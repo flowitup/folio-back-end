@@ -1,0 +1,41 @@
+[project]
+name = "construction-backend"
+version = "0.1.0"
+description = "Construction Management System - Backend API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "flask>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "flask-cors>=4.0.0",
+    "rq>=1.16.0",
+    "redis>=5.0.0",
+    "gunicorn>=21.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=24.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
