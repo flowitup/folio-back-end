@@ -39,15 +39,32 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
-          LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+          echo "PR Number: $PR_NUMBER"
+
+          # Get labels from event payload first (more reliable)
+          EVENT_LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          echo "Labels from event: $EVENT_LABELS"
+
+          # Fallback to gh CLI if event labels empty
+          if [ "$EVENT_LABELS" = "[]" ] || [ -z "$EVENT_LABELS" ]; then
+            LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>&1) || true
+            echo "Labels from gh CLI: $LABELS"
+          else
+            LABELS="$EVENT_LABELS"
+          fi
+
           if echo "$LABELS" | grep -q "version:major"; then
             echo "bump_type=major" >> $GITHUB_OUTPUT
+            echo "Detected: major"
           elif echo "$LABELS" | grep -q "version:minor"; then
             echo "bump_type=minor" >> $GITHUB_OUTPUT
+            echo "Detected: minor"
           elif echo "$LABELS" | grep -q "version:patch"; then
             echo "bump_type=patch" >> $GITHUB_OUTPUT
+            echo "Detected: patch"
           else
             echo "bump_type=none" >> $GITHUB_OUTPUT
+            echo "Detected: none"
           fi
 
       - name: Compute new version

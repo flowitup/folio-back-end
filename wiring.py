@@ -8,7 +8,6 @@ The core domain should depend only on ports (abstractions), not on concrete impl
 This follows the Dependency Inversion Principle.
 """
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
 
