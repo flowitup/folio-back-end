@@ -162,21 +162,21 @@ jobs:
             echo "pyproject.toml already has version $NEW_VERSION"
           fi
 
-  # Job 2: Lint and test (runs after version-bump on PR, or directly on push)
+  # Job 2: Lint and test (only on PR - already passed before merge)
   lint-test:
     runs-on: self-hosted
     timeout-minutes: 10
     needs: [version-bump]
-    if: always() && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
+    if: github.event_name == 'pull_request' && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+          ref: ${{ github.head_ref }}
           fetch-depth: 1
 
       - name: Pull latest changes
-        run: git pull origin ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }} || true
+        run: git pull origin ${{ github.head_ref }} || true
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -221,12 +221,11 @@ jobs:
           echo "| mypy | ${{ steps.mypy.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| pytest | ${{ steps.pytest.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
 
-  # Job 3: Create release (only on push to main, after lint-test passes)
+  # Job 3: Create release (only on push to main - lint-test already passed in PR)
   release:
     runs-on: self-hosted
     timeout-minutes: 5
-    needs: [lint-test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.lint-test.result == 'success'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
