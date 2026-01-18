@@ -36,6 +36,16 @@ def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    # Production security check: Ensure JWT secret is not default
+    import os
+    if os.environ.get("FLASK_ENV") == "production":
+        jwt_secret = getattr(config_class, "JWT_SECRET_KEY", "")
+        if not jwt_secret or "dev-" in jwt_secret.lower():
+            raise RuntimeError(
+                "CRITICAL: JWT_SECRET_KEY must be set to a secure value in production. "
+                "Set JWT_SECRET_KEY environment variable."
+            )
+
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False

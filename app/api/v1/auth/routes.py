@@ -33,9 +33,11 @@ def login():
     try:
         data = LoginRequest(**request.get_json())
     except ValidationError as e:
+        # Sanitize Pydantic errors - don't expose internals
+        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
         return jsonify(ErrorResponse(
             error="ValidationError",
-            message=str(e),
+            message=f"Invalid input: {', '.join(str(f) for f in error_fields)}",
             status_code=400
         ).model_dump()), 400
 
