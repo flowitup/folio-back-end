@@ -234,6 +234,9 @@ jobs:
 
       - name: Install GitHub CLI
         run: |
+          # Add local bin to PATH for this step
+          export PATH="$HOME/.local/bin:$PATH"
+
           if ! command -v gh &> /dev/null; then
             if [ "$(uname)" = "Darwin" ]; then
               brew install gh
