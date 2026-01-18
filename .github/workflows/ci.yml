@@ -289,7 +289,7 @@ jobs:
           VERSION="${{ steps.get-version.outputs.version }}"
           TAG="${{ steps.get-version.outputs.tag }}"
           gh release create "$TAG" \
-            --title "Release $TAG" \
+            --title "$TAG" \
             --notes "## What's Changed
 
           Version $VERSION released.
