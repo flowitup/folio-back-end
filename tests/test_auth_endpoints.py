@@ -432,23 +432,64 @@ class TestGetCurrentUserEndpoint:
 class TestRateLimiting:
     """Test rate limiting on login endpoint."""
 
-    def test_login_rate_limiting(self, client):
-        """Test that login endpoint is rate limited."""
+    @pytest.fixture
+    def rate_limited_client(self):
+        """Create a client with rate limiting enabled."""
+        from uuid import uuid4
+        from app.domain.entities.user import User
+
+        # Create custom config with rate limiting enabled
+        class RateLimitTestConfig(TestingConfig):
+            JWT_TOKEN_LOCATION = ["headers", "cookies"]
+            RATELIMIT_ENABLED = True
+            RATELIMIT_STORAGE_URI = "memory://"
+            RATELIMIT_DEFAULT = "100 per minute"
+
+        rate_limited_app = create_app(RateLimitTestConfig)
+
+        with rate_limited_app.app_context():
+            db.create_all()
+
+            password_hasher = Argon2PasswordHasher()
+            token_issuer = JWTTokenIssuer()
+            user_repo = SQLAlchemyUserRepository()
+
+            # Create test user in database
+            from app.infrastructure.database.models import UserModel
+            test_user = UserModel(
+                id=uuid4(),
+                email="ratelimit@example.com",
+                password_hash=password_hasher.hash("password123"),
+                is_active=True,
+            )
+            db.session.add(test_user)
+            db.session.commit()
+
+            configure_container(
+                user_repository=user_repo,
+                password_hasher=password_hasher,
+                token_issuer=token_issuer,
+            )
+            yield rate_limited_app.test_client()
+
+            # Cleanup
+            db.drop_all()
+
+    def test_login_rate_limiting(self, rate_limited_client):
+        """Test that login endpoint is rate limited after 5 attempts."""
         # Try to login 6 times rapidly (limit is 5 per minute)
         for i in range(6):
-            response = client.post(
+            response = rate_limited_client.post(
                 "/api/v1/auth/login",
-                json={"email": "active@example.com", "password": "password123"}
+                json={"email": "ratelimit@example.com", "password": "password123"}
             )
 
             if i < 5:
                 # First 5 should succeed (or fail with auth error)
                 assert response.status_code in [200, 401, 403]
             else:
-                # 6th request should be rate limited
-                # Note: Rate limiting may return 429 or other status
-                # This test may be flaky depending on rate limiter implementation
-                pass  # Commenting out strict assertion for now
+                # 6th request should be rate limited (429 Too Many Requests)
+                assert response.status_code == 429
 
 
 class TestHealthCheck:

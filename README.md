@@ -139,6 +139,7 @@ uv run python -m infrastructure.queue.rq_worker default emails outbox
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | No | `sqlite:///dev.db` | Database connection string |
 | `SECRET_KEY` | Yes (prod) | `dev-secret-key` | Secret key for sessions |
+| `JWT_SECRET_KEY` | Yes (prod) | `dev-jwt-secret` | Secret key for JWT tokens |
 | `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection URL |
 | `EMAIL_PROVIDER` | No | `smtp` | Email provider type |
 | `SMTP_HOST` | No | `localhost` | SMTP server host |
@@ -152,6 +153,43 @@ uv run python -m infrastructure.queue.rq_worker default emails outbox
 
 ### Health Check
 - `GET /health` - Returns `{"status": "ok"}`
+
+### Authentication (API v1)
+- `POST /api/v1/auth/login` - Authenticate and get JWT tokens (rate limited: 5/min)
+- `POST /api/v1/auth/logout` - Logout and revoke token
+- `POST /api/v1/auth/refresh` - Refresh access token
+- `GET /api/v1/auth/me` - Get current user info
+
+#### CSRF Protection
+
+When using cookies for authentication (browser clients), CSRF protection is enabled.
+
+**Frontend Integration:**
+
+1. On login, the server sets cookies including a CSRF token
+2. For all state-changing requests (POST, PUT, DELETE), include the CSRF token header:
+
+```javascript
+// After login, get CSRF token from cookie
+const csrfToken = document.cookie
+  .split('; ')
+  .find(row => row.startsWith('csrf_access_token='))
+  ?.split('=')[1];
+
+// Include in subsequent requests
+fetch('/api/v1/auth/logout', {
+  method: 'POST',
+  headers: {
+    'X-CSRF-TOKEN': csrfToken,
+    'Content-Type': 'application/json'
+  },
+  credentials: 'include'
+});
+```
+
+**API Clients (non-browser):**
+
+Use the `Authorization: Bearer <token>` header instead of cookies. CSRF protection only applies to cookie-based auth.
 
 ### API v1 (Stubs - Return 501)
 - `GET /api/v1/projects` - List projects

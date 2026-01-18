@@ -1,9 +1,14 @@
 """Pytest configuration and fixtures for database tests."""
 
 import os
+import sys
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+# Add project root to Python path for wiring module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.infrastructure.database.models import Base
 
