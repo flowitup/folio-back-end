@@ -285,6 +285,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           VERSION="${{ steps.get-version.outputs.version }}"
           TAG="${{ steps.get-version.outputs.tag }}"
           gh release create "$TAG" \
