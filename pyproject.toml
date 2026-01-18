@@ -1,10 +1,9 @@
 [project]
 name = "construction-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "Construction Management System - Backend API"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
 
 dependencies = [
     "flask>=3.0.0",
@@ -27,6 +26,9 @@ dev = [
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*", "config*", "outbox*", "infrastructure*"]
 
 [tool.black]
 line-length = 120
