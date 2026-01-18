@@ -141,7 +141,7 @@ jobs:
       - name: Run ruff
         id: ruff
         timeout-minutes: 2
-        run: ruff check . --color=always
+        run: ruff check . --output-format=full
 
       - name: Run black
         id: black
