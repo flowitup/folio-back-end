@@ -238,10 +238,13 @@ jobs:
             if [ "$(uname)" = "Darwin" ]; then
               brew install gh
             else
-              # Linux installation
-              curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-              sudo apt update && sudo apt install gh -y
+              # Linux: install to user directory (no sudo required)
+              GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+              curl -sL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz
+              mkdir -p "$HOME/.local/bin"
+              mv gh_${GH_VERSION}_linux_amd64/bin/gh "$HOME/.local/bin/"
+              echo "$HOME/.local/bin" >> $GITHUB_PATH
+              rm -rf gh_${GH_VERSION}_linux_amd64
             fi
           fi
           gh --version
