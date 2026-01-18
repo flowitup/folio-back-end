@@ -1,0 +1,311 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+# Prevent concurrent runs from conflicting
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  # Job 1: Calculate and commit version bump (only on PR)
+  version-bump:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    outputs:
+      new_version: ${{ steps.compute-version.outputs.new_version }}
+      version_bumped: ${{ steps.compute-version.outputs.version_bumped }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get PR labels
+        id: get-labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          echo "PR Number: $PR_NUMBER"
+
+          # Get labels from event payload first (more reliable)
+          EVENT_LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          echo "Labels from event: $EVENT_LABELS"
+
+          # Fallback to gh CLI if event labels empty
+          if [ "$EVENT_LABELS" = "[]" ] || [ -z "$EVENT_LABELS" ]; then
+            LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>&1) || true
+            echo "Labels from gh CLI: $LABELS"
+          else
+            LABELS="$EVENT_LABELS"
+          fi
+
+          if echo "$LABELS" | grep -q "version:major"; then
+            echo "bump_type=major" >> $GITHUB_OUTPUT
+            echo "Detected: major"
+          elif echo "$LABELS" | grep -q "version:minor"; then
+            echo "bump_type=minor" >> $GITHUB_OUTPUT
+            echo "Detected: minor"
+          elif echo "$LABELS" | grep -q "version:patch"; then
+            echo "bump_type=patch" >> $GITHUB_OUTPUT
+            echo "Detected: patch"
+          else
+            echo "bump_type=none" >> $GITHUB_OUTPUT
+            echo "Detected: none"
+          fi
+
+      - name: Get main branch version
+        id: main-version
+        run: |
+          # Fetch main branch version from remote
+          MAIN_VERSION=$(git show origin/main:pyproject.toml 2>/dev/null | sed -n 's/^version = "\([^"]*\)"/\1/p' || echo "0.0.0")
+          echo "main_version=$MAIN_VERSION" >> $GITHUB_OUTPUT
+          echo "Main branch version: $MAIN_VERSION"
+
+      - name: Compute new version
+        id: compute-version
+        run: |
+          BUMP_TYPE="${{ steps.get-labels.outputs.bump_type }}"
+          MAIN_VERSION="${{ steps.main-version.outputs.main_version }}"
+
+          # Get current PR version
+          PR_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)
+          echo "PR version: $PR_VERSION"
+          echo "Main version: $MAIN_VERSION"
+
+          # No version label - skip bump
+          if [ "$BUMP_TYPE" = "none" ] || [ -z "$BUMP_TYPE" ]; then
+            echo "new_version=$PR_VERSION" >> $GITHUB_OUTPUT
+            echo "version_bumped=false" >> $GITHUB_OUTPUT
+            echo "No version label found, skipping bump"
+            exit 0
+          fi
+
+          # Compare versions: if PR version > main version, version already bumped
+          # Version comparison function using sort -V
+          version_gt() {
+            test "$(printf '%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" && test "$1" != "$2"
+          }
+
+          if version_gt "$PR_VERSION" "$MAIN_VERSION"; then
+            echo "new_version=$PR_VERSION" >> $GITHUB_OUTPUT
+            echo "version_bumped=false" >> $GITHUB_OUTPUT
+            echo "PR version ($PR_VERSION) > main version ($MAIN_VERSION) - already bumped, skipping"
+            exit 0
+          fi
+
+          # Validate version format
+          if ! echo "$MAIN_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid main version format: $MAIN_VERSION"
+            exit 1
+          fi
+
+          # Calculate new version from main branch version
+          MAJOR=$(echo "$MAIN_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$MAIN_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$MAIN_VERSION" | cut -d. -f3)
+
+          case "$BUMP_TYPE" in
+            major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
+            patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+          esac
+
+          # Check if PR already has the target version
+          if [ "$PR_VERSION" = "$NEW_VERSION" ]; then
+            echo "new_version=$PR_VERSION" >> $GITHUB_OUTPUT
+            echo "version_bumped=false" >> $GITHUB_OUTPUT
+            echo "PR already has target version $NEW_VERSION, skipping bump"
+            exit 0
+          fi
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "current_version=$PR_VERSION" >> $GITHUB_OUTPUT
+          echo "version_bumped=true" >> $GITHUB_OUTPUT
+          echo "Version will bump: $PR_VERSION -> $NEW_VERSION ($BUMP_TYPE based on main $MAIN_VERSION)"
+
+      - name: Update pyproject.toml
+        if: steps.compute-version.outputs.version_bumped == 'true'
+        run: |
+          NEW_VERSION="${{ steps.compute-version.outputs.new_version }}"
+          CURRENT_VERSION="${{ steps.compute-version.outputs.current_version }}"
+          if [ "$(uname)" = "Darwin" ]; then
+            sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" pyproject.toml
+          else
+            sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" pyproject.toml
+          fi
+
+      - name: Commit version bump to PR
+        if: steps.compute-version.outputs.version_bumped == 'true'
+        run: |
+          NEW_VERSION="${{ steps.compute-version.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet pyproject.toml; then
+            git add pyproject.toml
+            git commit -m "chore: bump version to $NEW_VERSION"
+            git push origin ${{ github.head_ref }}
+          else
+            echo "pyproject.toml already has version $NEW_VERSION"
+          fi
+
+  # Job 2: Lint and test (only on PR - already passed before merge)
+  lint-test:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    needs: [version-bump]
+    if: github.event_name == 'pull_request' && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 1
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.head_ref }} || true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh && echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        timeout-minutes: 3
+        run: uv sync --frozen
+
+      - name: Run ruff
+        id: ruff
+        timeout-minutes: 2
+        run: uv run ruff check . --output-format=full
+
+      - name: Run black
+        id: black
+        timeout-minutes: 2
+        run: uv run black --check . --color
+
+      - name: Run mypy
+        id: mypy
+        timeout-minutes: 3
+        run: uv run mypy . --color-output
+
+      - name: Run pytest
+        id: pytest
+        timeout-minutes: 5
+        run: uv run pytest --tb=short -q --color=yes
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## Lint & Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ruff | ${{ steps.ruff.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| black | ${{ steps.black.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| mypy | ${{ steps.mypy.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| pytest | ${{ steps.pytest.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # Job 3: Create release (only on push to main - lint-test already passed in PR)
+  release:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install GitHub CLI
+        run: |
+          # Add local bin to PATH for this step
+          export PATH="$HOME/.local/bin:$PATH"
+
+          if ! command -v gh &> /dev/null; then
+            if [ "$(uname)" = "Darwin" ]; then
+              brew install gh
+            else
+              # Linux: install to user directory (no sudo required)
+              GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+              curl -sL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz
+              mkdir -p "$HOME/.local/bin"
+              mv gh_${GH_VERSION}_linux_amd64/bin/gh "$HOME/.local/bin/"
+              echo "$HOME/.local/bin" >> $GITHUB_PATH
+              rm -rf gh_${GH_VERSION}_linux_amd64
+            fi
+          fi
+          gh --version
+
+      - name: Get version
+        id: get-version
+        run: |
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check-tag
+        run: |
+          TAG="${{ steps.get-version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already exists, skipping release"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG does not exist, will create release"
+          fi
+
+      - name: Create tag
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          TAG="${{ steps.get-version.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: steps.check-tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          VERSION="${{ steps.get-version.outputs.version }}"
+          TAG="${{ steps.get-version.outputs.tag }}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "## What's Changed
+
+          Version $VERSION released.
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/commits/$TAG" \
+            --latest
+
+      - name: Write job summary
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          echo "## Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.get-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** ${{ steps.get-version.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Skip summary
+        if: steps.check-tag.outputs.exists == 'true'
+        run: |
+          echo "## Release Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Tag ${{ steps.get-version.outputs.tag }} already exists" >> $GITHUB_STEP_SUMMARY
