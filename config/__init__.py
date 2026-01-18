@@ -7,6 +7,7 @@ Configuration follows the 12-factor app methodology.
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -60,6 +61,24 @@ class Config:
     # Application settings
     DEBUG: bool = get_env("FLASK_DEBUG", default="false").lower() == "true"
     TESTING: bool = False
+
+    # JWT Configuration
+    JWT_SECRET_KEY: str = get_env("JWT_SECRET_KEY", default="dev-jwt-secret-change-in-production")
+    JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(minutes=30)
+    JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
+    JWT_TOKEN_LOCATION: list = None  # Set in __post_init__
+    JWT_COOKIE_SECURE: bool = get_env("FLASK_ENV", default="development") == "production"
+    JWT_COOKIE_CSRF_PROTECT: bool = True
+    JWT_COOKIE_SAMESITE: str = "Lax"
+
+    # Rate Limiting
+    RATELIMIT_STORAGE_URL: str = get_env("REDIS_URL", default="redis://localhost:6379/1")
+    RATELIMIT_DEFAULT: str = "100 per minute"
+    RATELIMIT_LOGIN: str = "5 per minute"
+
+    def __post_init__(self):
+        if self.JWT_TOKEN_LOCATION is None:
+            self.JWT_TOKEN_LOCATION = ["headers", "cookies"]
 
 
 class DevelopmentConfig(Config):

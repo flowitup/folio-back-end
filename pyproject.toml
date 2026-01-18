@@ -20,6 +20,8 @@ dependencies = [
     "flask-jwt-extended>=4.7.1",
     "flask-login>=0.6.3",
     "pydantic>=2.12.5",
+    "flask-limiter>=3.5.0",
+    "email-validator>=2.0.0",
 ]
 
 [project.optional-dependencies]

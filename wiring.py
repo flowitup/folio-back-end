@@ -21,6 +21,9 @@ from app.application.ports.user_repository_port import UserRepositoryPort
 from app.domain.services.auth_service import AuthService
 from app.domain.services.authorization_service import AuthorizationService
 
+# Import use cases
+from app.application.usecases import LoginUseCase, LogoutUseCase
+
 
 # =============================================================================
 # PORTS (Interfaces) - Legacy ports kept for compatibility
@@ -91,6 +94,10 @@ class Container:
     auth_service: Optional[AuthService] = None
     authorization_service: Optional[AuthorizationService] = None
 
+    # Use cases (configured after domain services)
+    login_usecase: Optional[LoginUseCase] = None
+    logout_usecase: Optional[LogoutUseCase] = None
+
 
 # Global container instance
 container = Container()
@@ -128,6 +135,16 @@ def configure_container(
         container.auth_service = AuthService(user_repository, password_hasher)
     if user_repository:
         container.authorization_service = AuthorizationService(user_repository)
+
+    # Wire up use cases if dependencies are available
+    if container.auth_service and container.authorization_service and token_issuer:
+        container.login_usecase = LoginUseCase(
+            container.auth_service,
+            container.authorization_service,
+            token_issuer,
+        )
+    if token_issuer:
+        container.logout_usecase = LogoutUseCase(token_issuer)
 
     return container
 
