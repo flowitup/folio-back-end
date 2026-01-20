@@ -5,6 +5,8 @@ This module provides the create_app() function which sets up and configures
 the Flask application following the application factory pattern.
 """
 
+import os
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
@@ -12,8 +14,6 @@ from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 
 from config import Config
-
-# Import our custom Base before creating SQLAlchemy instance
 from app.infrastructure.database.models import Base
 from app.infrastructure.rate_limiter import limiter
 
@@ -36,15 +36,11 @@ def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # Production security check: Ensure JWT secret is not default
-    import os
+    # Production security check
     if os.environ.get("FLASK_ENV") == "production":
         jwt_secret = getattr(config_class, "JWT_SECRET_KEY", "")
         if not jwt_secret or "dev-" in jwt_secret.lower():
-            raise RuntimeError(
-                "CRITICAL: JWT_SECRET_KEY must be set to a secure value in production. "
-                "Set JWT_SECRET_KEY environment variable."
-            )
+            raise RuntimeError("CRITICAL: JWT_SECRET_KEY must be set in production.")
 
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
@@ -55,52 +51,15 @@ def create_app(config_class: type = Config) -> Flask:
     db.init_app(app)
     jwt.init_app(app)
     limiter.init_app(app)
-
-    # Initialize migrations
     migrate.init_app(app, db, render_as_batch=True)
 
-    # JWT error handlers
-    @jwt.expired_token_loader
-    def expired_token_callback(jwt_header, jwt_payload):
-        return jsonify({
-            "error": "TokenExpired",
-            "message": "Token has expired",
-            "status_code": 401
-        }), 401
+    # Configure JWT handlers
+    from app.infrastructure.jwt_handlers import configure_jwt_handlers
+    configure_jwt_handlers(jwt)
 
-    @jwt.invalid_token_loader
-    def invalid_token_callback(error):
-        return jsonify({
-            "error": "InvalidToken",
-            "message": "Token is invalid",
-            "status_code": 401
-        }), 401
-
-    @jwt.unauthorized_loader
-    def missing_token_callback(error):
-        return jsonify({
-            "error": "Unauthorized",
-            "message": "Missing authentication token",
-            "status_code": 401
-        }), 401
-
-    @jwt.revoked_token_loader
-    def revoked_token_callback(jwt_header, jwt_payload):
-        return jsonify({
-            "error": "TokenRevoked",
-            "message": "Token has been revoked",
-            "status_code": 401
-        }), 401
-
-    # Token revocation check
-    @jwt.token_in_blocklist_loader
-    def check_if_token_revoked(jwt_header, jwt_payload):
-        jti = jwt_payload.get("jti")
-        from wiring import get_container
-        container = get_container()
-        if container.token_issuer:
-            return container.token_issuer.is_token_revoked(jti)
-        return False
+    # Configure dependency injection container
+    with app.app_context():
+        _configure_di_container()
 
     # Health check endpoint
     @app.route("/health", methods=["GET"])
@@ -114,4 +73,25 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
 
+    # Initialize Swagger API documentation
+    from app.api.swagger import init_swagger
+    init_swagger(app)
+
     return app
+
+
+def _configure_di_container() -> None:
+    """Configure the dependency injection container."""
+    from wiring import configure_container
+    from app.infrastructure.adapters.sqlalchemy_user_repository import SQLAlchemyUserRepository
+    from app.infrastructure.adapters.argon2_password_hasher import Argon2PasswordHasher
+    from app.infrastructure.adapters.jwt_token_issuer import JWTTokenIssuer
+    from app.infrastructure.adapters.flask_session_manager import FlaskSessionManager
+    from config import Config
+
+    configure_container(
+        user_repository=SQLAlchemyUserRepository(db.session),
+        password_hasher=Argon2PasswordHasher(),
+        token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
+        session_manager=FlaskSessionManager(),
+    )

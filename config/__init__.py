@@ -6,7 +6,7 @@ Configuration follows the 12-factor app methodology.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Optional
 
@@ -66,7 +66,7 @@ class Config:
     JWT_SECRET_KEY: str = get_env("JWT_SECRET_KEY", default="dev-jwt-secret-change-in-production")
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(minutes=30)
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
-    JWT_TOKEN_LOCATION: list = None  # Set in __post_init__
+    JWT_TOKEN_LOCATION: tuple = ("headers", "cookies")
     JWT_COOKIE_SECURE: bool = get_env("FLASK_ENV", default="development") == "production"
     JWT_COOKIE_CSRF_PROTECT: bool = True
     JWT_COOKIE_SAMESITE: str = "Lax"

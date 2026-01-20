@@ -14,6 +14,8 @@ COPY app/ app/
 COPY config/ config/
 COPY infrastructure/ infrastructure/
 COPY outbox/ outbox/
+COPY migrations/ migrations/
+COPY scripts/ scripts/
 COPY wiring.py .
 COPY tasks.py .
 

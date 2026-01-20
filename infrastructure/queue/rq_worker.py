@@ -9,7 +9,7 @@ import os
 import sys
 
 from redis import Redis
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -39,10 +39,11 @@ def run_worker(queues: list[str] | None = None) -> None:
 
     redis_conn = get_redis_connection()
 
-    with Connection(redis_conn):
-        worker = Worker(map(Queue, queues))
-        print(f"Starting worker listening on queues: {', '.join(queues)}")
-        worker.work(with_scheduler=True)
+    # RQ 2.x: Pass connection to Queue and Worker directly (Connection removed)
+    queue_instances = [Queue(name, connection=redis_conn) for name in queues]
+    worker = Worker(queue_instances, connection=redis_conn)
+    print(f"Starting worker listening on queues: {', '.join(queues)}")
+    worker.work(with_scheduler=True)
 
 
 if __name__ == "__main__":
