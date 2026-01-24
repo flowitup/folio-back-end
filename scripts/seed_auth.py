@@ -1,50 +1,27 @@
-"""
-Seed script for authentication data.
-
-Creates default roles, permissions, and optionally an admin user.
-
-Usage:
-    # Using CLI args (visible in shell history - dev only)
-    uv run python scripts/seed_auth.py --with-admin admin@example.com password
-
-    # Using environment variables (recommended for production)
-    ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=secret uv run python scripts/seed_auth.py --with-admin
-
-Security Note:
-    Prefer environment variables over CLI args to avoid password exposure
-    in shell history. CLI args are acceptable for local development only.
-"""
+"""Seed script for authentication data (permissions, roles, users)."""
 
 import os
 import sys
 from argon2 import PasswordHasher
 from uuid import uuid4
 
-from app import create_app, db
-from app.infrastructure.database.models import (
-    PermissionModel,
-    RoleModel,
-    UserModel,
-)
+from app import db
+from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
 
 
-# Default permissions: resource:action format
 DEFAULT_PERMISSIONS = [
-    # Admin wildcard
     {"name": "*:*", "resource": "*", "action": "*"},
-    # Project permissions
     {"name": "project:create", "resource": "project", "action": "create"},
     {"name": "project:read", "resource": "project", "action": "read"},
     {"name": "project:update", "resource": "project", "action": "update"},
     {"name": "project:delete", "resource": "project", "action": "delete"},
-    # User permissions
+    {"name": "project:manage_users", "resource": "project", "action": "manage_users"},
     {"name": "user:create", "resource": "user", "action": "create"},
     {"name": "user:read", "resource": "user", "action": "read"},
     {"name": "user:update", "resource": "user", "action": "update"},
     {"name": "user:delete", "resource": "user", "action": "delete"},
 ]
 
-# Default roles with their permissions
 DEFAULT_ROLES = [
     {
         "name": "admin",
@@ -59,6 +36,7 @@ DEFAULT_ROLES = [
             "project:read",
             "project:update",
             "project:delete",
+            "project:manage_users",
             "user:read",
         ],
     },
@@ -109,7 +87,6 @@ def seed_roles(permission_map: dict) -> dict:
                 name=role_data["name"],
                 description=role_data["description"],
             )
-            # Assign permissions
             for perm_name in role_data["permissions"]:
                 if perm_name in permission_map:
                     role.permissions.append(permission_map[perm_name])
@@ -121,12 +98,12 @@ def seed_roles(permission_map: dict) -> dict:
     return role_map
 
 
-def create_admin_user(email: str, password: str, role_map: dict) -> None:
+def create_admin_user(email: str, password: str, role_map: dict) -> UserModel | None:
     """Create an admin user with hashed password."""
     existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
     if existing:
         print(f"  User '{email}' already exists, skipping.")
-        return
+        return existing
 
     ph = PasswordHasher()
     password_hash = ph.hash(password)
@@ -138,55 +115,27 @@ def create_admin_user(email: str, password: str, role_map: dict) -> None:
         is_active=True,
     )
 
-    # Assign admin role
     if "admin" in role_map:
         user.roles.append(role_map["admin"])
 
     db.session.add(user)
     db.session.commit()
     print(f"  Created admin user: {email}")
+    return user
 
 
-def main():
-    """Main entry point for seeding."""
-    app = create_app()
+def get_admin_credentials() -> tuple[str | None, str | None]:
+    """Get admin credentials from env vars or CLI args."""
+    email = os.environ.get("ADMIN_EMAIL")
+    password = os.environ.get("ADMIN_PASSWORD")
 
-    with app.app_context():
-        print("Seeding authentication data...")
-
-        print("\n1. Creating permissions...")
-        permission_map = seed_permissions()
-
-        print("\n2. Creating roles...")
-        role_map = seed_roles(permission_map)
-
-        # Check for admin user creation
+    if not email or not password:
         if "--with-admin" in sys.argv:
-            # Try environment variables first (recommended)
-            email = os.environ.get("ADMIN_EMAIL")
-            password = os.environ.get("ADMIN_PASSWORD")
+            idx = sys.argv.index("--with-admin")
+            if idx + 2 < len(sys.argv):
+                email = sys.argv[idx + 1]
+                password = sys.argv[idx + 2]
+                print("\n  Warning: Using CLI args for credentials (visible in shell history)")
+                print("  Consider using ADMIN_EMAIL and ADMIN_PASSWORD env vars instead.")
 
-            # Fall back to CLI args if env vars not set
-            if not email or not password:
-                idx = sys.argv.index("--with-admin")
-                if idx + 2 < len(sys.argv):
-                    email = sys.argv[idx + 1]
-                    password = sys.argv[idx + 2]
-                    print("\n  Warning: Using CLI args for credentials (visible in shell history)")
-                    print("  Consider using ADMIN_EMAIL and ADMIN_PASSWORD env vars instead.")
-
-            if email and password:
-                print(f"\n3. Creating admin user: {email}...")
-                create_admin_user(email, password, role_map)
-            else:
-                print("\nError: --with-admin requires credentials")
-                print("Options:")
-                print("  1. Environment vars: ADMIN_EMAIL=x ADMIN_PASSWORD=y python scripts/seed_auth.py --with-admin")
-                print("  2. CLI args (dev only): python scripts/seed_auth.py --with-admin email password")
-                sys.exit(1)
-
-        print("\nSeeding complete!")
-
-
-if __name__ == "__main__":
-    main()
+    return email, password
