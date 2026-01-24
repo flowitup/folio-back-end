@@ -33,7 +33,7 @@ def get_engine_url():
 
 
 # Import models for autogenerate support
-from app.infrastructure.database.models import Base, UserModel, RoleModel, PermissionModel
+from app.infrastructure.database.models import Base, UserModel, RoleModel, PermissionModel, ProjectModel, user_projects
 
 config.set_main_option('sqlalchemy.url', get_engine_url())
 target_db = current_app.extensions['migrate'].db

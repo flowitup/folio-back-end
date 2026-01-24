@@ -57,6 +57,25 @@ role_permissions = Table(
     ),
 )
 
+# Association table: users <-> projects (many-to-many)
+user_projects = Table(
+    "user_projects",
+    Base.metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "project_id",
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("assigned_at", DateTime, default=lambda: datetime.now(timezone.utc)),
+)
+
 
 class UserModel(Base):
     """User database model."""
@@ -75,6 +94,7 @@ class UserModel(Base):
 
     # Relationships
     roles = relationship("RoleModel", secondary=user_roles, back_populates="users")
+    projects = relationship("ProjectModel", secondary=user_projects, back_populates="users")
 
     # Case-insensitive email index using func.lower()
     __table_args__ = (Index("ix_users_email_lower", func.lower(email)),)
@@ -121,3 +141,26 @@ class PermissionModel(Base):
 
     def __repr__(self) -> str:
         return f"<Permission {self.name}>"
+
+
+class ProjectModel(Base):
+    """Project database model."""
+    __tablename__ = "projects"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    name = Column(String(255), nullable=False)
+    address = Column(String(500), nullable=True)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    # Relationships
+    owner = relationship("UserModel", foreign_keys=[owner_id])
+    users = relationship("UserModel", secondary=user_projects, back_populates="projects")
+
+    def __repr__(self) -> str:
+        return f"<Project {self.name}>"

@@ -23,6 +23,14 @@ from app.domain.services.authorization_service import AuthorizationService
 
 # Import use cases
 from app.application.usecases import LoginUseCase, LogoutUseCase
+from app.application.projects import (
+    IProjectRepository,
+    CreateProjectUseCase,
+    ListProjectsUseCase,
+    GetProjectUseCase,
+    UpdateProjectUseCase,
+    DeleteProjectUseCase,
+)
 
 
 # =============================================================================
@@ -98,6 +106,13 @@ class Container:
     login_usecase: Optional[LoginUseCase] = None
     logout_usecase: Optional[LogoutUseCase] = None
 
+    # Project use cases
+    create_project_usecase: Optional[CreateProjectUseCase] = None
+    list_projects_usecase: Optional[ListProjectsUseCase] = None
+    get_project_usecase: Optional[GetProjectUseCase] = None
+    update_project_usecase: Optional[UpdateProjectUseCase] = None
+    delete_project_usecase: Optional[DeleteProjectUseCase] = None
+
 
 # Global container instance
 container = Container()
@@ -145,6 +160,14 @@ def configure_container(
         )
     if token_issuer:
         container.logout_usecase = LogoutUseCase(token_issuer)
+
+    # Wire up project use cases if repository is available
+    if project_repository:
+        container.create_project_usecase = CreateProjectUseCase(project_repository)
+        container.list_projects_usecase = ListProjectsUseCase(project_repository)
+        container.get_project_usecase = GetProjectUseCase(project_repository)
+        container.update_project_usecase = UpdateProjectUseCase(project_repository)
+        container.delete_project_usecase = DeleteProjectUseCase(project_repository)
 
     return container
 
