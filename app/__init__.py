@@ -85,11 +85,11 @@ def create_app(config_class: type = Config) -> Flask:
 def _configure_di_container() -> None:
     """Configure the dependency injection container."""
     from wiring import configure_container
-    from app.infrastructure.adapters.sqlalchemy_user_repository import SQLAlchemyUserRepository
-    from app.infrastructure.adapters.sqlalchemy_project_repository import SQLAlchemyProjectRepository
-    from app.infrastructure.adapters.argon2_password_hasher import Argon2PasswordHasher
-    from app.infrastructure.adapters.jwt_token_issuer import JWTTokenIssuer
-    from app.infrastructure.adapters.flask_session_manager import FlaskSessionManager
+    from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+    from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
+    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+    from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+    from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from config import Config
 
     configure_container(

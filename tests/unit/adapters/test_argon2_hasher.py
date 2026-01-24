@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.infrastructure.adapters.argon2_password_hasher import Argon2PasswordHasher
+from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
 
 
 class TestArgon2PasswordHasherHash:

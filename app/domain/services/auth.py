@@ -2,8 +2,8 @@
 
 from uuid import UUID
 
-from app.application.ports.password_hasher_port import PasswordHasherPort
-from app.application.ports.user_repository_port import UserRepositoryPort
+from app.application.ports.password_hasher import PasswordHasherPort
+from app.application.ports.user_repository import UserRepositoryPort
 from app.domain.exceptions.auth_exceptions import (
     InvalidCredentialsError,
     UserInactiveError,

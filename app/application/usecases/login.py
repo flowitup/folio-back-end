@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import List
 from uuid import UUID
 
-from app.application.ports.token_issuer_port import TokenIssuerPort
-from app.domain.services.auth_service import AuthService
-from app.domain.services.authorization_service import AuthorizationService
+from app.application.ports.token_issuer import TokenIssuerPort
+from app.domain.services.auth import AuthService
+from app.domain.services.authorization import AuthorizationService
 
 
 @dataclass

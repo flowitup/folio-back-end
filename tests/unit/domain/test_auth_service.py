@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, MagicMock
 from uuid import uuid4
 
-from app.domain.services.auth_service import AuthService
+from app.domain.services.auth import AuthService
 from app.domain.exceptions.auth_exceptions import (
     InvalidCredentialsError,
     UserInactiveError,

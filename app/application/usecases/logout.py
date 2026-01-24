@@ -1,6 +1,6 @@
 """Logout use case."""
 
-from app.application.ports.token_issuer_port import TokenIssuerPort
+from app.application.ports.token_issuer import TokenIssuerPort
 
 
 class LogoutUseCase:

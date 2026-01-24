@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, MagicMock
 from uuid import uuid4
 
-from app.domain.services.authorization_service import AuthorizationService
+from app.domain.services.authorization import AuthorizationService
 
 
 class TestAuthorizationServiceGetUserPermissions:

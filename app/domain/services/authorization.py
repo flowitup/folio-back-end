@@ -3,7 +3,7 @@
 from typing import List, Optional, Set, TYPE_CHECKING
 from uuid import UUID
 
-from app.application.ports.user_repository_port import UserRepositoryPort
+from app.application.ports.user_repository import UserRepositoryPort
 
 if TYPE_CHECKING:
     from app.domain.entities.user import User

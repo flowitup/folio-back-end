@@ -15,14 +15,15 @@ from flask_jwt_extended import (
 )
 from pydantic import ValidationError
 
-from app.api.swagger import (
-    login_request_model, login_response_model, user_response_model,
-    refresh_response_model, logout_response_model, error_response_model
-)
 
-
-def register_resources(auth_ns: Namespace) -> None:
+def register_resources(auth_ns: Namespace, models: dict) -> None:
     """Register all auth resources with the namespace."""
+    login_request_model = models["login_request"]
+    login_response_model = models["login_response"]
+    user_response_model = models["user_response"]
+    refresh_response_model = models["refresh_response"]
+    logout_response_model = models["logout_response"]
+    error_response_model = models["error_response"]
 
     @auth_ns.route("/login")
     class LoginResource(Resource):

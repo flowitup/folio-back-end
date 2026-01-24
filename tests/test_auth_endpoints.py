@@ -10,10 +10,10 @@ from app.infrastructure.database.models import UserModel, RoleModel, PermissionM
 from app.domain.entities.user import User
 from app.domain.entities.role import Role
 from app.domain.entities.permission import Permission
-from app.application.ports.user_repository_port import UserRepositoryPort
-from app.infrastructure.adapters.argon2_password_hasher import Argon2PasswordHasher
-from app.infrastructure.adapters.jwt_token_issuer import JWTTokenIssuer
-from app.infrastructure.adapters.flask_session_manager import FlaskSessionManager
+from app.application.ports.user_repository import UserRepositoryPort
+from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+from app.infrastructure.adapters.flask_session import FlaskSessionManager
 from config import TestingConfig
 from wiring import configure_container
 

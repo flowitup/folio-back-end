@@ -12,14 +12,14 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
 
 # Import port interfaces from application layer
-from app.application.ports.password_hasher_port import PasswordHasherPort
-from app.application.ports.token_issuer_port import TokenIssuerPort
-from app.application.ports.session_manager_port import SessionManagerPort
-from app.application.ports.user_repository_port import UserRepositoryPort
+from app.application.ports.password_hasher import PasswordHasherPort
+from app.application.ports.token_issuer import TokenIssuerPort
+from app.application.ports.session_manager import SessionManagerPort
+from app.application.ports.user_repository import UserRepositoryPort
 
 # Import domain services
-from app.domain.services.auth_service import AuthService
-from app.domain.services.authorization_service import AuthorizationService
+from app.domain.services.auth import AuthService
+from app.domain.services.authorization import AuthorizationService
 
 # Import use cases
 from app.application.usecases import LoginUseCase, LogoutUseCase
