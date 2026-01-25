@@ -30,9 +30,11 @@ def init_swagger(app: Flask) -> None:
     )
 
     auth_ns = api.namespace("auth", description="Authentication operations", path="/api/v1/auth")
+    projects_ns = api.namespace("projects", description="Project management operations", path="/api/v1/projects")
     models = create_all_models(api)
 
-    from app.api.swagger_resources import register_resources
+    from app.api.swagger_resources import register_resources, register_project_resources
     register_resources(auth_ns, models)
+    register_project_resources(projects_ns, models)
 
     api.init_app(app)

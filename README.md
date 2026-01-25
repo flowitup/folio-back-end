@@ -191,12 +191,14 @@ fetch('/api/v1/auth/logout', {
 
 Use the `Authorization: Bearer <token>` header instead of cookies. CSRF protection only applies to cookie-based auth.
 
-### API v1 (Stubs - Return 501)
-- `GET /api/v1/projects` - List projects
-- `POST /api/v1/projects` - Create project
-- `GET /api/v1/projects/:id` - Get project
-- `PUT /api/v1/projects/:id` - Update project
-- `DELETE /api/v1/projects/:id` - Delete project
+### Projects (API v1)
+- `GET /api/v1/projects` - List projects (requires `project:read`)
+- `POST /api/v1/projects` - Create project (requires `project:create`)
+- `GET /api/v1/projects/:id` - Get project (requires `project:read`)
+- `PUT /api/v1/projects/:id` - Update project (requires `project:update`)
+- `DELETE /api/v1/projects/:id` - Delete project (requires `project:delete`)
+
+### Users (API v1 - Stubs)
 - `GET /api/v1/users` - List users
 - `GET /api/v1/users/:id` - Get user
 

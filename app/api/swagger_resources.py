@@ -129,3 +129,106 @@ def register_resources(auth_ns: Namespace, models: dict) -> None:
             if not user:
                 return {"error": "NotFound", "message": "User not found", "status_code": 404}, 404
             return UserResponse(id=user.id, email=user.email, permissions=get_jwt().get("permissions", []), roles=[r.name for r in user.roles]).model_dump()
+
+
+def register_project_resources(projects_ns: Namespace, models: dict) -> None:
+    """Register all project resources with the namespace."""
+    create_project_model = models["create_project_request"]
+    update_project_model = models["update_project_request"]
+    add_user_model = models["add_user_request"]
+    project_response_model = models["project_response"]
+    project_list_model = models["project_list_response"]
+    message_model = models["message_response"]
+    error_model = models["error_response"]
+
+    @projects_ns.route("")
+    class ProjectListResource(Resource):
+        """Project list and creation endpoint."""
+
+        @projects_ns.doc("list_projects")
+        @projects_ns.response(200, "Success", project_list_model)
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def get(self):
+            """List projects for current user."""
+            from app.api.v1.projects.routes import list_projects
+            return list_projects()
+
+        @projects_ns.doc("create_project")
+        @projects_ns.expect(create_project_model)
+        @projects_ns.response(201, "Created", project_response_model)
+        @projects_ns.response(400, "Validation Error", error_model)
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def post(self):
+            """Create a new project."""
+            from app.api.v1.projects.routes import create_project
+            return create_project()
+
+    @projects_ns.route("/<project_id>")
+    @projects_ns.param("project_id", "Project UUID")
+    class ProjectResource(Resource):
+        """Single project operations."""
+
+        @projects_ns.doc("get_project")
+        @projects_ns.response(200, "Success", project_response_model)
+        @projects_ns.response(404, "Not Found", error_model)
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def get(self, project_id: str):
+            """Get a project by ID."""
+            from app.api.v1.projects.routes import get_project
+            return get_project(project_id)
+
+        @projects_ns.doc("update_project")
+        @projects_ns.expect(update_project_model)
+        @projects_ns.response(200, "Success", project_response_model)
+        @projects_ns.response(400, "Validation Error", error_model)
+        @projects_ns.response(404, "Not Found", error_model)
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def put(self, project_id: str):
+            """Update a project."""
+            from app.api.v1.projects.routes import update_project
+            return update_project(project_id)
+
+        @projects_ns.doc("delete_project")
+        @projects_ns.response(204, "Deleted")
+        @projects_ns.response(404, "Not Found", error_model)
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def delete(self, project_id: str):
+            """Delete a project."""
+            from app.api.v1.projects.routes import delete_project
+            return delete_project(project_id)
+
+    @projects_ns.route("/<project_id>/users")
+    @projects_ns.param("project_id", "Project UUID")
+    class ProjectUsersResource(Resource):
+        """Project user management."""
+
+        @projects_ns.doc("add_user_to_project")
+        @projects_ns.expect(add_user_model)
+        @projects_ns.response(200, "Success", message_model)
+        @projects_ns.response(400, "Validation Error", error_model)
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def post(self, project_id: str):
+            """Add a user to a project."""
+            from app.api.v1.projects.routes import add_user_to_project
+            return add_user_to_project(project_id)
+
+    @projects_ns.route("/<project_id>/users/<user_id>")
+    @projects_ns.param("project_id", "Project UUID")
+    @projects_ns.param("user_id", "User UUID")
+    class ProjectUserResource(Resource):
+        """Single user in project operations."""
+
+        @projects_ns.doc("remove_user_from_project")
+        @projects_ns.response(204, "Deleted")
+        @projects_ns.response(401, "Unauthorized", error_model)
+        @jwt_required()
+        def delete(self, project_id: str, user_id: str):
+            """Remove a user from a project."""
+            from app.api.v1.projects.routes import remove_user_from_project
+            return remove_user_from_project(project_id, user_id)

@@ -66,9 +66,54 @@ def create_common_models(api: Api) -> dict:
     }
 
 
+def create_project_models(api: Api) -> dict:
+    """Create project-related API models."""
+    create_project_request = api.model("CreateProjectRequest", {
+        "name": fields.String(required=True, description="Project name", example="Office Building A"),
+        "address": fields.String(description="Project address", example="123 Main St"),
+    })
+
+    update_project_request = api.model("UpdateProjectRequest", {
+        "name": fields.String(description="Project name", example="Office Building A"),
+        "address": fields.String(description="Project address", example="123 Main St"),
+    })
+
+    add_user_request = api.model("AddUserRequest", {
+        "user_id": fields.String(required=True, description="UUID of user to add"),
+    })
+
+    project_response = api.model("ProjectResponse", {
+        "id": fields.String(description="Project UUID"),
+        "name": fields.String(description="Project name"),
+        "address": fields.String(description="Project address"),
+        "owner_id": fields.String(description="Owner UUID"),
+        "user_count": fields.Integer(description="Number of users"),
+        "created_at": fields.String(description="Creation timestamp"),
+    })
+
+    project_list_response = api.model("ProjectListResponse", {
+        "projects": fields.List(fields.Nested(project_response)),
+        "total": fields.Integer(description="Total count"),
+    })
+
+    message_response = api.model("MessageResponse", {
+        "message": fields.String(description="Response message"),
+    })
+
+    return {
+        "create_project_request": create_project_request,
+        "update_project_request": update_project_request,
+        "add_user_request": add_user_request,
+        "project_response": project_response,
+        "project_list_response": project_list_response,
+        "message_response": message_response,
+    }
+
+
 def create_all_models(api: Api) -> dict:
     """Create all API models for Swagger documentation."""
     models = {}
     models.update(create_auth_models(api))
     models.update(create_common_models(api))
+    models.update(create_project_models(api))
     return models
