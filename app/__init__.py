@@ -47,7 +47,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Initialize extensions
-    CORS(app)
+    cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    CORS(app, supports_credentials=True, origins=cors_origins)
     db.init_app(app)
     jwt.init_app(app)
     limiter.init_app(app)
