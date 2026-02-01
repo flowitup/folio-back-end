@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 COPY app/ app/
 COPY config/ config/
-COPY infrastructure/ infrastructure/
+COPY stack/ stack/
 COPY outbox/ outbox/
 COPY migrations/ migrations/
 COPY scripts/ scripts/

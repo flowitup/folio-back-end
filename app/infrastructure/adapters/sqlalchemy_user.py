@@ -1,6 +1,6 @@
 """SQLAlchemy implementation of UserRepositoryPort."""
 
-from typing import Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -32,6 +32,17 @@ class SQLAlchemyUserRepository:
         if not user_model:
             return None
         return self._to_entity(user_model)
+
+    def search_by_email(self, query: str, limit: int = 10) -> List[Tuple[UUID, str]]:
+        """Search users by email. Returns list of (id, email) tuples."""
+        users = (
+            self._session.query(UserModel)
+            .filter(UserModel.email.ilike(f"%{query}%"))
+            .filter(UserModel.is_active == True)
+            .limit(limit)
+            .all()
+        )
+        return [(u.id, u.email) for u in users]
 
     def save(self, user: User) -> User:
         """Save a user (create or update)."""
