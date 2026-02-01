@@ -26,6 +26,7 @@ from scripts.seed_auth import (
     seed_permissions,
     seed_roles,
     create_admin_user,
+    create_client_user,
     get_admin_credentials,
 )
 from scripts.seed_project import seed_projects
@@ -51,6 +52,10 @@ def main():
             if email and password:
                 print(f"\n3. Creating admin user: {email}...")
                 admin_user = create_admin_user(email, password, role_map)
+
+                # Also create a client user for testing
+                print("\n4. Creating client user: client@example.com...")
+                create_client_user("client@example.com", "password123", role_map)
             else:
                 print("\nError: --with-admin requires credentials")
                 print("Options:")
@@ -60,7 +65,7 @@ def main():
 
         if "--with-projects" in sys.argv:
             if admin_user:
-                print("\n4. Creating sample projects...")
+                print("\n5. Creating sample projects...")
                 seed_projects(admin_user)
             else:
                 print("\nError: --with-projects requires --with-admin")

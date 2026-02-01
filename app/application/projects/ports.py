@@ -1,7 +1,7 @@
 """Project repository port."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 from app.domain.entities.project import Project
@@ -48,4 +48,9 @@ class IProjectRepository(ABC):
     @abstractmethod
     def remove_user(self, project_id: UUID, user_id: UUID) -> None:
         """Remove user from project."""
+        ...
+
+    @abstractmethod
+    def get_project_users(self, project_id: UUID) -> List[Tuple[UUID, str]]:
+        """Get users assigned to a project. Returns list of (id, email) tuples."""
         ...

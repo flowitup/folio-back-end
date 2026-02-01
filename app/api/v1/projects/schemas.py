@@ -42,3 +42,15 @@ class ErrorResponse(BaseModel):
     error: str
     message: str
     status_code: int
+
+
+class ProjectUserResponse(BaseModel):
+    """User associated with a project."""
+    id: str
+    email: str
+
+
+class ProjectUsersListResponse(BaseModel):
+    """List of users for a project."""
+    users: List[ProjectUserResponse]
+    total: int

@@ -1,6 +1,6 @@
 """SQLAlchemy implementation of project repository."""
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy.orm import Session, joinedload
@@ -78,7 +78,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         user = self._session.query(UserModel).filter_by(id=user_id).first()
         if project and user and user not in project.users:
             project.users.append(user)
-            self._session.flush()
+            self._session.commit()
 
     def remove_user(self, project_id: UUID, user_id: UUID) -> None:
         project = (
@@ -90,7 +90,18 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         user = self._session.query(UserModel).filter_by(id=user_id).first()
         if project and user and user in project.users:
             project.users.remove(user)
-            self._session.flush()
+            self._session.commit()
+
+    def get_project_users(self, project_id: UUID) -> List[Tuple[UUID, str]]:
+        project = (
+            self._session.query(ProjectModel)
+            .options(joinedload(ProjectModel.users))
+            .filter_by(id=project_id)
+            .first()
+        )
+        if not project:
+            return []
+        return [(u.id, u.email) for u in project.users]
 
     def _to_entity(self, model: ProjectModel) -> Project:
         return Project(

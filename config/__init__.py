@@ -67,9 +67,13 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(minutes=30)
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
     JWT_TOKEN_LOCATION: tuple = ("headers", "cookies")
-    JWT_COOKIE_SECURE: bool = get_env("FLASK_ENV", default="development") == "production"
-    JWT_COOKIE_CSRF_PROTECT: bool = True
-    JWT_COOKIE_SAMESITE: str = "Lax"
+    # For cross-origin requests (frontend:3000 -> backend:5000), we need SameSite=None
+    # SameSite=None requires Secure=True, but for local dev over HTTP we must use False
+    # In production, both should be True over HTTPS
+    _is_production: bool = get_env("FLASK_ENV", default="development") == "production"
+    JWT_COOKIE_SECURE: bool = _is_production
+    JWT_COOKIE_CSRF_PROTECT: bool = _is_production  # Disable CSRF for dev (cross-origin)
+    JWT_COOKIE_SAMESITE: str = "None" if not _is_production else "Strict"
 
     # Rate Limiting
     RATELIMIT_STORAGE_URL: str = get_env("REDIS_URL", default="redis://localhost:6379/1")

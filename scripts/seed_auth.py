@@ -124,6 +124,32 @@ def create_admin_user(email: str, password: str, role_map: dict) -> UserModel | 
     return user
 
 
+def create_client_user(email: str, password: str, role_map: dict) -> UserModel | None:
+    """Create a client user with basic 'user' role."""
+    existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
+    if existing:
+        print(f"  User '{email}' already exists, skipping.")
+        return existing
+
+    ph = PasswordHasher()
+    password_hash = ph.hash(password)
+
+    user = UserModel(
+        id=uuid4(),
+        email=email.lower(),
+        password_hash=password_hash,
+        is_active=True,
+    )
+
+    if "user" in role_map:
+        user.roles.append(role_map["user"])
+
+    db.session.add(user)
+    db.session.commit()
+    print(f"  Created client user: {email}")
+    return user
+
+
 def get_admin_credentials() -> tuple[str | None, str | None]:
     """Get admin credentials from env vars or CLI args."""
     email = os.environ.get("ADMIN_EMAIL")

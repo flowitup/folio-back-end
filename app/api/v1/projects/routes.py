@@ -9,7 +9,8 @@ from pydantic import ValidationError
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
     CreateProjectRequest, UpdateProjectRequest, AddUserRequest,
-    ProjectResponse, ProjectListResponse, ErrorResponse
+    ProjectResponse, ProjectListResponse, ErrorResponse,
+    ProjectUserResponse, ProjectUsersListResponse
 )
 from app.api.v1.projects.decorators import require_permission, has_permission
 from app.application.projects import CreateProjectRequest as CreateDTO
@@ -183,6 +184,34 @@ def delete_project(project_id: str):
     return "", 204
 
 
+@projects_bp.route("/<project_id>/users", methods=["GET"])
+@jwt_required()
+@require_permission("project:read")
+def get_project_users(project_id: str):
+    """Get users assigned to a project."""
+    container = get_container()
+
+    try:
+        # Verify project exists
+        container.get_project_usecase.execute(UUID(project_id))
+    except ProjectNotFoundError:
+        return jsonify(ErrorResponse(
+            error="NotFound",
+            message=f"Project {project_id} not found",
+            status_code=404
+        ).model_dump()), 404
+
+    users = container.project_repository.get_project_users(UUID(project_id))
+
+    return jsonify(ProjectUsersListResponse(
+        users=[
+            ProjectUserResponse(id=str(u[0]), email=u[1])
+            for u in users
+        ],
+        total=len(users)
+    ).model_dump())
+
+
 @projects_bp.route("/<project_id>/users", methods=["POST"])
 @jwt_required()
 @require_permission("project:manage_users")
@@ -199,6 +228,26 @@ def add_user_to_project(project_id: str):
         ).model_dump()), 400
 
     container = get_container()
+
+    # Verify project exists
+    try:
+        container.get_project_usecase.execute(UUID(project_id))
+    except ProjectNotFoundError:
+        return jsonify(ErrorResponse(
+            error="NotFound",
+            message=f"Project {project_id} not found",
+            status_code=404
+        ).model_dump()), 404
+
+    # Verify user exists
+    user = container.user_repository.find_by_id(UUID(data.user_id))
+    if not user:
+        return jsonify(ErrorResponse(
+            error="NotFound",
+            message=f"User {data.user_id} not found",
+            status_code=404
+        ).model_dump()), 404
+
     container.project_repository.add_user(UUID(project_id), UUID(data.user_id))
 
     return jsonify({"message": "User added to project"}), 200
