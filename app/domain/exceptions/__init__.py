@@ -15,6 +15,13 @@ from app.domain.exceptions.project_exceptions import (
     ProjectAccessDeniedError,
     InvalidProjectDataError,
 )
+from app.domain.exceptions.labor_exceptions import (
+    LaborError,
+    WorkerNotFoundError,
+    LaborEntryNotFoundError,
+    DuplicateEntryError,
+    InvalidWorkerDataError,
+)
 
 __all__ = [
     "AuthenticationError",
@@ -28,4 +35,9 @@ __all__ = [
     "ProjectNotFoundError",
     "ProjectAccessDeniedError",
     "InvalidProjectDataError",
+    "LaborError",
+    "WorkerNotFoundError",
+    "LaborEntryNotFoundError",
+    "DuplicateEntryError",
+    "InvalidWorkerDataError",
 ]

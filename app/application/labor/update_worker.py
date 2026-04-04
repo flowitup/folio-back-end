@@ -1,0 +1,72 @@
+"""Update worker use case."""
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Optional
+from uuid import UUID
+
+from app.application.labor.ports import IWorkerRepository
+from app.domain.exceptions.labor_exceptions import (
+    WorkerNotFoundError,
+    InvalidWorkerDataError,
+)
+
+
+@dataclass
+class UpdateWorkerRequest:
+    worker_id: UUID
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    daily_rate: Optional[Decimal] = None
+
+
+@dataclass
+class UpdateWorkerResponse:
+    id: str
+    project_id: str
+    name: str
+    phone: Optional[str]
+    daily_rate: float
+    is_active: bool
+    created_at: str
+
+
+class UpdateWorkerUseCase:
+    """Update an existing worker."""
+
+    def __init__(self, worker_repo: IWorkerRepository):
+        self._repo = worker_repo
+
+    def execute(self, request: UpdateWorkerRequest) -> UpdateWorkerResponse:
+        worker = self._repo.find_by_id(request.worker_id)
+        if not worker:
+            raise WorkerNotFoundError(str(request.worker_id))
+
+        if request.name is not None:
+            if len(request.name.strip()) == 0:
+                raise InvalidWorkerDataError("Worker name cannot be empty")
+            if len(request.name) > 255:
+                raise InvalidWorkerDataError("Worker name exceeds 255 characters")
+            worker.name = request.name.strip()
+
+        if request.phone is not None:
+            worker.phone = request.phone.strip() if request.phone else None
+
+        if request.daily_rate is not None:
+            if request.daily_rate <= 0:
+                raise InvalidWorkerDataError("Daily rate must be greater than 0")
+            worker.daily_rate = request.daily_rate
+
+        worker.updated_at = datetime.now(timezone.utc)
+        saved = self._repo.update(worker)
+
+        return UpdateWorkerResponse(
+            id=str(saved.id),
+            project_id=str(saved.project_id),
+            name=saved.name,
+            phone=saved.phone,
+            daily_rate=float(saved.daily_rate),
+            is_active=saved.is_active,
+            created_at=saved.created_at.isoformat(),
+        )

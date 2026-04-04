@@ -15,6 +15,8 @@ from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.role import RoleModel
 from app.infrastructure.database.models.permission import PermissionModel
 from app.infrastructure.database.models.project import ProjectModel
+from app.infrastructure.database.models.worker import WorkerModel
+from app.infrastructure.database.models.labor_entry import LaborEntryModel
 
 __all__ = [
     "Base",
@@ -25,4 +27,6 @@ __all__ = [
     "RoleModel",
     "PermissionModel",
     "ProjectModel",
+    "WorkerModel",
+    "LaborEntryModel",
 ]

@@ -14,6 +14,9 @@ Usage:
     # Seed with admin user and sample projects
     uv run python scripts/seed.py --with-admin admin@example.com password --with-projects
 
+    # Seed with labor data (requires projects to exist)
+    uv run python scripts/seed.py --with-admin admin@example.com password --with-projects --with-labor
+
 Security Note:
     Prefer environment variables over CLI args to avoid password exposure
     in shell history. CLI args are acceptable for local development only.
@@ -30,6 +33,7 @@ from scripts.seed_auth import (
     get_admin_credentials,
 )
 from scripts.seed_project import seed_projects
+from scripts.seed_labor import seed_labor
 
 
 def main():
@@ -70,6 +74,10 @@ def main():
             else:
                 print("\nError: --with-projects requires --with-admin")
                 sys.exit(1)
+
+        if "--with-labor" in sys.argv:
+            print("\n6. Creating sample labor data...")
+            seed_labor()
 
         print("\nSeeding complete!")
 

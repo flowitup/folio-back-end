@@ -31,6 +31,19 @@ from app.application.projects import (
     UpdateProjectUseCase,
     DeleteProjectUseCase,
 )
+from app.application.labor import (
+    IWorkerRepository,
+    ILaborEntryRepository,
+    CreateWorkerUseCase,
+    UpdateWorkerUseCase,
+    DeleteWorkerUseCase,
+    ListWorkersUseCase,
+    LogAttendanceUseCase,
+    UpdateAttendanceUseCase,
+    DeleteAttendanceUseCase,
+    ListLaborEntriesUseCase,
+    GetLaborSummaryUseCase,
+)
 
 
 # =============================================================================
@@ -98,6 +111,10 @@ class Container:
     token_issuer: Optional[TokenIssuerPort] = None
     session_manager: Optional[SessionManagerPort] = None
 
+    # Labor ports
+    worker_repository: Optional[IWorkerRepository] = None
+    labor_entry_repository: Optional[ILaborEntryRepository] = None
+
     # Domain services (configured after ports)
     auth_service: Optional[AuthService] = None
     authorization_service: Optional[AuthorizationService] = None
@@ -113,6 +130,17 @@ class Container:
     update_project_usecase: Optional[UpdateProjectUseCase] = None
     delete_project_usecase: Optional[DeleteProjectUseCase] = None
 
+    # Labor use cases
+    create_worker_usecase: Optional[CreateWorkerUseCase] = None
+    update_worker_usecase: Optional[UpdateWorkerUseCase] = None
+    delete_worker_usecase: Optional[DeleteWorkerUseCase] = None
+    list_workers_usecase: Optional[ListWorkersUseCase] = None
+    log_attendance_usecase: Optional[LogAttendanceUseCase] = None
+    update_attendance_usecase: Optional[UpdateAttendanceUseCase] = None
+    delete_attendance_usecase: Optional[DeleteAttendanceUseCase] = None
+    list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
+    get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
+
 
 # Global container instance
 container = Container()
@@ -126,6 +154,8 @@ def configure_container(
     password_hasher: Optional[PasswordHasherPort] = None,
     token_issuer: Optional[TokenIssuerPort] = None,
     session_manager: Optional[SessionManagerPort] = None,
+    worker_repository: Optional[IWorkerRepository] = None,
+    labor_entry_repository: Optional[ILaborEntryRepository] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -143,6 +173,8 @@ def configure_container(
         password_hasher=password_hasher,
         token_issuer=token_issuer,
         session_manager=session_manager,
+        worker_repository=worker_repository,
+        labor_entry_repository=labor_entry_repository,
     )
 
     # Wire up domain services if repositories are provided
@@ -168,6 +200,22 @@ def configure_container(
         container.get_project_usecase = GetProjectUseCase(project_repository)
         container.update_project_usecase = UpdateProjectUseCase(project_repository)
         container.delete_project_usecase = DeleteProjectUseCase(project_repository)
+
+    # Wire up labor use cases if repositories are available
+    if worker_repository:
+        container.create_worker_usecase = CreateWorkerUseCase(worker_repository)
+        container.update_worker_usecase = UpdateWorkerUseCase(worker_repository)
+        container.delete_worker_usecase = DeleteWorkerUseCase(worker_repository)
+        container.list_workers_usecase = ListWorkersUseCase(worker_repository)
+
+    if worker_repository and labor_entry_repository:
+        container.log_attendance_usecase = LogAttendanceUseCase(worker_repository, labor_entry_repository)
+        container.list_labor_entries_usecase = ListLaborEntriesUseCase(worker_repository, labor_entry_repository)
+
+    if labor_entry_repository:
+        container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository)
+        container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
+        container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
 
     return container
 
