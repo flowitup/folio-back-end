@@ -2,10 +2,10 @@ name: CI Pipeline
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
     types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
-    branches: [main]
+    branches: [master]
 
 # Prevent concurrent runs from conflicting
 concurrency:
@@ -71,7 +71,7 @@ jobs:
         id: main-version
         run: |
           # Fetch main branch version from remote
-          MAIN_VERSION=$(git show origin/main:pyproject.toml 2>/dev/null | sed -n 's/^version = "\([^"]*\)"/\1/p' || echo "0.0.0")
+          MAIN_VERSION=$(git show origin/master:pyproject.toml 2>/dev/null | sed -n 's/^version = "\([^"]*\)"/\1/p' || echo "0.0.0")
           echo "main_version=$MAIN_VERSION" >> $GITHUB_OUTPUT
           echo "Main branch version: $MAIN_VERSION"
 
@@ -225,7 +225,7 @@ jobs:
   release:
     runs-on: self-hosted
     timeout-minutes: 5
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
