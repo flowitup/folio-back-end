@@ -1,7 +1,6 @@
 """Unit tests for CreateInvoiceUseCase."""
 
 from datetime import date
-from decimal import Decimal
 from unittest.mock import MagicMock
 from uuid import uuid4
 import pytest
@@ -23,10 +22,12 @@ def make_mock_repo():
 def make_request(**kwargs):
     """Factory helper for test requests."""
     defaults = dict(
-        project_id=uuid4(), created_by=uuid4(),
-        type=InvoiceType.CLIENT, issue_date=date.today(),
+        project_id=uuid4(),
+        created_by=uuid4(),
+        type=InvoiceType.CLIENT,
+        issue_date=date.today(),
         recipient_name="ACME Corp",
-        items=[{"description": "Work", "quantity": 10, "unit_price": 50}]
+        items=[{"description": "Work", "quantity": 10, "unit_price": 50}],
     )
     defaults.update(kwargs)
     return CreateInvoiceRequest(**defaults)
@@ -77,10 +78,7 @@ class TestCreateInvoiceSuccess:
         """Should preserve optional fields when provided."""
         repo = make_mock_repo()
         use_case = CreateInvoiceUseCase(repo)
-        request = make_request(
-            recipient_address="123 Main St",
-            notes="Important invoice"
-        )
+        request = make_request(recipient_address="123 Main St", notes="Important invoice")
 
         result = use_case.execute(request)
 
@@ -107,9 +105,7 @@ class TestCreateInvoiceSuccess:
         """Should handle decimal prices."""
         repo = make_mock_repo()
         use_case = CreateInvoiceUseCase(repo)
-        request = make_request(
-            items=[{"description": "Work", "quantity": 2.5, "unit_price": 10.50}]
-        )
+        request = make_request(items=[{"description": "Work", "quantity": 2.5, "unit_price": 10.50}])
 
         result = use_case.execute(request)
 
@@ -157,9 +153,7 @@ class TestCreateInvoiceValidationErrors:
         use_case = CreateInvoiceUseCase(repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="[Qq]uantity"):
-            use_case.execute(
-                make_request(items=[{"description": "X", "quantity": 0, "unit_price": 10}])
-            )
+            use_case.execute(make_request(items=[{"description": "X", "quantity": 0, "unit_price": 10}]))
 
     def test_negative_quantity_raises(self):
         """Should reject item with negative quantity."""
@@ -167,9 +161,7 @@ class TestCreateInvoiceValidationErrors:
         use_case = CreateInvoiceUseCase(repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="[Qq]uantity"):
-            use_case.execute(
-                make_request(items=[{"description": "X", "quantity": -1, "unit_price": 10}])
-            )
+            use_case.execute(make_request(items=[{"description": "X", "quantity": -1, "unit_price": 10}]))
 
     def test_negative_price_raises(self):
         """Should reject item with negative price."""
@@ -177,9 +169,7 @@ class TestCreateInvoiceValidationErrors:
         use_case = CreateInvoiceUseCase(repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="[Pp]rice|[Uu]nit"):
-            use_case.execute(
-                make_request(items=[{"description": "X", "quantity": 1, "unit_price": -5}])
-            )
+            use_case.execute(make_request(items=[{"description": "X", "quantity": 1, "unit_price": -5}]))
 
     def test_empty_description_raises(self):
         """Should reject item with empty description."""
@@ -187,9 +177,7 @@ class TestCreateInvoiceValidationErrors:
         use_case = CreateInvoiceUseCase(repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="[Dd]escription"):
-            use_case.execute(
-                make_request(items=[{"description": "", "quantity": 1, "unit_price": 10}])
-            )
+            use_case.execute(make_request(items=[{"description": "", "quantity": 1, "unit_price": 10}]))
 
     def test_whitespace_description_raises(self):
         """Should reject item with whitespace-only description."""
@@ -197,17 +185,13 @@ class TestCreateInvoiceValidationErrors:
         use_case = CreateInvoiceUseCase(repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="[Dd]escription"):
-            use_case.execute(
-                make_request(items=[{"description": "   ", "quantity": 1, "unit_price": 10}])
-            )
+            use_case.execute(make_request(items=[{"description": "   ", "quantity": 1, "unit_price": 10}]))
 
     def test_zero_price_allowed(self):
         """Should allow zero price (e.g., for donation/no-charge items)."""
         repo = make_mock_repo()
         use_case = CreateInvoiceUseCase(repo)
-        request = make_request(
-            items=[{"description": "X", "quantity": 1, "unit_price": 0}]
-        )
+        request = make_request(items=[{"description": "X", "quantity": 1, "unit_price": 0}])
 
         result = use_case.execute(request)
 

@@ -15,6 +15,7 @@ class Role:
 
     Roles are assigned to users and define their access rights.
     """
+
     id: UUID
     name: str
     description: Optional[str] = None

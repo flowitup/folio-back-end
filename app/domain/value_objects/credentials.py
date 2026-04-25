@@ -9,6 +9,7 @@ EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 @dataclass(frozen=True, slots=True)
 class Email:
     """Immutable email value object with validation."""
+
     value: str
 
     def __post_init__(self) -> None:
@@ -24,6 +25,7 @@ class Email:
 @dataclass(frozen=True, slots=True)
 class Password:
     """Immutable password value object with validation."""
+
     value: str
 
     def __post_init__(self) -> None:

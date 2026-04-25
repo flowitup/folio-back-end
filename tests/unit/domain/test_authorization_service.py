@@ -44,9 +44,7 @@ class TestAuthorizationServiceGetUserPermissions:
         user.roles = [admin_role, user_role]
         return user
 
-    def test_get_user_permissions_aggregates_all_roles(
-        self, authz_service, mock_user_repo, mock_user_with_roles
-    ):
+    def test_get_user_permissions_aggregates_all_roles(self, authz_service, mock_user_repo, mock_user_with_roles):
         """Should return all permissions aggregated from all roles."""
         mock_user_repo.find_by_id.return_value = mock_user_with_roles
 
@@ -192,9 +190,7 @@ class TestAuthorizationServiceHasAnyPermission:
         user.roles = [role]
         mock_repo.find_by_id.return_value = user
 
-        result = service.has_any_permission(
-            user.id, ["project:read", "project:write", "user:delete"]
-        )
+        result = service.has_any_permission(user.id, ["project:read", "project:write", "user:delete"])
         assert result is True
 
     def test_has_any_permission_false(self, authz_service):
@@ -238,9 +234,7 @@ class TestAuthorizationServiceHasAllPermissions:
         user.roles = [role]
         mock_repo.find_by_id.return_value = user
 
-        result = service.has_all_permissions(
-            user.id, ["project:read", "project:write"]
-        )
+        result = service.has_all_permissions(user.id, ["project:read", "project:write"])
         assert result is True
 
     def test_has_all_permissions_false(self, authz_service):
@@ -256,9 +250,7 @@ class TestAuthorizationServiceHasAllPermissions:
         user.roles = [role]
         mock_repo.find_by_id.return_value = user
 
-        result = service.has_all_permissions(
-            user.id, ["project:read", "project:write"]
-        )
+        result = service.has_all_permissions(user.id, ["project:read", "project:write"])
         assert result is False
 
 

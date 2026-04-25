@@ -13,6 +13,7 @@ class Project:
 
     Represents a construction project that users can be assigned to.
     """
+
     id: UUID
     name: str
     owner_id: UUID

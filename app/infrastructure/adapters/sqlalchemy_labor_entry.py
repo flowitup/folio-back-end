@@ -50,11 +50,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
     ) -> List[LaborEntry]:
-        query = (
-            self._session.query(LaborEntryModel)
-            .join(WorkerModel)
-            .filter(WorkerModel.project_id == project_id)
-        )
+        query = self._session.query(LaborEntryModel).join(WorkerModel).filter(WorkerModel.project_id == project_id)
         if date_from:
             query = query.filter(LaborEntryModel.date >= date_from)
         if date_to:

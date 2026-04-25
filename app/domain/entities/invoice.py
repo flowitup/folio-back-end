@@ -7,8 +7,6 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID
 
-from app.domain.value_objects.invoice_item import InvoiceItem
-
 
 class InvoiceType(str, Enum):
     CLIENT = "client"

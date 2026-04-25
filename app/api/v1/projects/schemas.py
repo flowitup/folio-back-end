@@ -6,23 +6,27 @@ from typing import Optional, List
 
 class CreateProjectRequest(BaseModel):
     """Request body for creating a project."""
+
     name: str = Field(..., min_length=1, max_length=255)
     address: Optional[str] = Field(None, max_length=500)
 
 
 class UpdateProjectRequest(BaseModel):
     """Request body for updating a project."""
+
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     address: Optional[str] = Field(None, max_length=500)
 
 
 class AddUserRequest(BaseModel):
     """Request body for adding user to project."""
+
     user_id: str = Field(..., description="UUID of user to add")
 
 
 class ProjectResponse(BaseModel):
     """Single project response."""
+
     id: str
     name: str
     address: Optional[str]
@@ -33,12 +37,14 @@ class ProjectResponse(BaseModel):
 
 class ProjectListResponse(BaseModel):
     """List of projects response."""
+
     projects: List[ProjectResponse]
     total: int
 
 
 class ErrorResponse(BaseModel):
     """Error response format."""
+
     error: str
     message: str
     status_code: int
@@ -46,11 +52,13 @@ class ErrorResponse(BaseModel):
 
 class ProjectUserResponse(BaseModel):
     """User associated with a project."""
+
     id: str
     email: str
 
 
 class ProjectUsersListResponse(BaseModel):
     """List of users for a project."""
+
     users: List[ProjectUserResponse]
     total: int

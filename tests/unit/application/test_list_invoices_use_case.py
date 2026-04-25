@@ -14,9 +14,14 @@ from app.domain.value_objects.invoice_item import InvoiceItem
 def make_invoice(type_=InvoiceType.CLIENT, invoice_number="INV-2026-0001"):
     """Factory helper for test invoices."""
     return Invoice(
-        id=uuid4(), project_id=uuid4(), invoice_number=invoice_number,
-        type=type_, issue_date=date.today(), recipient_name="Acme",
-        created_by=uuid4(), created_at=datetime.now(timezone.utc),
+        id=uuid4(),
+        project_id=uuid4(),
+        invoice_number=invoice_number,
+        type=type_,
+        issue_date=date.today(),
+        recipient_name="Acme",
+        created_by=uuid4(),
+        created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
         items=[InvoiceItem("Work", Decimal("1"), Decimal("100"))],
     )
@@ -99,9 +104,7 @@ class TestListInvoicesFiltering:
 
         use_case = ListInvoicesUseCase(repo)
         project_id = uuid4()
-        request = ListInvoicesRequest(
-            project_id=project_id, invoice_type=InvoiceType.SUPPLIER
-        )
+        request = ListInvoicesRequest(project_id=project_id, invoice_type=InvoiceType.SUPPLIER)
         result = use_case.execute(request)
 
         assert len(result) == 1

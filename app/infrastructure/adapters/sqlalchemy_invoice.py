@@ -93,9 +93,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             # Unique constraint on (project_id, invoice_number) was violated due
             # to a concurrent request generating the same sequential number.
             if "uq_project_invoice_number" in str(e.orig):
-                raise InvoiceNumberConflictError(
-                    "Invoice number conflict, please retry"
-                ) from e
+                raise InvoiceNumberConflictError("Invoice number conflict, please retry") from e
             raise
         return _model_to_entity(model)
 
@@ -103,12 +101,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model = self._session.query(InvoiceModel).filter_by(id=invoice_id).first()
         return _model_to_entity(model) if model else None
 
-    def list_by_project(
-        self, project_id: UUID, invoice_type: Optional[InvoiceType] = None
-    ) -> List[Invoice]:
-        query = self._session.query(InvoiceModel).filter(
-            InvoiceModel.project_id == project_id
-        )
+    def list_by_project(self, project_id: UUID, invoice_type: Optional[InvoiceType] = None) -> List[Invoice]:
+        query = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
         if invoice_type is not None:
             query = query.filter(InvoiceModel.type == invoice_type.value)
         models = query.order_by(InvoiceModel.created_at.desc()).all()

@@ -26,16 +26,14 @@ from app.domain.exceptions.invoice_exceptions import (
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
     """Return a standardised JSON error response."""
-    return jsonify(ErrorResponse(
-        error=error, message=message, status_code=status_code
-    ).model_dump()), status_code
+    return jsonify(ErrorResponse(error=error, message=message, status_code=status_code).model_dump()), status_code
 
 
 def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
@@ -51,6 +49,7 @@ def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["GET"])
 @jwt_required()
@@ -77,10 +76,12 @@ def list_invoices(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify({
-        "invoices": [dataclasses.asdict(r) for r in results],
-        "total": len(results),
-    })
+    return jsonify(
+        {
+            "invoices": [dataclasses.asdict(r) for r in results],
+            "total": len(results),
+        }
+    )
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])

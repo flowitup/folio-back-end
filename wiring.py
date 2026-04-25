@@ -24,7 +24,6 @@ from app.domain.services.authorization import AuthorizationService
 # Import use cases
 from app.application.usecases import LoginUseCase, LogoutUseCase
 from app.application.projects import (
-    IProjectRepository,
     CreateProjectUseCase,
     ListProjectsUseCase,
     GetProjectUseCase,
@@ -53,7 +52,6 @@ from app.application.invoice import (
     DeleteInvoiceUseCase,
 )
 
-
 # =============================================================================
 # PORTS (Interfaces) - Legacy ports kept for compatibility
 # =============================================================================
@@ -68,31 +66,25 @@ class EmailPort(Protocol):
         subject: str,
         body: str,
         html_body: Optional[str] = None,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class QueuePort(Protocol):
     """Port for task queue operations."""
 
-    def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str:
-        ...
+    def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str: ...
 
 
 class ProjectRepository(Protocol):
     """Port for project persistence operations."""
 
-    def find_all(self) -> list:
-        ...
+    def find_all(self) -> list: ...
 
-    def find_by_id(self, project_id: str) -> Optional[Any]:
-        ...
+    def find_by_id(self, project_id: str) -> Optional[Any]: ...
 
-    def save(self, project: Any) -> Any:
-        ...
+    def save(self, project: Any) -> Any: ...
 
-    def delete(self, project_id: str) -> bool:
-        ...
+    def delete(self, project_id: str) -> bool: ...
 
 
 # =============================================================================

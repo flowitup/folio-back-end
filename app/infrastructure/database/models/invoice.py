@@ -3,11 +3,14 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Column, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.infrastructure.database.models.base import Base
+
+# Use JSONB on PostgreSQL, generic JSON elsewhere (SQLite for tests)
+ItemsJSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 class InvoiceModel(Base):
@@ -32,7 +35,7 @@ class InvoiceModel(Base):
     recipient_name = Column(String(255), nullable=False)
     recipient_address = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
-    items = Column(JSONB, nullable=False, default=list)
+    items = Column(ItemsJSON, nullable=False, default=list)
     created_by = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -48,9 +51,7 @@ class InvoiceModel(Base):
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
 
-    __table_args__ = (
-        UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),
-    )
+    __table_args__ = (UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),)
 
     def __repr__(self) -> str:
         return f"<Invoice {self.invoice_number} project={self.project_id}>"

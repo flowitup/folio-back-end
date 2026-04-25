@@ -7,9 +7,7 @@ from uuid import UUID
 class TokenIssuerPort(Protocol):
     """Port for JWT token operations."""
 
-    def create_access_token(
-        self, user_id: UUID, additional_claims: Optional[Dict[str, Any]] = None
-    ) -> str:
+    def create_access_token(self, user_id: UUID, additional_claims: Optional[Dict[str, Any]] = None) -> str:
         """Create short-lived access token."""
         ...
 

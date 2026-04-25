@@ -42,9 +42,7 @@ class TestAuthService:
         user.is_active = True
         return user
 
-    def test_authenticate_success(
-        self, auth_service, mock_user_repo, mock_hasher, mock_user
-    ):
+    def test_authenticate_success(self, auth_service, mock_user_repo, mock_hasher, mock_user):
         """Should return user ID for valid credentials."""
         mock_user_repo.find_by_email.return_value = mock_user
 
@@ -52,13 +50,9 @@ class TestAuthService:
 
         assert result == mock_user.id
         mock_user_repo.find_by_email.assert_called_once_with("test@example.com")
-        mock_hasher.verify.assert_called_once_with(
-            "password123", mock_user.password_hash
-        )
+        mock_hasher.verify.assert_called_once_with("password123", mock_user.password_hash)
 
-    def test_authenticate_user_not_found(
-        self, auth_service, mock_user_repo, mock_hasher
-    ):
+    def test_authenticate_user_not_found(self, auth_service, mock_user_repo, mock_hasher):
         """Should raise InvalidCredentialsError for unknown email (generic for security)."""
         mock_user_repo.find_by_email.return_value = None
 
@@ -69,9 +63,7 @@ class TestAuthService:
         # Verify timing-attack prevention (dummy hash called)
         mock_hasher.hash.assert_called_once_with("dummy_password")
 
-    def test_authenticate_inactive_user(
-        self, auth_service, mock_user_repo, mock_user
-    ):
+    def test_authenticate_inactive_user(self, auth_service, mock_user_repo, mock_user):
         """Should raise UserInactiveError for deactivated account."""
         mock_user.is_active = False
         mock_user_repo.find_by_email.return_value = mock_user
@@ -81,9 +73,7 @@ class TestAuthService:
 
         assert "deactivated" in str(exc_info.value).lower()
 
-    def test_authenticate_invalid_password(
-        self, auth_service, mock_user_repo, mock_hasher, mock_user
-    ):
+    def test_authenticate_invalid_password(self, auth_service, mock_user_repo, mock_hasher, mock_user):
         """Should raise InvalidCredentialsError for wrong password."""
         mock_user_repo.find_by_email.return_value = mock_user
         mock_hasher.verify.return_value = False
@@ -93,9 +83,7 @@ class TestAuthService:
 
         assert "Invalid email or password" in str(exc_info.value)
 
-    def test_authenticate_normalizes_email_lowercase(
-        self, auth_service, mock_user_repo, mock_hasher, mock_user
-    ):
+    def test_authenticate_normalizes_email_lowercase(self, auth_service, mock_user_repo, mock_hasher, mock_user):
         """Should lowercase email before lookup."""
         mock_user_repo.find_by_email.return_value = mock_user
 

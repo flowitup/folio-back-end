@@ -59,6 +59,7 @@ def create_app(config_class: type = Config) -> Flask:
 
     # Configure JWT handlers
     from app.infrastructure.jwt_handlers import configure_jwt_handlers
+
     configure_jwt_handlers(jwt)
 
     # Configure dependency injection container
@@ -77,6 +78,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.projects import projects_bp
     from app.api.v1.labor import labor_bp
     from app.api.v1.invoices import invoice_bp
+
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
@@ -85,6 +87,7 @@ def create_app(config_class: type = Config) -> Flask:
 
     # Initialize Swagger API documentation
     from app.api.swagger import init_swagger
+
     init_swagger(app)
 
     return app

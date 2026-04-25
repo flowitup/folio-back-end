@@ -12,6 +12,7 @@ from app.infrastructure.database.models.base import Base
 
 class WorkerModel(Base):
     """Worker database model."""
+
     __tablename__ = "workers"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)

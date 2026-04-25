@@ -8,7 +8,6 @@ from uuid import uuid4
 from app import db
 from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
 
-
 DEFAULT_PERMISSIONS = [
     {"name": "*:*", "resource": "*", "action": "*"},
     {"name": "project:create", "resource": "project", "action": "create"},

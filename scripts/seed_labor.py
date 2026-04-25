@@ -7,7 +7,6 @@ from uuid import uuid4
 from app import db
 from app.infrastructure.database.models import ProjectModel, WorkerModel, LaborEntryModel
 
-
 DEFAULT_WORKERS = [
     {"name": "Jean Dupont", "phone": "+33612345678", "daily_rate": Decimal("150.00")},
     {"name": "Pierre Martin", "phone": "+33623456789", "daily_rate": Decimal("175.00")},
@@ -22,11 +21,7 @@ def seed_workers(project: ProjectModel) -> list[WorkerModel]:
     workers = []
 
     for worker_data in DEFAULT_WORKERS:
-        existing = (
-            db.session.query(WorkerModel)
-            .filter_by(project_id=project.id, name=worker_data["name"])
-            .first()
-        )
+        existing = db.session.query(WorkerModel).filter_by(project_id=project.id, name=worker_data["name"]).first()
         if existing:
             print(f"    Worker '{worker_data['name']}' already exists, skipping.")
             workers.append(existing)
@@ -65,11 +60,7 @@ def seed_labor_entries(workers: list[WorkerModel]) -> None:
         for days_ago in [1, 2, 3, 5, 7, 8, 10, 12, 14]:
             entry_date = today - timedelta(days=days_ago)
 
-            existing = (
-                db.session.query(LaborEntryModel)
-                .filter_by(worker_id=worker.id, date=entry_date)
-                .first()
-            )
+            existing = db.session.query(LaborEntryModel).filter_by(worker_id=worker.id, date=entry_date).first()
             if existing:
                 continue
 

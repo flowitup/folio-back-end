@@ -13,6 +13,7 @@ from app.infrastructure.database.models.associations import user_roles, role_per
 
 class RoleModel(Base):
     """Role database model."""
+
     __tablename__ = "roles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -22,9 +23,7 @@ class RoleModel(Base):
 
     # Relationships
     users = relationship("UserModel", secondary=user_roles, back_populates="roles")
-    permissions = relationship(
-        "PermissionModel", secondary=role_permissions, back_populates="roles"
-    )
+    permissions = relationship("PermissionModel", secondary=role_permissions, back_populates="roles")
 
     def __repr__(self) -> str:
         return f"<Role {self.name}>"

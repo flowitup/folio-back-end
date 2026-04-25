@@ -3,6 +3,7 @@
 Usage (from construction-back-end/):
     uv run python scripts/reset_password.py admin@test.com password123
 """
+
 import sys
 
 from app import create_app, db

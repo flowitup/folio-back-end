@@ -3,7 +3,6 @@
 from decimal import Decimal
 from datetime import date, datetime, timezone
 from uuid import uuid4
-import pytest
 
 from app.domain.entities.invoice import Invoice, InvoiceType
 from app.domain.value_objects.invoice_item import InvoiceItem
@@ -12,11 +11,16 @@ from app.domain.value_objects.invoice_item import InvoiceItem
 def make_invoice(**kwargs):
     """Factory helper to create test invoice with sensible defaults."""
     defaults = dict(
-        id=uuid4(), project_id=uuid4(), invoice_number="INV-2026-0001",
-        type=InvoiceType.CLIENT, issue_date=date.today(),
-        recipient_name="ACME Corp", created_by=uuid4(),
-        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
-        items=[]
+        id=uuid4(),
+        project_id=uuid4(),
+        invoice_number="INV-2026-0001",
+        type=InvoiceType.CLIENT,
+        issue_date=date.today(),
+        recipient_name="ACME Corp",
+        created_by=uuid4(),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        items=[],
     )
     defaults.update(kwargs)
     return Invoice(**defaults)
@@ -66,9 +70,7 @@ class TestInvoiceItemTotal:
 
     def test_item_total_decimal_precision(self):
         """Item total preserves Decimal precision."""
-        item = InvoiceItem(
-            description="Y", quantity=Decimal("2.5"), unit_price=Decimal("12.40")
-        )
+        item = InvoiceItem(description="Y", quantity=Decimal("2.5"), unit_price=Decimal("12.40"))
         assert item.total == Decimal("31.00")
 
     def test_item_total_zero_quantity(self):
@@ -94,14 +96,8 @@ class TestInvoiceEquality:
     def test_equality_ignores_other_fields(self):
         """Equality only compares id, ignores other fields."""
         id_ = uuid4()
-        inv1 = make_invoice(
-            id=id_, recipient_name="A", invoice_number="INV-001",
-            type=InvoiceType.CLIENT
-        )
-        inv2 = make_invoice(
-            id=id_, recipient_name="B", invoice_number="INV-002",
-            type=InvoiceType.LABOR
-        )
+        inv1 = make_invoice(id=id_, recipient_name="A", invoice_number="INV-001", type=InvoiceType.CLIENT)
+        inv2 = make_invoice(id=id_, recipient_name="B", invoice_number="INV-002", type=InvoiceType.LABOR)
         assert inv1 == inv2  # Same id means equal
 
     def test_not_equal_to_other_types(self):
@@ -109,7 +105,7 @@ class TestInvoiceEquality:
         inv = make_invoice()
         assert inv != "not an invoice"
         assert inv != 123
-        assert inv != None
+        assert inv != None  # noqa: E711  -- explicitly test __eq__ with None
 
 
 class TestInvoiceHash:

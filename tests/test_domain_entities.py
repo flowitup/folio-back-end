@@ -33,7 +33,7 @@ class TestPermissionEntity:
     def test_permission_wildcard_resource(self):
         """Test wildcard resource matching."""
         perm = Permission(
-            id=UUID('12345678-1234-5678-1234-567812345678'),
+            id=UUID("12345678-1234-5678-1234-567812345678"),
             name="*:read",
             resource="*",
             action="read",
@@ -47,7 +47,7 @@ class TestPermissionEntity:
     def test_permission_wildcard_action(self):
         """Test wildcard action matching."""
         perm = Permission(
-            id=UUID('12345678-1234-5678-1234-567812345678'),
+            id=UUID("12345678-1234-5678-1234-567812345678"),
             name="project:*",
             resource="project",
             action="*",
@@ -61,7 +61,7 @@ class TestPermissionEntity:
     def test_permission_full_wildcard(self):
         """Test full wildcard (superuser) permission."""
         perm = Permission(
-            id=UUID('12345678-1234-5678-1234-567812345678'),
+            id=UUID("12345678-1234-5678-1234-567812345678"),
             name="*:*",
             resource="*",
             action="*",
@@ -128,10 +128,7 @@ class TestUserEntity:
 
     def test_create_user(self):
         """Test creating a user using factory method."""
-        user = User.create(
-            email="Test@Example.com",
-            password_hash="hashed_password"
-        )
+        user = User.create(email="Test@Example.com", password_hash="hashed_password")
 
         assert isinstance(user.id, UUID)
         assert user.email == "test@example.com"  # Should be lowercased and stripped
@@ -143,10 +140,7 @@ class TestUserEntity:
 
     def test_email_normalization(self):
         """Test that email is normalized (lowercased and stripped)."""
-        user = User.create(
-            email="  UPPER@CASE.COM  ",
-            password_hash="hash"
-        )
+        user = User.create(email="  UPPER@CASE.COM  ", password_hash="hash")
 
         assert user.email == "upper@case.com"
 

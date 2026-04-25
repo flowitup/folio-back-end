@@ -2,20 +2,14 @@
 
 import pytest
 from uuid import uuid4
-from datetime import datetime, timezone
 
-from app.infrastructure.database.models import ProjectModel, UserModel, RoleModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 
 
 @pytest.fixture
 def owner_user(session):
     """Create owner user for projects."""
-    user = UserModel(
-        id=uuid4(),
-        email="owner@test.com",
-        password_hash="hashed",
-        is_active=True
-    )
+    user = UserModel(id=uuid4(), email="owner@test.com", password_hash="hashed", is_active=True)
     session.add(user)
     session.commit()
     return user
@@ -24,12 +18,7 @@ def owner_user(session):
 @pytest.fixture
 def regular_user(session):
     """Create regular user to assign to projects."""
-    user = UserModel(
-        id=uuid4(),
-        email="user@test.com",
-        password_hash="hashed",
-        is_active=True
-    )
+    user = UserModel(id=uuid4(), email="user@test.com", password_hash="hashed", is_active=True)
     session.add(user)
     session.commit()
     return user
@@ -38,12 +27,7 @@ def regular_user(session):
 @pytest.fixture
 def sample_project(session, owner_user):
     """Create a sample project."""
-    project = ProjectModel(
-        id=uuid4(),
-        name="Test Project",
-        address="123 Test St",
-        owner_id=owner_user.id
-    )
+    project = ProjectModel(id=uuid4(), name="Test Project", address="123 Test St", owner_id=owner_user.id)
     session.add(project)
     session.commit()
     return project
@@ -54,12 +38,7 @@ class TestProjectModel:
 
     def test_create_project(self, session, owner_user):
         """Test creating a new project."""
-        project = ProjectModel(
-            id=uuid4(),
-            name="New Project",
-            address="456 New St",
-            owner_id=owner_user.id
-        )
+        project = ProjectModel(id=uuid4(), name="New Project", address="456 New St", owner_id=owner_user.id)
         session.add(project)
         session.commit()
 
@@ -71,11 +50,7 @@ class TestProjectModel:
 
     def test_create_project_without_address(self, session, owner_user):
         """Test creating project with null address."""
-        project = ProjectModel(
-            id=uuid4(),
-            name="No Address Project",
-            owner_id=owner_user.id
-        )
+        project = ProjectModel(id=uuid4(), name="No Address Project", owner_id=owner_user.id)
         session.add(project)
         session.commit()
 
@@ -161,7 +136,6 @@ class TestProjectUserAssociation:
         sample_project.users.append(regular_user)
         session.commit()
 
-        project_id = sample_project.id
         session.delete(sample_project)
         session.commit()
 
@@ -177,11 +151,7 @@ class TestProjectTimestamps:
 
     def test_created_at_auto_set(self, session, owner_user):
         """Test created_at is automatically set."""
-        project = ProjectModel(
-            id=uuid4(),
-            name="Timestamp Test",
-            owner_id=owner_user.id
-        )
+        project = ProjectModel(id=uuid4(), name="Timestamp Test", owner_id=owner_user.id)
         session.add(project)
         session.commit()
 
@@ -190,11 +160,7 @@ class TestProjectTimestamps:
 
     def test_updated_at_auto_set(self, session, owner_user):
         """Test updated_at is automatically set."""
-        project = ProjectModel(
-            id=uuid4(),
-            name="Timestamp Test",
-            owner_id=owner_user.id
-        )
+        project = ProjectModel(id=uuid4(), name="Timestamp Test", owner_id=owner_user.id)
         session.add(project)
         session.commit()
 

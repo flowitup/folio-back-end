@@ -1,7 +1,6 @@
 """Tests for authentication database models."""
 
 import pytest
-from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 
 from app.infrastructure.database.models import (
@@ -79,11 +78,7 @@ class TestUserModel:
         role_id = role.id
 
         # Verify association exists
-        result = session.execute(
-            user_roles.select().where(
-                user_roles.c.user_id == user_id
-            )
-        ).first()
+        result = session.execute(user_roles.select().where(user_roles.c.user_id == user_id)).first()
         assert result is not None
 
         # Delete user
@@ -91,11 +86,7 @@ class TestUserModel:
         session.commit()
 
         # Association should be deleted
-        result = session.execute(
-            user_roles.select().where(
-                user_roles.c.user_id == user_id
-            )
-        ).first()
+        result = session.execute(user_roles.select().where(user_roles.c.user_id == user_id)).first()
         assert result is None
 
         # Role should still exist
@@ -132,16 +123,8 @@ class TestRoleModel:
     def test_role_permission_relationship(self, session):
         """Test many-to-many relationship between roles and permissions."""
         role = RoleModel(name="editor")
-        perm1 = PermissionModel(
-            name="project:create",
-            resource="project",
-            action="create"
-        )
-        perm2 = PermissionModel(
-            name="project:read",
-            resource="project",
-            action="read"
-        )
+        perm1 = PermissionModel(name="project:create", resource="project", action="create")
+        perm2 = PermissionModel(name="project:read", resource="project", action="read")
 
         session.add_all([role, perm1, perm2])
         session.commit()
@@ -159,11 +142,7 @@ class TestRoleModel:
     def test_role_cascade_delete(self, session):
         """Test cascade delete for role-permission association."""
         role = RoleModel(name="temp_role")
-        perm = PermissionModel(
-            name="test:action",
-            resource="test",
-            action="action"
-        )
+        perm = PermissionModel(name="test:action", resource="test", action="action")
 
         session.add_all([role, perm])
         session.commit()
@@ -179,11 +158,7 @@ class TestRoleModel:
         session.commit()
 
         # Association should be deleted
-        result = session.execute(
-            role_permissions.select().where(
-                role_permissions.c.role_id == role_id
-            )
-        ).first()
+        result = session.execute(role_permissions.select().where(role_permissions.c.role_id == role_id)).first()
         assert result is None
 
         # Permission should still exist
@@ -196,11 +171,7 @@ class TestPermissionModel:
 
     def test_create_permission(self, session):
         """Test creating a permission."""
-        perm = PermissionModel(
-            name="user:update",
-            resource="user",
-            action="update"
-        )
+        perm = PermissionModel(name="user:update", resource="user", action="update")
         session.add(perm)
         session.commit()
 
@@ -212,19 +183,11 @@ class TestPermissionModel:
 
     def test_permission_name_uniqueness(self, session):
         """Test that permission names must be unique."""
-        perm1 = PermissionModel(
-            name="project:delete",
-            resource="project",
-            action="delete"
-        )
+        perm1 = PermissionModel(name="project:delete", resource="project", action="delete")
         session.add(perm1)
         session.commit()
 
-        perm2 = PermissionModel(
-            name="project:delete",
-            resource="project",
-            action="delete"
-        )
+        perm2 = PermissionModel(name="project:delete", resource="project", action="delete")
         session.add(perm2)
 
         with pytest.raises(IntegrityError):
@@ -264,14 +227,14 @@ class TestDatabaseSchema:
         from sqlalchemy import inspect
 
         inspector = inspect(engine)
-        columns = {col['name']: col for col in inspector.get_columns('users')}
+        columns = {col["name"]: col for col in inspector.get_columns("users")}
 
-        assert 'id' in columns
-        assert 'email' in columns
-        assert 'password_hash' in columns
-        assert 'is_active' in columns
-        assert 'created_at' in columns
-        assert 'updated_at' in columns
+        assert "id" in columns
+        assert "email" in columns
+        assert "password_hash" in columns
+        assert "is_active" in columns
+        assert "created_at" in columns
+        assert "updated_at" in columns
 
     def test_user_table_constraints(self, engine):
         """Test users table has correct constraints."""
@@ -280,11 +243,8 @@ class TestDatabaseSchema:
         inspector = inspect(engine)
 
         # Check unique constraints
-        unique_constraints = inspector.get_unique_constraints('users')
-        email_unique = any(
-            'email' in constraint.get('column_names', [])
-            for constraint in unique_constraints
-        )
+        unique_constraints = inspector.get_unique_constraints("users")
+        email_unique = any("email" in constraint.get("column_names", []) for constraint in unique_constraints)
         assert email_unique
 
     def test_association_table_foreign_keys(self, engine):
@@ -294,20 +254,20 @@ class TestDatabaseSchema:
         inspector = inspect(engine)
 
         # Check user_roles foreign keys
-        user_roles_fks = inspector.get_foreign_keys('user_roles')
+        user_roles_fks = inspector.get_foreign_keys("user_roles")
         assert len(user_roles_fks) == 2
 
-        fk_tables = {fk['referred_table'] for fk in user_roles_fks}
-        assert 'users' in fk_tables
-        assert 'roles' in fk_tables
+        fk_tables = {fk["referred_table"] for fk in user_roles_fks}
+        assert "users" in fk_tables
+        assert "roles" in fk_tables
 
         # Check role_permissions foreign keys
-        role_perms_fks = inspector.get_foreign_keys('role_permissions')
+        role_perms_fks = inspector.get_foreign_keys("role_permissions")
         assert len(role_perms_fks) == 2
 
-        fk_tables = {fk['referred_table'] for fk in role_perms_fks}
-        assert 'roles' in fk_tables
-        assert 'permissions' in fk_tables
+        fk_tables = {fk["referred_table"] for fk in role_perms_fks}
+        assert "roles" in fk_tables
+        assert "permissions" in fk_tables
 
     def test_cascade_delete_constraints(self, engine):
         """Test that CASCADE delete is configured on foreign keys."""
@@ -316,11 +276,11 @@ class TestDatabaseSchema:
         inspector = inspect(engine)
 
         # Check user_roles cascades
-        user_roles_fks = inspector.get_foreign_keys('user_roles')
+        user_roles_fks = inspector.get_foreign_keys("user_roles")
         for fk in user_roles_fks:
-            assert fk.get('options', {}).get('ondelete') == 'CASCADE'
+            assert fk.get("options", {}).get("ondelete") == "CASCADE"
 
         # Check role_permissions cascades
-        role_perms_fks = inspector.get_foreign_keys('role_permissions')
+        role_perms_fks = inspector.get_foreign_keys("role_permissions")
         for fk in role_perms_fks:
-            assert fk.get('options', {}).get('ondelete') == 'CASCADE'
+            assert fk.get("options", {}).get("ondelete") == "CASCADE"

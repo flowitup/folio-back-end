@@ -31,6 +31,7 @@ def require_permission(permission: str):
         def create_project():
             ...
     """
+
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -38,14 +39,19 @@ def require_permission(permission: str):
             permissions = jwt_claims.get("permissions", [])
 
             if not _has_permission(permissions, permission):
-                return jsonify(ErrorResponse(
-                    error="Forbidden",
-                    message=f"Missing permission: {permission}",
-                    status_code=403
-                ).model_dump()), 403
+                return (
+                    jsonify(
+                        ErrorResponse(
+                            error="Forbidden", message=f"Missing permission: {permission}", status_code=403
+                        ).model_dump()
+                    ),
+                    403,
+                )
 
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 

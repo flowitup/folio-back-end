@@ -15,6 +15,7 @@ class Worker:
     Represents an external worker assigned to a construction project.
     Workers are project-scoped (duplicated per project, not shared).
     """
+
     id: UUID
     project_id: UUID
     name: str

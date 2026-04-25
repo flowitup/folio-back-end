@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.domain.entities.user import User
 from app.domain.entities.role import Role
 from app.domain.entities.permission import Permission
-from app.infrastructure.database.models import UserModel, RoleModel
+from app.infrastructure.database.models import UserModel
 
 
 class SQLAlchemyUserRepository:
@@ -26,9 +26,7 @@ class SQLAlchemyUserRepository:
 
     def find_by_email(self, email: str) -> Optional[User]:
         """Find a user by email."""
-        user_model = self._session.query(UserModel).filter_by(
-            email=email.lower().strip()
-        ).first()
+        user_model = self._session.query(UserModel).filter_by(email=email.lower().strip()).first()
         if not user_model:
             return None
         return self._to_entity(user_model)
@@ -38,7 +36,7 @@ class SQLAlchemyUserRepository:
         users = (
             self._session.query(UserModel)
             .filter(UserModel.email.ilike(f"%{query}%"))
-            .filter(UserModel.is_active == True)
+            .filter(UserModel.is_active.is_(True))
             .limit(limit)
             .all()
         )
@@ -75,12 +73,14 @@ class SQLAlchemyUserRepository:
                 )
                 for p in role_model.permissions
             ]
-            roles.append(Role(
-                id=role_model.id,
-                name=role_model.name,
-                description=role_model.description or "",
-                permissions=permissions,
-            ))
+            roles.append(
+                Role(
+                    id=role_model.id,
+                    name=role_model.name,
+                    description=role_model.description or "",
+                    permissions=permissions,
+                )
+            )
 
         return User(
             id=model.id,

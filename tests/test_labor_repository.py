@@ -23,12 +23,7 @@ from app.domain.exceptions.labor_exceptions import DuplicateEntryError
 @pytest.fixture
 def owner_user(session):
     """Create owner user for projects."""
-    user = UserModel(
-        id=uuid4(),
-        email="labor_owner@test.com",
-        password_hash="hashed",
-        is_active=True
-    )
+    user = UserModel(id=uuid4(), email="labor_owner@test.com", password_hash="hashed", is_active=True)
     session.add(user)
     session.commit()
     return user
@@ -37,12 +32,7 @@ def owner_user(session):
 @pytest.fixture
 def sample_project(session, owner_user):
     """Create a sample project for labor tests."""
-    project = ProjectModel(
-        id=uuid4(),
-        name="Labor Test Project",
-        address="123 Labor St",
-        owner_id=owner_user.id
-    )
+    project = ProjectModel(id=uuid4(), name="Labor Test Project", address="123 Labor St", owner_id=owner_user.id)
     session.add(project)
     session.commit()
     return project

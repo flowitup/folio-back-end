@@ -15,6 +15,7 @@ class LaborEntry:
     Represents a single day's attendance for a worker.
     UNIQUE constraint on (worker_id, date) enforced at DB level.
     """
+
     id: UUID
     worker_id: UUID
     date: date
