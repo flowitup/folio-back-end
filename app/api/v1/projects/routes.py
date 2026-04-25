@@ -12,7 +12,7 @@ from app.api.v1.projects.schemas import (
     ProjectResponse, ProjectListResponse, ErrorResponse,
     ProjectUserResponse, ProjectUsersListResponse
 )
-from app.api.v1.projects.decorators import require_permission, has_permission
+from app.api.v1.projects.decorators import require_permission, has_permission, can_read_project, can_mutate_project
 from app.application.projects import CreateProjectRequest as CreateDTO
 from app.domain.exceptions.project_exceptions import (
     ProjectNotFoundError, InvalidProjectDataError
@@ -97,6 +97,7 @@ def create_project():
 def get_project(project_id: str):
     """Get a single project by ID."""
     container = get_container()
+    user_id = UUID(get_jwt_identity())
 
     try:
         project = container.get_project_usecase.execute(UUID(project_id))
@@ -106,6 +107,13 @@ def get_project(project_id: str):
             message=f"Project {project_id} not found",
             status_code=404
         ).model_dump()), 404
+
+    if not can_read_project(project, user_id):
+        return jsonify(ErrorResponse(
+            error="Forbidden",
+            message="Access denied",
+            status_code=403
+        ).model_dump()), 403
 
     return jsonify(ProjectResponse(
         id=str(project.id),
@@ -134,6 +142,24 @@ def update_project(project_id: str):
         ).model_dump()), 400
 
     container = get_container()
+    user_id = UUID(get_jwt_identity())
+
+    # Load project first to check ownership before mutating
+    try:
+        existing = container.get_project_usecase.execute(UUID(project_id))
+    except ProjectNotFoundError:
+        return jsonify(ErrorResponse(
+            error="NotFound",
+            message=f"Project {project_id} not found",
+            status_code=404
+        ).model_dump()), 404
+
+    if not can_mutate_project(existing, user_id):
+        return jsonify(ErrorResponse(
+            error="Forbidden",
+            message="Access denied",
+            status_code=403
+        ).model_dump()), 403
 
     try:
         result = container.update_project_usecase.execute(
@@ -141,12 +167,6 @@ def update_project(project_id: str):
             name=data.name,
             address=data.address
         )
-    except ProjectNotFoundError:
-        return jsonify(ErrorResponse(
-            error="NotFound",
-            message=f"Project {project_id} not found",
-            status_code=404
-        ).model_dump()), 404
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(
             error="ValidationError",
@@ -171,9 +191,10 @@ def update_project(project_id: str):
 def delete_project(project_id: str):
     """Delete a project."""
     container = get_container()
+    user_id = UUID(get_jwt_identity())
 
     try:
-        container.delete_project_usecase.execute(UUID(project_id))
+        project = container.get_project_usecase.execute(UUID(project_id))
     except ProjectNotFoundError:
         return jsonify(ErrorResponse(
             error="NotFound",
@@ -181,6 +202,14 @@ def delete_project(project_id: str):
             status_code=404
         ).model_dump()), 404
 
+    if not can_mutate_project(project, user_id):
+        return jsonify(ErrorResponse(
+            error="Forbidden",
+            message="Access denied",
+            status_code=403
+        ).model_dump()), 403
+
+    container.delete_project_usecase.execute(UUID(project_id))
     return "", 204
 
 
@@ -190,16 +219,23 @@ def delete_project(project_id: str):
 def get_project_users(project_id: str):
     """Get users assigned to a project."""
     container = get_container()
+    user_id = UUID(get_jwt_identity())
 
     try:
-        # Verify project exists
-        container.get_project_usecase.execute(UUID(project_id))
+        project = container.get_project_usecase.execute(UUID(project_id))
     except ProjectNotFoundError:
         return jsonify(ErrorResponse(
             error="NotFound",
             message=f"Project {project_id} not found",
             status_code=404
         ).model_dump()), 404
+
+    if not can_read_project(project, user_id):
+        return jsonify(ErrorResponse(
+            error="Forbidden",
+            message="Access denied",
+            status_code=403
+        ).model_dump()), 403
 
     users = container.project_repository.get_project_users(UUID(project_id))
 
@@ -228,16 +264,24 @@ def add_user_to_project(project_id: str):
         ).model_dump()), 400
 
     container = get_container()
+    user_id = UUID(get_jwt_identity())
 
-    # Verify project exists
+    # Verify project exists and caller owns it
     try:
-        container.get_project_usecase.execute(UUID(project_id))
+        project = container.get_project_usecase.execute(UUID(project_id))
     except ProjectNotFoundError:
         return jsonify(ErrorResponse(
             error="NotFound",
             message=f"Project {project_id} not found",
             status_code=404
         ).model_dump()), 404
+
+    if not can_mutate_project(project, user_id):
+        return jsonify(ErrorResponse(
+            error="Forbidden",
+            message="Access denied",
+            status_code=403
+        ).model_dump()), 403
 
     # Verify user exists
     user = container.user_repository.find_by_id(UUID(data.user_id))
@@ -259,6 +303,23 @@ def add_user_to_project(project_id: str):
 def remove_user_from_project(project_id: str, user_id: str):
     """Remove a user from a project."""
     container = get_container()
-    container.project_repository.remove_user(UUID(project_id), UUID(user_id))
+    caller_id = UUID(get_jwt_identity())
 
+    try:
+        project = container.get_project_usecase.execute(UUID(project_id))
+    except ProjectNotFoundError:
+        return jsonify(ErrorResponse(
+            error="NotFound",
+            message=f"Project {project_id} not found",
+            status_code=404
+        ).model_dump()), 404
+
+    if not can_mutate_project(project, caller_id):
+        return jsonify(ErrorResponse(
+            error="Forbidden",
+            message="Access denied",
+            status_code=403
+        ).model_dump()), 403
+
+    container.project_repository.remove_user(UUID(project_id), UUID(user_id))
     return "", 204

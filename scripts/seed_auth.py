@@ -17,6 +17,7 @@ DEFAULT_PERMISSIONS = [
     {"name": "project:delete", "resource": "project", "action": "delete"},
     {"name": "project:manage_users", "resource": "project", "action": "manage_users"},
     {"name": "project:manage_labor", "resource": "project", "action": "manage_labor"},
+    {"name": "project:manage_invoices", "resource": "project", "action": "manage_invoices"},
     {"name": "user:create", "resource": "user", "action": "create"},
     {"name": "user:read", "resource": "user", "action": "read"},
     {"name": "user:update", "resource": "user", "action": "update"},
@@ -39,6 +40,7 @@ DEFAULT_ROLES = [
             "project:delete",
             "project:manage_users",
             "project:manage_labor",
+            "project:manage_invoices",
             "user:read",
         ],
     },
@@ -101,14 +103,22 @@ def seed_roles(permission_map: dict) -> dict:
 
 
 def create_admin_user(email: str, password: str, role_map: dict) -> UserModel | None:
-    """Create an admin user with hashed password."""
-    existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
-    if existing:
-        print(f"  User '{email}' already exists, skipping.")
-        return existing
+    """Create an admin user with hashed password.
 
+    If the user already exists, reset their password and ensure the admin role is set.
+    """
     ph = PasswordHasher()
     password_hash = ph.hash(password)
+
+    existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
+    if existing:
+        existing.password_hash = password_hash
+        existing.is_active = True
+        if "admin" in role_map and role_map["admin"] not in existing.roles:
+            existing.roles.append(role_map["admin"])
+        db.session.commit()
+        print(f"  User '{email}' already existed — password reset and admin role ensured.")
+        return existing
 
     user = UserModel(
         id=uuid4(),

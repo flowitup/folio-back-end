@@ -92,6 +92,7 @@ def list_labor_entries(project_id: str):
                 amount_override=e.amount_override,
                 effective_cost=e.effective_cost,
                 note=e.note,
+                shift_type=e.shift_type,
                 created_at=e.created_at,
             ) for e in entries
         ],
@@ -117,6 +118,7 @@ def log_attendance(project_id: str):
             date=_parse_date(data.date),
             amount_override=Decimal(str(data.amount_override)) if data.amount_override else None,
             note=data.note,
+            shift_type=data.shift_type,
         ))
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
@@ -129,6 +131,7 @@ def log_attendance(project_id: str):
         "id": result.id,
         "worker_id": result.worker_id,
         "date": result.date,
+        "shift_type": result.shift_type,
         "amount_override": result.amount_override,
         "note": result.note,
         "created_at": result.created_at,
@@ -151,6 +154,7 @@ def update_attendance(project_id: str, entry_id: str):
             entry_id=UUID(entry_id),
             amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
             note=data.note,
+            shift_type=data.shift_type,
         ))
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
@@ -161,6 +165,7 @@ def update_attendance(project_id: str, entry_id: str):
         "id": result.id,
         "worker_id": result.worker_id,
         "date": result.date,
+        "shift_type": result.shift_type,
         "amount_override": result.amount_override,
         "note": result.note,
         "created_at": result.created_at,

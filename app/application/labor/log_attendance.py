@@ -18,6 +18,7 @@ class LogAttendanceRequest:
     date: date
     amount_override: Optional[Decimal] = None
     note: Optional[str] = None
+    shift_type: str = "full"
 
 
 @dataclass
@@ -27,6 +28,7 @@ class LogAttendanceResponse:
     date: str
     amount_override: Optional[float]
     note: Optional[str]
+    shift_type: str
     created_at: str
 
 
@@ -53,6 +55,7 @@ class LogAttendanceUseCase:
             date=request.date,
             amount_override=request.amount_override,
             note=request.note.strip() if request.note else None,
+            shift_type=request.shift_type,
             created_at=datetime.now(timezone.utc),
         )
 
@@ -65,5 +68,6 @@ class LogAttendanceUseCase:
             date=saved.date.isoformat(),
             amount_override=float(saved.amount_override) if saved.amount_override else None,
             note=saved.note,
+            shift_type=saved.shift_type,
             created_at=saved.created_at.isoformat(),
         )

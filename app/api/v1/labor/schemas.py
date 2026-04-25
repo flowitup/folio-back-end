@@ -25,12 +25,14 @@ class LogAttendanceRequest(BaseModel):
     date: str = Field(...)  # ISO date YYYY-MM-DD
     amount_override: Optional[float] = Field(None, ge=0)
     note: Optional[str] = Field(None, max_length=500)
+    shift_type: str = Field("full", pattern="^(full|half|overtime)$")
 
 
 class UpdateAttendanceRequest(BaseModel):
     """Request body for updating attendance."""
     amount_override: Optional[float] = Field(None, ge=0)
     note: Optional[str] = Field(None, max_length=500)
+    shift_type: Optional[str] = Field(None, pattern="^(full|half|overtime)$")
 
 
 # Response schemas
@@ -60,6 +62,7 @@ class LaborEntryResponse(BaseModel):
     amount_override: Optional[float]
     effective_cost: float
     note: Optional[str]
+    shift_type: str
     created_at: str
 
 

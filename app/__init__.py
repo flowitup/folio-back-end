@@ -36,18 +36,21 @@ def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # Production security check
+    # Production security check — fail fast rather than run with insecure defaults
     if os.environ.get("FLASK_ENV") == "production":
         jwt_secret = getattr(config_class, "JWT_SECRET_KEY", "")
         if not jwt_secret or "dev-" in jwt_secret.lower():
             raise RuntimeError("CRITICAL: JWT_SECRET_KEY must be set in production.")
+        secret_key = getattr(config_class, "SECRET_KEY", "")
+        if not secret_key or "dev-" in secret_key.lower():
+            raise RuntimeError("CRITICAL: SECRET_KEY must be set in production.")
 
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Initialize extensions
-    cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
     CORS(app, supports_credentials=True, origins=cors_origins)
     db.init_app(app)
     jwt.init_app(app)
@@ -73,10 +76,12 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.auth import auth_bp
     from app.api.v1.projects import projects_bp
     from app.api.v1.labor import labor_bp
+    from app.api.v1.invoices import invoice_bp
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
     app.register_blueprint(labor_bp, url_prefix="/api/v1")
+    app.register_blueprint(invoice_bp, url_prefix="/api/v1")
 
     # Initialize Swagger API documentation
     from app.api.swagger import init_swagger
@@ -92,6 +97,7 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
     from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
     from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
+    from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
@@ -102,6 +108,7 @@ def _configure_di_container() -> None:
         project_repository=SQLAlchemyProjectRepository(db.session),
         worker_repository=SQLAlchemyWorkerRepository(db.session),
         labor_entry_repository=SQLAlchemyLaborEntryRepository(db.session),
+        invoice_repository=SQLAlchemyInvoiceRepository(db.session),
         password_hasher=Argon2PasswordHasher(),
         token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
         session_manager=FlaskSessionManager(),

@@ -19,6 +19,7 @@ class LaborEntryModel(Base):
     date = Column(Date, nullable=False)
     amount_override = Column(Numeric(10, 2), nullable=True)
     note = Column(String(500), nullable=True)
+    shift_type = Column(String(20), nullable=False, server_default="full")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (

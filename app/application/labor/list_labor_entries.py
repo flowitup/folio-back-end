@@ -17,6 +17,7 @@ class LaborEntryDetail:
     amount_override: Optional[float]
     effective_cost: float
     note: Optional[str]
+    shift_type: str
     created_at: str
 
 
@@ -51,18 +52,20 @@ class ListLaborEntriesUseCase:
             worker_id=request.worker_id,
         )
 
+        _multipliers = {"full": 1.0, "half": 0.5, "overtime": 1.5}
+
         result = []
         for entry in entries:
             worker = worker_map.get(entry.worker_id)
             if not worker:
                 continue  # Skip orphaned entries
 
-            # Effective cost: override if set, else daily rate
-            effective_cost = (
-                float(entry.amount_override)
-                if entry.amount_override is not None
-                else float(worker.daily_rate)
-            )
+            # Effective cost: override wins; else daily_rate × shift multiplier
+            if entry.amount_override is not None:
+                effective_cost = float(entry.amount_override)
+            else:
+                multiplier = _multipliers.get(entry.shift_type, 1.0)
+                effective_cost = float(worker.daily_rate) * multiplier
 
             result.append(
                 LaborEntryDetail(
@@ -73,6 +76,7 @@ class ListLaborEntriesUseCase:
                     amount_override=float(entry.amount_override) if entry.amount_override else None,
                     effective_cost=effective_cost,
                     note=entry.note,
+                    shift_type=entry.shift_type,
                     created_at=entry.created_at.isoformat(),
                 )
             )

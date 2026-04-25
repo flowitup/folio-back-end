@@ -1,6 +1,8 @@
 """RBAC decorators for project routes."""
 
 from functools import wraps
+from uuid import UUID
+
 from flask import jsonify
 from flask_jwt_extended import get_jwt
 
@@ -52,3 +54,17 @@ def has_permission(permission: str) -> bool:
     jwt_claims = get_jwt()
     permissions = jwt_claims.get("permissions", [])
     return _has_permission(permissions, permission)
+
+
+def can_read_project(project, user_id: UUID) -> bool:
+    """Admin (project:create), owner, or project member may read a project."""
+    if has_permission("project:create"):
+        return True
+    return project.owner_id == user_id or user_id in project.user_ids
+
+
+def can_mutate_project(project, user_id: UUID) -> bool:
+    """Only admin (project:create) or project owner may modify/delete a project."""
+    if has_permission("project:create"):
+        return True
+    return project.owner_id == user_id

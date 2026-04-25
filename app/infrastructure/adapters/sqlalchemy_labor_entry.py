@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case as sa_case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             date=entry.date,
             amount_override=entry.amount_override,
             note=entry.note,
+            shift_type=entry.shift_type,
             created_at=entry.created_at,
         )
         try:
@@ -69,6 +70,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         if model:
             model.amount_override = entry.amount_override
             model.note = entry.note
+            model.shift_type = entry.shift_type
             self._session.flush()
             return self._to_entity(model)
         return entry
@@ -83,10 +85,15 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
     ) -> List[LaborSummaryRow]:
-        # Calculate effective cost: COALESCE(amount_override, daily_rate)
+        # Effective cost: override wins; else daily_rate × shift multiplier
+        shift_multiplier = sa_case(
+            (LaborEntryModel.shift_type == "half", 0.5),
+            (LaborEntryModel.shift_type == "overtime", 1.5),
+            else_=1.0,
+        )
         effective_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            WorkerModel.daily_rate
+            WorkerModel.daily_rate * shift_multiplier,
         )
 
         query = (
@@ -125,5 +132,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             date=model.date,
             amount_override=Decimal(str(model.amount_override)) if model.amount_override else None,
             note=model.note,
+            shift_type=model.shift_type or "full",
             created_at=model.created_at,
         )

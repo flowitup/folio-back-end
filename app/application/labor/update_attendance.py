@@ -14,6 +14,7 @@ class UpdateAttendanceRequest:
     entry_id: UUID
     amount_override: Optional[Decimal] = None
     note: Optional[str] = None
+    shift_type: Optional[str] = None
 
 
 @dataclass
@@ -23,6 +24,7 @@ class UpdateAttendanceResponse:
     date: str
     amount_override: Optional[float]
     note: Optional[str]
+    shift_type: str
     created_at: str
 
 
@@ -40,6 +42,8 @@ class UpdateAttendanceUseCase:
         # Update fields (allow setting to None to clear override)
         entry.amount_override = request.amount_override
         entry.note = request.note.strip() if request.note else None
+        if request.shift_type is not None:
+            entry.shift_type = request.shift_type
 
         saved = self._repo.update(entry)
 
@@ -49,5 +53,6 @@ class UpdateAttendanceUseCase:
             date=saved.date.isoformat(),
             amount_override=float(saved.amount_override) if saved.amount_override else None,
             note=saved.note,
+            shift_type=saved.shift_type,
             created_at=saved.created_at.isoformat(),
         )
