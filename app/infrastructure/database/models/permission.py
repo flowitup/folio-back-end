@@ -13,6 +13,7 @@ from app.infrastructure.database.models.associations import role_permissions
 
 class PermissionModel(Base):
     """Permission database model."""
+
     __tablename__ = "permissions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -22,9 +23,7 @@ class PermissionModel(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    roles = relationship(
-        "RoleModel", secondary=role_permissions, back_populates="permissions"
-    )
+    roles = relationship("RoleModel", secondary=role_permissions, back_populates="permissions")
 
     __table_args__ = (Index("ix_permissions_resource_action", "resource", "action"),)
 

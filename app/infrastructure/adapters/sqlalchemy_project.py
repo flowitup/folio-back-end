@@ -30,10 +30,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
 
     def find_by_id(self, project_id: UUID) -> Optional[Project]:
         model = (
-            self._session.query(ProjectModel)
-            .options(joinedload(ProjectModel.users))
-            .filter_by(id=project_id)
-            .first()
+            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
         )
         return self._to_entity(model) if model else None
 
@@ -48,11 +45,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         return [self._to_entity(m) for m in models]
 
     def list_all(self) -> List[Project]:
-        models = (
-            self._session.query(ProjectModel)
-            .options(joinedload(ProjectModel.users))
-            .all()
-        )
+        models = self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).all()
         return [self._to_entity(m) for m in models]
 
     def update(self, project: Project) -> Project:
@@ -70,10 +63,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
 
     def add_user(self, project_id: UUID, user_id: UUID) -> None:
         project = (
-            self._session.query(ProjectModel)
-            .options(joinedload(ProjectModel.users))
-            .filter_by(id=project_id)
-            .first()
+            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
         )
         user = self._session.query(UserModel).filter_by(id=user_id).first()
         if project and user and user not in project.users:
@@ -82,10 +72,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
 
     def remove_user(self, project_id: UUID, user_id: UUID) -> None:
         project = (
-            self._session.query(ProjectModel)
-            .options(joinedload(ProjectModel.users))
-            .filter_by(id=project_id)
-            .first()
+            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
         )
         user = self._session.query(UserModel).filter_by(id=user_id).first()
         if project and user and user in project.users:
@@ -94,10 +81,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
 
     def get_project_users(self, project_id: UUID) -> List[Tuple[UUID, str]]:
         project = (
-            self._session.query(ProjectModel)
-            .options(joinedload(ProjectModel.users))
-            .filter_by(id=project_id)
-            .first()
+            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
         )
         if not project:
             return []

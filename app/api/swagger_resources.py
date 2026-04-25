@@ -10,8 +10,12 @@ from uuid import UUID
 from flask import request, make_response, jsonify
 from flask_restx import Resource, Namespace
 from flask_jwt_extended import (
-    jwt_required, get_jwt_identity, get_jwt,
-    set_access_cookies, set_refresh_cookies, unset_jwt_cookies
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
+    set_access_cookies,
+    set_refresh_cookies,
+    unset_jwt_cookies,
 )
 from pydantic import ValidationError
 
@@ -36,15 +40,23 @@ def register_resources(auth_ns: Namespace, models: dict) -> None:
         @auth_ns.response(401, "Invalid Credentials", error_response_model)
         def post(self):
             """Authenticate user and return tokens."""
-            from app.api.v1.auth.schemas import LoginRequest, LoginResponse, UserResponse, ErrorResponse
-            from app.domain.exceptions.auth_exceptions import InvalidCredentialsError, UserNotFoundError, UserInactiveError
+            from app.api.v1.auth.schemas import LoginRequest, LoginResponse, UserResponse
+            from app.domain.exceptions.auth_exceptions import (
+                InvalidCredentialsError,
+                UserNotFoundError,
+                UserInactiveError,
+            )
             from wiring import get_container
 
             try:
                 data = LoginRequest(**request.get_json())
             except ValidationError as e:
                 error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-                return {"error": "ValidationError", "message": f"Invalid: {', '.join(str(f) for f in error_fields)}", "status_code": 400}, 400
+                return {
+                    "error": "ValidationError",
+                    "message": f"Invalid: {', '.join(str(f) for f in error_fields)}",
+                    "status_code": 400,
+                }, 400
 
             container = get_container()
             if not container.login_usecase:
@@ -61,7 +73,9 @@ def register_resources(auth_ns: Namespace, models: dict) -> None:
             response_data = LoginResponse(
                 access_token=result.access_token,
                 refresh_token=result.refresh_token,
-                user=UserResponse(id=user.id, email=user.email, permissions=result.permissions, roles=[r.name for r in user.roles])
+                user=UserResponse(
+                    id=user.id, email=user.email, permissions=result.permissions, roles=[r.name for r in user.roles]
+                ),
             )
             response = make_response(jsonify(response_data.model_dump()))
             set_access_cookies(response, result.access_token)
@@ -120,7 +134,7 @@ def register_resources(auth_ns: Namespace, models: dict) -> None:
         @jwt_required()
         def get(self):
             """Get current authenticated user."""
-            from app.api.v1.auth.schemas import UserResponse, ErrorResponse
+            from app.api.v1.auth.schemas import UserResponse
             from wiring import get_container
 
             user_id = get_jwt_identity()
@@ -128,7 +142,12 @@ def register_resources(auth_ns: Namespace, models: dict) -> None:
             user = container.user_repository.find_by_id(UUID(user_id))
             if not user:
                 return {"error": "NotFound", "message": "User not found", "status_code": 404}, 404
-            return UserResponse(id=user.id, email=user.email, permissions=get_jwt().get("permissions", []), roles=[r.name for r in user.roles]).model_dump()
+            return UserResponse(
+                id=user.id,
+                email=user.email,
+                permissions=get_jwt().get("permissions", []),
+                roles=[r.name for r in user.roles],
+            ).model_dump()
 
 
 def register_project_resources(projects_ns: Namespace, models: dict) -> None:
@@ -152,6 +171,7 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def get(self):
             """List projects for current user."""
             from app.api.v1.projects.routes import list_projects
+
             return list_projects()
 
         @projects_ns.doc("create_project")
@@ -163,6 +183,7 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def post(self):
             """Create a new project."""
             from app.api.v1.projects.routes import create_project
+
             return create_project()
 
     @projects_ns.route("/<project_id>")
@@ -178,6 +199,7 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def get(self, project_id: str):
             """Get a project by ID."""
             from app.api.v1.projects.routes import get_project
+
             return get_project(project_id)
 
         @projects_ns.doc("update_project")
@@ -190,6 +212,7 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def put(self, project_id: str):
             """Update a project."""
             from app.api.v1.projects.routes import update_project
+
             return update_project(project_id)
 
         @projects_ns.doc("delete_project")
@@ -200,6 +223,7 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def delete(self, project_id: str):
             """Delete a project."""
             from app.api.v1.projects.routes import delete_project
+
             return delete_project(project_id)
 
     @projects_ns.route("/<project_id>/users")
@@ -216,6 +240,7 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def post(self, project_id: str):
             """Add a user to a project."""
             from app.api.v1.projects.routes import add_user_to_project
+
             return add_user_to_project(project_id)
 
     @projects_ns.route("/<project_id>/users/<user_id>")
@@ -231,4 +256,5 @@ def register_project_resources(projects_ns: Namespace, models: dict) -> None:
         def delete(self, project_id: str, user_id: str):
             """Remove a user from a project."""
             from app.api.v1.projects.routes import remove_user_from_project
+
             return remove_user_from_project(project_id, user_id)

@@ -17,6 +17,7 @@ from app.infrastructure.database.models.permission import PermissionModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.worker import WorkerModel
 from app.infrastructure.database.models.labor_entry import LaborEntryModel
+from app.infrastructure.database.models.invoice import InvoiceModel
 
 __all__ = [
     "Base",
@@ -29,4 +30,5 @@ __all__ = [
     "ProjectModel",
     "WorkerModel",
     "LaborEntryModel",
+    "InvoiceModel",
 ]

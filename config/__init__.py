@@ -6,7 +6,7 @@ Configuration follows the 12-factor app methodology.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
 
@@ -75,8 +75,8 @@ class Config:
     JWT_COOKIE_CSRF_PROTECT: bool = _is_production  # Disable CSRF for dev (cross-origin)
     JWT_COOKIE_SAMESITE: str = "None" if not _is_production else "Strict"
 
-    # Rate Limiting
-    RATELIMIT_STORAGE_URL: str = get_env("REDIS_URL", default="redis://localhost:6379/1")
+    # Rate Limiting (flask-limiter reads RATELIMIT_STORAGE_URI from app config)
+    RATELIMIT_STORAGE_URI: str = get_env("REDIS_URL", default="redis://localhost:6379/1")
     RATELIMIT_DEFAULT: str = "100 per minute"
     RATELIMIT_LOGIN: str = "5 per minute"
 

@@ -46,19 +46,13 @@ def _parse_date(date_str: str) -> date:
 
 def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
     """Create standardized error response."""
-    return jsonify(ErrorResponse(
-        error=error, message=message, status_code=status_code
-    ).model_dump()), status_code
+    return jsonify(ErrorResponse(error=error, message=message, status_code=status_code).model_dump()), status_code
 
 
 def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
     """Create validation error response from Pydantic error."""
     error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-    return _error_response(
-        "ValidationError",
-        f"Invalid input: {', '.join(str(f) for f in error_fields)}",
-        400
-    )
+    return _error_response("ValidationError", f"Invalid input: {', '.join(str(f) for f in error_fields)}", 400)
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["GET"])
@@ -82,21 +76,25 @@ def list_labor_entries(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify(LaborEntryListResponse(
-        entries=[
-            LaborEntryResponse(
-                id=e.id,
-                worker_id=e.worker_id,
-                worker_name=e.worker_name,
-                date=e.date,
-                amount_override=e.amount_override,
-                effective_cost=e.effective_cost,
-                note=e.note,
-                created_at=e.created_at,
-            ) for e in entries
-        ],
-        total=len(entries)
-    ).model_dump())
+    return jsonify(
+        LaborEntryListResponse(
+            entries=[
+                LaborEntryResponse(
+                    id=e.id,
+                    worker_id=e.worker_id,
+                    worker_name=e.worker_name,
+                    date=e.date,
+                    amount_override=e.amount_override,
+                    effective_cost=e.effective_cost,
+                    note=e.note,
+                    shift_type=e.shift_type,
+                    created_at=e.created_at,
+                )
+                for e in entries
+            ],
+            total=len(entries),
+        ).model_dump()
+    )
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["POST"])
@@ -111,13 +109,16 @@ def log_attendance(project_id: str):
         return _validation_error_response(e)
 
     try:
-        result = get_container().log_attendance_usecase.execute(LogAttendanceDTO(
-            project_id=UUID(project_id),
-            worker_id=UUID(data.worker_id),
-            date=_parse_date(data.date),
-            amount_override=Decimal(str(data.amount_override)) if data.amount_override else None,
-            note=data.note,
-        ))
+        result = get_container().log_attendance_usecase.execute(
+            LogAttendanceDTO(
+                project_id=UUID(project_id),
+                worker_id=UUID(data.worker_id),
+                date=_parse_date(data.date),
+                amount_override=Decimal(str(data.amount_override)) if data.amount_override else None,
+                note=data.note,
+                shift_type=data.shift_type,
+            )
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError as e:
@@ -125,14 +126,20 @@ def log_attendance(project_id: str):
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
 
-    return jsonify({
-        "id": result.id,
-        "worker_id": result.worker_id,
-        "date": result.date,
-        "amount_override": result.amount_override,
-        "note": result.note,
-        "created_at": result.created_at,
-    }), 201
+    return (
+        jsonify(
+            {
+                "id": result.id,
+                "worker_id": result.worker_id,
+                "date": result.date,
+                "shift_type": result.shift_type,
+                "amount_override": result.amount_override,
+                "note": result.note,
+                "created_at": result.created_at,
+            }
+        ),
+        201,
+    )
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>", methods=["PUT"])
@@ -147,24 +154,30 @@ def update_attendance(project_id: str, entry_id: str):
         return _validation_error_response(e)
 
     try:
-        result = get_container().update_attendance_usecase.execute(UpdateAttendanceDTO(
-            entry_id=UUID(entry_id),
-            amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
-            note=data.note,
-        ))
+        result = get_container().update_attendance_usecase.execute(
+            UpdateAttendanceDTO(
+                entry_id=UUID(entry_id),
+                amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
+                note=data.note,
+                shift_type=data.shift_type,
+            )
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
-    return jsonify({
-        "id": result.id,
-        "worker_id": result.worker_id,
-        "date": result.date,
-        "amount_override": result.amount_override,
-        "note": result.note,
-        "created_at": result.created_at,
-    })
+    return jsonify(
+        {
+            "id": result.id,
+            "worker_id": result.worker_id,
+            "date": result.date,
+            "shift_type": result.shift_type,
+            "amount_override": result.amount_override,
+            "note": result.note,
+            "created_at": result.created_at,
+        }
+    )
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>", methods=["DELETE"])
@@ -174,9 +187,7 @@ def update_attendance(project_id: str, entry_id: str):
 def delete_attendance(project_id: str, entry_id: str):
     """Delete a labor entry."""
     try:
-        get_container().delete_attendance_usecase.execute(
-            DeleteAttendanceRequest(entry_id=UUID(entry_id))
-        )
+        get_container().delete_attendance_usecase.execute(DeleteAttendanceRequest(entry_id=UUID(entry_id)))
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except LaborEntryNotFoundError:
@@ -204,15 +215,18 @@ def get_labor_summary(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify(LaborSummaryResponse(
-        rows=[
-            WorkerSummaryRow(
-                worker_id=r.worker_id,
-                worker_name=r.worker_name,
-                days_worked=r.days_worked,
-                total_cost=r.total_cost,
-            ) for r in result.rows
-        ],
-        total_days=result.total_days,
-        total_cost=result.total_cost,
-    ).model_dump())
+    return jsonify(
+        LaborSummaryResponse(
+            rows=[
+                WorkerSummaryRow(
+                    worker_id=r.worker_id,
+                    worker_name=r.worker_name,
+                    days_worked=r.days_worked,
+                    total_cost=r.total_cost,
+                )
+                for r in result.rows
+            ],
+            total_days=result.total_days,
+            total_cost=result.total_cost,
+        ).model_dump()
+    )

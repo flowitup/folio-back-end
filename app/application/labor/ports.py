@@ -14,6 +14,7 @@ from app.domain.entities.labor_entry import LaborEntry
 @dataclass
 class LaborSummaryRow:
     """Aggregated labor cost per worker."""
+
     worker_id: UUID
     worker_name: str
     days_worked: int

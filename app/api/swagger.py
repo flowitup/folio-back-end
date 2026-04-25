@@ -23,7 +23,7 @@ def init_swagger(app: Flask) -> None:
                 "type": "apiKey",
                 "in": "header",
                 "name": "Authorization",
-                "description": "JWT Bearer token. Format: 'Bearer {token}'"
+                "description": "JWT Bearer token. Format: 'Bearer {token}'",
             }
         },
         security="Bearer",
@@ -34,6 +34,7 @@ def init_swagger(app: Flask) -> None:
     models = create_all_models(api)
 
     from app.api.swagger_resources import register_resources, register_project_resources
+
     register_resources(auth_ns, models)
     register_project_resources(projects_ns, models)
 

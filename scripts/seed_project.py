@@ -5,7 +5,6 @@ from uuid import uuid4
 from app import db
 from app.infrastructure.database.models import ProjectModel, UserModel
 
-
 DEFAULT_PROJECTS = [
     {"name": "Downtown Office Tower", "address": "123 Main Street, Suite 100"},
     {"name": "Riverside Apartments", "address": "456 River Road"},

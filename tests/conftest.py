@@ -16,10 +16,7 @@ from app.infrastructure.database.models import Base
 @pytest.fixture(scope="session")
 def test_db_url():
     """Get test database URL from environment or use default SQLite."""
-    return os.getenv(
-        "TEST_DATABASE_URL",
-        "sqlite:///:memory:"  # Use in-memory SQLite for tests
-    )
+    return os.getenv("TEST_DATABASE_URL", "sqlite:///:memory:")  # Use in-memory SQLite for tests
 
 
 @pytest.fixture(scope="session")

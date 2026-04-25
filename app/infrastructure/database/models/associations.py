@@ -7,7 +7,6 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from app.infrastructure.database.models.base import Base
 
-
 # Association table: users <-> roles (many-to-many)
 user_roles = Table(
     "user_roles",

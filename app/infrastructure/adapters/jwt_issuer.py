@@ -35,12 +35,18 @@ class JWTTokenIssuer:
             try:
                 self._redis = redis.from_url(redis_url)
                 self._redis.ping()  # Test connection
-            except redis.RedisError:
-                self._redis = None  # Fall back to in-memory
+            except redis.RedisError as e:
+                import logging
 
-    def create_access_token(
-        self, user_id: UUID, additional_claims: Optional[Dict[str, Any]] = None
-    ) -> str:
+                logging.critical(
+                    "Token blacklist: Redis unavailable (%s) — falling back to "
+                    "in-memory. Revoked tokens will not persist across restarts "
+                    "and are NOT shared between worker processes.",
+                    e,
+                )
+                self._redis = None
+
+    def create_access_token(self, user_id: UUID, additional_claims: Optional[Dict[str, Any]] = None) -> str:
         """Create short-lived access token with user ID and optional claims."""
         claims = additional_claims or {}
         return create_access_token(

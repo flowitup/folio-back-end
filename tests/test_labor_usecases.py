@@ -4,14 +4,13 @@ import pytest
 from decimal import Decimal
 from datetime import date, datetime, timezone
 from uuid import uuid4
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     LaborEntryNotFoundError,
-    DuplicateEntryError,
     InvalidWorkerDataError,
 )
 from app.application.labor import (
@@ -29,8 +28,6 @@ from app.application.labor import (
     UpdateAttendanceRequest,
     DeleteAttendanceUseCase,
     DeleteAttendanceRequest,
-    ListLaborEntriesUseCase,
-    ListLaborEntriesRequest,
     GetLaborSummaryUseCase,
     GetLaborSummaryRequest,
     LaborSummaryRow,
@@ -79,12 +76,14 @@ class TestCreateWorkerUseCase:
         mock_worker_repo.create.return_value = sample_worker
         usecase = CreateWorkerUseCase(mock_worker_repo)
 
-        result = usecase.execute(CreateWorkerRequest(
-            project_id=sample_worker.project_id,
-            name="Test Worker",
-            daily_rate=Decimal("100.00"),
-            phone="+33612345678",
-        ))
+        result = usecase.execute(
+            CreateWorkerRequest(
+                project_id=sample_worker.project_id,
+                name="Test Worker",
+                daily_rate=Decimal("100.00"),
+                phone="+33612345678",
+            )
+        )
 
         assert result.name == "Test Worker"
         assert result.daily_rate == 100.0
@@ -94,21 +93,25 @@ class TestCreateWorkerUseCase:
         usecase = CreateWorkerUseCase(mock_worker_repo)
 
         with pytest.raises(InvalidWorkerDataError):
-            usecase.execute(CreateWorkerRequest(
-                project_id=uuid4(),
-                name="   ",
-                daily_rate=Decimal("100.00"),
-            ))
+            usecase.execute(
+                CreateWorkerRequest(
+                    project_id=uuid4(),
+                    name="   ",
+                    daily_rate=Decimal("100.00"),
+                )
+            )
 
     def test_create_worker_negative_rate_raises_error(self, mock_worker_repo):
         usecase = CreateWorkerUseCase(mock_worker_repo)
 
         with pytest.raises(InvalidWorkerDataError):
-            usecase.execute(CreateWorkerRequest(
-                project_id=uuid4(),
-                name="Worker",
-                daily_rate=Decimal("-10.00"),
-            ))
+            usecase.execute(
+                CreateWorkerRequest(
+                    project_id=uuid4(),
+                    name="Worker",
+                    daily_rate=Decimal("-10.00"),
+                )
+            )
 
 
 class TestUpdateWorkerUseCase:
@@ -119,10 +122,12 @@ class TestUpdateWorkerUseCase:
         mock_worker_repo.update.return_value = sample_worker
         usecase = UpdateWorkerUseCase(mock_worker_repo)
 
-        result = usecase.execute(UpdateWorkerRequest(
-            worker_id=sample_worker.id,
-            name="Updated Name",
-        ))
+        result = usecase.execute(
+            UpdateWorkerRequest(
+                worker_id=sample_worker.id,
+                name="Updated Name",
+            )
+        )
 
         assert result is not None
         mock_worker_repo.update.assert_called_once()
@@ -132,10 +137,12 @@ class TestUpdateWorkerUseCase:
         usecase = UpdateWorkerUseCase(mock_worker_repo)
 
         with pytest.raises(WorkerNotFoundError):
-            usecase.execute(UpdateWorkerRequest(
-                worker_id=uuid4(),
-                name="New Name",
-            ))
+            usecase.execute(
+                UpdateWorkerRequest(
+                    worker_id=uuid4(),
+                    name="New Name",
+                )
+            )
 
 
 class TestDeleteWorkerUseCase:
@@ -166,11 +173,13 @@ class TestLogAttendanceUseCase:
         mock_entry_repo.create.return_value = sample_entry
         usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
 
-        result = usecase.execute(LogAttendanceRequest(
-            project_id=sample_worker.project_id,
-            worker_id=sample_worker.id,
-            date=date.today(),
-        ))
+        result = usecase.execute(
+            LogAttendanceRequest(
+                project_id=sample_worker.project_id,
+                worker_id=sample_worker.id,
+                date=date.today(),
+            )
+        )
 
         assert result.worker_id == str(sample_worker.id)
         mock_entry_repo.create.assert_called_once()
@@ -180,11 +189,13 @@ class TestLogAttendanceUseCase:
         usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
 
         with pytest.raises(WorkerNotFoundError):
-            usecase.execute(LogAttendanceRequest(
-                project_id=uuid4(),
-                worker_id=uuid4(),
-                date=date.today(),
-            ))
+            usecase.execute(
+                LogAttendanceRequest(
+                    project_id=uuid4(),
+                    worker_id=uuid4(),
+                    date=date.today(),
+                )
+            )
 
     def test_log_attendance_with_override(self, mock_worker_repo, mock_entry_repo, sample_worker):
         mock_worker_repo.find_by_id.return_value = sample_worker
@@ -199,12 +210,14 @@ class TestLogAttendanceUseCase:
         mock_entry_repo.create.return_value = entry_with_override
         usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
 
-        result = usecase.execute(LogAttendanceRequest(
-            project_id=sample_worker.project_id,
-            worker_id=sample_worker.id,
-            date=date.today(),
-            amount_override=Decimal("150.00"),
-        ))
+        result = usecase.execute(
+            LogAttendanceRequest(
+                project_id=sample_worker.project_id,
+                worker_id=sample_worker.id,
+                date=date.today(),
+                amount_override=Decimal("150.00"),
+            )
+        )
 
         assert result.amount_override == 150.0
 
@@ -217,10 +230,12 @@ class TestUpdateAttendanceUseCase:
         mock_entry_repo.update.return_value = sample_entry
         usecase = UpdateAttendanceUseCase(mock_entry_repo)
 
-        result = usecase.execute(UpdateAttendanceRequest(
-            entry_id=sample_entry.id,
-            note="Updated note",
-        ))
+        result = usecase.execute(
+            UpdateAttendanceRequest(
+                entry_id=sample_entry.id,
+                note="Updated note",
+            )
+        )
 
         assert result is not None
         mock_entry_repo.update.assert_called_once()
@@ -230,10 +245,12 @@ class TestUpdateAttendanceUseCase:
         usecase = UpdateAttendanceUseCase(mock_entry_repo)
 
         with pytest.raises(LaborEntryNotFoundError):
-            usecase.execute(UpdateAttendanceRequest(
-                entry_id=uuid4(),
-                note="New note",
-            ))
+            usecase.execute(
+                UpdateAttendanceRequest(
+                    entry_id=uuid4(),
+                    note="New note",
+                )
+            )
 
 
 class TestDeleteAttendanceUseCase:

@@ -12,6 +12,7 @@ from app.domain.services.authorization import AuthorizationService
 @dataclass
 class LoginResult:
     """Result of successful login."""
+
     user_id: UUID
     access_token: str
     refresh_token: str

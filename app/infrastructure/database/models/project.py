@@ -13,6 +13,7 @@ from app.infrastructure.database.models.associations import user_projects
 
 class ProjectModel(Base):
     """Project database model."""
+
     __tablename__ = "projects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)

@@ -1,7 +1,6 @@
 """Integration tests for auth API endpoints."""
 
 import pytest
-from flask import Flask
 from uuid import uuid4, UUID
 from typing import Optional
 
@@ -49,7 +48,7 @@ class SQLAlchemyUserRepository(UserRepositoryPort):
             is_active=model.is_active,
             created_at=model.created_at,
             updated_at=model.updated_at,
-            roles=[]
+            roles=[],
         )
 
         # Convert roles
@@ -59,7 +58,7 @@ class SQLAlchemyUserRepository(UserRepositoryPort):
                 name=role_model.name,
                 description=role_model.description,
                 created_at=role_model.created_at,
-                permissions=[]
+                permissions=[],
             )
 
             # Convert permissions
@@ -69,7 +68,7 @@ class SQLAlchemyUserRepository(UserRepositoryPort):
                     name=perm_model.name,
                     resource=perm_model.resource,
                     action=perm_model.action,
-                    created_at=perm_model.created_at
+                    created_at=perm_model.created_at,
                 )
                 role.permissions.append(perm)
 
@@ -81,6 +80,7 @@ class SQLAlchemyUserRepository(UserRepositoryPort):
 @pytest.fixture(scope="module")
 def app():
     """Create Flask app for testing."""
+
     # Create custom testing config with proper JWT settings
     class CustomTestConfig(TestingConfig):
         JWT_TOKEN_LOCATION = ["headers", "cookies"]
@@ -94,17 +94,14 @@ def app():
         # Configure dependency injection container
         user_repo = SQLAlchemyUserRepository()
         password_hasher = Argon2PasswordHasher()
-        token_issuer = JWTTokenIssuer(
-            access_expires_minutes=30,
-            refresh_expires_days=7
-        )
+        token_issuer = JWTTokenIssuer(access_expires_minutes=30, refresh_expires_days=7)
         session_manager = FlaskSessionManager()
 
         configure_container(
             user_repository=user_repo,
             password_hasher=password_hasher,
             token_issuer=token_issuer,
-            session_manager=session_manager
+            session_manager=session_manager,
         )
 
         # Create test user with hashed password
@@ -122,30 +119,17 @@ def app():
         user_role.permissions.append(read_perm)
 
         # Create active and inactive users
-        active_user = UserModel(
-            email="active@example.com",
-            password_hash=hasher.hash("password123"),
-            is_active=True
-        )
+        active_user = UserModel(email="active@example.com", password_hash=hasher.hash("password123"), is_active=True)
         active_user.roles.append(user_role)
 
-        admin_user = UserModel(
-            email="admin@example.com",
-            password_hash=hasher.hash("admin123"),
-            is_active=True
-        )
+        admin_user = UserModel(email="admin@example.com", password_hash=hasher.hash("admin123"), is_active=True)
         admin_user.roles.append(admin_role)
 
         inactive_user = UserModel(
-            email="inactive@example.com",
-            password_hash=hasher.hash("password123"),
-            is_active=False
+            email="inactive@example.com", password_hash=hasher.hash("password123"), is_active=False
         )
 
-        db.session.add_all([
-            admin_role, user_role, read_perm, write_perm,
-            active_user, admin_user, inactive_user
-        ])
+        db.session.add_all([admin_role, user_role, read_perm, write_perm, active_user, admin_user, inactive_user])
         db.session.commit()
 
         yield test_app
@@ -164,6 +148,7 @@ def client(app):
 def container(app):
     """Get dependency injection container."""
     from wiring import get_container
+
     with app.app_context():
         return get_container()
 
@@ -173,10 +158,7 @@ class TestLoginEndpoint:
 
     def test_login_with_valid_credentials(self, client):
         """Test login with valid email and password."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
-        )
+        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
 
         assert response.status_code == 200
         data = response.get_json()
@@ -191,10 +173,7 @@ class TestLoginEndpoint:
 
     def test_login_with_admin_user(self, client):
         """Test login as admin gets admin permissions."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "admin@example.com", "password": "admin123"}
-        )
+        response = client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "admin123"})
 
         assert response.status_code == 200
         data = response.get_json()
@@ -206,8 +185,7 @@ class TestLoginEndpoint:
     def test_login_with_invalid_email(self, client):
         """Test login with non-existent email."""
         response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "nonexistent@example.com", "password": "password123"}
+            "/api/v1/auth/login", json={"email": "nonexistent@example.com", "password": "password123"}
         )
 
         assert response.status_code == 401
@@ -217,10 +195,7 @@ class TestLoginEndpoint:
 
     def test_login_with_invalid_password(self, client):
         """Test login with wrong password."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "wrongpassword"}
-        )
+        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "wrongpassword"})
 
         assert response.status_code == 401
         data = response.get_json()
@@ -228,10 +203,7 @@ class TestLoginEndpoint:
 
     def test_login_with_inactive_user(self, client):
         """Test login with deactivated account."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "inactive@example.com", "password": "password123"}
-        )
+        response = client.post("/api/v1/auth/login", json={"email": "inactive@example.com", "password": "password123"})
 
         assert response.status_code == 403
         data = response.get_json()
@@ -240,10 +212,7 @@ class TestLoginEndpoint:
 
     def test_login_with_missing_email(self, client):
         """Test login without email field."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"password": "password123"}
-        )
+        response = client.post("/api/v1/auth/login", json={"password": "password123"})
 
         assert response.status_code == 400
         data = response.get_json()
@@ -251,10 +220,7 @@ class TestLoginEndpoint:
 
     def test_login_with_missing_password(self, client):
         """Test login without password field."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com"}
-        )
+        response = client.post("/api/v1/auth/login", json={"email": "active@example.com"})
 
         assert response.status_code == 400
         data = response.get_json()
@@ -262,25 +228,19 @@ class TestLoginEndpoint:
 
     def test_login_with_empty_payload(self, client):
         """Test login with empty JSON."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={}
-        )
+        response = client.post("/api/v1/auth/login", json={})
 
         assert response.status_code == 400
 
     def test_login_sets_cookies(self, client):
         """Test that login sets JWT cookies."""
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
-        )
+        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
 
         assert response.status_code == 200
         # Check cookies are set
-        cookies = response.headers.getlist('Set-Cookie')
-        cookie_names = [c.split('=')[0] for c in cookies]
-        assert any('access_token' in name for name in cookie_names)
+        cookies = response.headers.getlist("Set-Cookie")
+        cookie_names = [c.split("=")[0] for c in cookies]
+        assert any("access_token" in name for name in cookie_names)
 
 
 class TestLogoutEndpoint:
@@ -299,16 +259,12 @@ class TestLogoutEndpoint:
         """Test logout with valid token."""
         # First login
         login_response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
+            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
         )
         token = login_response.get_json()["access_token"]
 
         # Then logout
-        response = client.post(
-            "/api/v1/auth/logout",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
 
         assert response.status_code == 200
         data = response.get_json()
@@ -318,19 +274,15 @@ class TestLogoutEndpoint:
         """Test that logout clears JWT cookies."""
         # First login
         login_response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
+            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
         )
         token = login_response.get_json()["access_token"]
 
         # Then logout
-        response = client.post(
-            "/api/v1/auth/logout",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
 
         # Check cookies are cleared (max-age=0 or expires in past)
-        cookies = response.headers.getlist('Set-Cookie')
+        cookies = response.headers.getlist("Set-Cookie")
         assert len(cookies) > 0
 
 
@@ -341,16 +293,12 @@ class TestRefreshEndpoint:
         """Test refreshing access token with valid refresh token."""
         # First login to get refresh token
         login_response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
+            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
         )
         refresh_token = login_response.get_json()["refresh_token"]
 
         # Use refresh token to get new access token
-        response = client.post(
-            "/api/v1/auth/refresh",
-            headers={"Authorization": f"Bearer {refresh_token}"}
-        )
+        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {refresh_token}"})
 
         assert response.status_code == 200
         data = response.get_json()
@@ -369,16 +317,12 @@ class TestRefreshEndpoint:
         """Test refresh with access token (should fail)."""
         # Login to get access token
         login_response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
+            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
         )
         access_token = login_response.get_json()["access_token"]
 
         # Try to use access token for refresh (should fail)
-        response = client.post(
-            "/api/v1/auth/refresh",
-            headers={"Authorization": f"Bearer {access_token}"}
-        )
+        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {access_token}"})
 
         # Should fail because we need refresh token, not access token
         assert response.status_code in [401, 422]
@@ -391,16 +335,12 @@ class TestGetCurrentUserEndpoint:
         """Test getting current user info with valid token."""
         # Login first
         login_response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123"}
+            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
         )
         token = login_response.get_json()["access_token"]
 
         # Get current user
-        response = client.get(
-            "/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
 
         assert response.status_code == 200
         data = response.get_json()
@@ -419,10 +359,7 @@ class TestGetCurrentUserEndpoint:
 
     def test_get_current_user_with_invalid_token(self, client):
         """Test getting current user with invalid token."""
-        response = client.get(
-            "/api/v1/auth/me",
-            headers={"Authorization": "Bearer invalid-token-123"}
-        )
+        response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer invalid-token-123"})
 
         assert response.status_code == 401
         data = response.get_json()
@@ -435,8 +372,6 @@ class TestRateLimiting:
     @pytest.fixture
     def rate_limited_client(self):
         """Create a client with rate limiting enabled."""
-        from uuid import uuid4
-        from app.domain.entities.user import User
 
         # Create custom config with rate limiting enabled
         class RateLimitTestConfig(TestingConfig):
@@ -456,6 +391,7 @@ class TestRateLimiting:
 
             # Create test user in database
             from app.infrastructure.database.models import UserModel
+
             test_user = UserModel(
                 id=uuid4(),
                 email="ratelimit@example.com",
@@ -480,8 +416,7 @@ class TestRateLimiting:
         # Try to login 6 times rapidly (limit is 5 per minute)
         for i in range(6):
             response = rate_limited_client.post(
-                "/api/v1/auth/login",
-                json={"email": "ratelimit@example.com", "password": "password123"}
+                "/api/v1/auth/login", json={"email": "ratelimit@example.com", "password": "password123"}
             )
 
             if i < 5:

@@ -6,10 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from app.domain.entities.project import Project
-from app.domain.exceptions.project_exceptions import (
-    ProjectNotFoundError,
-    InvalidProjectDataError
-)
+from app.domain.exceptions.project_exceptions import ProjectNotFoundError, InvalidProjectDataError
 from app.application.projects import (
     CreateProjectUseCase,
     CreateProjectRequest,
@@ -38,11 +35,7 @@ class TestCreateProjectUseCase:
         )
 
         usecase = CreateProjectUseCase(mock_repo)
-        request = CreateProjectRequest(
-            name="Test Project",
-            address="123 St",
-            owner_id=owner_id
-        )
+        request = CreateProjectRequest(name="Test Project", address="123 St", owner_id=owner_id)
 
         result = usecase.execute(request)
 
@@ -55,10 +48,7 @@ class TestCreateProjectUseCase:
         mock_repo = Mock()
         usecase = CreateProjectUseCase(mock_repo)
 
-        request = CreateProjectRequest(
-            name="",
-            owner_id=uuid4()
-        )
+        request = CreateProjectRequest(name="", owner_id=uuid4())
 
         with pytest.raises(InvalidProjectDataError, match="name is required"):
             usecase.execute(request)
@@ -68,10 +58,7 @@ class TestCreateProjectUseCase:
         mock_repo = Mock()
         usecase = CreateProjectUseCase(mock_repo)
 
-        request = CreateProjectRequest(
-            name="   ",
-            owner_id=uuid4()
-        )
+        request = CreateProjectRequest(name="   ", owner_id=uuid4())
 
         with pytest.raises(InvalidProjectDataError, match="name is required"):
             usecase.execute(request)
@@ -81,10 +68,7 @@ class TestCreateProjectUseCase:
         mock_repo = Mock()
         usecase = CreateProjectUseCase(mock_repo)
 
-        request = CreateProjectRequest(
-            name="x" * 256,
-            owner_id=uuid4()
-        )
+        request = CreateProjectRequest(name="x" * 256, owner_id=uuid4())
 
         with pytest.raises(InvalidProjectDataError, match="exceeds 255"):
             usecase.execute(request)
@@ -103,11 +87,7 @@ class TestCreateProjectUseCase:
         )
 
         usecase = CreateProjectUseCase(mock_repo)
-        request = CreateProjectRequest(
-            name="  Trimmed  ",
-            address="  Trimmed Address  ",
-            owner_id=owner_id
-        )
+        request = CreateProjectRequest(name="  Trimmed  ", address="  Trimmed Address  ", owner_id=owner_id)
 
         usecase.execute(request)
 
@@ -156,10 +136,8 @@ class TestListProjectsUseCase:
         """Admin sees all projects."""
         mock_repo = Mock()
         mock_repo.list_all.return_value = [
-            Project(id=uuid4(), name="P1", address=None, owner_id=uuid4(),
-                    created_at=datetime.now(timezone.utc)),
-            Project(id=uuid4(), name="P2", address=None, owner_id=uuid4(),
-                    created_at=datetime.now(timezone.utc)),
+            Project(id=uuid4(), name="P1", address=None, owner_id=uuid4(), created_at=datetime.now(timezone.utc)),
+            Project(id=uuid4(), name="P2", address=None, owner_id=uuid4(), created_at=datetime.now(timezone.utc)),
         ]
 
         usecase = ListProjectsUseCase(mock_repo)
@@ -173,8 +151,14 @@ class TestListProjectsUseCase:
         user_id = uuid4()
         mock_repo = Mock()
         mock_repo.list_by_user.return_value = [
-            Project(id=uuid4(), name="P1", address=None, owner_id=uuid4(),
-                    created_at=datetime.now(timezone.utc), user_ids=[user_id]),
+            Project(
+                id=uuid4(),
+                name="P1",
+                address=None,
+                owner_id=uuid4(),
+                created_at=datetime.now(timezone.utc),
+                user_ids=[user_id],
+            ),
         ]
 
         usecase = ListProjectsUseCase(mock_repo)
@@ -203,7 +187,7 @@ class TestUpdateProjectUseCase:
         mock_repo.update.return_value = existing
 
         usecase = UpdateProjectUseCase(mock_repo)
-        result = usecase.execute(project_id, name="New Name", address="New Address")
+        usecase.execute(project_id, name="New Name", address="New Address")
 
         assert existing.name == "New Name"
         assert existing.address == "New Address"

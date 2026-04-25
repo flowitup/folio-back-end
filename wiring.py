@@ -24,7 +24,6 @@ from app.domain.services.authorization import AuthorizationService
 # Import use cases
 from app.application.usecases import LoginUseCase, LogoutUseCase
 from app.application.projects import (
-    IProjectRepository,
     CreateProjectUseCase,
     ListProjectsUseCase,
     GetProjectUseCase,
@@ -44,7 +43,14 @@ from app.application.labor import (
     ListLaborEntriesUseCase,
     GetLaborSummaryUseCase,
 )
-
+from app.application.invoice import (
+    IInvoiceRepository,
+    CreateInvoiceUseCase,
+    ListInvoicesUseCase,
+    GetInvoiceUseCase,
+    UpdateInvoiceUseCase,
+    DeleteInvoiceUseCase,
+)
 
 # =============================================================================
 # PORTS (Interfaces) - Legacy ports kept for compatibility
@@ -60,31 +66,25 @@ class EmailPort(Protocol):
         subject: str,
         body: str,
         html_body: Optional[str] = None,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class QueuePort(Protocol):
     """Port for task queue operations."""
 
-    def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str:
-        ...
+    def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str: ...
 
 
 class ProjectRepository(Protocol):
     """Port for project persistence operations."""
 
-    def find_all(self) -> list:
-        ...
+    def find_all(self) -> list: ...
 
-    def find_by_id(self, project_id: str) -> Optional[Any]:
-        ...
+    def find_by_id(self, project_id: str) -> Optional[Any]: ...
 
-    def save(self, project: Any) -> Any:
-        ...
+    def save(self, project: Any) -> Any: ...
 
-    def delete(self, project_id: str) -> bool:
-        ...
+    def delete(self, project_id: str) -> bool: ...
 
 
 # =============================================================================
@@ -114,6 +114,14 @@ class Container:
     # Labor ports
     worker_repository: Optional[IWorkerRepository] = None
     labor_entry_repository: Optional[ILaborEntryRepository] = None
+
+    # Invoice ports and use cases
+    invoice_repository: Optional[IInvoiceRepository] = None
+    create_invoice_usecase: Optional[CreateInvoiceUseCase] = None
+    list_invoices_usecase: Optional[ListInvoicesUseCase] = None
+    get_invoice_usecase: Optional[GetInvoiceUseCase] = None
+    update_invoice_usecase: Optional[UpdateInvoiceUseCase] = None
+    delete_invoice_usecase: Optional[DeleteInvoiceUseCase] = None
 
     # Domain services (configured after ports)
     auth_service: Optional[AuthService] = None
@@ -156,6 +164,7 @@ def configure_container(
     session_manager: Optional[SessionManagerPort] = None,
     worker_repository: Optional[IWorkerRepository] = None,
     labor_entry_repository: Optional[ILaborEntryRepository] = None,
+    invoice_repository: Optional[IInvoiceRepository] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -175,6 +184,7 @@ def configure_container(
         session_manager=session_manager,
         worker_repository=worker_repository,
         labor_entry_repository=labor_entry_repository,
+        invoice_repository=invoice_repository,
     )
 
     # Wire up domain services if repositories are provided
@@ -216,6 +226,14 @@ def configure_container(
         container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository)
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
+
+    # Wire invoice use cases
+    if invoice_repository:
+        container.create_invoice_usecase = CreateInvoiceUseCase(invoice_repository)
+        container.list_invoices_usecase = ListInvoicesUseCase(invoice_repository)
+        container.get_invoice_usecase = GetInvoiceUseCase(invoice_repository)
+        container.update_invoice_usecase = UpdateInvoiceUseCase(invoice_repository)
+        container.delete_invoice_usecase = DeleteInvoiceUseCase(invoice_repository)
 
     return container
 

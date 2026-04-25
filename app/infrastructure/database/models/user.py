@@ -13,6 +13,7 @@ from app.infrastructure.database.models.associations import user_roles, user_pro
 
 class UserModel(Base):
     """User database model."""
+
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)

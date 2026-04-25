@@ -13,6 +13,7 @@ class Permission:
 
     Format: resource:action (e.g., 'project:create')
     """
+
     id: UUID
     name: str  # Full permission name: 'resource:action'
     resource: str  # Resource type: 'project', 'user', etc.

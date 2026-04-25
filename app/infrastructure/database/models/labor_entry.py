@@ -12,6 +12,7 @@ from app.infrastructure.database.models.base import Base
 
 class LaborEntryModel(Base):
     """Labor entry database model."""
+
     __tablename__ = "labor_entries"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -19,11 +20,10 @@ class LaborEntryModel(Base):
     date = Column(Date, nullable=False)
     amount_override = Column(Numeric(10, 2), nullable=True)
     note = Column(String(500), nullable=True)
+    shift_type = Column(String(20), nullable=False, server_default="full")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    __table_args__ = (
-        UniqueConstraint("worker_id", "date", name="uq_worker_date"),
-    )
+    __table_args__ = (UniqueConstraint("worker_id", "date", name="uq_worker_date"),)
 
     # Relationships
     worker = relationship("WorkerModel", back_populates="labor_entries")

@@ -14,6 +14,7 @@ EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 class InvalidEmailError(ValueError):
     """Raised when email format is invalid."""
+
     pass
 
 
@@ -24,6 +25,7 @@ class User:
 
     Users have email/password credentials and assigned roles.
     """
+
     id: UUID
     email: str
     password_hash: str

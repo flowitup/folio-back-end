@@ -16,6 +16,7 @@ def require_permission(*required_permissions):
     Usage: @require_permission("project:create", "project:update")
     Requires ALL listed permissions.
     """
+
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -28,14 +29,21 @@ def require_permission(*required_permissions):
                 return fn(*args, **kwargs)
 
             if not all(p in user_permissions for p in required_permissions):
-                return jsonify({
-                    "error": "Forbidden",
-                    "message": f"Required permissions: {', '.join(required_permissions)}",
-                    "status_code": 403
-                }), 403
+                return (
+                    jsonify(
+                        {
+                            "error": "Forbidden",
+                            "message": f"Required permissions: {', '.join(required_permissions)}",
+                            "status_code": 403,
+                        }
+                    ),
+                    403,
+                )
 
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -46,6 +54,7 @@ def require_any_permission(*required_permissions):
     Usage: @require_any_permission("project:read", "project:admin")
     Requires at least ONE listed permission.
     """
+
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -58,14 +67,21 @@ def require_any_permission(*required_permissions):
                 return fn(*args, **kwargs)
 
             if not any(p in user_permissions for p in required_permissions):
-                return jsonify({
-                    "error": "Forbidden",
-                    "message": f"Required one of: {', '.join(required_permissions)}",
-                    "status_code": 403
-                }), 403
+                return (
+                    jsonify(
+                        {
+                            "error": "Forbidden",
+                            "message": f"Required one of: {', '.join(required_permissions)}",
+                            "status_code": 403,
+                        }
+                    ),
+                    403,
+                )
 
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -76,6 +92,7 @@ def require_role(*required_roles):
     Usage: @require_role("admin")
     Requires at least ONE listed role.
     """
+
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -86,12 +103,19 @@ def require_role(*required_roles):
             authz = container.authorization_service
 
             if not any(authz.has_role(UUID(user_id), role) for role in required_roles):
-                return jsonify({
-                    "error": "Forbidden",
-                    "message": f"Required role: {', '.join(required_roles)}",
-                    "status_code": 403
-                }), 403
+                return (
+                    jsonify(
+                        {
+                            "error": "Forbidden",
+                            "message": f"Required role: {', '.join(required_roles)}",
+                            "status_code": 403,
+                        }
+                    ),
+                    403,
+                )
 
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
