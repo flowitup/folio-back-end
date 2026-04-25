@@ -188,7 +188,7 @@ jobs:
 
       - name: Install dependencies
         timeout-minutes: 3
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Run ruff
         id: ruff
