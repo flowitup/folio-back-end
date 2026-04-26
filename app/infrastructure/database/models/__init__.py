@@ -18,6 +18,8 @@ from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.worker import WorkerModel
 from app.infrastructure.database.models.labor_entry import LaborEntryModel
 from app.infrastructure.database.models.invoice import InvoiceModel
+from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
+from app.infrastructure.database.models.task import TaskModel
 
 __all__ = [
     "Base",
@@ -31,4 +33,6 @@ __all__ = [
     "WorkerModel",
     "LaborEntryModel",
     "InvoiceModel",
+    "InvoiceAttachmentModel",
+    "TaskModel",
 ]

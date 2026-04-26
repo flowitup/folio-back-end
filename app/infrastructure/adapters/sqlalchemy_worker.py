@@ -28,7 +28,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             created_at=worker.created_at,
         )
         self._session.add(model)
-        self._session.flush()
+        self._session.commit()
         return self._to_entity(model)
 
     def find_by_id(self, worker_id: UUID) -> Optional[Worker]:
@@ -50,7 +50,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             model.daily_rate = worker.daily_rate
             model.is_active = worker.is_active
             model.updated_at = worker.updated_at
-            self._session.flush()
+            self._session.commit()
             return self._to_entity(model)
         return worker
 
@@ -58,7 +58,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
         model = self._session.query(WorkerModel).filter_by(id=worker_id).first()
         if model:
             model.is_active = False
-            self._session.flush()
+            self._session.commit()
             return True
         return False
 

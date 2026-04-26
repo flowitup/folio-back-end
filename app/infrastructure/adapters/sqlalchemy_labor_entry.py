@@ -33,7 +33,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         try:
             self._session.add(model)
-            self._session.flush()
+            self._session.commit()
         except IntegrityError:
             self._session.rollback()
             raise DuplicateEntryError(str(entry.worker_id), entry.date.isoformat())

@@ -10,7 +10,11 @@ from pydantic import ValidationError
 
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.invoices.schemas import CreateInvoiceSchema, UpdateInvoiceSchema
-from app.api.v1.projects.decorators import require_permission
+from app.api.v1.projects.decorators import (
+    require_permission,
+    require_project_access,
+    require_invoice_access,
+)
 from app.api.v1.projects.schemas import ErrorResponse
 from app.application.invoice import (
     CreateInvoiceRequest,
@@ -54,6 +58,7 @@ def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_project_access(write=False)
 def list_invoices(project_id: str):
     """List invoices for a project, optionally filtered by ?type=."""
     invoice_type_param = request.args.get("type")
@@ -88,6 +93,7 @@ def list_invoices(project_id: str):
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")
+@require_project_access(write=True)
 def create_invoice(project_id: str):
     """Create a new invoice for a project."""
     try:
@@ -125,6 +131,7 @@ def create_invoice(project_id: str):
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_invoice_access(write=False)
 def get_invoice(project_id: str, invoice_id: str):
     """Retrieve a single invoice by ID, scoped to the project."""
     try:
@@ -145,6 +152,7 @@ def get_invoice(project_id: str, invoice_id: str):
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")
+@require_invoice_access(write=True)
 def update_invoice(project_id: str, invoice_id: str):
     """Partially update an invoice (type is immutable after creation)."""
     try:
@@ -181,6 +189,7 @@ def update_invoice(project_id: str, invoice_id: str):
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")
+@require_invoice_access(write=True)
 def delete_invoice(project_id: str, invoice_id: str):
     """Delete an invoice by ID, scoped to the project."""
     # Verify invoice belongs to the requested project before deleting

@@ -87,7 +87,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         self._session.add(model)
         try:
-            self._session.flush()
+            self._session.commit()
         except IntegrityError as e:
             self._session.rollback()
             # Unique constraint on (project_id, invoice_number) was violated due
@@ -118,11 +118,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.notes = invoice.notes
         model.items = _items_to_jsonb(invoice.items)
         model.updated_at = datetime.now(timezone.utc)
-        self._session.flush()
+        self._session.commit()
         return _model_to_entity(model)
 
     def delete(self, invoice_id: UUID) -> bool:
         result = self._session.query(InvoiceModel).filter_by(id=invoice_id).delete()
+        self._session.commit()
         return result > 0
 
     def next_invoice_number(self, project_id: UUID) -> str:

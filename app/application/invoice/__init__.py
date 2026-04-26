@@ -1,20 +1,35 @@
 """Invoice use cases and ports."""
 
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository, IInvoiceRepository
 from app.application.invoice.dtos import InvoiceItemResponse, InvoiceResponse
 from app.application.invoice.create_invoice import CreateInvoiceUseCase, CreateInvoiceRequest
 from app.application.invoice.list_invoices import ListInvoicesUseCase, ListInvoicesRequest
 from app.application.invoice.get_invoice import GetInvoiceUseCase
 from app.application.invoice.update_invoice import UpdateInvoiceUseCase, UpdateInvoiceRequest
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
+from app.application.invoice.upload_attachment import (
+    UploadAttachmentUseCase,
+    FileTooLargeError,
+    UnsupportedFileTypeError,
+    MAX_FILE_SIZE_BYTES,
+    ALLOWED_MIME_TYPES,
+)
+from app.application.invoice.manage_attachments import (
+    ListAttachmentsUseCase,
+    GetAttachmentUseCase,
+    DeleteAttachmentUseCase,
+    AttachmentNotFoundError,
+)
 
 __all__ = [
-    # Port
+    # Ports
     "IInvoiceRepository",
+    "IAttachmentStorage",
+    "IInvoiceAttachmentRepository",
     # DTOs
     "InvoiceItemResponse",
     "InvoiceResponse",
-    # Use cases
+    # Invoice use cases
     "CreateInvoiceUseCase",
     "CreateInvoiceRequest",
     "ListInvoicesUseCase",
@@ -23,4 +38,15 @@ __all__ = [
     "UpdateInvoiceUseCase",
     "UpdateInvoiceRequest",
     "DeleteInvoiceUseCase",
+    # Attachment use cases
+    "UploadAttachmentUseCase",
+    "ListAttachmentsUseCase",
+    "GetAttachmentUseCase",
+    "DeleteAttachmentUseCase",
+    # Errors and constants
+    "FileTooLargeError",
+    "UnsupportedFileTypeError",
+    "AttachmentNotFoundError",
+    "MAX_FILE_SIZE_BYTES",
+    "ALLOWED_MIME_TYPES",
 ]

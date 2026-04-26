@@ -49,6 +49,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # Reject upload bodies > 10 MB at the WSGI layer (matches attachment use-case cap)
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
     CORS(app, supports_credentials=True, origins=cors_origins)
@@ -78,12 +81,14 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.projects import projects_bp
     from app.api.v1.labor import labor_bp
     from app.api.v1.invoices import invoice_bp
+    from app.api.v1.tasks import task_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
     app.register_blueprint(labor_bp, url_prefix="/api/v1")
     app.register_blueprint(invoice_bp, url_prefix="/api/v1")
+    app.register_blueprint(task_bp, url_prefix="/api/v1")
 
     # Initialize Swagger API documentation
     from app.api.swagger import init_swagger
@@ -101,10 +106,28 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
     from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
     from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
+    from app.infrastructure.adapters.sqlalchemy_invoice_attachment import SQLAlchemyInvoiceAttachmentRepository
+    from app.infrastructure.adapters.sqlalchemy_task import SQLAlchemyTaskRepository
+    from app.infrastructure.adapters.s3_attachment_storage import S3AttachmentStorage
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from config import Config
+
+    storage = S3AttachmentStorage(
+        endpoint_url=Config.S3_ENDPOINT_URL,
+        access_key=Config.S3_ACCESS_KEY,
+        secret_key=Config.S3_SECRET_KEY,
+        bucket=Config.S3_BUCKET,
+        region=Config.S3_REGION,
+    )
+    # Best-effort bucket bootstrap — log but do not crash the app on transient S3 outage
+    try:
+        storage.ensure_bucket()
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("S3 bucket bootstrap failed: %s (uploads will fail until resolved)", exc)
 
     configure_container(
         user_repository=SQLAlchemyUserRepository(db.session),
@@ -112,6 +135,9 @@ def _configure_di_container() -> None:
         worker_repository=SQLAlchemyWorkerRepository(db.session),
         labor_entry_repository=SQLAlchemyLaborEntryRepository(db.session),
         invoice_repository=SQLAlchemyInvoiceRepository(db.session),
+        attachment_storage=storage,
+        invoice_attachment_repository=SQLAlchemyInvoiceAttachmentRepository(db.session),
+        task_repository=SQLAlchemyTaskRepository(db.session),
         password_hasher=Argon2PasswordHasher(),
         token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
         session_manager=FlaskSessionManager(),
