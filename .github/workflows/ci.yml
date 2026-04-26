@@ -53,18 +53,22 @@ jobs:
             LABELS="$EVENT_LABELS"
           fi
 
+          # Explicit label wins; otherwise default to patch so every merged PR
+          # produces a release. Use `version:none` to opt out (rare: docs-only,
+          # ci-only, or hotfix that piggybacks on the previous release).
           if echo "$LABELS" | grep -q "version:major"; then
             echo "bump_type=major" >> $GITHUB_OUTPUT
             echo "Detected: major"
           elif echo "$LABELS" | grep -q "version:minor"; then
             echo "bump_type=minor" >> $GITHUB_OUTPUT
             echo "Detected: minor"
-          elif echo "$LABELS" | grep -q "version:patch"; then
-            echo "bump_type=patch" >> $GITHUB_OUTPUT
-            echo "Detected: patch"
-          else
+          elif echo "$LABELS" | grep -q "version:none"; then
             echo "bump_type=none" >> $GITHUB_OUTPUT
-            echo "Detected: none"
+            echo "Detected: none (explicit opt-out)"
+          else
+            # Default — covers both `version:patch` and any PR with no label.
+            echo "bump_type=patch" >> $GITHUB_OUTPUT
+            echo "Detected: patch (default)"
           fi
 
       - name: Get main branch version
