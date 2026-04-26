@@ -56,6 +56,15 @@ from app.application.invoice import (
     DeleteAttachmentUseCase,
 )
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
+from app.application.task import (
+    ITaskRepository,
+    CreateTaskUseCase,
+    ListTasksUseCase,
+    GetTaskUseCase,
+    UpdateTaskUseCase,
+    MoveTaskUseCase,
+    DeleteTaskUseCase,
+)
 
 # =============================================================================
 # PORTS (Interfaces) - Legacy ports kept for compatibility
@@ -136,6 +145,15 @@ class Container:
     get_attachment_usecase: Optional[GetAttachmentUseCase] = None
     delete_attachment_usecase: Optional[DeleteAttachmentUseCase] = None
 
+    # Task (planning Kanban) ports + use cases
+    task_repository: Optional[ITaskRepository] = None
+    create_task_usecase: Optional[CreateTaskUseCase] = None
+    list_tasks_usecase: Optional[ListTasksUseCase] = None
+    get_task_usecase: Optional[GetTaskUseCase] = None
+    update_task_usecase: Optional[UpdateTaskUseCase] = None
+    move_task_usecase: Optional[MoveTaskUseCase] = None
+    delete_task_usecase: Optional[DeleteTaskUseCase] = None
+
     # Domain services (configured after ports)
     auth_service: Optional[AuthService] = None
     authorization_service: Optional[AuthorizationService] = None
@@ -180,6 +198,7 @@ def configure_container(
     invoice_repository: Optional[IInvoiceRepository] = None,
     attachment_storage: Optional[IAttachmentStorage] = None,
     invoice_attachment_repository: Optional[IInvoiceAttachmentRepository] = None,
+    task_repository: Optional[ITaskRepository] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -202,6 +221,7 @@ def configure_container(
         invoice_repository=invoice_repository,
         attachment_storage=attachment_storage,
         invoice_attachment_repository=invoice_attachment_repository,
+        task_repository=task_repository,
     )
 
     # Wire up domain services if repositories are provided
@@ -257,6 +277,15 @@ def configure_container(
             invoice_attachment_repository,
             attachment_storage,
         )
+
+    # Wire task (planning) use cases
+    if task_repository:
+        container.create_task_usecase = CreateTaskUseCase(task_repository)
+        container.list_tasks_usecase = ListTasksUseCase(task_repository)
+        container.get_task_usecase = GetTaskUseCase(task_repository)
+        container.update_task_usecase = UpdateTaskUseCase(task_repository)
+        container.move_task_usecase = MoveTaskUseCase(task_repository)
+        container.delete_task_usecase = DeleteTaskUseCase(task_repository)
 
     # Wire attachment use cases
     if invoice_repository and invoice_attachment_repository and attachment_storage:

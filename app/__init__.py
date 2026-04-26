@@ -81,12 +81,14 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.projects import projects_bp
     from app.api.v1.labor import labor_bp
     from app.api.v1.invoices import invoice_bp
+    from app.api.v1.tasks import task_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
     app.register_blueprint(labor_bp, url_prefix="/api/v1")
     app.register_blueprint(invoice_bp, url_prefix="/api/v1")
+    app.register_blueprint(task_bp, url_prefix="/api/v1")
 
     # Initialize Swagger API documentation
     from app.api.swagger import init_swagger
@@ -105,6 +107,7 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
     from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
     from app.infrastructure.adapters.sqlalchemy_invoice_attachment import SQLAlchemyInvoiceAttachmentRepository
+    from app.infrastructure.adapters.sqlalchemy_task import SQLAlchemyTaskRepository
     from app.infrastructure.adapters.s3_attachment_storage import S3AttachmentStorage
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
@@ -134,6 +137,7 @@ def _configure_di_container() -> None:
         invoice_repository=SQLAlchemyInvoiceRepository(db.session),
         attachment_storage=storage,
         invoice_attachment_repository=SQLAlchemyInvoiceAttachmentRepository(db.session),
+        task_repository=SQLAlchemyTaskRepository(db.session),
         password_hasher=Argon2PasswordHasher(),
         token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
         session_manager=FlaskSessionManager(),

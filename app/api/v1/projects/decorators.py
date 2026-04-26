@@ -171,6 +171,45 @@ def require_invoice_access(write: bool = False):
     return decorator
 
 
+def require_task_access(write: bool = False):
+    """Decorator: load task → invoice's project → check membership.
+
+    Apply to routes whose path includes `<task_id>`. JWT is required
+    upstream via `@jwt_required()`.
+    """
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            from wiring import get_container
+
+            task_id_str = kwargs.get("task_id")
+            if not task_id_str:
+                return _forbidden("Missing task id")
+            try:
+                task_uuid = UUID(task_id_str)
+            except ValueError:
+                return _forbidden("Invalid task id")
+
+            container = get_container()
+            task = container.task_repository.find_by_id(task_uuid)
+            if task is None:
+                return _not_found(f"Task {task_id_str} not found")
+            project = container.project_repository.find_by_id(task.project_id)
+            if project is None:
+                return _not_found("Task's project no longer exists")
+
+            user_id = UUID(get_jwt_identity())
+            allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            if not allowed:
+                return _forbidden()
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def require_attachment_access(write: bool = False):
     """Decorator: load attachment → invoice → project → check membership.
 
