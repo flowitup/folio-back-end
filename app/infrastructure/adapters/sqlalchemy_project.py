@@ -25,7 +25,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             created_at=project.created_at,
         )
         self._session.add(model)
-        self._session.flush()
+        self._session.commit()
         return self._to_entity(model)
 
     def find_by_id(self, project_id: UUID) -> Optional[Project]:
@@ -53,7 +53,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         if model:
             model.name = project.name
             model.address = project.address
-            self._session.flush()
+            self._session.commit()
             return self._to_entity(model)
         return project
 

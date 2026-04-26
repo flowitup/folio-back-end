@@ -50,7 +50,12 @@ from app.application.invoice import (
     GetInvoiceUseCase,
     UpdateInvoiceUseCase,
     DeleteInvoiceUseCase,
+    UploadAttachmentUseCase,
+    ListAttachmentsUseCase,
+    GetAttachmentUseCase,
+    DeleteAttachmentUseCase,
 )
+from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
 
 # =============================================================================
 # PORTS (Interfaces) - Legacy ports kept for compatibility
@@ -123,6 +128,14 @@ class Container:
     update_invoice_usecase: Optional[UpdateInvoiceUseCase] = None
     delete_invoice_usecase: Optional[DeleteInvoiceUseCase] = None
 
+    # Attachment storage + repository
+    attachment_storage: Optional[IAttachmentStorage] = None
+    invoice_attachment_repository: Optional[IInvoiceAttachmentRepository] = None
+    upload_attachment_usecase: Optional[UploadAttachmentUseCase] = None
+    list_attachments_usecase: Optional[ListAttachmentsUseCase] = None
+    get_attachment_usecase: Optional[GetAttachmentUseCase] = None
+    delete_attachment_usecase: Optional[DeleteAttachmentUseCase] = None
+
     # Domain services (configured after ports)
     auth_service: Optional[AuthService] = None
     authorization_service: Optional[AuthorizationService] = None
@@ -165,6 +178,8 @@ def configure_container(
     worker_repository: Optional[IWorkerRepository] = None,
     labor_entry_repository: Optional[ILaborEntryRepository] = None,
     invoice_repository: Optional[IInvoiceRepository] = None,
+    attachment_storage: Optional[IAttachmentStorage] = None,
+    invoice_attachment_repository: Optional[IInvoiceAttachmentRepository] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -185,6 +200,8 @@ def configure_container(
         worker_repository=worker_repository,
         labor_entry_repository=labor_entry_repository,
         invoice_repository=invoice_repository,
+        attachment_storage=attachment_storage,
+        invoice_attachment_repository=invoice_attachment_repository,
     )
 
     # Wire up domain services if repositories are provided
@@ -233,7 +250,22 @@ def configure_container(
         container.list_invoices_usecase = ListInvoicesUseCase(invoice_repository)
         container.get_invoice_usecase = GetInvoiceUseCase(invoice_repository)
         container.update_invoice_usecase = UpdateInvoiceUseCase(invoice_repository)
-        container.delete_invoice_usecase = DeleteInvoiceUseCase(invoice_repository)
+        # DeleteInvoice gets the attachment repo + storage so it can clean S3 before
+        # the FK CASCADE drops the metadata rows (no S3 orphans on invoice delete).
+        container.delete_invoice_usecase = DeleteInvoiceUseCase(
+            invoice_repository,
+            invoice_attachment_repository,
+            attachment_storage,
+        )
+
+    # Wire attachment use cases
+    if invoice_repository and invoice_attachment_repository and attachment_storage:
+        container.upload_attachment_usecase = UploadAttachmentUseCase(
+            invoice_repository, invoice_attachment_repository, attachment_storage
+        )
+        container.list_attachments_usecase = ListAttachmentsUseCase(invoice_attachment_repository)
+        container.get_attachment_usecase = GetAttachmentUseCase(invoice_attachment_repository, attachment_storage)
+        container.delete_attachment_usecase = DeleteAttachmentUseCase(invoice_attachment_repository, attachment_storage)
 
     return container
 

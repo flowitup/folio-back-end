@@ -17,6 +17,12 @@ Usage:
     # Seed with labor data (requires projects to exist)
     uv run python scripts/seed.py --with-admin admin@example.com password --with-projects --with-labor
 
+    # Seed with invoices (requires projects to exist)
+    uv run python scripts/seed.py --with-admin admin@example.com password --with-projects --with-invoices
+
+    # Reset invoices and reseed (use --reset-invoices alongside --with-invoices)
+    uv run python scripts/seed.py --with-admin admin@example.com password --with-projects --with-invoices --reset-invoices
+
 Security Note:
     Prefer environment variables over CLI args to avoid password exposure
     in shell history. CLI args are acceptable for local development only.
@@ -34,6 +40,7 @@ from scripts.seed_auth import (
 )
 from scripts.seed_project import seed_projects
 from scripts.seed_labor import seed_labor
+from scripts.seed_invoices import seed_invoices
 
 
 def main():
@@ -78,6 +85,10 @@ def main():
         if "--with-labor" in sys.argv:
             print("\n6. Creating sample labor data...")
             seed_labor()
+
+        if "--with-invoices" in sys.argv:
+            print("\n7. Creating sample invoices...")
+            seed_invoices(reset="--reset-invoices" in sys.argv)
 
         print("\nSeeding complete!")
 

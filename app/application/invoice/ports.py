@@ -1,7 +1,7 @@
 """Invoice repository port — persistence contract for the invoice domain."""
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import BinaryIO, Optional
 from uuid import UUID
 
 from app.domain.entities.invoice import Invoice, InvoiceType
@@ -27,3 +27,36 @@ class IInvoiceRepository(ABC):
 
     @abstractmethod
     def next_invoice_number(self, project_id: UUID) -> str: ...
+
+
+class IAttachmentStorage(ABC):
+    """Port for binary file storage (S3 / MinIO / local FS)."""
+
+    @abstractmethod
+    def put(self, key: str, fileobj: BinaryIO, content_type: str) -> None:
+        """Upload a file. `key` is the storage object path."""
+
+    @abstractmethod
+    def get_stream(self, key: str) -> tuple[BinaryIO, int]:
+        """Open a download stream. Returns (file-like, content_length)."""
+
+    @abstractmethod
+    def delete(self, key: str) -> None:
+        """Remove an object. Idempotent — no-op if key does not exist."""
+
+
+class IInvoiceAttachmentRepository(ABC):
+    """Port for invoice attachment metadata persistence."""
+
+    @abstractmethod
+    def save(self, attachment) -> "InvoiceAttachment":  # noqa: F821 — fwd ref
+        ...
+
+    @abstractmethod
+    def find_by_id(self, attachment_id: UUID): ...
+
+    @abstractmethod
+    def list_by_invoice(self, invoice_id: UUID) -> list: ...
+
+    @abstractmethod
+    def delete(self, attachment_id: UUID) -> bool: ...

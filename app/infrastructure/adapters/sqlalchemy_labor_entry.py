@@ -33,7 +33,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         try:
             self._session.add(model)
-            self._session.flush()
+            self._session.commit()
         except IntegrityError:
             self._session.rollback()
             raise DuplicateEntryError(str(entry.worker_id), entry.date.isoformat())
@@ -67,7 +67,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.amount_override = entry.amount_override
             model.note = entry.note
             model.shift_type = entry.shift_type
-            self._session.flush()
+            self._session.commit()
             return self._to_entity(model)
         return entry
 

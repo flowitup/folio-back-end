@@ -80,6 +80,13 @@ class Config:
     RATELIMIT_DEFAULT: str = "100 per minute"
     RATELIMIT_LOGIN: str = "5 per minute"
 
+    # S3 / MinIO storage for invoice attachments
+    S3_ENDPOINT_URL: str = get_env("S3_ENDPOINT_URL", default="http://localhost:9000")
+    S3_ACCESS_KEY: str = get_env("S3_ACCESS_KEY", default="minioadmin")
+    S3_SECRET_KEY: str = get_env("S3_SECRET_KEY", default="minioadmin")
+    S3_BUCKET: str = get_env("S3_BUCKET", default="construction-attachments")
+    S3_REGION: str = get_env("S3_REGION", default="us-east-1")
+
     def __post_init__(self):
         if self.JWT_TOKEN_LOCATION is None:
             self.JWT_TOKEN_LOCATION = ["headers", "cookies"]
