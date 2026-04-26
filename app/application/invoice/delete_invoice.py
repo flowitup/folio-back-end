@@ -53,6 +53,4 @@ class DeleteInvoiceUseCase:
             try:
                 self._storage.delete(key)
             except Exception as exc:
-                logger.warning(
-                    "Failed to delete S3 object %s for invoice %s: %s", key, invoice_id, exc
-                )
+                logger.warning("Failed to delete S3 object %s for invoice %s: %s", key, invoice_id, exc)

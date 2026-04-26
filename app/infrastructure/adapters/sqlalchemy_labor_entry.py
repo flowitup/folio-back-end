@@ -67,7 +67,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.amount_override = entry.amount_override
             model.note = entry.note
             model.shift_type = entry.shift_type
-            self._session.commit()
+            self._session.flush()
             return self._to_entity(model)
         return entry
 

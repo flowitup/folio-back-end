@@ -95,10 +95,7 @@ ITEM_TEMPLATES = {
 
 def _items_to_payload(items: list[tuple[str, float, float]]) -> list[dict]:
     """Convert (description, qty, unit_price) tuples to JSON dicts the model expects."""
-    return [
-        {"description": desc, "quantity": float(qty), "unit_price": float(price)}
-        for desc, qty, price in items
-    ]
+    return [{"description": desc, "quantity": float(qty), "unit_price": float(price)} for desc, qty, price in items]
 
 
 def _seed_for_project(project: ProjectModel, creator: UserModel | None, per_project: int) -> int:
@@ -112,9 +109,7 @@ def _seed_for_project(project: ProjectModel, creator: UserModel | None, per_proj
         invoice_number = f"INV-{today.year}-{i + 1:04d}"
 
         existing = (
-            db.session.query(InvoiceModel)
-            .filter_by(project_id=project.id, invoice_number=invoice_number)
-            .first()
+            db.session.query(InvoiceModel).filter_by(project_id=project.id, invoice_number=invoice_number).first()
         )
         if existing:
             print(f"    [skip] {invoice_number} already exists")
