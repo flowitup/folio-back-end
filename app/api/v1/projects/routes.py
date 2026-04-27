@@ -240,54 +240,29 @@ def get_project_users(project_id: str):
 
 @projects_bp.route("/<project_id>/users", methods=["POST"])
 @jwt_required()
-@require_permission("project:manage_users")
 def add_user_to_project(project_id: str):
-    """Add a user to a project."""
-    try:
-        data = AddUserRequest(**request.get_json())
-    except ValidationError as e:
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-        return (
-            jsonify(
-                ErrorResponse(
-                    error="ValidationError",
-                    message=f"Invalid input: {', '.join(str(f) for f in error_fields)}",
-                    status_code=400,
-                ).model_dump()
-            ),
-            400,
-        )
+    """DEPRECATED — invite-only signup is the only membership-creation path.
 
-    container = get_container()
-    user_id = UUID(get_jwt_identity())
+    This endpoint cannot satisfy the per-project role requirement (user_projects.role_id
+    is NOT NULL after migration e3f1a2b4c5d6) and is replaced by:
+      POST /api/v1/invitations  {project_id, email, role_id}
 
-    # Verify project exists and caller owns it
-    try:
-        project = container.get_project_usecase.execute(UUID(project_id))
-    except ProjectNotFoundError:
-        return (
-            jsonify(
-                ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()
-            ),
-            404,
-        )
-
-    if not can_mutate_project(project, user_id):
-        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
-
-    # Verify user exists
-    user = container.user_repository.find_by_id(UUID(data.user_id))
-    if not user:
-        return (
-            jsonify(
-                ErrorResponse(error="NotFound", message=f"User {data.user_id} not found", status_code=404).model_dump()
-            ),
-            404,
-        )
-
-    container.project_repository.add_user(UUID(project_id), UUID(data.user_id))
-
-    return jsonify({"message": "User added to project"}), 200
+    Returns 410 Gone for any caller. Kept registered (rather than removed) so legacy
+    clients receive a clear deprecation signal instead of a silent 404.
+    """
+    return (
+        jsonify(
+            ErrorResponse(
+                error="Gone",
+                message=(
+                    "POST /projects/<id>/users is deprecated. Use "
+                    "POST /api/v1/invitations with {project_id, email, role_id} instead."
+                ),
+                status_code=410,
+            ).model_dump()
+        ),
+        410,
+    )
 
 
 @projects_bp.route("/<uuid:project_id>/members", methods=["GET"])

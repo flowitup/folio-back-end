@@ -49,6 +49,16 @@ def _err(code: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=code).model_dump()), code
 
 
+def _gone(reason: str, message: str):
+    """410 Gone with a `reason` discriminator the frontend uses to pick the error UI.
+
+    reason ∈ {'expired', 'revoked', 'accepted'}.
+    """
+    body = ErrorResponse(error="Gone", message=message, status_code=410).model_dump()
+    body["reason"] = reason
+    return jsonify(body), 410
+
+
 def _validation_err(e: ValidationError):
     fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
     return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
@@ -212,8 +222,12 @@ def verify_invitation(token: str):
         dto = container.verify_invitation_usecase.execute(raw_token=token)
     except InvalidInvitationTokenError:
         return _err(404, "NotFound", "Invitation not found.")
-    except (InvitationExpiredError, InvitationRevokedError, InvitationAlreadyAcceptedError) as e:
-        return _err(410, "Gone", str(e))
+    except InvitationExpiredError as e:
+        return _gone("expired", str(e))
+    except InvitationRevokedError as e:
+        return _gone("revoked", str(e))
+    except InvitationAlreadyAcceptedError as e:
+        return _gone("accepted", str(e))
     except Exception as e:
         # Surface DB-level errors (e.g. missing table in test env) as 500
         import logging
@@ -256,8 +270,12 @@ def accept_invitation():
         )
     except InvalidInvitationTokenError:
         return _err(404, "NotFound", "Invitation not found.")
-    except (InvitationExpiredError, InvitationRevokedError, InvitationAlreadyAcceptedError) as e:
-        return _err(410, "Gone", str(e))
+    except InvitationExpiredError as e:
+        return _gone("expired", str(e))
+    except InvitationRevokedError as e:
+        return _gone("revoked", str(e))
+    except InvitationAlreadyAcceptedError as e:
+        return _gone("accepted", str(e))
     except ValueError as e:
         return _err(422, "ValidationError", str(e))
     except Exception:
