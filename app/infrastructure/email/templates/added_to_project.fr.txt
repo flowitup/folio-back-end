@@ -1,0 +1,12 @@
+Vous avez été ajouté à {{ project_name }} sur {{ app_name }}
+
+Bonjour,
+
+{{ inviter_name }} vous a ajouté à {{ project_name }} sur {{ app_name }} en tant que {{ role_name }}.
+
+Consultez votre projet ici :
+{{ accept_url }}
+
+Si vous pensez qu'il s'agit d'une erreur, veuillez contacter l'administrateur du projet.
+
+— L'équipe {{ app_name }}

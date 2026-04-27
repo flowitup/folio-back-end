@@ -51,12 +51,18 @@ class Config:
     REDIS_URL: str = get_env("REDIS_URL", default="redis://localhost:6379/0")
 
     # Email configuration
+    # EMAIL_PROVIDER: 'resend' | 'inmemory' | 'smtp'
     EMAIL_PROVIDER: str = get_env("EMAIL_PROVIDER", default="smtp")
     SMTP_HOST: str = get_env("SMTP_HOST", default="localhost")
     SMTP_PORT: int = int(get_env("SMTP_PORT", default="587"))
     SMTP_USER: str = get_env("SMTP_USER", default="")
     SMTP_PASS: str = get_env("SMTP_PASS", default="")
     SMTP_USE_TLS: bool = get_env("SMTP_USE_TLS", default="true").lower() == "true"
+    # Resend API settings (used when EMAIL_PROVIDER=resend)
+    RESEND_API_KEY: str = get_env("RESEND_API_KEY", default="")
+    FROM_EMAIL: str = get_env("FROM_EMAIL", default="")
+    # Base URL of the frontend app (used in invitation links)
+    APP_BASE_URL: str = get_env("APP_BASE_URL", default="http://localhost:3000")
 
     # Application settings
     DEBUG: bool = get_env("FLASK_DEBUG", default="false").lower() == "true"

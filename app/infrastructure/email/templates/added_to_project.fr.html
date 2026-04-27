@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vous avez été ajouté à {{ project_name }} sur {{ app_name }}</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background: #f4f4f4; padding: 32px 0;">
+    <tr>
+      <td align="center">
+        <table width="560" cellpadding="0" cellspacing="0" style="background: #ffffff; border-radius: 6px; padding: 32px; max-width: 560px;">
+          <tr>
+            <td>
+              <h2 style="color: #1a1a1a; margin-top: 0;">Vous avez été ajouté à un projet</h2>
+              <p style="color: #444444; line-height: 1.6;">
+                <strong>{{ inviter_name }}</strong> vous a ajouté à
+                <strong>{{ project_name }}</strong> sur <strong>{{ app_name }}</strong>
+                en tant que <strong>{{ role_name }}</strong>.
+              </p>
+              <p style="text-align: center; margin: 32px 0;">
+                <a href="{{ accept_url }}"
+                   style="background: #2563eb; color: #ffffff; text-decoration: none;
+                          padding: 12px 28px; border-radius: 4px; font-weight: bold; display: inline-block;">
+                  Voir le projet
+                </a>
+              </p>
+              <p style="color: #888888; font-size: 13px;">
+                Si vous pensez qu'il s'agit d'une erreur, veuillez contacter l'administrateur du projet.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -1,0 +1,12 @@
+Bạn đã được thêm vào {{ project_name }} trên {{ app_name }}
+
+Xin chào,
+
+{{ inviter_name }} đã thêm bạn vào {{ project_name }} trên {{ app_name }} với vai trò {{ role_name }}.
+
+Xem dự án tại đây:
+{{ accept_url }}
+
+Nếu bạn cho rằng đây là nhầm lẫn, vui lòng liên hệ quản trị viên dự án.
+
+— Đội ngũ {{ app_name }}

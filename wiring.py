@@ -8,7 +8,8 @@ The core domain should depend only on ports (abstractions), not on concrete impl
 This follows the Dependency Inversion Principle.
 """
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Protocol
 
 # Import port interfaces from application layer
@@ -119,6 +120,10 @@ class Container:
     queue_service: Optional[QueuePort] = None
     project_repository: Optional[ProjectRepository] = None
 
+    # New email port (EmailPayload-based adapter) + renderer
+    email_port: Optional[Any] = None  # ResendEmailAdapter | InMemoryEmailAdapter
+    email_renderer: Optional[Any] = None  # EmailRenderer
+
     # Auth ports
     user_repository: Optional[UserRepositoryPort] = None
     password_hasher: Optional[PasswordHasherPort] = None
@@ -179,6 +184,52 @@ class Container:
     delete_attendance_usecase: Optional[DeleteAttendanceUseCase] = None
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
+
+
+# =============================================================================
+# EMAIL PORT FACTORY
+# =============================================================================
+
+# Module-level singleton for InMemoryEmailAdapter so tests can inspect .sent
+_inmemory_email_adapter: Optional[Any] = None
+
+
+def _build_email_port() -> Any:
+    """
+    Instantiate the correct email adapter based on EMAIL_PROVIDER env var.
+
+    Supported values: 'resend', 'inmemory', 'smtp' (smtp keeps legacy path).
+    Defaults to 'smtp' when unset.
+    """
+    global _inmemory_email_adapter
+
+    provider = os.environ.get("EMAIL_PROVIDER", "smtp").lower()
+
+    if provider == "resend":
+        from app.infrastructure.email.resend_adapter import ResendEmailAdapter
+        api_key = os.environ.get("RESEND_API_KEY", "")
+        from_email = os.environ.get("FROM_EMAIL", "")
+        return ResendEmailAdapter(api_key=api_key, from_email=from_email)
+
+    if provider == "inmemory":
+        from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
+        if _inmemory_email_adapter is None:
+            _inmemory_email_adapter = InMemoryEmailAdapter()
+        return _inmemory_email_adapter
+
+    # 'smtp' or any unknown value — return None to keep legacy email_service path
+    return None
+
+
+def _build_email_renderer() -> Any:
+    """Return an EmailRenderer pointed at the bundled Jinja2 templates directory."""
+    import pathlib
+    from app.infrastructure.email.renderer import EmailRenderer
+
+    templates_dir = str(
+        pathlib.Path(__file__).parent / "app" / "infrastructure" / "email" / "templates"
+    )
+    return EmailRenderer(templates_dir=templates_dir)
 
 
 # Global container instance
@@ -295,6 +346,10 @@ def configure_container(
         container.list_attachments_usecase = ListAttachmentsUseCase(invoice_attachment_repository)
         container.get_attachment_usecase = GetAttachmentUseCase(invoice_attachment_repository, attachment_storage)
         container.delete_attachment_usecase = DeleteAttachmentUseCase(invoice_attachment_repository, attachment_storage)
+
+    # Wire email port + renderer
+    container.email_port = _build_email_port()
+    container.email_renderer = _build_email_renderer()
 
     return container
 
