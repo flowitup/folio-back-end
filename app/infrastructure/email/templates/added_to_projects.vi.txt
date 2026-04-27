@@ -1,0 +1,16 @@
+Bạn đã được thêm vào {{ added_projects|length }} dự án trên {{ app_name }}
+
+Xin chào,
+
+{{ inviter_name }} đã thêm bạn vào các dự án sau trên {{ app_name }} với vai trò {{ role_name }}:
+
+{% for proj in added_projects %}
+- {{ proj.name }}
+{% endfor %}
+
+Xem bảng điều khiển tại đây:
+{{ app_url }}
+
+Nếu bạn cho rằng đây là nhầm lẫn, vui lòng liên hệ quản trị viên của bạn.
+
+— Đội ngũ {{ app_name }}

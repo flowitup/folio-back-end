@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bạn đã được thêm vào {{ added_projects|length }} dự án trên {{ app_name }}</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background: #f4f4f4; padding: 32px 0;">
+    <tr>
+      <td align="center">
+        <table width="560" cellpadding="0" cellspacing="0" style="background: #ffffff; border-radius: 6px; padding: 32px; max-width: 560px;">
+          <tr>
+            <td>
+              <h2 style="color: #1a1a1a; margin-top: 0;">
+                Bạn đã được thêm vào {{ added_projects|length }} dự án
+              </h2>
+              <p style="color: #444444; line-height: 1.6;">
+                <strong>{{ inviter_name }}</strong> đã thêm bạn vào các dự án sau
+                trên <strong>{{ app_name }}</strong>
+                với vai trò <strong>{{ role_name }}</strong>:
+              </p>
+              <ul style="color: #444444; line-height: 1.8; padding-left: 20px;">
+                {% for proj in added_projects %}
+                <li><strong>{{ proj.name }}</strong></li>
+                {% endfor %}
+              </ul>
+              <p style="text-align: center; margin: 32px 0;">
+                <a href="{{ app_url }}"
+                   style="background: #2563eb; color: #ffffff; text-decoration: none;
+                          padding: 12px 28px; border-radius: 4px; font-weight: bold; display: inline-block;">
+                  Xem bảng điều khiển
+                </a>
+              </p>
+              <p style="color: #888888; font-size: 13px;">
+                Nếu bạn cho rằng đây là nhầm lẫn, vui lòng liên hệ quản trị viên của bạn.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

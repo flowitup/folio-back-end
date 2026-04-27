@@ -42,6 +42,30 @@ class SQLAlchemyUserRepository:
         )
         return [(u.id, u.email) for u in users]
 
+    def search_by_email_or_name(self, query: str, limit: int = 20) -> List[User]:
+        """Search users by email or display_name (case-insensitive substring match).
+
+        Returns up to ``limit`` active User entities ordered by email asc.
+        Used by the superadmin user-search endpoint (phase 03).
+        """
+        from sqlalchemy import func, or_
+
+        pattern = f"%{query.lower()}%"
+        users = (
+            self._session.query(UserModel)
+            .filter(
+                or_(
+                    func.lower(UserModel.email).like(pattern),
+                    func.lower(func.coalesce(UserModel.display_name, "")).like(pattern),
+                )
+            )
+            .filter(UserModel.is_active.is_(True))
+            .order_by(UserModel.email.asc())
+            .limit(limit)
+            .all()
+        )
+        return [self._to_entity(u) for u in users]
+
     def save(self, user: User) -> User:
         """Save a user (create or update)."""
         existing = self._session.query(UserModel).filter_by(id=user.id).first()

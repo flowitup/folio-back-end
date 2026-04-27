@@ -11,6 +11,9 @@ SUBJECTS: dict[tuple[str, str], str] = {
     ("added_to_project", "en"): "You've been added to {project_name} on Folio",
     ("added_to_project", "fr"): "Vous avez été ajouté à {project_name} sur Folio",
     ("added_to_project", "vi"): "Bạn đã được thêm vào {project_name} trên Folio",
+    ("added_to_projects", "en"): "You've been added to {count} projects on Folio",
+    ("added_to_projects", "fr"): "Vous avez été ajouté à {count} projets sur Folio",
+    ("added_to_projects", "vi"): "Bạn đã được thêm vào {count} dự án trên Folio",
 }
 
 
@@ -42,6 +45,11 @@ class EmailRenderer:
         """
         # Inject app_name default so callers don't need to repeat it everywhere.
         ctx = {"app_name": "Folio", **context}
+
+        # Inject count for templates that carry an added_projects list
+        # (e.g. added_to_projects.*) so the subject can use {count}.
+        if "added_projects" in ctx:
+            ctx["count"] = len(ctx["added_projects"])
 
         subject_tpl = SUBJECTS[(template_name, locale)]
         # Format subject with plain (unescaped) context values so we don't get

@@ -136,3 +136,13 @@ class UserWriteRepositoryPort(Protocol):
     def save(self, user: User) -> User:
         """Persist a user (insert or update). Returns the saved instance."""
         ...
+
+    def search_by_email_or_name(self, query: str, limit: int = 20) -> list[User]:
+        """Search users by email or display_name (case-insensitive prefix/substring match).
+
+        Used by the superadmin user-search endpoint (phase 03). Declared here at
+        the port level so the application layer never imports from infrastructure.
+
+        Returns up to ``limit`` matching User entities, ordered by email asc.
+        """
+        ...
