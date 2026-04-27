@@ -18,6 +18,7 @@ from app.api.v1.invitations.schemas import (
 )
 from app.api.v1.auth.schemas import ErrorResponse
 from app.application.invitations.exceptions import (
+    AlreadyMemberError,
     PermissionDeniedError,
     RateLimitedError,
     RoleNotFoundError,
@@ -118,6 +119,8 @@ def create_invitation():
         return _err(404, "NotFound", str(e))
     except RoleNotAllowedError as e:
         return _err(403, "Forbidden", str(e))
+    except AlreadyMemberError as e:
+        return _err(409, "Conflict", str(e))
     except RateLimitedError as e:
         return _err(429, "RateLimited", str(e))
     except Exception:

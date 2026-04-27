@@ -16,7 +16,15 @@ class CreateInviteRequest(BaseModel):
 
 
 class CreateInviteResponse(BaseModel):
-    """POST /invitations response body."""
+    """POST /invitations response body.
+
+    SECURITY/UX NOTE — kind discriminator leak (H3 from code-review):
+    ``kind`` reveals whether the supplied email belongs to an existing user
+    (``direct_added``) or not (``invitation_sent``). Accepted within the admin
+    trust boundary because ``project:invite`` callers can already enumerate
+    users via /projects/<id>/members. Do NOT echo this discriminator on any
+    public-facing endpoint.
+    """
 
     kind: Literal["invitation_sent", "direct_added"]
     invitation_id: Optional[UUID] = None

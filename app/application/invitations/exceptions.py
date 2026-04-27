@@ -25,3 +25,17 @@ class RoleNotFoundError(Exception):
     """Raised when the requested role does not exist."""
 
     pass
+
+
+class AlreadyMemberError(Exception):
+    """
+    Raised when an admin invites an existing user who is already a member of the
+    target project with a *different* role than the one requested.
+
+    Same-role invites remain idempotent (return ``direct_added`` no-op without
+    raising). Mapped to HTTP 409 by the route layer. The product decision is to
+    refuse the silent role-change here; admins should explicitly change a member's
+    role via a (future) dedicated endpoint to avoid surprising side-effects.
+    """
+
+    pass

@@ -218,6 +218,7 @@ class TestExistingUserPath:
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
+        membership_repo.find_role_id.return_value = None  # not yet a member
         user_repo = MagicMock()
         user_repo.find_by_id.return_value = inviter
         user_repo.find_by_email.return_value = existing_user
@@ -252,6 +253,7 @@ class TestExistingUserPath:
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
+        membership_repo.find_role_id.return_value = None  # not yet a member
         user_repo = MagicMock()
         user_repo.find_by_id.return_value = inviter
         user_repo.find_by_email.return_value = existing_user
@@ -285,6 +287,7 @@ class TestExistingUserPath:
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
+        membership_repo.find_role_id.return_value = None  # not yet a member
         user_repo = MagicMock()
         user_repo.find_by_id.return_value = inviter
         user_repo.find_by_email.return_value = existing_user
@@ -316,6 +319,89 @@ class TestExistingUserPath:
 
         renderer.render.assert_called_once()
         assert renderer.render.call_args[0][0] == "added_to_project"
+
+    def test_existing_member_same_role_is_idempotent_noop(self):
+        """Already a member with SAME role → direct_added, no email enqueued (H2)."""
+        inviter = _make_user(has_invite_perm=True)
+        project = _make_project()
+        role = _make_role()
+        existing_user = User(
+            id=uuid4(), email="member@example.com", password_hash="hashed",
+            is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+        )
+        membership_repo = MagicMock()
+        # Already a member with the same role_id → idempotent no-op
+        membership_repo.find_role_id.return_value = role.id
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = inviter
+        user_repo.find_by_email.return_value = existing_user
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        role_repo = MagicMock()
+        role_repo.find_by_id.return_value = role
+        renderer = MagicMock()
+        queue = MagicMock()
+
+        uc = CreateInvitationUseCase(
+            invitation_repo=MagicMock(),
+            project_membership_repo=membership_repo,
+            user_repo=user_repo,
+            project_repo=project_repo,
+            role_repo=role_repo,
+            email_port=MagicMock(),
+            email_renderer=renderer,
+            queue_port=queue,
+            app_base_url="http://localhost:3000",
+        )
+        result = uc.execute(
+            inviter_id=inviter.id,
+            project_id=project.id,
+            email="member@example.com",
+            role_id=role.id,
+        )
+
+        assert result.kind == "direct_added"
+        # No new membership added, no email enqueued
+        membership_repo.add.assert_not_called()
+        queue.enqueue.assert_not_called()
+        renderer.render.assert_not_called()
+
+    def test_existing_member_different_role_raises_already_member_error(self):
+        """Already a member with DIFFERENT role → AlreadyMemberError (maps to 409, H2)."""
+        from app.application.invitations.exceptions import AlreadyMemberError
+        inviter = _make_user(has_invite_perm=True)
+        project = _make_project()
+        role = _make_role()  # the role admin is *trying* to assign
+        existing_user = User(
+            id=uuid4(), email="member@example.com", password_hash="hashed",
+            is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+        )
+        # Membership exists but with a *different* role_id
+        membership_repo = MagicMock()
+        membership_repo.find_role_id.return_value = uuid4()  # different from role.id
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = inviter
+        user_repo.find_by_email.return_value = existing_user
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        role_repo = MagicMock()
+        role_repo.find_by_id.return_value = role
+
+        uc = _make_usecase(
+            membership_repo=membership_repo,
+            user_repo=user_repo,
+            project_repo=project_repo,
+            role_repo=role_repo,
+        )
+        with pytest.raises(AlreadyMemberError):
+            uc.execute(
+                inviter_id=inviter.id,
+                project_id=project.id,
+                email="member@example.com",
+                role_id=role.id,
+            )
+        # No state mutation should have occurred
+        membership_repo.add.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

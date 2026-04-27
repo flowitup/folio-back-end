@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.application.invitations.dtos import CreateInvitationResultDto
 from app.application.invitations.exceptions import (
+    AlreadyMemberError,
     PermissionDeniedError,
     RateLimitedError,
     RoleNotFoundError,
@@ -91,9 +92,19 @@ class CreateInvitationUseCase:
         normalized_email = email.strip().lower()
 
         # 5. Existing-user fast-path
+        #
+        # SECURITY/UX NOTE — kind discriminator leak (H3 from code-review):
+        # The DTO returned below carries `kind="direct_added"` for existing emails
+        # and `kind="invitation_sent"` for new ones. This leaks user-existence to
+        # the authenticated admin/owner. Accepted within the admin trust boundary
+        # because admins can already enumerate users via the /projects/<id>/members
+        # endpoint and via project membership lists. Do NOT expose this discriminator
+        # on any public-facing endpoint.
         existing_user = self._user_repo.find_by_email(normalized_email)
         if existing_user is not None:
-            if not self._membership_repo.exists(existing_user.id, project_id):
+            existing_role_id = self._membership_repo.find_role_id(existing_user.id, project_id)
+            if existing_role_id is None:
+                # Not yet a member — add membership + send notification email.
                 membership = ProjectMembership.create(
                     user_id=existing_user.id,
                     project_id=project_id,
@@ -108,6 +119,15 @@ class CreateInvitationUseCase:
                     role_name=role.name,
                     locale=locale,
                 )
+            elif existing_role_id != role_id:
+                # Already a member with a different role — refuse the silent
+                # role-change (H2 from code-review). Admin must use a dedicated
+                # role-change flow. Maps to HTTP 409.
+                raise AlreadyMemberError(
+                    f"User {existing_user.id} is already a member of project "
+                    f"{project_id} with a different role; refusing silent role change."
+                )
+            # else: same role → idempotent no-op (don't re-send the email).
             return CreateInvitationResultDto(kind="direct_added", user_id=existing_user.id)
 
         # 6. Invitation flow — enforce daily cap

@@ -68,6 +68,14 @@ class ProjectMembershipRepositoryPort(Protocol):
         """Return True if the user is already a member of the project."""
         ...
 
+    def find_role_id(self, user_id: UUID, project_id: UUID) -> Optional[UUID]:
+        """
+        Return the role_id of an existing (user, project) membership, or None
+        if no such membership exists. Used by CreateInvitationUseCase to
+        distinguish 'not a member' from 'already a member with same/different role'.
+        """
+        ...
+
 
 class ProjectRepositoryPort(Protocol):
     """Minimal read-only project contract needed by invitation use-cases."""

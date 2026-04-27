@@ -52,3 +52,20 @@ class SqlAlchemyProjectMembershipRepository:
             {"uid": str(user_id), "pid": str(project_id)},
         )
         return result.fetchone() is not None
+
+    def find_role_id(self, user_id: UUID, project_id: UUID):
+        """Return the role_id of an existing membership row, or None."""
+        result = self._session.execute(
+            text(
+                "SELECT role_id FROM user_projects "
+                "WHERE user_id = :uid AND project_id = :pid LIMIT 1"
+            ),
+            {"uid": str(user_id), "pid": str(project_id)},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        # SQLAlchemy returns string for SQLite UUID; coerce to UUID for the port contract.
+        from uuid import UUID as _UUID
+        raw = row[0]
+        return raw if isinstance(raw, _UUID) else _UUID(str(raw))
