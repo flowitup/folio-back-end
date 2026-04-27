@@ -75,6 +75,14 @@ from app.application.invitations import (
     ListInvitationsUseCase,
 )
 from app.application.admin import BulkAddExistingUserUseCase
+from app.application.notes.create_note_usecase import CreateNoteUseCase
+from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
+from app.application.notes.update_note_usecase import UpdateNoteUseCase
+from app.application.notes.delete_note_usecase import DeleteNoteUseCase
+from app.application.notes.mark_note_done_usecase import MarkNoteDoneUseCase
+from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
+from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
+from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
 
 # =============================================================================
 # PORTS (Interfaces)
@@ -189,6 +197,19 @@ class Container:
 
     # Admin use cases
     bulk_add_existing_user_usecase: Optional[BulkAddExistingUserUseCase] = None
+
+    # Notes repos + use cases (phase 03)
+    note_repo: Optional[Any] = None  # SqlAlchemyNoteRepository (NoteRepositoryPort + NoteQueryPort)
+    note_dismissal_repo: Optional[Any] = None  # SqlAlchemyNoteDismissalRepository
+    note_membership_reader: Optional[Any] = None  # SqlAlchemyProjectMembershipReader
+    create_note_usecase: Optional[CreateNoteUseCase] = None
+    list_project_notes_usecase: Optional[ListProjectNotesUseCase] = None
+    update_note_usecase: Optional[UpdateNoteUseCase] = None
+    delete_note_usecase: Optional[DeleteNoteUseCase] = None
+    mark_note_done_usecase: Optional[MarkNoteDoneUseCase] = None
+    mark_note_open_usecase: Optional[MarkNoteOpenUseCase] = None
+    list_due_notifications_usecase: Optional[ListDueNotificationsUseCase] = None
+    dismiss_notification_usecase: Optional[DismissNotificationUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
@@ -478,6 +499,11 @@ def configure_container(
             app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:3000"),
             db_session=_db.session,
         )
+
+    # Wire notes use cases (phase 03) — always wired; repos are instantiated in
+    # _configure_di_container() which injects db.session at app startup.
+    # Note: note_repo, note_dismissal_repo, and note_membership_reader are set
+    # directly on the container after this function returns (see app/__init__.py).
 
     return container
 
