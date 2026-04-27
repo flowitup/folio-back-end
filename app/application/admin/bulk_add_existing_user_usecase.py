@@ -18,12 +18,18 @@ from app.application.invitations.ports import (
     ProjectMembershipRepositoryPort,
     ProjectRepositoryPort,
     RoleRepositoryPort,
+    TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
 from app.domain.entities.project_membership import ProjectMembership
 from tasks import EmailPayload
 
 _MAX_PROJECTS = 50
+
+# Email locale for the consolidated "you've been added to N projects" notification.
+# v1: always 'en' — Folio doesn't yet store a preferred locale on User. When that
+# field lands, swap this for ``target_user.preferred_locale or EMAIL_DEFAULT_LOCALE``.
+EMAIL_DEFAULT_LOCALE = "en"
 
 
 class BulkAddExistingUserUseCase:
@@ -42,6 +48,7 @@ class BulkAddExistingUserUseCase:
         email_renderer: Any,  # EmailRenderer — render(template, locale, ctx) -> (subject, txt, html)
         queue_port: Any,  # QueuePort — enqueue(task_name, payload)
         app_base_url: str,
+        db_session: TransactionalSessionPort,
     ) -> None:
         self._user_repo = user_repo
         self._project_repo = project_repo
@@ -50,6 +57,7 @@ class BulkAddExistingUserUseCase:
         self._renderer = email_renderer
         self._queue = queue_port
         self._base_url = app_base_url.rstrip("/")
+        self._db = db_session
 
     # ------------------------------------------------------------------
 
@@ -159,10 +167,14 @@ class BulkAddExistingUserUseCase:
                         )
                     )
 
-        # 7. Enqueue ONE consolidated email if any memberships were created
+        # 7. Commit BEFORE enqueueing the email so the queue write only happens
+        # after persistence is durable (H2 fix). If commit raises, the consolidated
+        # email is never enqueued — no orphan "you've been added" notification.
+        # Mirrors the explicit-commit pattern in ``AcceptInvitationUseCase``.
+        self._db.commit()
+
         if added_projects:
             self._enqueue_consolidated_email(
-                target_user=target_user,
                 role_name=role.name,
                 added_projects=added_projects,
                 requester_name=requester.display_or_email,
@@ -177,20 +189,24 @@ class BulkAddExistingUserUseCase:
 
     def _enqueue_consolidated_email(
         self,
-        target_user: Any,
         role_name: str,
         added_projects: list[dict],
         requester_name: str,
         to_email: str,
     ) -> None:
-        """Build and enqueue the consolidated 'added to N projects' email."""
+        """Render + enqueue the consolidated 'added to N projects' email.
+
+        Caller MUST commit the DB transaction before invoking this (the H2 contract:
+        emails only go out for state that persisted). Locale is
+        ``EMAIL_DEFAULT_LOCALE`` (v1: 'en'); future enhancement keys off
+        ``target_user.preferred_locale`` once that field exists.
+        """
         ctx = {
             "added_projects": added_projects,
             "role_name": role_name,
             "inviter_name": requester_name,
-            "app_url": f"{self._base_url}/en/dashboard",
+            "app_url": f"{self._base_url}/{EMAIL_DEFAULT_LOCALE}/dashboard",
         }
-        # Locale always 'en' for v1 — target user locale not yet stored.
-        subject, text, html = self._renderer.render("added_to_projects", "en", ctx)
+        subject, text, html = self._renderer.render("added_to_projects", EMAIL_DEFAULT_LOCALE, ctx)
         payload = EmailPayload(to=to_email, subject=subject, body=text, html_body=html)
         self._queue.enqueue("tasks.send_email", {"payload": payload})

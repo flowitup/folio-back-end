@@ -69,6 +69,31 @@ def _make_role(name="member") -> Role:
     return Role(id=uuid4(), name=name)
 
 
+class _FakeSession:
+    """Test fake for the TransactionalSessionPort — counts commit() calls.
+
+    H2 — the use-case explicitly commits before enqueueing the consolidated email
+    so the queue write only fires for state that persisted. Tests assert the order:
+    repo writes → commit → enqueue.
+    """
+
+    def __init__(self) -> None:
+        self.commit_calls = 0
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def begin_nested(self):
+        # Unused by the bulk-add use-case, but the Protocol declares it.
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            yield self
+
+        return _ctx()
+
+
 def _make_usecase(
     user_repo=None,
     project_repo=None,
@@ -76,6 +101,7 @@ def _make_usecase(
     membership_repo=None,
     renderer=None,
     queue=None,
+    db_session=None,
 ) -> BulkAddExistingUserUseCase:
     if renderer is None:
         renderer = MagicMock()
@@ -88,6 +114,7 @@ def _make_usecase(
         email_renderer=renderer,
         queue_port=queue or MagicMock(),
         app_base_url="http://localhost:3000",
+        db_session=db_session or _FakeSession(),
     )
 
 
