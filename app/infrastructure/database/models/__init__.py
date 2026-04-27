@@ -21,6 +21,7 @@ from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
 from app.infrastructure.database.models.task import TaskModel
 from app.infrastructure.database.models.invitation import InvitationModel
+from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOrm
 
 __all__ = [
     "Base",
@@ -37,4 +38,6 @@ __all__ = [
     "InvoiceAttachmentModel",
     "TaskModel",
     "InvitationModel",
+    "NoteOrm",
+    "NoteDismissalOrm",
 ]
