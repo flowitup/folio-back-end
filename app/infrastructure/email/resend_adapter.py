@@ -43,7 +43,9 @@ class ResendEmailAdapter:
             body["html"] = payload.html_body
 
         data = json.dumps(body).encode("utf-8")
-        request = urllib.request.Request(
+        # Local name `req` to avoid confusion with the imported `urllib.request`
+        # module — a previous reviewer flagged the shadowing as N2.
+        req = urllib.request.Request(
             _RESEND_API_URL,
             data=data,
             headers={
@@ -54,7 +56,7 @@ class ResendEmailAdapter:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(req, timeout=self._timeout) as response:
                 status = response.status
                 raw = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:

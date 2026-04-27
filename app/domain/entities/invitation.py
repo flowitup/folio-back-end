@@ -1,7 +1,7 @@
 """Invitation domain entity — models the invite lifecycle."""
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional
@@ -149,7 +149,6 @@ class Invitation:
             raise InvitationExpiredError(f"Invitation {self.id} has expired.")
 
         now = datetime.now(timezone.utc)
-        from dataclasses import replace  # local import to avoid top-level cycle risk
         return replace(
             self,
             status=InvitationStatus.ACCEPTED,
@@ -165,7 +164,6 @@ class Invitation:
         Does NOT raise — revoking an already-revoked invitation is idempotent.
         """
         now = datetime.now(timezone.utc)
-        from dataclasses import replace
         return replace(
             self,
             status=InvitationStatus.REVOKED,

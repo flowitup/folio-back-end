@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime, timezone
+
 from app.application.invitations.dtos import VerifyInvitationDto
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
@@ -52,9 +55,7 @@ class VerifyInvitationUseCase:
 
         # Lazy-expire: if still PENDING but past expiry, persist the flip
         if inv.status == InvitationStatus.PENDING and not inv.is_usable():
-            from dataclasses import replace as _replace
-            from datetime import datetime, timezone
-            expired = _replace(
+            expired = replace(
                 inv,
                 status=InvitationStatus.EXPIRED,
                 updated_at=datetime.now(timezone.utc),
