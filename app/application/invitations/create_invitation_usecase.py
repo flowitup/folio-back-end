@@ -105,6 +105,7 @@ class CreateInvitationUseCase:
                     to=existing_user.email,
                     project_name=project.name,
                     inviter_name=inviter.display_or_email,
+                    role_name=role.name,
                     locale=locale,
                 )
             return CreateInvitationResultDto(kind="direct_added", user_id=existing_user.id)
@@ -181,8 +182,9 @@ class CreateInvitationUseCase:
             "project_name": project_name,
             "role_name": role_name,
             "inviter_name": inviter_name,
+            "expires_in_days": 7,
         }
-        subject, text, html = self._renderer.render("invitation", locale, ctx)
+        subject, text, html = self._renderer.render("invite", locale, ctx)
         payload = EmailPayload(to=to, subject=subject, body=text, html_body=html)
         self._queue.enqueue("tasks.send_email", {"payload": payload})
 
@@ -191,9 +193,15 @@ class CreateInvitationUseCase:
         to: str,
         project_name: str,
         inviter_name: str,
+        role_name: str,
         locale: str,
     ) -> None:
-        ctx = {"project_name": project_name, "inviter_name": inviter_name}
+        ctx = {
+            "project_name": project_name,
+            "inviter_name": inviter_name,
+            "role_name": role_name,
+            "accept_url": f"{self._base_url}/{locale}/dashboard",
+        }
         subject, text, html = self._renderer.render("added_to_project", locale, ctx)
         payload = EmailPayload(to=to, subject=subject, body=text, html_body=html)
         self._queue.enqueue("tasks.send_email", {"payload": payload})

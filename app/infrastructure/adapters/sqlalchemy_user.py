@@ -59,7 +59,7 @@ class SQLAlchemyUserRepository:
                 display_name=user.display_name,
             )
             self._session.add(user_model)
-        self._session.commit()
+        self._session.flush()
         return user
 
     def _to_entity(self, model: UserModel) -> User:

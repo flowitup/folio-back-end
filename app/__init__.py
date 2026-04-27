@@ -94,6 +94,12 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
     app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
 
+    # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
+    # MUST only be registered when TESTING=True — never in production.
+    if app.config.get("TESTING"):
+        from app.api.v1.test_only.routes import test_only_bp
+        app.register_blueprint(test_only_bp, url_prefix="/api/v1/__test__")
+
     # Initialize Swagger API documentation
     from app.api.swagger import init_swagger
 

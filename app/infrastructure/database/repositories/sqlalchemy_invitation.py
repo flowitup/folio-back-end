@@ -33,7 +33,7 @@ class SqlAlchemyInvitationRepository:
         else:
             model = InvitationModel.from_entity(inv)
             self._session.add(model)
-        self._session.commit()
+        self._session.flush()
         return inv
 
     def find_by_token_hash(self, token_hash: str) -> Optional[Invitation]:

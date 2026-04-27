@@ -110,7 +110,7 @@ def create_invitation():
         return _err(403, "Forbidden", str(e))
     except RateLimitedError as e:
         return _err(429, "RateLimited", str(e))
-    except Exception as e:
+    except Exception:
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     response_data = CreateInviteResponse(

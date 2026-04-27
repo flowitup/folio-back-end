@@ -74,8 +74,8 @@ class AcceptInvitationUseCase:
 
         password_hash = self._hasher.hash(password)
 
-        # --- Transactional block ---
-        with self._db.begin():
+        # --- Transactional block (SAVEPOINT — works inside Flask-SQLAlchemy's request transaction) ---
+        with self._db.begin_nested():
             # Race condition guard: user may have registered between verify and accept
             user = self._user_repo.find_by_email(inv.email)
             if user is None:
@@ -97,6 +97,7 @@ class AcceptInvitationUseCase:
 
             accepted_inv = inv.accept()
             self._inv_repo.save(accepted_inv)
+        self._db.commit()
 
         # Issue tokens after commit (outside the transaction)
         access_token = self._tokens.create_access_token(user.id)

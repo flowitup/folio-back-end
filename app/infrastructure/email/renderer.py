@@ -40,15 +40,18 @@ class EmailRenderer:
             KeyError: if (template_name, locale) has no subject mapping.
             jinja2.TemplateNotFound: if template files are missing.
         """
+        # Inject app_name default so callers don't need to repeat it everywhere.
+        ctx = {"app_name": "Folio", **context}
+
         subject_tpl = SUBJECTS[(template_name, locale)]
         # Format subject with plain (unescaped) context values so we don't get
         # HTML entities in the subject line.
-        subject = subject_tpl.format(**context)
+        subject = subject_tpl.format(**ctx)
 
         txt_tmpl = self._env.get_template(f"{template_name}.{locale}.txt")
         html_tmpl = self._env.get_template(f"{template_name}.{locale}.html")
 
-        text_body = txt_tmpl.render(**context)
-        html_body = html_tmpl.render(**context)
+        text_body = txt_tmpl.render(**ctx)
+        html_body = html_tmpl.render(**ctx)
 
         return subject, text_body, html_body

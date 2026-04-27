@@ -40,7 +40,7 @@ class SqlAlchemyProjectMembershipRepository:
                 "assigned_at": assigned_at,
             },
         )
-        self._session.commit()
+        self._session.flush()
         return membership
 
     def exists(self, user_id: UUID, project_id: UUID) -> bool:

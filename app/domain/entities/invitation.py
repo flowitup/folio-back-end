@@ -115,9 +115,13 @@ class Invitation:
 
     def is_usable(self) -> bool:
         """Return True iff status is PENDING and the invitation has not expired."""
+        # SQLite strips tzinfo on load; treat naive datetimes as UTC for the comparison.
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
         return (
             self.status == InvitationStatus.PENDING
-            and datetime.now(timezone.utc) < self.expires_at
+            and datetime.now(timezone.utc) < expires
         )
 
     # ------------------------------------------------------------------
