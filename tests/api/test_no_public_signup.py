@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
-
 # Uses the invitation_app + inv_client fixtures from conftest.py
 
 

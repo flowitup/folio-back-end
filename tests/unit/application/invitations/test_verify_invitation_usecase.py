@@ -18,12 +18,14 @@ from app.domain.exceptions.invitation_exceptions import (
 )
 from app.domain.value_objects.invite_token import generate_token, hash_token
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_inv(*, status: InvitationStatus = InvitationStatus.PENDING, past_expiry: bool = False) -> tuple[Invitation, str]:
+
+def _make_inv(
+    *, status: InvitationStatus = InvitationStatus.PENDING, past_expiry: bool = False
+) -> tuple[Invitation, str]:
     raw, token_hash = generate_token()
     now = datetime.now(timezone.utc)
     expires_at = now - timedelta(hours=1) if past_expiry else now + timedelta(days=7)
@@ -61,6 +63,7 @@ def _make_uc(inv_repo, project_repo=None, role_repo=None, user_repo=None) -> Ver
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestVerifyInvitation:
     def test_valid_token_returns_dto_without_invitation_id(self):

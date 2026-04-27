@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
-from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine
@@ -22,10 +20,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.infrastructure.database.models import Base
 
-
 # ---------------------------------------------------------------------------
 # Low-level SQLAlchemy session fixtures (kept for unit/repository tests)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def test_db_url():
@@ -66,13 +64,16 @@ def session(engine, tables):
 # InMemoryEmailAdapter fixture — for assertions in integration tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def inmemory_email_adapter():
     """Return the global InMemoryEmailAdapter singleton and clear it before each test."""
     import wiring
+
     # Ensure the singleton is initialised (may be None if configure_container never ran)
     if wiring._inmemory_email_adapter is None:
         from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
+
         wiring._inmemory_email_adapter = InMemoryEmailAdapter()
     adapter = wiring._inmemory_email_adapter
     adapter.clear()
@@ -84,6 +85,7 @@ def inmemory_email_adapter():
 # Flask app + test client fixtures for API-level tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def invitation_app():
     """Flask app wired with in-memory DB + InMemoryEmailAdapter for invitation tests."""
@@ -94,14 +96,15 @@ def invitation_app():
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
     from app.infrastructure.database.repositories.sqlalchemy_invitation import SqlAlchemyInvitationRepository
-    from app.infrastructure.database.repositories.sqlalchemy_project_membership import SqlAlchemyProjectMembershipRepository
+    from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
+        SqlAlchemyProjectMembershipRepository,
+    )
     from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
     from config import TestingConfig
     from wiring import configure_container
     import wiring as _wiring
     from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
-    from uuid import uuid4
 
     class InviteTestConfig(TestingConfig):
         JWT_TOKEN_LOCATION = ["headers", "cookies"]
@@ -153,10 +156,16 @@ def invitation_app():
         superadmin_role.permissions.append(star_perm)
 
         # Seed roles + permissions first so they get IDs before users reference them
-        db.session.add_all([
-            invite_perm, read_perm, star_perm,
-            admin_role, member_role, superadmin_role,
-        ])
+        db.session.add_all(
+            [
+                invite_perm,
+                read_perm,
+                star_perm,
+                admin_role,
+                member_role,
+                superadmin_role,
+            ]
+        )
         db.session.flush()  # assign DB-generated UUIDs
 
         # Seed users
@@ -207,6 +216,7 @@ def invitation_app():
         # (user_projects is an association table — no ORM model; use raw SQL)
         from sqlalchemy import text
         from datetime import datetime, timezone
+
         db.session.execute(
             text(
                 "INSERT INTO user_projects "

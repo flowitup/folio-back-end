@@ -42,9 +42,7 @@ class RevokeInvitationUseCase:
             raise PermissionDeniedError(f"User {inviter_id} not found.")
 
         if not self._can_revoke(inviter, inv.project_id, inv.invited_by):
-            raise PermissionDeniedError(
-                f"User {inviter_id} cannot revoke invitation {invitation_id}."
-            )
+            raise PermissionDeniedError(f"User {inviter_id} cannot revoke invitation {invitation_id}.")
 
         # Idempotent: nothing to do if already non-pending
         if inv.status != InvitationStatus.PENDING:

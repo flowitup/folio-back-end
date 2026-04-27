@@ -10,7 +10,6 @@ from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
     CreateProjectRequest,
     UpdateProjectRequest,
-    AddUserRequest,
     ProjectResponse,
     ProjectListResponse,
     ErrorResponse,
@@ -271,6 +270,7 @@ def add_user_to_project(project_id: str):
 def get_project_members(project_id: UUID):
     """Return project members with role and join date. Requires project membership."""
     from sqlalchemy import text
+
     container = get_container()
     user_id = UUID(get_jwt_identity())
 
@@ -278,19 +278,23 @@ def get_project_members(project_id: UUID):
         project = container.get_project_usecase.execute(project_id)
     except ProjectNotFoundError:
         return (
-            jsonify(ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()),
+            jsonify(
+                ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()
+            ),
             404,
         )
 
     # Allow project owner or any member
     if project.owner_id != user_id and user_id not in project.user_ids:
         from flask_jwt_extended import get_jwt
+
         claims = get_jwt()
         if "*:*" not in set(claims.get("permissions", [])):
             return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     # Query members with role info via raw SQL (user_projects + roles + users join)
     from app import db
+
     rows = db.session.execute(
         text(
             """

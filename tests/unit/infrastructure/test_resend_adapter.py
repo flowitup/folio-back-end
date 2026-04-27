@@ -14,7 +14,6 @@ from app.infrastructure.email.exceptions import EmailDeliveryError
 from app.infrastructure.email.resend_adapter import ResendEmailAdapter
 from tasks import EmailPayload
 
-
 _API_KEY = "re_test_supersecretkey_12345"
 _FROM = "noreply@example.com"
 
@@ -49,6 +48,7 @@ def _fake_200_response(body: dict | None = None) -> MagicMock:
 # Constructor guards
 # ---------------------------------------------------------------------------
 
+
 class TestConstructorGuards:
     def test_empty_api_key_raises(self):
         with pytest.raises(ValueError, match="RESEND_API_KEY"):
@@ -62,6 +62,7 @@ class TestConstructorGuards:
 # ---------------------------------------------------------------------------
 # Success path
 # ---------------------------------------------------------------------------
+
 
 class TestSendSuccess:
     def test_200_response_does_not_raise(self):
@@ -153,6 +154,7 @@ class TestSendSuccess:
 # Error paths
 # ---------------------------------------------------------------------------
 
+
 class TestSendErrors:
     def test_http_429_raises_email_delivery_error(self):
         adapter = _make_adapter()
@@ -194,6 +196,7 @@ class TestSendErrors:
 # ---------------------------------------------------------------------------
 # Security: API key must NEVER leak into error messages or logs
 # ---------------------------------------------------------------------------
+
 
 class TestApiKeyNotLeaked:
     def test_api_key_not_in_http_error_message(self):

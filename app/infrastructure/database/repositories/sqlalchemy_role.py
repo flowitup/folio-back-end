@@ -29,8 +29,7 @@ class SqlAlchemyRoleRepository:
     @staticmethod
     def _to_entity(model: RoleModel) -> Role:
         permissions = [
-            Permission(id=p.id, name=p.name, resource=p.resource, action=p.action)
-            for p in model.permissions
+            Permission(id=p.id, name=p.name, resource=p.resource, action=p.action) for p in model.permissions
         ]
         return Role(
             id=model.id,

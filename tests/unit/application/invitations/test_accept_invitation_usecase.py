@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -19,10 +19,10 @@ from app.domain.exceptions.invitation_exceptions import (
 )
 from app.domain.value_objects.invite_token import generate_token
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_pending_inv() -> tuple[Invitation, str]:
     raw, token_hash = generate_token()
@@ -122,6 +122,7 @@ def _make_user(email: str = "invitee@example.com") -> User:
 # Happy path: new user
 # ---------------------------------------------------------------------------
 
+
 class TestAcceptNewUser:
     def test_creates_user_with_display_name(self):
         inv, raw = _make_pending_inv()
@@ -135,7 +136,7 @@ class TestAcceptNewUser:
         membership_repo.exists.return_value = False
 
         uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
-        result = uc.execute(raw_token=raw, name="Alice", password="password123")
+        uc.execute(raw_token=raw, name="Alice", password="password123")
 
         user_repo.save.assert_called_once()
         saved_user_arg = user_repo.save.call_args[0][0]
@@ -190,8 +191,10 @@ class TestAcceptNewUser:
         issuer.create_refresh_token.return_value = "refresh-jwt"
 
         uc = _make_uc(
-            inv_repo=inv_repo, user_repo=user_repo,
-            membership_repo=membership_repo, token_issuer=issuer,
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            token_issuer=issuer,
         )
         result = uc.execute(raw_token=raw, name="Alice", password="password123")
 
@@ -203,11 +206,11 @@ class TestAcceptNewUser:
 # Race condition: existing user with same email
 # ---------------------------------------------------------------------------
 
+
 class TestExistingUserRace:
     def test_reuses_existing_user_without_changing_password(self):
         inv, raw = _make_pending_inv()
         existing_user = _make_user(inv.email)
-        existing_hash = existing_user.password_hash
         inv_repo = MagicMock()
         inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
@@ -259,6 +262,7 @@ class TestExistingUserRace:
 # Error paths
 # ---------------------------------------------------------------------------
 
+
 class TestAcceptErrors:
     def test_invalid_token_raises(self):
         inv_repo = MagicMock()
@@ -271,6 +275,7 @@ class TestAcceptErrors:
     def test_already_accepted_raises(self):
         inv, raw = _make_pending_inv()
         from dataclasses import replace
+
         accepted_inv = replace(inv, status=InvitationStatus.ACCEPTED)
         inv_repo = MagicMock()
         inv_repo.find_by_token_hash_for_update.return_value = accepted_inv
@@ -320,6 +325,7 @@ class TestAcceptErrors:
 # ---------------------------------------------------------------------------
 # Transactional atomicity
 # ---------------------------------------------------------------------------
+
 
 class TestTransactionAtomicity:
     def test_membership_failure_leaves_invitation_not_accepted(self):

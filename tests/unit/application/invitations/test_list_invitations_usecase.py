@@ -16,10 +16,10 @@ from app.domain.entities.role import Role
 from app.domain.entities.user import User
 from app.domain.value_objects.invite_token import generate_token
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, role_id=None, inviter_id=None) -> Invitation:
     _, token_hash = generate_token()
@@ -40,16 +40,24 @@ def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, role_id=None,
 
 def _make_member_user() -> User:
     user = User(
-        id=uuid4(), email="member@example.com", password_hash="h",
-        is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+        id=uuid4(),
+        email="member@example.com",
+        password_hash="h",
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+        roles=[],
     )
     return user
 
 
 def _make_superadmin_user() -> User:
     user = User(
-        id=uuid4(), email="sa@example.com", password_hash="h",
-        is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+        id=uuid4(),
+        email="sa@example.com",
+        password_hash="h",
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+        roles=[],
     )
     role = Role(id=uuid4(), name="superadmin")
     perm = Permission(id=uuid4(), name="*:*", resource="*", action="*")
@@ -71,6 +79,7 @@ def _make_uc(inv_repo=None, membership_repo=None, role_repo=None, user_repo=None
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestListInvitations:
     def test_returns_dtos_with_safe_fields_only(self):
         requester = _make_member_user()
@@ -89,8 +98,7 @@ class TestListInvitations:
         role_repo.find_by_id.return_value = mock_role
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: (
-            requester if uid == requester.id
-            else MagicMock(display_or_email="Inviter")
+            requester if uid == requester.id else MagicMock(display_or_email="Inviter")
         )
 
         uc = _make_uc(
@@ -114,7 +122,6 @@ class TestListInvitations:
     def test_filters_by_status(self):
         requester = _make_member_user()
         project_id = uuid4()
-        inv_pending = _make_inv(InvitationStatus.PENDING)
         inv_accepted = _make_inv(InvitationStatus.ACCEPTED)
 
         inv_repo = MagicMock()
@@ -132,7 +139,7 @@ class TestListInvitations:
             role_repo=role_repo,
             user_repo=user_repo,
         )
-        result = uc.execute(
+        uc.execute(
             requester_id=requester.id,
             project_id=project_id,
             status_filter="accepted",

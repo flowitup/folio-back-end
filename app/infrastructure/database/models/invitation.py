@@ -1,7 +1,6 @@
 """Invitation database model — maps to the 'invitations' table (phase 01 migration)."""
 
 from datetime import datetime, timezone
-from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text

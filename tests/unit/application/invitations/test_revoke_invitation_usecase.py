@@ -17,10 +17,10 @@ from app.domain.entities.user import User
 from app.domain.exceptions.invitation_exceptions import InvitationNotFoundError
 from app.domain.value_objects.invite_token import generate_token
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=None) -> Invitation:
     _, token_hash = generate_token()
@@ -41,8 +41,12 @@ def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=No
 
 def _make_user_with_invite_perm() -> User:
     user = User(
-        id=uuid4(), email="admin@example.com", password_hash="h",
-        is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+        id=uuid4(),
+        email="admin@example.com",
+        password_hash="h",
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+        roles=[],
     )
     role = Role(id=uuid4(), name="member")
     perm = Permission(id=uuid4(), name="project:invite", resource="project", action="invite")
@@ -53,8 +57,12 @@ def _make_user_with_invite_perm() -> User:
 
 def _make_plain_user() -> User:
     return User(
-        id=uuid4(), email="plain@example.com", password_hash="h",
-        is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+        id=uuid4(),
+        email="plain@example.com",
+        password_hash="h",
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+        roles=[],
     )
 
 
@@ -68,6 +76,7 @@ def _make_uc(inv_repo=None, user_repo=None) -> RevokeInvitationUseCase:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestRevokeInvitation:
     def test_pending_becomes_revoked(self):

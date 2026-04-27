@@ -51,9 +51,7 @@ class ListInvitationsUseCase:
         is_superadmin = requester.has_permission("*", "*")
         is_member = self._membership_repo.exists(requester_id, project_id)
         if not is_superadmin and not is_member:
-            raise PermissionDeniedError(
-                f"User {requester_id} is not a member of project {project_id}."
-            )
+            raise PermissionDeniedError(f"User {requester_id} is not a member of project {project_id}.")
 
         status_enum: Optional[InvitationStatus] = None
         if status_filter:

@@ -36,6 +36,7 @@ def _make_pending(*, ttl_days: int = 7) -> tuple[Invitation, str]:
 # Factory
 # ---------------------------------------------------------------------------
 
+
 class TestInvitationCreate:
     def test_returns_pending_status(self):
         inv, _ = _make_pending()
@@ -62,6 +63,7 @@ class TestInvitationCreate:
 # is_usable
 # ---------------------------------------------------------------------------
 
+
 class TestIsUsable:
     def test_pending_within_ttl_is_usable(self):
         inv, _ = _make_pending()
@@ -70,6 +72,7 @@ class TestIsUsable:
     def test_pending_past_expiry_is_not_usable(self):
         inv, _ = _make_pending()
         from dataclasses import replace
+
         expired = replace(inv, expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
         assert expired.is_usable() is False
 
@@ -87,6 +90,7 @@ class TestIsUsable:
 # ---------------------------------------------------------------------------
 # accept() state transitions
 # ---------------------------------------------------------------------------
+
 
 class TestAccept:
     def test_accept_pending_returns_accepted_invitation(self):
@@ -110,6 +114,7 @@ class TestAccept:
     def test_accept_expired_raises(self):
         inv, _ = _make_pending()
         from dataclasses import replace
+
         expired = replace(inv, expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
         with pytest.raises(InvitationExpiredError):
             expired.accept()
@@ -118,6 +123,7 @@ class TestAccept:
 # ---------------------------------------------------------------------------
 # revoke() — idempotent
 # ---------------------------------------------------------------------------
+
 
 class TestRevoke:
     def test_revoke_pending_returns_revoked(self):
@@ -143,6 +149,7 @@ class TestRevoke:
 # ---------------------------------------------------------------------------
 # _normalize_email — malformed inputs
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "bad_email",

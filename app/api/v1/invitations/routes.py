@@ -39,6 +39,7 @@ from wiring import get_container
 def _jwt_user_key() -> str:
     """Rate-limit key based on JWT identity (user ID) for authenticated endpoints."""
     from flask_jwt_extended import get_jwt_identity as _get_jwt_identity
+
     try:
         uid = _get_jwt_identity()
         return f"user:{uid}" if uid else request.remote_addr
@@ -69,6 +70,7 @@ def _validation_err(e: ValidationError):
 # POST /api/v1/invitations
 # ---------------------------------------------------------------------------
 
+
 @invitations_bp.route("", methods=["POST"])
 @jwt_required()
 @limiter.limit("10 per hour", key_func=_jwt_user_key)
@@ -95,6 +97,7 @@ def create_invitation():
         pass
 
     from flask_jwt_extended import get_jwt
+
     claims = get_jwt()
     permissions = set(claims.get("permissions", []))
     is_superadmin = "*:*" in permissions
@@ -138,6 +141,7 @@ def create_invitation():
 # ---------------------------------------------------------------------------
 # GET /api/v1/projects/<uuid:project_id>/invitations
 # ---------------------------------------------------------------------------
+
 
 @invitations_bp.route("/projects/<uuid:project_id>/invitations", methods=["GET"])
 @jwt_required()
@@ -183,6 +187,7 @@ def list_project_invitations(project_id: UUID):
 # POST /api/v1/invitations/<uuid:invitation_id>/revoke
 # ---------------------------------------------------------------------------
 
+
 @invitations_bp.route("/<uuid:invitation_id>/revoke", methods=["POST"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=_jwt_user_key)
@@ -213,6 +218,7 @@ def revoke_invitation(invitation_id: UUID):
 # GET /api/v1/invitations/verify/<token>  — public
 # ---------------------------------------------------------------------------
 
+
 @invitations_bp.route("/verify/<token>", methods=["GET"])
 @limiter.limit("60 per minute")
 def verify_invitation(token: str):
@@ -234,23 +240,28 @@ def verify_invitation(token: str):
     except Exception as e:
         # Surface DB-level errors (e.g. missing table in test env) as 500
         import logging
+
         logging.getLogger(__name__).exception("verify_invitation error: %s", e)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
-    return jsonify(
-        VerifyInviteResponse(
-            email=dto.email,
-            project_name=dto.project_name,
-            role_name=dto.role_name,
-            inviter_name=dto.inviter_name,
-            expires_at=dto.expires_at,
-        ).model_dump()
-    ), 200
+    return (
+        jsonify(
+            VerifyInviteResponse(
+                email=dto.email,
+                project_name=dto.project_name,
+                role_name=dto.role_name,
+                inviter_name=dto.inviter_name,
+                expires_at=dto.expires_at,
+            ).model_dump()
+        ),
+        200,
+    )
 
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/invitations/accept  — public
 # ---------------------------------------------------------------------------
+
 
 @invitations_bp.route("/accept", methods=["POST"])
 @limiter.limit("5 per minute")

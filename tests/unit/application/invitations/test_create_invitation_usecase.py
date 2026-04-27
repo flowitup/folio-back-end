@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -22,10 +22,10 @@ from app.domain.entities.role import Role
 from app.domain.entities.user import User
 from app.domain.exceptions.invitation_exceptions import RoleNotAllowedError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_user(*, has_invite_perm: bool = False, is_superadmin: bool = False) -> User:
     user = User(
@@ -89,6 +89,7 @@ def _make_usecase(
 # ---------------------------------------------------------------------------
 # Happy path: new email → invitation_sent
 # ---------------------------------------------------------------------------
+
 
 class TestNewEmailPath:
     def test_returns_invitation_sent_kind(self):
@@ -203,6 +204,7 @@ class TestNewEmailPath:
 # Happy path: existing user → direct_added
 # ---------------------------------------------------------------------------
 
+
 class TestExistingUserPath:
     def test_returns_direct_added_kind(self):
         inviter = _make_user(has_invite_perm=True)
@@ -248,8 +250,12 @@ class TestExistingUserPath:
         project = _make_project()
         role = _make_role()
         existing_user = User(
-            id=uuid4(), email="existing@example.com", password_hash="hashed",
-            is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+            id=uuid4(),
+            email="existing@example.com",
+            password_hash="hashed",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            roles=[],
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
@@ -282,8 +288,12 @@ class TestExistingUserPath:
         project = _make_project()
         role = _make_role()
         existing_user = User(
-            id=uuid4(), email="existing@example.com", password_hash="hashed",
-            is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+            id=uuid4(),
+            email="existing@example.com",
+            password_hash="hashed",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            roles=[],
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
@@ -326,8 +336,12 @@ class TestExistingUserPath:
         project = _make_project()
         role = _make_role()
         existing_user = User(
-            id=uuid4(), email="member@example.com", password_hash="hashed",
-            is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+            id=uuid4(),
+            email="member@example.com",
+            password_hash="hashed",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            roles=[],
         )
         membership_repo = MagicMock()
         # Already a member with the same role_id → idempotent no-op
@@ -369,12 +383,17 @@ class TestExistingUserPath:
     def test_existing_member_different_role_raises_already_member_error(self):
         """Already a member with DIFFERENT role → AlreadyMemberError (maps to 409, H2)."""
         from app.application.invitations.exceptions import AlreadyMemberError
+
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         role = _make_role()  # the role admin is *trying* to assign
         existing_user = User(
-            id=uuid4(), email="member@example.com", password_hash="hashed",
-            is_active=True, created_at=datetime.now(timezone.utc), roles=[],
+            id=uuid4(),
+            email="member@example.com",
+            password_hash="hashed",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            roles=[],
         )
         # Membership exists but with a *different* role_id
         membership_repo = MagicMock()
@@ -407,6 +426,7 @@ class TestExistingUserPath:
 # ---------------------------------------------------------------------------
 # Permission checks
 # ---------------------------------------------------------------------------
+
 
 class TestPermissionChecks:
     def test_inviter_without_perm_and_not_owner_raises(self):
@@ -494,6 +514,7 @@ class TestPermissionChecks:
 # Guard: superadmin role not allowed
 # ---------------------------------------------------------------------------
 
+
 class TestRoleGuard:
     def test_superadmin_role_raises_role_not_allowed(self):
         inviter = _make_user(has_invite_perm=True)
@@ -527,6 +548,7 @@ class TestRoleGuard:
 # ---------------------------------------------------------------------------
 # Rate limit
 # ---------------------------------------------------------------------------
+
 
 class TestRateLimit:
     def test_per_project_50_daily_cap_raises(self):
@@ -562,6 +584,7 @@ class TestRateLimit:
 # ---------------------------------------------------------------------------
 # Duplicate pending → revoke old, create new
 # ---------------------------------------------------------------------------
+
 
 class TestDuplicatePending:
     def test_revokes_old_pending_then_creates_new(self):
@@ -608,6 +631,7 @@ class TestDuplicatePending:
 # ---------------------------------------------------------------------------
 # Missing resources
 # ---------------------------------------------------------------------------
+
 
 class TestMissingResources:
     def test_project_not_found_raises(self):

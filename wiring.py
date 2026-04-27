@@ -9,7 +9,7 @@ This follows the Dependency Inversion Principle.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
 
 # Import port interfaces from application layer
@@ -174,9 +174,9 @@ class Container:
     delete_project_usecase: Optional[DeleteProjectUseCase] = None
 
     # Invitation repos (bound in phase 05)
-    invitation_repo: Optional[Any] = None           # SqlAlchemyInvitationRepository
-    project_membership_repo: Optional[Any] = None   # SqlAlchemyProjectMembershipRepository
-    role_repository: Optional[Any] = None           # SqlAlchemyRoleRepository (also used by roles API)
+    invitation_repo: Optional[Any] = None  # SqlAlchemyInvitationRepository
+    project_membership_repo: Optional[Any] = None  # SqlAlchemyProjectMembershipRepository
+    role_repository: Optional[Any] = None  # SqlAlchemyRoleRepository (also used by roles API)
 
     # Invitation use cases (repos wired in phase 05)
     # app_base_url is read from APP_BASE_URL env var at configure_container time
@@ -219,12 +219,14 @@ def _build_email_port() -> Any:
 
     if provider == "resend":
         from app.infrastructure.email.resend_adapter import ResendEmailAdapter
+
         api_key = os.environ.get("RESEND_API_KEY", "")
         from_email = os.environ.get("FROM_EMAIL", "")
         return ResendEmailAdapter(api_key=api_key, from_email=from_email)
 
     if provider == "inmemory":
         from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
+
         if _inmemory_email_adapter is None:
             _inmemory_email_adapter = InMemoryEmailAdapter()
         return _inmemory_email_adapter
@@ -240,9 +242,7 @@ def _build_email_renderer() -> Any:
     import pathlib
     from app.infrastructure.email.renderer import EmailRenderer
 
-    templates_dir = str(
-        pathlib.Path(__file__).parent / "app" / "infrastructure" / "email" / "templates"
-    )
+    templates_dir = str(pathlib.Path(__file__).parent / "app" / "infrastructure" / "email" / "templates")
     return EmailRenderer(templates_dir=templates_dir)
 
 
@@ -267,9 +267,8 @@ class _DirectEmailQueue:
                     self._email_port.send(ep)
                 except Exception:
                     import logging
-                    logging.getLogger(__name__).warning(
-                        "Inline email send failed for task %s", task_name
-                    )
+
+                    logging.getLogger(__name__).warning("Inline email send failed for task %s", task_name)
         return "inline"
 
 
@@ -406,9 +405,7 @@ def configure_container(
         and user_repository is not None
     ):
         # InMemory queue shim — use email_port directly if no real queue configured
-        _queue = queue_service if queue_service is not None else _DirectEmailQueue(
-            container.email_port
-        )
+        _queue = queue_service if queue_service is not None else _DirectEmailQueue(container.email_port)
 
         container.create_invitation_usecase = CreateInvitationUseCase(
             invitation_repo=invitation_repo,
@@ -441,6 +438,7 @@ def configure_container(
         # AcceptInvitationUseCase needs a db session; lazily import db here
         if password_hasher is not None and token_issuer is not None:
             from app import db as _db
+
             container.accept_invitation_usecase = AcceptInvitationUseCase(
                 invitation_repo=invitation_repo,
                 user_repo=user_repository,

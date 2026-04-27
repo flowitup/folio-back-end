@@ -16,16 +16,15 @@ def list_roles():
     container = get_container()
 
     if not hasattr(container, "role_repository") or container.role_repository is None:
-        return jsonify({"error": "ServiceUnavailable", "message": "Role service not configured.", "status_code": 503}), 503
+        return (
+            jsonify({"error": "ServiceUnavailable", "message": "Role service not configured.", "status_code": 503}),
+            503,
+        )
 
     roles = container.role_repository.list_all()
     visible = [r for r in roles if r.name != "superadmin"]
 
-    return jsonify(
-        {
-            "roles": [
-                {"id": str(r.id), "name": r.name, "description": r.description or ""}
-                for r in visible
-            ]
-        }
-    ), 200
+    return (
+        jsonify({"roles": [{"id": str(r.id), "name": r.name, "description": r.description or ""} for r in visible]}),
+        200,
+    )

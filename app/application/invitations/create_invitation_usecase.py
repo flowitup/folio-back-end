@@ -36,9 +36,9 @@ class CreateInvitationUseCase:
         user_repo: UserWriteRepositoryPort,
         project_repo: ProjectRepositoryPort,
         role_repo: RoleRepositoryPort,
-        email_port: Any,       # EmailAdapterPort with .send(EmailPayload)
-        email_renderer: Any,   # EmailRenderer with .render(template, locale, ctx)
-        queue_port: Any,       # QueuePort with .enqueue(task_name, payload)
+        email_port: Any,  # EmailAdapterPort with .send(EmailPayload)
+        email_renderer: Any,  # EmailRenderer with .render(template, locale, ctx)
+        queue_port: Any,  # QueuePort with .enqueue(task_name, payload)
         app_base_url: str,
         project_invite_daily_cap: int = 50,
     ) -> None:
@@ -77,9 +77,7 @@ class CreateInvitationUseCase:
 
         # Verify permission: role-based OR project owner
         if not self._can_invite(inviter, project.owner_id, inviter_id):
-            raise PermissionDeniedError(
-                f"User {inviter_id} does not have 'project:invite' permission."
-            )
+            raise PermissionDeniedError(f"User {inviter_id} does not have 'project:invite' permission.")
 
         # 3. Load role; guard superadmin
         role = self._role_repo.find_by_id(role_id)
@@ -134,14 +132,11 @@ class CreateInvitationUseCase:
         daily_count = self._inv_repo.count_created_today_by_project(project_id)
         if daily_count >= self._daily_cap:
             raise RateLimitedError(
-                f"Project {project_id} has reached the daily invitation limit "
-                f"({self._daily_cap})."
+                f"Project {project_id} has reached the daily invitation limit " f"({self._daily_cap})."
             )
 
         # Revoke any existing pending invitation for same email+project
-        pending = self._inv_repo.find_pending_by_email_and_project(
-            normalized_email, project_id
-        )
+        pending = self._inv_repo.find_pending_by_email_and_project(normalized_email, project_id)
         if pending is not None:
             revoked = pending.revoke()
             self._inv_repo.save(revoked)

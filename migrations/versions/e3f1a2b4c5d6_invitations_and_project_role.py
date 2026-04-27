@@ -10,7 +10,6 @@ import logging
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "e3f1a2b4c5d6"
@@ -96,14 +95,10 @@ def upgrade():
     )
 
     # Fetch member role id — must exist after seed; raise if missing (guards backfill)
-    result = conn.execute(
-        sa.text("SELECT id FROM roles WHERE name = 'member'")
-    )
+    result = conn.execute(sa.text("SELECT id FROM roles WHERE name = 'member'"))
     member_role_row = result.fetchone()
     if member_role_row is None:
-        raise RuntimeError(
-            "Failed to seed 'member' role — cannot proceed with backfill."
-        )
+        raise RuntimeError("Failed to seed 'member' role — cannot proceed with backfill.")
     member_role_id = member_role_row[0]
 
     # 4. Seed 'project:invite' permission + attach to admin role if it exists
@@ -117,19 +112,13 @@ def upgrade():
         )
     )
 
-    result = conn.execute(
-        sa.text("SELECT id FROM permissions WHERE name = 'project:invite'")
-    )
+    result = conn.execute(sa.text("SELECT id FROM permissions WHERE name = 'project:invite'"))
     perm_row = result.fetchone()
     if perm_row is None:
-        raise RuntimeError(
-            "Failed to seed 'project:invite' permission — unexpected conflict state."
-        )
+        raise RuntimeError("Failed to seed 'project:invite' permission — unexpected conflict state.")
     perm_id = perm_row[0]
 
-    result = conn.execute(
-        sa.text("SELECT id FROM roles WHERE name = 'admin'")
-    )
+    result = conn.execute(sa.text("SELECT id FROM roles WHERE name = 'admin'"))
     admin_row = result.fetchone()
     if admin_row is None:
         logger.warning(
@@ -161,9 +150,7 @@ def upgrade():
 
     # 6. Backfill role_id to member role for all existing rows
     conn.execute(
-        sa.text(
-            "UPDATE user_projects SET role_id = :member_id WHERE role_id IS NULL"
-        ),
+        sa.text("UPDATE user_projects SET role_id = :member_id WHERE role_id IS NULL"),
         {"member_id": str(member_role_id)},
     )
 
@@ -191,12 +178,8 @@ def upgrade():
 
 def downgrade():
     # Drop FKs on user_projects
-    op.drop_constraint(
-        "fk_user_projects_invited_by_user_id", "user_projects", type_="foreignkey"
-    )
-    op.drop_constraint(
-        "fk_user_projects_role_id", "user_projects", type_="foreignkey"
-    )
+    op.drop_constraint("fk_user_projects_invited_by_user_id", "user_projects", type_="foreignkey")
+    op.drop_constraint("fk_user_projects_role_id", "user_projects", type_="foreignkey")
 
     # Drop new columns from user_projects
     op.drop_column("user_projects", "invited_by_user_id")

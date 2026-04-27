@@ -46,9 +46,7 @@ class SqlAlchemyProjectMembershipRepository:
     def exists(self, user_id: UUID, project_id: UUID) -> bool:
         """Return True if the user is already a member of the project."""
         result = self._session.execute(
-            text(
-                "SELECT 1 FROM user_projects WHERE user_id = :uid AND project_id = :pid LIMIT 1"
-            ),
+            text("SELECT 1 FROM user_projects WHERE user_id = :uid AND project_id = :pid LIMIT 1"),
             {"uid": str(user_id), "pid": str(project_id)},
         )
         return result.fetchone() is not None
@@ -56,10 +54,7 @@ class SqlAlchemyProjectMembershipRepository:
     def find_role_id(self, user_id: UUID, project_id: UUID):
         """Return the role_id of an existing membership row, or None."""
         result = self._session.execute(
-            text(
-                "SELECT role_id FROM user_projects "
-                "WHERE user_id = :uid AND project_id = :pid LIMIT 1"
-            ),
+            text("SELECT role_id FROM user_projects " "WHERE user_id = :uid AND project_id = :pid LIMIT 1"),
             {"uid": str(user_id), "pid": str(project_id)},
         )
         row = result.fetchone()
@@ -67,5 +62,6 @@ class SqlAlchemyProjectMembershipRepository:
             return None
         # SQLAlchemy returns string for SQLite UUID; coerce to UUID for the port contract.
         from uuid import UUID as _UUID
+
         raw = row[0]
         return raw if isinstance(raw, _UUID) else _UUID(str(raw))

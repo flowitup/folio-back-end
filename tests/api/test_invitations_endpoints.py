@@ -11,6 +11,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
@@ -18,6 +19,7 @@ def _auth(token: str) -> dict:
 # ---------------------------------------------------------------------------
 # POST /api/v1/invitations
 # ---------------------------------------------------------------------------
+
 
 class TestCreateInvitation:
     def test_admin_creates_invitation_returns_201(self, inv_client, admin_token, invitation_app):
@@ -78,9 +80,7 @@ class TestCreateInvitation:
         # Second call revokes old + creates new → still 201
         assert r2.status_code == 201
 
-    def test_existing_member_same_role_returns_201_idempotent(
-        self, inv_client, admin_token, invitation_app
-    ):
+    def test_existing_member_same_role_returns_201_idempotent(self, inv_client, admin_token, invitation_app):
         """Inviting an already-member with the SAME role is idempotent (no-op direct_added)."""
         # Member fixture is already in the project with the 'member' role.
         resp = inv_client.post(
@@ -96,17 +96,14 @@ class TestCreateInvitation:
         body = resp.get_json()
         assert body["kind"] == "direct_added"
 
-    def test_existing_member_different_role_returns_409(
-        self, inv_client, admin_token, invitation_app
-    ):
+    def test_existing_member_different_role_returns_409(self, inv_client, admin_token, invitation_app):
         """Inviting an already-member with a DIFFERENT role is rejected with 409 (H2)."""
         # Look up a different role id (admin) to assign — different from 'member'.
         from app.infrastructure.database.models import RoleModel
         from app import db
+
         with invitation_app.app_context():
-            admin_role = (
-                db.session.query(RoleModel).filter(RoleModel.name == "admin").first()
-            )
+            admin_role = db.session.query(RoleModel).filter(RoleModel.name == "admin").first()
             assert admin_role is not None, "admin role must be seeded by conftest"
             admin_role_id = str(admin_role.id)
 
@@ -127,6 +124,7 @@ class TestCreateInvitation:
 # ---------------------------------------------------------------------------
 # GET /api/v1/invitations/projects/<id>/invitations
 # ---------------------------------------------------------------------------
+
 
 class TestListProjectInvitations:
     def test_member_can_list(self, inv_client, member_token, invitation_app):
@@ -164,10 +162,12 @@ class TestListProjectInvitations:
 # POST /api/v1/invitations/<id>/revoke
 # ---------------------------------------------------------------------------
 
+
 class TestRevokeInvitation:
     def _create_invitation(self, client, token, app) -> str:
         """Helper: create an invitation and return its id."""
         import uuid
+
         resp = client.post(
             "/api/v1/invitations",
             json={
@@ -203,6 +203,7 @@ class TestRevokeInvitation:
 
     def test_nonexistent_invitation_returns_404(self, inv_client, admin_token):
         import uuid
+
         resp = inv_client.post(
             f"/api/v1/invitations/{uuid.uuid4()}/revoke",
             headers=_auth(admin_token),
@@ -214,11 +215,13 @@ class TestRevokeInvitation:
 # GET /api/v1/invitations/verify/<token>
 # ---------------------------------------------------------------------------
 
+
 class TestVerifyInvitation:
     def _create_and_get_token(self, client, admin_token, app) -> str:
         """Create an invitation and retrieve raw token from __test__ endpoint."""
         import uuid
         import wiring
+
         # Clear email adapter
         if wiring._inmemory_email_adapter:
             wiring._inmemory_email_adapter.clear()
@@ -241,6 +244,7 @@ class TestVerifyInvitation:
         body_text = email_resp.get_json().get("body", "")
         # Token is embedded in accept URL path: /en/accept-invite/<token>
         import re
+
         match = re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", body_text)
         if not match:
             return ""
@@ -262,10 +266,12 @@ class TestVerifyInvitation:
 
     def test_revoked_token_returns_410(self, inv_client, admin_token, invitation_app):
         import wiring
+
         if wiring._inmemory_email_adapter:
             wiring._inmemory_email_adapter.clear()
 
         import uuid
+
         email_addr = f"revoked-verify-{uuid.uuid4().hex[:8]}@example.com"
         create_resp = inv_client.post(
             "/api/v1/invitations",
@@ -290,6 +296,7 @@ class TestVerifyInvitation:
             pytest.skip("No email captured")
         body_text = email_resp.get_json().get("body", "")
         import re
+
         match = re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", body_text)
         if not match:
             pytest.skip("Could not extract token")
@@ -306,10 +313,12 @@ class TestVerifyInvitation:
         from app.infrastructure.database.models.invitation import InvitationModel
 
         import wiring
+
         if wiring._inmemory_email_adapter:
             wiring._inmemory_email_adapter.clear()
 
         import uuid as _uuid
+
         create_resp = inv_client.post(
             "/api/v1/invitations",
             json={
@@ -330,6 +339,7 @@ class TestVerifyInvitation:
             pytest.skip("No email captured")
         body_text = email_resp.get_json().get("body", "")
         import re
+
         match = re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", body_text)
         if not match:
             pytest.skip("Token not found in email")
@@ -351,12 +361,14 @@ class TestVerifyInvitation:
 # POST /api/v1/invitations/accept
 # ---------------------------------------------------------------------------
 
+
 class TestAcceptInvitation:
     def _setup_invitation(self, client, admin_token, app) -> str:
         """Create invitation, return raw token."""
         import uuid
         import wiring
         import re
+
         if wiring._inmemory_email_adapter:
             wiring._inmemory_email_adapter.clear()
 

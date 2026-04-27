@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from uuid import UUID
 
 from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
@@ -17,8 +16,6 @@ from app.domain.entities.project_membership import ProjectMembership
 from app.domain.entities.user import User
 from app.domain.exceptions.invitation_exceptions import InvalidInvitationTokenError
 from app.domain.value_objects.invite_token import hash_token
-from tasks import EmailPayload
-
 
 _MIN_PASSWORD_LEN = 8
 _MAX_PASSWORD_LEN = 128
@@ -80,9 +77,7 @@ class AcceptInvitationUseCase:
         with self._db.begin_nested():
             inv = self._inv_repo.find_by_token_hash_for_update(token_hash)
             if inv is None:
-                raise InvalidInvitationTokenError(
-                    "No invitation found for the supplied token."
-                )
+                raise InvalidInvitationTokenError("No invitation found for the supplied token.")
             accepted_inv = inv.accept()  # raises if expired/revoked/accepted
 
             user = self._user_repo.find_by_email(inv.email)
@@ -124,15 +119,10 @@ class AcceptInvitationUseCase:
     def _validate_password(password: str) -> None:
         length = len(password)
         if length < _MIN_PASSWORD_LEN or length > _MAX_PASSWORD_LEN:
-            raise ValueError(
-                f"Password must be between {_MIN_PASSWORD_LEN} and "
-                f"{_MAX_PASSWORD_LEN} characters."
-            )
+            raise ValueError(f"Password must be between {_MIN_PASSWORD_LEN} and " f"{_MAX_PASSWORD_LEN} characters.")
 
     @staticmethod
     def _validate_name(name: str) -> None:
         stripped = name.strip()
         if not stripped or len(stripped) > _MAX_NAME_LEN:
-            raise ValueError(
-                f"Name must be between 1 and {_MAX_NAME_LEN} characters."
-            )
+            raise ValueError(f"Name must be between 1 and {_MAX_NAME_LEN} characters.")

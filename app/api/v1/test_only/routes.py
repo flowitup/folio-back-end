@@ -23,11 +23,14 @@ def last_email():
         return "", 204
 
     last = adapter.sent[-1]
-    return jsonify(
-        {
-            "to": last.to,
-            "subject": last.subject,
-            "body": last.body,
-            "html_body": last.html_body,
-        }
-    ), 200
+    return (
+        jsonify(
+            {
+                "to": last.to,
+                "subject": last.subject,
+                "body": last.body,
+                "html_body": last.html_body,
+            }
+        ),
+        200,
+    )

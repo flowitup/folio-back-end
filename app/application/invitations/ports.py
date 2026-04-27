@@ -56,9 +56,7 @@ class InvitationRepositoryPort(Protocol):
         """Look up an invitation by its UUID. Returns None if not found."""
         ...
 
-    def find_pending_by_email_and_project(
-        self, email: str, project_id: UUID
-    ) -> Optional[Invitation]:
+    def find_pending_by_email_and_project(self, email: str, project_id: UUID) -> Optional[Invitation]:
         """
         Return the first PENDING invitation for the given email + project combination,
         or None if no such invitation exists.

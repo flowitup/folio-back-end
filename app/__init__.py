@@ -98,6 +98,7 @@ def create_app(config_class: type = Config) -> Flask:
     # MUST only be registered when TESTING=True — never in production.
     if app.config.get("TESTING"):
         from app.api.v1.test_only.routes import test_only_bp
+
         app.register_blueprint(test_only_bp, url_prefix="/api/v1/__test__")
 
     # Initialize Swagger API documentation
@@ -123,7 +124,9 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.database.repositories.sqlalchemy_invitation import SqlAlchemyInvitationRepository
-    from app.infrastructure.database.repositories.sqlalchemy_project_membership import SqlAlchemyProjectMembershipRepository
+    from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
+        SqlAlchemyProjectMembershipRepository,
+    )
     from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from config import Config
 

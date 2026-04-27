@@ -11,7 +11,6 @@ from app.domain.value_objects.invite_token import generate_token
 from app.domain.exceptions.invitation_exceptions import (
     InvitationAlreadyAcceptedError,
     InvitationExpiredError,
-    InvitationNotUsableError,
     InvitationRevokedError,
 )
 
@@ -119,10 +118,7 @@ class Invitation:
         expires = self.expires_at
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
-        return (
-            self.status == InvitationStatus.PENDING
-            and datetime.now(timezone.utc) < expires
-        )
+        return self.status == InvitationStatus.PENDING and datetime.now(timezone.utc) < expires
 
     # ------------------------------------------------------------------
     # State transitions (immutable-style — return new instances)
@@ -139,9 +135,7 @@ class Invitation:
             InvitationNotUsableError: fallback for any other non-usable state.
         """
         if self.status == InvitationStatus.ACCEPTED:
-            raise InvitationAlreadyAcceptedError(
-                f"Invitation {self.id} has already been accepted."
-            )
+            raise InvitationAlreadyAcceptedError(f"Invitation {self.id} has already been accepted.")
         if self.status == InvitationStatus.REVOKED:
             raise InvitationRevokedError(f"Invitation {self.id} has been revoked.")
         if not self.is_usable():

@@ -61,18 +61,14 @@ class ResendEmailAdapter:
                 raw = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8") if exc.fp else ""
-            raise EmailDeliveryError(
-                f"Resend API error {exc.code} for <{payload.to}>: {raw}"
-            ) from exc
+            raise EmailDeliveryError(f"Resend API error {exc.code} for <{payload.to}>: {raw}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise EmailDeliveryError(
                 f"Resend network error for <{payload.to}>: {exc.reason if hasattr(exc, 'reason') else exc}"
             ) from exc
 
         if not (200 <= status < 300):
-            raise EmailDeliveryError(
-                f"Resend API returned {status} for <{payload.to}>: {raw}"
-            )
+            raise EmailDeliveryError(f"Resend API returned {status} for <{payload.to}>: {raw}")
 
         try:
             resp_json = json.loads(raw)

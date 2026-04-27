@@ -6,7 +6,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.application.invitations.ports import InvitationRepositoryPort
 from app.domain.entities.invitation import Invitation, InvitationStatus
 from app.infrastructure.database.models.invitation import InvitationModel
 
@@ -60,9 +59,7 @@ class SqlAlchemyInvitationRepository:
         model = self._session.query(InvitationModel).filter_by(id=invitation_id).first()
         return model.to_entity() if model else None
 
-    def find_pending_by_email_and_project(
-        self, email: str, project_id: UUID
-    ) -> Optional[Invitation]:
+    def find_pending_by_email_and_project(self, email: str, project_id: UUID) -> Optional[Invitation]:
         """Return the first PENDING invitation for email + project, or None."""
         model = (
             self._session.query(InvitationModel)
@@ -89,9 +86,7 @@ class SqlAlchemyInvitationRepository:
 
     def count_created_today_by_project(self, project_id: UUID) -> int:
         """Return count of invitations created today (UTC) for the project."""
-        today_start = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         return (
             self._session.query(InvitationModel)
             .filter(
