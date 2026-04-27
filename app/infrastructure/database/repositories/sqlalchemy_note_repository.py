@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.domain.entities.note import Note
@@ -30,6 +30,17 @@ class SqlAlchemyNoteRepository:
     def find_by_id(self, note_id: UUID) -> Optional[Note]:
         """Return Note by UUID, or None if not found."""
         orm = self._session.get(NoteOrm, note_id)
+        return orm.to_entity() if orm is not None else None
+
+    def find_by_id_for_update(self, note_id: UUID) -> Optional[Note]:
+        """Return Note with SELECT FOR UPDATE row lock, or None if not found.
+
+        Serializes concurrent dismiss against the same note (H2 code-review).
+        Falls back to plain SELECT on dialects that don't support FOR UPDATE
+        (e.g. SQLite in tests).
+        """
+        stmt = select(NoteOrm).where(NoteOrm.id == note_id).with_for_update()
+        orm = self._session.execute(stmt).scalar_one_or_none()
         return orm.to_entity() if orm is not None else None
 
     def list_by_project(self, project_id: UUID) -> list[Note]:
@@ -116,8 +127,6 @@ def _row_to_entity(row: object) -> Note:
     SQLAlchemy Row supports positional access. We cast to Any once to avoid
     per-line ignores — the shape is guaranteed by the SELECT column list above.
     """
-    from typing import Any
-
     r: Any = row
     return Note(
         id=r[0],

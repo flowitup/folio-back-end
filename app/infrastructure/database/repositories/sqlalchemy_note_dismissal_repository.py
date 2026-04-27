@@ -36,7 +36,7 @@ class SqlAlchemyNoteDismissalRepository:
         re-scheduled reminders fire again for all users.
         """
         self._session.query(NoteDismissalOrm).filter(NoteDismissalOrm.note_id == note_id).delete(
-            synchronize_session="fetch"
+            synchronize_session=False
         )
         self._session.flush()
 

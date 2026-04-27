@@ -29,6 +29,7 @@ from app.application.notes.ports import (
     ProjectMembershipReaderPort,
     TransactionalSessionPort,
 )
+from app.domain.entities.note import _UNSET, _Unset
 
 
 class UpdateNoteUseCase:
@@ -55,11 +56,15 @@ class UpdateNoteUseCase:
         actor_id: UUID,
         note_id: UUID,
         title: str | None = None,
-        description: str | None = None,
+        description: str | None | _Unset = _UNSET,
         due_date: date | None = None,
         lead_time_minutes: int | None = None,
     ) -> NoteDto:
         """Apply updates and return the updated NoteDto.
+
+        ``description=_UNSET`` (default) → leave description unchanged.
+        ``description=None``  → clear the description.
+        ``description="..."`` → replace the description.
 
         Raises:
             NoteNotFoundError: note_id does not exist.
@@ -67,7 +72,7 @@ class UpdateNoteUseCase:
             ValueError: title or description fails validation.
             InvalidLeadTimeError: lead_time_minutes ∉ {0, 60, 1440}.
         """
-        note = self._note_repo.find_by_id(note_id)
+        note = self._note_repo.find_by_id_for_update(note_id)
         if note is None:
             raise NoteNotFoundError(f"Note {note_id} not found.")
 
@@ -80,6 +85,7 @@ class UpdateNoteUseCase:
 
         updated_note = note.with_updates(
             title=title,
+            description=description,
             due_date=due_date,
             lead_time_minutes=lead_time_minutes,
         )

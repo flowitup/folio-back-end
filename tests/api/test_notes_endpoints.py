@@ -284,6 +284,32 @@ class TestUpdateNoteEndpoint:
         )
         assert resp.status_code == 422
 
+    def test_patch_description_persists(self, inv_client, member_token, invitation_app):
+        """C1 regression: PATCH with description must update and be reflected in response."""
+        create_resp = inv_client.post(
+            _notes_url(invitation_app._test_project_id),
+            json=_valid_body(title="Desc test note"),
+            headers=_auth(member_token),
+        )
+        assert create_resp.status_code == 201
+        note_id = create_resp.get_json()["id"]
+
+        patch_resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_id),
+            json={"description": "updated description"},
+            headers=_auth(member_token),
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.get_json()["description"] == "updated description"
+
+        # Verify via list that the change is persisted
+        list_resp = inv_client.get(
+            _notes_url(invitation_app._test_project_id),
+            headers=_auth(member_token),
+        )
+        items = {item["id"]: item for item in list_resp.get_json()["items"]}
+        assert items[note_id]["description"] == "updated description"
+
 
 # ===========================================================================
 # DELETE /api/v1/projects/<project_id>/notes/<note_id>  — delete note

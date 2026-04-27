@@ -16,6 +16,15 @@ class NoteRepositoryPort(Protocol):
         """Return note by UUID, or None if not found."""
         ...
 
+    def find_by_id_for_update(self, note_id: UUID) -> Optional[Note]:
+        """Return note by UUID with a row-level SELECT FOR UPDATE lock, or None.
+
+        Serializes concurrent dismiss against the same note row (H2 from
+        code-review). Implementations on SQLite (tests) may degrade to a
+        plain SELECT — in-memory DB has no concurrent transactions.
+        """
+        ...
+
     def list_by_project(self, project_id: UUID) -> list[Note]:
         """Return all notes for a project ordered by due_date ASC."""
         ...
