@@ -18,6 +18,7 @@ from app.application.invitations.ports import (
     ProjectMembershipRepositoryPort,
     ProjectRepositoryPort,
     RoleRepositoryPort,
+    TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
 from app.domain.entities.invitation import Invitation
@@ -40,6 +41,7 @@ class CreateInvitationUseCase:
         email_renderer: Any,  # EmailRenderer with .render(template, locale, ctx)
         queue_port: Any,  # QueuePort with .enqueue(task_name, payload)
         app_base_url: str,
+        db_session: TransactionalSessionPort,
         project_invite_daily_cap: int = 50,
     ) -> None:
         self._inv_repo = invitation_repo
@@ -51,6 +53,7 @@ class CreateInvitationUseCase:
         self._renderer = email_renderer
         self._queue = queue_port
         self._base_url = app_base_url.rstrip("/")
+        self._db = db_session
         self._daily_cap = project_invite_daily_cap
 
     # ------------------------------------------------------------------
@@ -110,6 +113,10 @@ class CreateInvitationUseCase:
                     invited_by=inviter_id,
                 )
                 self._membership_repo.add(membership)
+                # H2 — commit BEFORE enqueueing the email so the queue write only
+                # happens after persistence is durable. If commit raises, no email
+                # goes out for a membership that didn't land.
+                self._db.commit()
                 self._enqueue_added_email(
                     to=existing_user.email,
                     project_name=project.name,
@@ -149,6 +156,9 @@ class CreateInvitationUseCase:
             invited_by=inviter_id,
         )
         self._inv_repo.save(inv)
+        # H2 — commit BEFORE enqueueing so the email only fires for invitations
+        # that persisted. If commit raises, no token email leaks.
+        self._db.commit()
 
         # Build accept URL and send email
         accept_url = f"{self._base_url}/{locale}/accept-invite/{raw_token}"
@@ -192,6 +202,7 @@ class CreateInvitationUseCase:
         inviter_name: str,
         locale: str,
     ) -> None:
+        """Render + enqueue the invite email. Caller MUST commit before invoking (H2)."""
         ctx = {
             "accept_url": accept_url,
             "project_name": project_name,
@@ -211,6 +222,7 @@ class CreateInvitationUseCase:
         role_name: str,
         locale: str,
     ) -> None:
+        """Render + enqueue the 'added directly' email. Caller MUST commit before invoking (H2)."""
         ctx = {
             "project_name": project_name,
             "inviter_name": inviter_name,

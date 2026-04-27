@@ -11,6 +11,17 @@ from app.domain.entities.permission import Permission
 from app.infrastructure.database.models import UserModel
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE wildcards so user-supplied input can't match more than its literal characters.
+
+    Without this, queries like ``%`` or ``_`` match any/single character respectively, turning
+    the search into a table-dump tool. We use ``\\`` as the escape character; callers MUST
+    pass ``escape='\\\\'`` to ``.like()`` for the escape to take effect.
+    """
+    # Order matters: escape backslash FIRST, then the LIKE-wildcards.
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class SQLAlchemyUserRepository:
     """SQLAlchemy adapter for user persistence."""
 
@@ -32,15 +43,46 @@ class SQLAlchemyUserRepository:
         return self._to_entity(user_model)
 
     def search_by_email(self, query: str, limit: int = 10) -> List[Tuple[UUID, str]]:
-        """Search users by email. Returns list of (id, email) tuples."""
+        """Search users by email substring. Returns list of (id, email) tuples.
+
+        Wildcard chars in ``query`` are escaped so a literal ``%`` matches a literal ``%``.
+        """
+        pattern = f"%{_escape_like(query)}%"
         users = (
             self._session.query(UserModel)
-            .filter(UserModel.email.ilike(f"%{query}%"))
+            .filter(UserModel.email.ilike(pattern, escape="\\"))
             .filter(UserModel.is_active.is_(True))
             .limit(limit)
             .all()
         )
         return [(u.id, u.email) for u in users]
+
+    def search_by_email_or_name(self, query: str, limit: int = 20) -> List[User]:
+        """Search users by email or display_name (case-insensitive substring match).
+
+        Returns up to ``limit`` active User entities ordered by email asc.
+        Used by the superadmin user-search endpoint (phase 03).
+
+        Wildcard chars in ``query`` are escaped (see ``_escape_like``) so a literal ``%`` or
+        ``_`` cannot match more than itself; without this, ``search='%'`` would dump the table.
+        """
+        from sqlalchemy import func, or_
+
+        pattern = f"%{_escape_like(query.lower())}%"
+        users = (
+            self._session.query(UserModel)
+            .filter(
+                or_(
+                    func.lower(UserModel.email).like(pattern, escape="\\"),
+                    func.lower(func.coalesce(UserModel.display_name, "")).like(pattern, escape="\\"),
+                )
+            )
+            .filter(UserModel.is_active.is_(True))
+            .order_by(UserModel.email.asc())
+            .limit(limit)
+            .all()
+        )
+        return [self._to_entity(u) for u in users]
 
     def save(self, user: User) -> User:
         """Save a user (create or update)."""

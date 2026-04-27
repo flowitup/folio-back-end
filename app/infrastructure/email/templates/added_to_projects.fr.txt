@@ -1,0 +1,16 @@
+Vous avez été ajouté à {{ added_projects|length }} projet(s) sur {{ app_name }}
+
+Bonjour,
+
+{{ inviter_name }} vous a ajouté aux projets suivants sur {{ app_name }} en tant que {{ role_name }} :
+
+{% for proj in added_projects %}
+- {{ proj.name }}
+{% endfor %}
+
+Consultez votre tableau de bord ici :
+{{ app_url }}
+
+Si vous pensez qu'il s'agit d'une erreur, veuillez contacter votre administrateur.
+
+— L'équipe {{ app_name }}

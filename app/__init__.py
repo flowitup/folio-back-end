@@ -84,6 +84,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.tasks import task_bp
     from app.api.v1.invitations import invitations_bp
     from app.api.v1.roles import roles_bp
+    from app.api.v1.admin import admin_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -93,6 +94,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(task_bp, url_prefix="/api/v1")
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
     app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
+    app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.

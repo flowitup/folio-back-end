@@ -74,6 +74,7 @@ from app.application.invitations import (
     RevokeInvitationUseCase,
     ListInvitationsUseCase,
 )
+from app.application.admin import BulkAddExistingUserUseCase
 
 # =============================================================================
 # PORTS (Interfaces)
@@ -185,6 +186,9 @@ class Container:
     accept_invitation_usecase: Optional[AcceptInvitationUseCase] = None
     revoke_invitation_usecase: Optional[RevokeInvitationUseCase] = None
     list_invitations_usecase: Optional[ListInvitationsUseCase] = None
+
+    # Admin use cases
+    bulk_add_existing_user_usecase: Optional[BulkAddExistingUserUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
@@ -407,6 +411,11 @@ def configure_container(
         # InMemory queue shim — use email_port directly if no real queue configured
         _queue = queue_service if queue_service is not None else _DirectEmailQueue(container.email_port)
 
+        # H2 — CreateInvitationUseCase + BulkAddExistingUserUseCase now own their
+        # transaction boundary: they commit explicitly before enqueueing emails so the
+        # queue write only fires for state that persisted. Inject the SQLAlchemy session.
+        from app import db as _db
+
         container.create_invitation_usecase = CreateInvitationUseCase(
             invitation_repo=invitation_repo,
             project_membership_repo=project_membership_repo,
@@ -417,6 +426,7 @@ def configure_container(
             email_renderer=container.email_renderer,
             queue_port=_queue,
             app_base_url=app_base_url,
+            db_session=_db.session,
         )
         container.verify_invitation_usecase = VerifyInvitationUseCase(
             invitation_repo=invitation_repo,
@@ -447,6 +457,27 @@ def configure_container(
                 token_issuer=token_issuer,
                 db_session=_db.session,
             )
+
+    # Wire admin use cases (requires user, project, role, membership repos)
+    if (
+        user_repository is not None
+        and project_repository is not None
+        and role_repo is not None
+        and project_membership_repo is not None
+    ):
+        _queue = queue_service if queue_service is not None else _DirectEmailQueue(container.email_port)
+        from app import db as _db
+
+        container.bulk_add_existing_user_usecase = BulkAddExistingUserUseCase(
+            user_repo=user_repository,
+            project_repo=project_repository,
+            role_repo=role_repo,
+            membership_repo=project_membership_repo,
+            email_renderer=container.email_renderer,
+            queue_port=_queue,
+            app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:3000"),
+            db_session=_db.session,
+        )
 
     return container
 

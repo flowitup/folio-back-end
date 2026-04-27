@@ -189,7 +189,23 @@ def invitation_app():
             is_active=True,
         )
 
-        db.session.add_all([admin_user, member_user, outsider_user])
+        # Seed superadmin user (needed for admin bulk-add + search endpoint tests)
+        superadmin_user = UserModel(
+            email="superadmin@invite-test.com",
+            password_hash=hasher.hash("Superadmin1234!"),
+            is_active=True,
+        )
+        superadmin_user.roles.append(superadmin_role)
+
+        # Seed target user — the user being bulk-added in admin tests
+        target_user = UserModel(
+            email="target@invite-test.com",
+            password_hash=hasher.hash("Target1234!"),
+            is_active=True,
+            display_name="Target User",
+        )
+
+        db.session.add_all([admin_user, member_user, outsider_user, superadmin_user, target_user])
         db.session.flush()  # assign user IDs before project references admin_user.id
 
         # Seed a project owned by admin
@@ -197,7 +213,16 @@ def invitation_app():
             name="Invite Test Project",
             owner_id=admin_user.id,
         )
-        db.session.add(project)
+        # Two extra projects for bulk-add multi-project tests
+        project2 = ProjectModel(
+            name="Bulk Add Test Project 2",
+            owner_id=admin_user.id,
+        )
+        project3 = ProjectModel(
+            name="Bulk Add Test Project 3",
+            owner_id=admin_user.id,
+        )
+        db.session.add_all([project, project2, project3])
         db.session.commit()
 
         # Store IDs on app for use in fixtures
@@ -207,10 +232,18 @@ def invitation_app():
         test_app._test_member_password = "Member1234!"
         test_app._test_outsider_email = "outsider@invite-test.com"
         test_app._test_outsider_password = "Outsider1234!"
+        test_app._test_superadmin_email = "superadmin@invite-test.com"
+        test_app._test_superadmin_password = "Superadmin1234!"
+        test_app._test_target_user_email = "target@invite-test.com"
         test_app._test_project_id = str(project.id)
+        test_app._test_project_2_id = str(project2.id)
+        test_app._test_project_3_id = str(project3.id)
         test_app._test_member_role_id = str(member_role.id)
+        test_app._test_superadmin_role_id = str(superadmin_role.id)
         test_app._test_admin_user_id = str(admin_user.id)
         test_app._test_member_user_id = str(member_user.id)
+        test_app._test_superadmin_user_id = str(superadmin_user.id)
+        test_app._test_target_user_id = str(target_user.id)
 
         # Add member_user as a project member so they can list invitations
         # (user_projects is an association table — no ORM model; use raw SQL)
@@ -226,6 +259,23 @@ def invitation_app():
             ),
             {
                 "uid": str(member_user.id),
+                "pid": str(project.id),
+                "rid": str(member_role.id),
+                "at": datetime.now(timezone.utc),
+            },
+        )
+
+        # Add target_user as a member of project (P1 only) with member_role
+        # so bulk-add tests can exercise ALREADY_MEMBER_SAME_ROLE against project.id
+        db.session.execute(
+            text(
+                "INSERT INTO user_projects "
+                "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
+                "VALUES (:uid, :pid, :rid, NULL, :at) "
+                "ON CONFLICT (user_id, project_id) DO NOTHING"
+            ),
+            {
+                "uid": str(target_user.id),
                 "pid": str(project.id),
                 "rid": str(member_role.id),
                 "at": datetime.now(timezone.utc),
@@ -265,3 +315,12 @@ def member_token(inv_client, invitation_app):
 @pytest.fixture
 def outsider_token(inv_client, invitation_app):
     return _login(inv_client, invitation_app._test_outsider_email, invitation_app._test_outsider_password)
+
+
+@pytest.fixture
+def superadmin_token(inv_client, invitation_app):
+    return _login(
+        inv_client,
+        invitation_app._test_superadmin_email,
+        invitation_app._test_superadmin_password,
+    )

@@ -1,0 +1,16 @@
+You've been added to {{ added_projects|length }} project(s) on {{ app_name }}
+
+Hi,
+
+{{ inviter_name }} has added you to the following project(s) on {{ app_name }} as {{ role_name }}:
+
+{% for proj in added_projects %}
+- {{ proj.name }}
+{% endfor %}
+
+View your dashboard here:
+{{ app_url }}
+
+If you believe this was a mistake, please contact your administrator.
+
+— The {{ app_name }} Team

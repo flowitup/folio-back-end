@@ -62,6 +62,25 @@ def _make_role(name: str = "member") -> Role:
     return Role(id=uuid4(), name=name)
 
 
+class _FakeSession:
+    """Test fake for the TransactionalSessionPort — counts commit() calls."""
+
+    def __init__(self) -> None:
+        self.commit_calls = 0
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def begin_nested(self):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            yield self
+
+        return _ctx()
+
+
 def _make_usecase(
     inv_repo=None,
     membership_repo=None,
@@ -70,6 +89,7 @@ def _make_usecase(
     role_repo=None,
     email_port=None,
     queue_port=None,
+    db_session=None,
 ) -> CreateInvitationUseCase:
     renderer = MagicMock()
     renderer.render.return_value = ("Subject", "Text body", "<html>body</html>")
@@ -83,6 +103,7 @@ def _make_usecase(
         email_renderer=renderer,
         queue_port=queue_port or MagicMock(),
         app_base_url="http://localhost:3000",
+        db_session=db_session or _FakeSession(),
     )
 
 
@@ -184,6 +205,7 @@ class TestNewEmailPath:
             email_renderer=renderer,
             queue_port=queue,
             app_base_url="http://localhost:3000",
+            db_session=_FakeSession(),
         )
         uc.execute(
             inviter_id=inviter.id,
@@ -319,6 +341,7 @@ class TestExistingUserPath:
             email_renderer=renderer,
             queue_port=queue,
             app_base_url="http://localhost:3000",
+            db_session=_FakeSession(),
         )
         uc.execute(
             inviter_id=inviter.id,
@@ -366,6 +389,7 @@ class TestExistingUserPath:
             email_renderer=renderer,
             queue_port=queue,
             app_base_url="http://localhost:3000",
+            db_session=_FakeSession(),
         )
         result = uc.execute(
             inviter_id=inviter.id,
