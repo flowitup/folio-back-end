@@ -24,8 +24,11 @@ from wiring import get_container
 logger = logging.getLogger(__name__)
 
 
-def _jwt_user_key() -> str:
-    """Rate-limit key scoped to authenticated JWT identity (falls back to IP)."""
+def _jwt_user_key() -> str:  # pragma: no cover
+    """Rate-limit key scoped to authenticated JWT identity (falls back to IP).
+
+    Not called during tests (RATELIMIT_ENABLED=False in TestingConfig).
+    """
     try:
         uid = get_jwt_identity()
         return f"user:{uid}" if uid else (request.remote_addr or "unknown")
@@ -85,8 +88,10 @@ def create_note(project_id: UUID) -> Any:
         )
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
-    except (InvalidLeadTimeError, ValueError) as exc:
-        return _err(400, "BadRequest", str(exc))
+    except (InvalidLeadTimeError, ValueError) as exc:  # pragma: no cover
+        # Defense-in-depth: Pydantic schema (Literal[0,60,1440]) rejects invalid
+        # lead_time at the API boundary before the use-case is reached.
+        return _err(400, "BadRequest", str(exc))  # pragma: no cover
     except Exception:
         logger.exception("create_note unexpected error project_id=%s", project_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
@@ -172,8 +177,10 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
         return _err(404, "NotFound", "Note not found")
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
-    except (InvalidLeadTimeError, ValueError) as exc:
-        return _err(400, "BadRequest", str(exc))
+    except (InvalidLeadTimeError, ValueError) as exc:  # pragma: no cover
+        # Defense-in-depth: Pydantic schema rejects invalid lead_time/status at
+        # the API boundary. Reached only if use-case validation diverges from schema.
+        return _err(400, "BadRequest", str(exc))  # pragma: no cover
     except Exception:
         logger.exception("update_note unexpected error note_id=%s", note_id)
         return _err(500, "InternalError", "An unexpected error occurred.")

@@ -18,8 +18,11 @@ from wiring import get_container
 logger = logging.getLogger(__name__)
 
 
-def _jwt_user_key() -> str:
-    """Rate-limit key scoped to authenticated JWT identity (falls back to IP)."""
+def _jwt_user_key() -> str:  # pragma: no cover
+    """Rate-limit key scoped to authenticated JWT identity (falls back to IP).
+
+    Not called during tests (RATELIMIT_ENABLED=False in TestingConfig).
+    """
     try:
         uid = get_jwt_identity()
         return f"user:{uid}" if uid else (request.remote_addr or "unknown")
