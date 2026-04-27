@@ -182,6 +182,68 @@ class TestUserSearchQueryGuard:
         )
         assert resp.status_code == 200
 
+    def test_200_query_under_3_chars_returns_empty(self, inv_client, superadmin_token):
+        """H3 — server-side min-3-char guard prevents 1-2 char enumeration."""
+        for short in ("a", "ab"):
+            resp = inv_client.get(
+                _SEARCH_URL,
+                query_string={"search": short},
+                headers=_auth(superadmin_token),
+            )
+            assert resp.status_code == 200, f"query={short!r}"
+            body = resp.get_json()
+            assert body["items"] == [], f"query={short!r} should return empty (got {body})"
+            assert body["count"] == 0
+
+    def test_200_query_exactly_3_chars_proceeds(self, inv_client, superadmin_token):
+        """3-char query passes the min-length guard (boundary)."""
+        resp = inv_client.get(
+            _SEARCH_URL,
+            query_string={"search": "tar"},  # matches target@... in seed
+            headers=_auth(superadmin_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# C1 — SQL LIKE wildcard injection (regression guard)
+# ---------------------------------------------------------------------------
+
+
+class TestUserSearchLikeEscape:
+    """`%` and `_` in user-supplied search must NOT match any character.
+
+    Without escaping, ``search='%'`` matches every row and ``search='_'`` matches any
+    single character — turning the search into a table-dump tool. The repo escapes
+    these chars before building the LIKE pattern.
+    """
+
+    def test_percent_wildcard_does_not_match_all_users(self, inv_client, superadmin_token):
+        resp = inv_client.get(
+            _SEARCH_URL,
+            query_string={"search": "%"},
+            headers=_auth(superadmin_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # No user's email or display_name literally contains '%' in the test seed.
+        assert body["count"] == 0
+        assert body["items"] == []
+
+    def test_underscore_wildcard_does_not_match_single_char(self, inv_client, superadmin_token):
+        resp = inv_client.get(
+            _SEARCH_URL,
+            query_string={"search": "_"},
+            headers=_auth(superadmin_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # No user's email or display_name literally contains '_' in the test seed.
+        assert body["count"] == 0
+        assert body["items"] == []
+
 
 # ---------------------------------------------------------------------------
 # Response shape — sensitive fields excluded

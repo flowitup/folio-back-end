@@ -30,6 +30,7 @@ from wiring import get_container
 logger = logging.getLogger(__name__)
 
 _MAX_SEARCH_LEN = 100  # reject queries longer than this (defense against LIKE abuse)
+_MIN_SEARCH_LEN = 3  # match the FE's min-3-char rule; defense-in-depth against enumeration
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +155,10 @@ def search_users():
     if len(q) > _MAX_SEARCH_LEN:
         return _err(400, "BadRequest", f"search query must be {_MAX_SEARCH_LEN} characters or fewer.")
 
+    # H3 — match FE's min-3-char rule server-side; prevents enumeration via 1-2 char queries.
+    if len(q) < _MIN_SEARCH_LEN:
+        return jsonify(UserSearchResponse(items=[], count=0).model_dump()), 200
+
     try:
         raw_limit = int(request.args.get("limit", 20))
     except (ValueError, TypeError):
@@ -162,6 +167,17 @@ def search_users():
 
     container = get_container()
     users = container.user_repository.search_by_email_or_name(q, limit)
+
+    # H3 — audit every superadmin user-search call. Logs requester id + query + result count
+    # so abusive enumeration patterns are detectable post-hoc.
+    requester_id = get_jwt_identity()
+    logger.info(
+        "admin.user_search requester=%s query=%r limit=%d count=%d",
+        requester_id,
+        q,
+        limit,
+        len(users),
+    )
 
     response = UserSearchResponse(
         items=[

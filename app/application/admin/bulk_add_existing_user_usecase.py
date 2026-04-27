@@ -78,11 +78,13 @@ class BulkAddExistingUserUseCase:
         """
         # 1. Load requester; guard existence
         requester = self._user_repo.find_by_id(requester_id)
-        if requester is None:
+        if requester is None:  # pragma: no cover - defense-in-depth: route's @jwt_required guarantees a valid identity
             raise PermissionDeniedError(f"Requester {requester_id} not found.")
 
         # 2. Defense-in-depth: require superadmin-level wildcard permission
-        if not requester.has_permission("*", "*"):
+        if not requester.has_permission(
+            "*", "*"
+        ):  # pragma: no cover - defense-in-depth: route's _require_superadmin fires first
             raise PermissionDeniedError(f"User {requester_id} does not have '*:*' permission required for bulk-add.")
 
         # 3. Load target user
@@ -103,9 +105,11 @@ class BulkAddExistingUserUseCase:
             seen[pid] = None
         deduped = list(seen.keys())
 
-        if not deduped:
+        if not deduped:  # pragma: no cover - defense-in-depth: Pydantic Field(min_length=1) intercepts at the route
             raise EmptyProjectListError("project_ids must not be empty.")
-        if len(deduped) > _MAX_PROJECTS:
+        if (
+            len(deduped) > _MAX_PROJECTS
+        ):  # pragma: no cover - defense-in-depth: Pydantic Field(max_length=50) intercepts
             raise TooManyProjectsError(f"project_ids must not exceed {_MAX_PROJECTS} entries; got {len(deduped)}.")
 
         # 6. Per-project loop
