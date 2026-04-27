@@ -124,33 +124,40 @@ class BulkAddExistingUserUseCase:
                 )
                 continue
 
-            existing_role_id = self._membership_repo.find_role_id(target_user.id, project.id)
+            # Try to insert; the repo returns True only if a row was actually
+            # written (False on ON CONFLICT DO NOTHING). This avoids the H1 race
+            # where two concurrent bulk-adds both observe `find_role_id == None`
+            # and both report ADDED even though only one INSERT succeeded.
+            membership = ProjectMembership.create(
+                user_id=target_user.id,
+                project_id=project.id,
+                role_id=role.id,
+                invited_by=requester.id,
+            )
+            inserted = self._membership_repo.add(membership)
 
-            if existing_role_id is None:
-                # Not yet a member — create membership
-                membership = ProjectMembership.create(
-                    user_id=target_user.id,
-                    project_id=project.id,
-                    role_id=role.id,
-                    invited_by=requester.id,
-                )
-                self._membership_repo.add(membership)
+            if inserted:
                 results.append(
                     BulkAddResultItemDto(project_id=pid, project_name=project.name, status=BulkAddStatus.ADDED)
                 )
                 added_projects.append({"name": project.name})
-            elif existing_role_id == role.id:
-                results.append(
-                    BulkAddResultItemDto(
-                        project_id=pid, project_name=project.name, status=BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
-                    )
-                )
             else:
-                results.append(
-                    BulkAddResultItemDto(
-                        project_id=pid, project_name=project.name, status=BulkAddStatus.ALREADY_MEMBER_DIFFERENT_ROLE
+                # Conflict — already a member. Read role to discriminate same-vs-different.
+                existing_role_id = self._membership_repo.find_role_id(target_user.id, project.id)
+                if existing_role_id == role.id:
+                    results.append(
+                        BulkAddResultItemDto(
+                            project_id=pid, project_name=project.name, status=BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
+                        )
                     )
-                )
+                else:
+                    results.append(
+                        BulkAddResultItemDto(
+                            project_id=pid,
+                            project_name=project.name,
+                            status=BulkAddStatus.ALREADY_MEMBER_DIFFERENT_ROLE,
+                        )
+                    )
 
         # 7. Enqueue ONE consolidated email if any memberships were created
         if added_projects:

@@ -19,10 +19,19 @@ class SqlAlchemyProjectMembershipRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def add(self, membership: ProjectMembership) -> ProjectMembership:
-        """Insert a new membership row into user_projects."""
+    def add(self, membership: ProjectMembership) -> bool:
+        """Insert a new membership row IF NOT ALREADY PRESENT.
+
+        Returns True if a row was actually inserted, False if the (user_id, project_id)
+        pair already existed. Uses ``INSERT ... ON CONFLICT DO NOTHING RETURNING user_id``
+        — RETURNING produces a row only when the INSERT succeeded; a conflict produces
+        zero rows. Both Postgres and SQLite ≥3.35 support this combination.
+
+        Used by ``BulkAddExistingUserUseCase`` to distinguish actually-added from
+        already-a-member without a separate read (H1 fix from code-review).
+        """
         assigned_at = membership.assigned_at or datetime.now(timezone.utc)
-        self._session.execute(
+        result = self._session.execute(
             text(
                 """
                 INSERT INTO user_projects
@@ -30,6 +39,7 @@ class SqlAlchemyProjectMembershipRepository:
                 VALUES
                     (:user_id, :project_id, :role_id, :invited_by, :assigned_at)
                 ON CONFLICT (user_id, project_id) DO NOTHING
+                RETURNING user_id
                 """
             ),
             {
@@ -40,8 +50,9 @@ class SqlAlchemyProjectMembershipRepository:
                 "assigned_at": assigned_at,
             },
         )
+        inserted = result.fetchone() is not None
         self._session.flush()
-        return membership
+        return inserted
 
     def exists(self, user_id: UUID, project_id: UUID) -> bool:
         """Return True if the user is already a member of the project."""

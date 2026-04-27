@@ -89,8 +89,14 @@ class InvitationRepositoryPort(Protocol):
 class ProjectMembershipRepositoryPort(Protocol):
     """Persistence contract for ProjectMembership aggregate."""
 
-    def add(self, membership: ProjectMembership) -> ProjectMembership:
-        """Persist a new project membership. Returns the saved instance."""
+    def add(self, membership: ProjectMembership) -> bool:
+        """Insert a new membership row IF NOT ALREADY PRESENT.
+
+        Returns True if a row was actually inserted, False if (user_id, project_id)
+        already existed (the row is left untouched — no role override). Callers use
+        this to distinguish "I added them" from "they were already in there" without
+        the false-success that ``ON CONFLICT DO NOTHING`` alone would produce.
+        """
         ...
 
     def exists(self, user_id: UUID, project_id: UUID) -> bool:

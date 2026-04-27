@@ -115,6 +115,7 @@ class TestHappyPath:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = None  # not yet a member
+        membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
@@ -150,6 +151,7 @@ class TestHappyPath:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = None
+        membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
@@ -184,6 +186,7 @@ class TestHappyPath:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = None
+        membership_repo.add.return_value = True
 
         queue = MagicMock()
         uc = _make_usecase(
@@ -227,6 +230,7 @@ class TestAlreadyMember:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = role.id  # same role
+        membership_repo.add.return_value = False
 
         uc = _make_usecase(
             user_repo=user_repo,
@@ -242,7 +246,9 @@ class TestAlreadyMember:
         )
 
         assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
-        membership_repo.add.assert_not_called()
+        # H1 — under the new contract `add()` IS called every iteration; the bool return
+        # (False, here) signals "row already existed, no INSERT performed".
+        membership_repo.add.assert_called_once()
 
     def test_same_role_not_in_email_recap(self):
         requester = _make_superadmin()
@@ -261,6 +267,7 @@ class TestAlreadyMember:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = role.id
+        membership_repo.add.return_value = False
 
         queue = MagicMock()
         uc = _make_usecase(
@@ -297,6 +304,7 @@ class TestAlreadyMember:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = uuid4()  # different role
+        membership_repo.add.return_value = False
 
         uc = _make_usecase(
             user_repo=user_repo,
@@ -312,7 +320,9 @@ class TestAlreadyMember:
         )
 
         assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER_DIFFERENT_ROLE
-        membership_repo.add.assert_not_called()
+        # H1 — `add()` IS called; `False` return tells us the conflict happened and
+        # we left the existing row untouched (no role override).
+        membership_repo.add.assert_called_once()
 
     def test_different_role_not_in_email_recap(self):
         requester = _make_superadmin()
@@ -331,6 +341,7 @@ class TestAlreadyMember:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = uuid4()
+        membership_repo.add.return_value = False
 
         queue = MagicMock()
         uc = _make_usecase(
@@ -347,6 +358,54 @@ class TestAlreadyMember:
             role_id=role.id,
         )
 
+        queue.enqueue.assert_not_called()
+
+    def test_h1_race_regression_add_returning_false_does_not_yield_added(self):
+        """H1 — if the repo's `add()` returns False (ON CONFLICT — row already existed),
+        the use-case must NOT report ADDED, must NOT include the project in the email recap.
+
+        Simulates the concurrent-bulk-add race: the use-case looked up `find_role_id` and saw
+        None (a moment before another caller inserted), then `add()` runs but returns False.
+        """
+        requester = _make_superadmin()
+        target = _make_user()
+        role = _make_role()
+        p1 = _make_project()
+
+        user_repo = MagicMock()
+        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
+
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = p1
+
+        role_repo = MagicMock()
+        role_repo.find_by_id.return_value = role
+
+        membership_repo = MagicMock()
+        # Pre-add view says "no membership" (race-window observation)
+        # Post-add `find_role_id` (the use-case calls it on conflict) reports the now-existing role.
+        membership_repo.find_role_id.return_value = role.id
+        # add() reports the conflict — row was inserted by someone else mid-flight.
+        membership_repo.add.return_value = False
+
+        queue = MagicMock()
+        uc = _make_usecase(
+            user_repo=user_repo,
+            project_repo=project_repo,
+            role_repo=role_repo,
+            membership_repo=membership_repo,
+            queue=queue,
+        )
+        result = uc.execute(
+            requester_id=requester.id,
+            target_user_id=target.id,
+            project_ids=[p1.id],
+            role_id=role.id,
+        )
+
+        # Must report ALREADY_MEMBER_*, not ADDED
+        assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
+        # Must NOT enqueue the consolidated email (no actual additions)
         queue.enqueue.assert_not_called()
 
 
@@ -405,6 +464,7 @@ class TestProjectNotFound:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = None
+        membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
@@ -594,6 +654,7 @@ class TestInputValidation:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = None
+        membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
@@ -652,6 +713,14 @@ class TestMixedBatch:
                 return diff_role_id
             return None  # not a member
 
+        # H1 — repo.add returns True only on actual INSERT (no conflict).
+        # In a real DB, a row at p_same/p_diff already exists; the INSERT...ON CONFLICT
+        # DO NOTHING reports False. p_add has no row → True.
+        def add_side_effect(membership):
+            if membership.project_id == p_add.id:
+                return True
+            return False
+
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = project_side_effect
 
@@ -660,6 +729,7 @@ class TestMixedBatch:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.side_effect = membership_side_effect
+        membership_repo.add.side_effect = add_side_effect
 
         queue = MagicMock()
         renderer = MagicMock()
@@ -710,6 +780,9 @@ class TestMixedBatch:
                 return role.id
             return None
 
+        def add_side_effect(membership):
+            return membership.project_id == p_add.id  # only p_add gets a real INSERT
+
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = project_side_effect
 
@@ -718,6 +791,7 @@ class TestMixedBatch:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.side_effect = membership_side_effect
+        membership_repo.add.side_effect = add_side_effect
 
         queue = MagicMock()
         renderer = MagicMock()
@@ -764,6 +838,7 @@ class TestMixedBatch:
 
         membership_repo = MagicMock()
         membership_repo.find_role_id.return_value = role.id  # already member same role
+        membership_repo.add.return_value = False
 
         queue = MagicMock()
         uc = _make_usecase(
