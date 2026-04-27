@@ -127,7 +127,7 @@ class TestAcceptNewUser:
         inv, raw = _make_pending_inv()
         new_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None  # new user
         user_repo.save.return_value = new_user
@@ -145,7 +145,7 @@ class TestAcceptNewUser:
         inv, raw = _make_pending_inv()
         new_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = new_user
@@ -161,7 +161,7 @@ class TestAcceptNewUser:
         inv, raw = _make_pending_inv()
         new_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = new_user
@@ -179,7 +179,7 @@ class TestAcceptNewUser:
         inv, raw = _make_pending_inv()
         new_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = new_user
@@ -209,7 +209,7 @@ class TestExistingUserRace:
         existing_user = _make_user(inv.email)
         existing_hash = existing_user.password_hash
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = existing_user  # already exists
         membership_repo = MagicMock()
@@ -226,7 +226,7 @@ class TestExistingUserRace:
         inv, raw = _make_pending_inv()
         existing_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = existing_user
         membership_repo = MagicMock()
@@ -241,7 +241,7 @@ class TestExistingUserRace:
         inv, raw = _make_pending_inv()
         existing_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = existing_user
         membership_repo = MagicMock()
@@ -262,7 +262,7 @@ class TestExistingUserRace:
 class TestAcceptErrors:
     def test_invalid_token_raises(self):
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = None
+        inv_repo.find_by_token_hash_for_update.return_value = None
 
         uc = _make_uc(inv_repo=inv_repo)
         with pytest.raises(InvalidInvitationTokenError):
@@ -273,7 +273,7 @@ class TestAcceptErrors:
         from dataclasses import replace
         accepted_inv = replace(inv, status=InvitationStatus.ACCEPTED)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = accepted_inv
+        inv_repo.find_by_token_hash_for_update.return_value = accepted_inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = _make_user()
@@ -287,7 +287,7 @@ class TestAcceptErrors:
     def test_expired_invitation_raises(self):
         inv, raw = _make_expired_inv()
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = _make_user()
@@ -301,7 +301,7 @@ class TestAcceptErrors:
     def test_short_password_raises_value_error(self):
         inv, raw = _make_pending_inv()
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
 
         uc = _make_uc(inv_repo=inv_repo)
         with pytest.raises(ValueError):
@@ -310,7 +310,7 @@ class TestAcceptErrors:
     def test_blank_name_raises_value_error(self):
         inv, raw = _make_pending_inv()
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
 
         uc = _make_uc(inv_repo=inv_repo)
         with pytest.raises(ValueError):
@@ -327,7 +327,7 @@ class TestTransactionAtomicity:
         inv, raw = _make_pending_inv()
         new_user = _make_user(inv.email)
         inv_repo = MagicMock()
-        inv_repo.find_by_token_hash.return_value = inv
+        inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = new_user
@@ -342,3 +342,23 @@ class TestTransactionAtomicity:
 
         # invitation.save must NOT have been called (no accepted status persisted)
         inv_repo.save.assert_not_called()
+
+    def test_uses_locked_lookup_for_concurrent_accept_safety(self):
+        """M1 — accept must use find_by_token_hash_for_update (row lock), not find_by_token_hash."""
+        inv, raw = _make_pending_inv()
+        new_user = _make_user(inv.email)
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        # If the use-case wrongly fell back to the unlocked variant, this would be called.
+        inv_repo.find_by_token_hash.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = None
+        user_repo.save.return_value = new_user
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
+        uc.execute(raw_token=raw, name="Alice", password="password123")
+
+        inv_repo.find_by_token_hash_for_update.assert_called_once()
+        inv_repo.find_by_token_hash.assert_not_called()

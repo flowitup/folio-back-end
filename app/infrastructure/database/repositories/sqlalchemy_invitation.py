@@ -41,6 +41,20 @@ class SqlAlchemyInvitationRepository:
         model = self._session.query(InvitationModel).filter_by(token_hash=token_hash).first()
         return model.to_entity() if model else None
 
+    def find_by_token_hash_for_update(self, token_hash: str) -> Optional[Invitation]:
+        """Look up an invitation with a row-level lock (Postgres SELECT ... FOR UPDATE).
+
+        Falls back to a plain SELECT on dialects that don't support FOR UPDATE
+        (e.g. SQLite under tests). Must be called inside an open transaction.
+        """
+        query = self._session.query(InvitationModel).filter_by(token_hash=token_hash)
+        # SQLite raises CompileError on with_for_update; degrade gracefully.
+        dialect = self._session.bind.dialect.name if self._session.bind else ""
+        if dialect != "sqlite":
+            query = query.with_for_update()
+        model = query.first()
+        return model.to_entity() if model else None
+
     def find_by_id(self, invitation_id: UUID) -> Optional[Invitation]:
         """Look up an invitation by its UUID."""
         model = self._session.query(InvitationModel).filter_by(id=invitation_id).first()

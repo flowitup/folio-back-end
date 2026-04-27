@@ -21,6 +21,20 @@ class InvitationRepositoryPort(Protocol):
         """Look up an invitation by its sha256 token hash. Returns None if not found."""
         ...
 
+    def find_by_token_hash_for_update(self, token_hash: str) -> Optional[Invitation]:
+        """
+        Look up an invitation by its sha256 token hash, acquiring a row-level
+        lock for the duration of the surrounding transaction (Postgres
+        ``SELECT ... FOR UPDATE``).
+
+        Used by AcceptInvitationUseCase to serialize concurrent accept
+        attempts for the same token (M1 from code-review). On dialects that
+        don't support ``FOR UPDATE`` (SQLite under tests), implementations
+        may degrade to a plain SELECT — the in-memory test DB doesn't have
+        concurrent transactions anyway.
+        """
+        ...
+
     def find_by_id(self, invitation_id: UUID) -> Optional[Invitation]:
         """Look up an invitation by its UUID. Returns None if not found."""
         ...

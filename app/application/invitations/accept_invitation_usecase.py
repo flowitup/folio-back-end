@@ -65,18 +65,26 @@ class AcceptInvitationUseCase:
         self._validate_password(password)
 
         token_hash = hash_token(raw_token)
-        inv = self._inv_repo.find_by_token_hash(token_hash)
-        if inv is None:
-            raise InvalidInvitationTokenError("No invitation found for the supplied token.")
-
-        # Will raise if expired/revoked/accepted (domain exceptions)
-        _ = inv.is_usable()  # warm check; accept() below enforces state
-
         password_hash = self._hasher.hash(password)
 
-        # --- Transactional block (SAVEPOINT — works inside Flask-SQLAlchemy's request transaction) ---
+        # --- Transactional block (SAVEPOINT — works inside Flask-SQLAlchemy's request transaction).
+        #
+        # M1 (from code-review): the lookup uses a row-level lock so two concurrent
+        # POST /accept requests for the same valid token serialize at the DB layer.
+        # The first commit wins; the second sees status=ACCEPTED on re-read and
+        # raises InvitationAlreadyAcceptedError via inv.accept().
+        #
+        # Order matters: inv.accept() runs BEFORE user/membership creation so a
+        # not-usable invitation rolls back the savepoint without leaving an
+        # orphan user behind.
         with self._db.begin_nested():
-            # Race condition guard: user may have registered between verify and accept
+            inv = self._inv_repo.find_by_token_hash_for_update(token_hash)
+            if inv is None:
+                raise InvalidInvitationTokenError(
+                    "No invitation found for the supplied token."
+                )
+            accepted_inv = inv.accept()  # raises if expired/revoked/accepted
+
             user = self._user_repo.find_by_email(inv.email)
             if user is None:
                 user = User.create(
@@ -95,7 +103,6 @@ class AcceptInvitationUseCase:
                 )
                 self._membership_repo.add(membership)
 
-            accepted_inv = inv.accept()
             self._inv_repo.save(accepted_inv)
         self._db.commit()
 
