@@ -66,6 +66,13 @@ from app.application.task import (
     MoveTaskUseCase,
     DeleteTaskUseCase,
 )
+from app.application.invitations import (
+    CreateInvitationUseCase,
+    VerifyInvitationUseCase,
+    AcceptInvitationUseCase,
+    RevokeInvitationUseCase,
+    ListInvitationsUseCase,
+)
 
 # =============================================================================
 # PORTS (Interfaces) - Legacy ports kept for compatibility
@@ -173,6 +180,14 @@ class Container:
     get_project_usecase: Optional[GetProjectUseCase] = None
     update_project_usecase: Optional[UpdateProjectUseCase] = None
     delete_project_usecase: Optional[DeleteProjectUseCase] = None
+
+    # Invitation use cases (repos wired in phase 05)
+    # app_base_url is read from APP_BASE_URL env var at configure_container time
+    create_invitation_usecase: Optional[CreateInvitationUseCase] = None
+    verify_invitation_usecase: Optional[VerifyInvitationUseCase] = None
+    accept_invitation_usecase: Optional[AcceptInvitationUseCase] = None
+    revoke_invitation_usecase: Optional[RevokeInvitationUseCase] = None
+    list_invitations_usecase: Optional[ListInvitationsUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
@@ -350,6 +365,34 @@ def configure_container(
     # Wire email port + renderer
     container.email_port = _build_email_port()
     container.email_renderer = _build_email_renderer()
+
+    # Wire invitation use cases.
+    # NOTE: SQLAlchemy invitation/membership repos (InvitationSQLRepo,
+    # ProjectMembershipSQLRepo, RoleSQLRepo) are added in phase 05.
+    # Once those repos are available, wire here:
+    #
+    #   app_base_url = os.environ.get("APP_BASE_URL", "http://localhost:3000")
+    #   if invitation_repo and project_membership_repo and user_repository \
+    #           and project_repo and role_repo and queue_service \
+    #           and container.email_port and container.email_renderer:
+    #       container.create_invitation_usecase = CreateInvitationUseCase(
+    #           invitation_repo, project_membership_repo, user_repository,
+    #           project_repo, role_repo, container.email_port,
+    #           container.email_renderer, queue_service, app_base_url,
+    #       )
+    #       container.verify_invitation_usecase = VerifyInvitationUseCase(
+    #           invitation_repo, project_repo, role_repo, user_repository,
+    #       )
+    #       container.accept_invitation_usecase = AcceptInvitationUseCase(
+    #           invitation_repo, user_repository, project_membership_repo,
+    #           password_hasher, token_issuer, db_session,
+    #       )
+    #       container.revoke_invitation_usecase = RevokeInvitationUseCase(
+    #           invitation_repo, user_repository,
+    #       )
+    #       container.list_invitations_usecase = ListInvitationsUseCase(
+    #           invitation_repo, project_membership_repo, role_repo, user_repository,
+    #       )
 
     return container
 

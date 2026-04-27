@@ -5,6 +5,9 @@ from uuid import UUID
 
 from app.domain.entities.invitation import Invitation, InvitationStatus
 from app.domain.entities.project_membership import ProjectMembership
+from app.domain.entities.project import Project
+from app.domain.entities.role import Role
+from app.domain.entities.user import User
 
 
 class InvitationRepositoryPort(Protocol):
@@ -63,4 +66,36 @@ class ProjectMembershipRepositoryPort(Protocol):
 
     def exists(self, user_id: UUID, project_id: UUID) -> bool:
         """Return True if the user is already a member of the project."""
+        ...
+
+
+class ProjectRepositoryPort(Protocol):
+    """Minimal read-only project contract needed by invitation use-cases."""
+
+    def find_by_id(self, project_id: UUID) -> Optional[Project]:
+        """Look up a project by UUID. Returns None if not found."""
+        ...
+
+
+class RoleRepositoryPort(Protocol):
+    """Minimal read-only role contract needed by invitation use-cases."""
+
+    def find_by_id(self, role_id: UUID) -> Optional[Role]:
+        """Look up a role by UUID. Returns None if not found."""
+        ...
+
+
+class UserWriteRepositoryPort(Protocol):
+    """Write contract for user persistence used during invitation acceptance."""
+
+    def find_by_id(self, user_id: UUID) -> Optional[User]:
+        """Find a user by UUID. Returns None if not found."""
+        ...
+
+    def find_by_email(self, email: str) -> Optional[User]:
+        """Find a user by email. Returns None if not found."""
+        ...
+
+    def save(self, user: User) -> User:
+        """Persist a user (insert or update). Returns the saved instance."""
         ...
