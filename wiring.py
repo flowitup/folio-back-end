@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Protocol
 
 # Import port interfaces from application layer
+from app.application.ports.email_port import EmailPort
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.session_manager import SessionManagerPort
@@ -75,20 +76,12 @@ from app.application.invitations import (
 )
 
 # =============================================================================
-# PORTS (Interfaces) - Legacy ports kept for compatibility
+# PORTS (Interfaces)
 # =============================================================================
-
-
-class EmailPort(Protocol):
-    """Port for sending emails."""
-
-    def send_email(
-        self,
-        to: str,
-        subject: str,
-        body: str,
-        html_body: Optional[str] = None,
-    ) -> bool: ...
+# EmailPort is now imported from app.application.ports.email_port (single
+# canonical contract: .send(EmailPayload)). The legacy send_email(to, subject,
+# body, html_body) Protocol that used to live here had zero callers and was
+# removed during the M3 unification.
 
 
 class QueuePort(Protocol):
@@ -123,12 +116,11 @@ class Container:
     """
 
     # Infrastructure ports
-    email_service: Optional[EmailPort] = None
     queue_service: Optional[QueuePort] = None
     project_repository: Optional[ProjectRepository] = None
 
-    # New email port (EmailPayload-based adapter) + renderer
-    email_port: Optional[Any] = None  # ResendEmailAdapter | InMemoryEmailAdapter
+    # Email — single canonical port (EmailPayload-based) + Jinja2 renderer.
+    email_port: Optional[EmailPort] = None  # ResendEmailAdapter | InMemoryEmailAdapter
     email_renderer: Optional[Any] = None  # EmailRenderer
 
     # Auth ports
@@ -237,7 +229,9 @@ def _build_email_port() -> Any:
             _inmemory_email_adapter = InMemoryEmailAdapter()
         return _inmemory_email_adapter
 
-    # 'smtp' or any unknown value — return None to keep legacy email_service path
+    # 'smtp' or any unknown value — no email adapter wired. The invitation
+    # use-cases will fail loudly if they try to enqueue a send while
+    # email_port is None, which is the right signal in non-prod/non-test envs.
     return None
 
 
@@ -284,7 +278,6 @@ container = Container()
 
 
 def configure_container(
-    email_service: Optional[EmailPort] = None,
     queue_service: Optional[QueuePort] = None,
     project_repository: Optional[ProjectRepository] = None,
     user_repository: Optional[UserRepositoryPort] = None,
@@ -310,7 +303,6 @@ def configure_container(
     global container
 
     container = Container(
-        email_service=email_service,
         queue_service=queue_service,
         project_repository=project_repository,
         user_repository=user_repository,
