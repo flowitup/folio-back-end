@@ -23,13 +23,31 @@ class SqlAlchemyProjectMembershipReader:
         self._session = session
 
     def is_member(self, user_id: UUID, project_id: UUID) -> bool:
-        """Return True if user_id is an active member of project_id.
+        """Return True if user_id is authorized to act as a member of project_id.
 
-        Delegates to the user_projects association table (source of truth
-        for project membership). A single point-lookup query with LIMIT 1.
+        Three paths grant authorization (any one is sufficient):
+        1. Explicit membership row in user_projects.
+        2. Project ownership (projects.owner_id) — owner is implicitly a member.
+        3. Holder of the global ``*:*`` superadmin permission.
+
+        Mirrors the owner + ``*:*`` bypass pattern already used by the
+        invitations and members routes. A single union SELECT with LIMIT 1.
         """
         result = self._session.execute(
-            text("SELECT 1 FROM user_projects " "WHERE user_id = :uid AND project_id = :pid " "LIMIT 1"),
+            text(
+                "SELECT 1 FROM user_projects "
+                "WHERE user_id = :uid AND project_id = :pid "
+                "UNION ALL "
+                "SELECT 1 FROM projects "
+                "WHERE id = :pid AND owner_id = :uid "
+                "UNION ALL "
+                "SELECT 1 "
+                "FROM user_roles ur "
+                "JOIN role_permissions rp ON rp.role_id = ur.role_id "
+                "JOIN permissions p ON p.id = rp.permission_id "
+                "WHERE ur.user_id = :uid AND p.name = '*:*' "
+                "LIMIT 1"
+            ),
             {"uid": str(user_id), "pid": str(project_id)},
         )
         return result.fetchone() is not None
