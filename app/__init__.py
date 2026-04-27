@@ -85,6 +85,8 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.invitations import invitations_bp
     from app.api.v1.roles import roles_bp
     from app.api.v1.admin import admin_bp
+    from app.api.v1.notes import notes_bp
+    from app.api.v1.notifications import notifications_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -95,6 +97,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
     app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
+    app.register_blueprint(notes_bp, url_prefix="/api/v1")
+    app.register_blueprint(notifications_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -130,6 +134,21 @@ def _configure_di_container() -> None:
         SqlAlchemyProjectMembershipRepository,
     )
     from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
+    from app.infrastructure.database.repositories.sqlalchemy_note_repository import SqlAlchemyNoteRepository
+    from app.infrastructure.database.repositories.sqlalchemy_note_dismissal_repository import (
+        SqlAlchemyNoteDismissalRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
+        SqlAlchemyProjectMembershipReader,
+    )
+    from app.application.notes.create_note_usecase import CreateNoteUseCase
+    from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
+    from app.application.notes.update_note_usecase import UpdateNoteUseCase
+    from app.application.notes.delete_note_usecase import DeleteNoteUseCase
+    from app.application.notes.mark_note_done_usecase import MarkNoteDoneUseCase
+    from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
+    from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
+    from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
     from config import Config
 
     storage = S3AttachmentStorage(
@@ -166,4 +185,57 @@ def _configure_di_container() -> None:
         invitation_repo=invitation_repo,
         project_membership_repo=membership_repo,
         role_repo=role_repo,
+    )
+
+    # Wire notes use-cases — done post-configure_container so we can pass db.session
+    # directly without adding more params to configure_container's signature.
+    from wiring import get_container as _get_container
+
+    _c = _get_container()
+    _note_repo = SqlAlchemyNoteRepository(db.session)
+    _dismissal_repo = SqlAlchemyNoteDismissalRepository(db.session)
+    _membership_reader = SqlAlchemyProjectMembershipReader(db.session)
+
+    _c.note_repo = _note_repo
+    _c.note_dismissal_repo = _dismissal_repo
+    _c.note_membership_reader = _membership_reader
+
+    _c.create_note_usecase = CreateNoteUseCase(
+        note_repo=_note_repo,
+        membership_reader=_membership_reader,
+        db_session=db.session,
+    )
+    _c.list_project_notes_usecase = ListProjectNotesUseCase(
+        note_repo=_note_repo,
+        membership_reader=_membership_reader,
+    )
+    _c.update_note_usecase = UpdateNoteUseCase(
+        note_repo=_note_repo,
+        dismissal_repo=_dismissal_repo,
+        membership_reader=_membership_reader,
+        db_session=db.session,
+    )
+    _c.delete_note_usecase = DeleteNoteUseCase(
+        note_repo=_note_repo,
+        membership_reader=_membership_reader,
+        db_session=db.session,
+    )
+    _c.mark_note_done_usecase = MarkNoteDoneUseCase(
+        note_repo=_note_repo,
+        membership_reader=_membership_reader,
+        db_session=db.session,
+    )
+    _c.mark_note_open_usecase = MarkNoteOpenUseCase(
+        note_repo=_note_repo,
+        membership_reader=_membership_reader,
+        db_session=db.session,
+    )
+    _c.list_due_notifications_usecase = ListDueNotificationsUseCase(
+        note_query=_note_repo,  # SqlAlchemyNoteRepository also implements NoteQueryPort
+    )
+    _c.dismiss_notification_usecase = DismissNotificationUseCase(
+        note_repo=_note_repo,
+        dismissal_repo=_dismissal_repo,
+        membership_reader=_membership_reader,
+        db_session=db.session,
     )

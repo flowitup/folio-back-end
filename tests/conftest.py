@@ -283,6 +283,76 @@ def invitation_app():
         )
         db.session.commit()
 
+        # ------------------------------------------------------------------
+        # Wire notes use-cases (phase 03) — same pattern as app/__init__.py
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_note_repository import (
+            SqlAlchemyNoteRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_note_dismissal_repository import (
+            SqlAlchemyNoteDismissalRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
+            SqlAlchemyProjectMembershipReader,
+        )
+        from app.application.notes.create_note_usecase import CreateNoteUseCase
+        from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
+        from app.application.notes.update_note_usecase import UpdateNoteUseCase
+        from app.application.notes.delete_note_usecase import DeleteNoteUseCase
+        from app.application.notes.mark_note_done_usecase import MarkNoteDoneUseCase
+        from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
+        from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
+        from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
+        from wiring import get_container as _get_container
+
+        _c = _get_container()
+        _note_repo = SqlAlchemyNoteRepository(db.session)
+        _dismissal_repo = SqlAlchemyNoteDismissalRepository(db.session)
+        _membership_reader = SqlAlchemyProjectMembershipReader(db.session)
+
+        _c.note_repo = _note_repo
+        _c.note_dismissal_repo = _dismissal_repo
+        _c.note_membership_reader = _membership_reader
+        _c.create_note_usecase = CreateNoteUseCase(
+            note_repo=_note_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.list_project_notes_usecase = ListProjectNotesUseCase(
+            note_repo=_note_repo,
+            membership_reader=_membership_reader,
+        )
+        _c.update_note_usecase = UpdateNoteUseCase(
+            note_repo=_note_repo,
+            dismissal_repo=_dismissal_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.delete_note_usecase = DeleteNoteUseCase(
+            note_repo=_note_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.mark_note_done_usecase = MarkNoteDoneUseCase(
+            note_repo=_note_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.mark_note_open_usecase = MarkNoteOpenUseCase(
+            note_repo=_note_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.list_due_notifications_usecase = ListDueNotificationsUseCase(
+            note_query=_note_repo,
+        )
+        _c.dismiss_notification_usecase = DismissNotificationUseCase(
+            note_repo=_note_repo,
+            dismissal_repo=_dismissal_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+
         yield test_app
 
         db.session.remove()
@@ -324,3 +394,185 @@ def superadmin_token(inv_client, invitation_app):
         invitation_app._test_superadmin_email,
         invitation_app._test_superadmin_password,
     )
+
+
+# ---------------------------------------------------------------------------
+# Note fixtures — used by test_notes_endpoints.py and test_notifications_endpoints.py
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def note_open(invitation_app):
+    """An open note with due_date=today, created_by member_user in project P1."""
+    from datetime import date, datetime, timezone
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models.note_orm import NoteOrm
+
+    with invitation_app.app_context():
+        now = datetime.now(timezone.utc)
+        # FK columns must be UUID objects (not strings) for SQLite PG_UUID compat
+        note = NoteOrm(
+            id=uuid4(),
+            project_id=UUID(invitation_app._test_project_id),
+            created_by=UUID(invitation_app._test_member_user_id),
+            title="Open test note",
+            description=None,
+            due_date=date.today(),
+            lead_time_minutes=0,
+            status="open",
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(note)
+        db.session.commit()
+        note_id = str(note.id)
+
+    yield note_id
+
+    with invitation_app.app_context():
+        from sqlalchemy import text
+
+        db.session.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        db.session.commit()
+
+
+@pytest.fixture
+def note_done(invitation_app):
+    """A done note for 'Done' bucket assertions."""
+    from datetime import date, datetime, timezone
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models.note_orm import NoteOrm
+
+    with invitation_app.app_context():
+        now = datetime.now(timezone.utc)
+        note = NoteOrm(
+            id=uuid4(),
+            project_id=UUID(invitation_app._test_project_id),
+            created_by=UUID(invitation_app._test_member_user_id),
+            title="Done test note",
+            description=None,
+            due_date=date.today(),
+            lead_time_minutes=0,
+            status="done",
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(note)
+        db.session.commit()
+        note_id = str(note.id)
+
+    yield note_id
+
+    with invitation_app.app_context():
+        from sqlalchemy import text
+
+        db.session.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        db.session.commit()
+
+
+@pytest.fixture
+def note_other_project(invitation_app):
+    """A note in a project where member_user is NOT a member (for 403 tests)."""
+    from datetime import date, datetime, timezone
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models import ProjectModel
+    from app.infrastructure.database.models.note_orm import NoteOrm
+
+    with invitation_app.app_context():
+        # Create a fresh project owned by superadmin — member_user is not in it
+        other_project = ProjectModel(
+            name="Other Project (no member access)",
+            owner_id=UUID(invitation_app._test_superadmin_user_id),
+        )
+        db.session.add(other_project)
+        db.session.flush()
+
+        now = datetime.now(timezone.utc)
+        note = NoteOrm(
+            id=uuid4(),
+            project_id=other_project.id,
+            created_by=UUID(invitation_app._test_superadmin_user_id),
+            title="Note in other project",
+            description=None,
+            due_date=date.today(),
+            lead_time_minutes=0,
+            status="open",
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(note)
+        db.session.commit()
+        note_id = str(note.id)
+        project_id = str(other_project.id)
+
+    yield note_id, project_id
+
+    with invitation_app.app_context():
+        from sqlalchemy import text
+
+        db.session.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        db.session.execute(text("DELETE FROM projects WHERE id = :id"), {"id": project_id})
+        db.session.commit()
+
+
+@pytest.fixture
+def note_dismissed_by_member(invitation_app):
+    """An open note that member_user has already dismissed."""
+    from datetime import date, datetime, timezone
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models.note_orm import NoteDismissalOrm, NoteOrm
+
+    with invitation_app.app_context():
+        now = datetime.now(timezone.utc)
+        note = NoteOrm(
+            id=uuid4(),
+            project_id=UUID(invitation_app._test_project_id),
+            created_by=UUID(invitation_app._test_member_user_id),
+            title="Already dismissed note",
+            description=None,
+            due_date=date.today(),
+            lead_time_minutes=0,
+            status="open",
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(note)
+        db.session.flush()
+
+        dismissal = NoteDismissalOrm(
+            user_id=UUID(invitation_app._test_member_user_id),
+            note_id=note.id,
+            dismissed_at=now,
+        )
+        db.session.add(dismissal)
+        db.session.commit()
+        note_id = str(note.id)
+
+    yield note_id
+
+    with invitation_app.app_context():
+        from sqlalchemy import text
+
+        db.session.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        db.session.commit()
+
+
+@pytest.fixture
+def non_member_user(invitation_app):
+    """Alias for outsider_user — a user with no project memberships."""
+    # The existing 'outsider@invite-test.com' has no memberships in P1.
+    return invitation_app._test_outsider_email
+
+
+@pytest.fixture
+def non_member_token(inv_client, invitation_app):
+    """JWT token for the outsider user (no project memberships)."""
+    return _login(inv_client, invitation_app._test_outsider_email, "Outsider1234!")
