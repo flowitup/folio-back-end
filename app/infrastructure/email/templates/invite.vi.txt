@@ -1,0 +1,14 @@
+Bạn được mời tham gia {{ project_name }} trên {{ app_name }}
+
+Xin chào,
+
+{{ inviter_name }} đã mời bạn tham gia {{ project_name }} trên {{ app_name }} với vai trò {{ role_name }}.
+
+Chấp nhận lời mời tại đây:
+{{ accept_url }}
+
+Lời mời này sẽ hết hạn sau {{ expires_in_days }} ngày.
+
+Nếu bạn không mong đợi lời mời này, hãy bỏ qua email này.
+
+— Đội ngũ {{ app_name }}

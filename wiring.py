@@ -8,10 +8,12 @@ The core domain should depend only on ports (abstractions), not on concrete impl
 This follows the Dependency Inversion Principle.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
 
 # Import port interfaces from application layer
+from app.application.ports.email_port import EmailPort
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.session_manager import SessionManagerPort
@@ -65,22 +67,21 @@ from app.application.task import (
     MoveTaskUseCase,
     DeleteTaskUseCase,
 )
+from app.application.invitations import (
+    CreateInvitationUseCase,
+    VerifyInvitationUseCase,
+    AcceptInvitationUseCase,
+    RevokeInvitationUseCase,
+    ListInvitationsUseCase,
+)
 
 # =============================================================================
-# PORTS (Interfaces) - Legacy ports kept for compatibility
+# PORTS (Interfaces)
 # =============================================================================
-
-
-class EmailPort(Protocol):
-    """Port for sending emails."""
-
-    def send_email(
-        self,
-        to: str,
-        subject: str,
-        body: str,
-        html_body: Optional[str] = None,
-    ) -> bool: ...
+# EmailPort is now imported from app.application.ports.email_port (single
+# canonical contract: .send(EmailPayload)). The legacy send_email(to, subject,
+# body, html_body) Protocol that used to live here had zero callers and was
+# removed during the M3 unification.
 
 
 class QueuePort(Protocol):
@@ -115,9 +116,12 @@ class Container:
     """
 
     # Infrastructure ports
-    email_service: Optional[EmailPort] = None
     queue_service: Optional[QueuePort] = None
     project_repository: Optional[ProjectRepository] = None
+
+    # Email — single canonical port (EmailPayload-based) + Jinja2 renderer.
+    email_port: Optional[EmailPort] = None  # ResendEmailAdapter | InMemoryEmailAdapter
+    email_renderer: Optional[Any] = None  # EmailRenderer
 
     # Auth ports
     user_repository: Optional[UserRepositoryPort] = None
@@ -169,6 +173,19 @@ class Container:
     update_project_usecase: Optional[UpdateProjectUseCase] = None
     delete_project_usecase: Optional[DeleteProjectUseCase] = None
 
+    # Invitation repos (bound in phase 05)
+    invitation_repo: Optional[Any] = None  # SqlAlchemyInvitationRepository
+    project_membership_repo: Optional[Any] = None  # SqlAlchemyProjectMembershipRepository
+    role_repository: Optional[Any] = None  # SqlAlchemyRoleRepository (also used by roles API)
+
+    # Invitation use cases (repos wired in phase 05)
+    # app_base_url is read from APP_BASE_URL env var at configure_container time
+    create_invitation_usecase: Optional[CreateInvitationUseCase] = None
+    verify_invitation_usecase: Optional[VerifyInvitationUseCase] = None
+    accept_invitation_usecase: Optional[AcceptInvitationUseCase] = None
+    revoke_invitation_usecase: Optional[RevokeInvitationUseCase] = None
+    list_invitations_usecase: Optional[ListInvitationsUseCase] = None
+
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
     update_worker_usecase: Optional[UpdateWorkerUseCase] = None
@@ -181,12 +198,85 @@ class Container:
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
 
 
+# =============================================================================
+# EMAIL PORT FACTORY
+# =============================================================================
+
+# Module-level singleton for InMemoryEmailAdapter so tests can inspect .sent
+_inmemory_email_adapter: Optional[Any] = None
+
+
+def _build_email_port() -> Any:
+    """
+    Instantiate the correct email adapter based on EMAIL_PROVIDER env var.
+
+    Supported values: 'resend', 'inmemory', 'smtp' (smtp keeps legacy path).
+    Defaults to 'smtp' when unset.
+    """
+    global _inmemory_email_adapter
+
+    provider = os.environ.get("EMAIL_PROVIDER", "smtp").lower()
+
+    if provider == "resend":
+        from app.infrastructure.email.resend_adapter import ResendEmailAdapter
+
+        api_key = os.environ.get("RESEND_API_KEY", "")
+        from_email = os.environ.get("FROM_EMAIL", "")
+        return ResendEmailAdapter(api_key=api_key, from_email=from_email)
+
+    if provider == "inmemory":
+        from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
+
+        if _inmemory_email_adapter is None:
+            _inmemory_email_adapter = InMemoryEmailAdapter()
+        return _inmemory_email_adapter
+
+    # 'smtp' or any unknown value — no email adapter wired. The invitation
+    # use-cases will fail loudly if they try to enqueue a send while
+    # email_port is None, which is the right signal in non-prod/non-test envs.
+    return None
+
+
+def _build_email_renderer() -> Any:
+    """Return an EmailRenderer pointed at the bundled Jinja2 templates directory."""
+    import pathlib
+    from app.infrastructure.email.renderer import EmailRenderer
+
+    templates_dir = str(pathlib.Path(__file__).parent / "app" / "infrastructure" / "email" / "templates")
+    return EmailRenderer(templates_dir=templates_dir)
+
+
+class _DirectEmailQueue:
+    """Fallback queue that sends emails inline (no Redis/Celery required).
+
+    Used when no real queue_service is configured (e.g. tests, dev with inmemory email).
+    The CreateInvitationUseCase calls queue.enqueue('tasks.send_email', {'payload': p}).
+    """
+
+    def __init__(self, email_port: Any) -> None:
+        self._email_port = email_port
+
+    def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str:
+        """Execute the email send inline instead of queuing."""
+        if self._email_port is None:
+            return "noop"
+        if task_name == "tasks.send_email":
+            ep = payload.get("payload")
+            if ep is not None:
+                try:
+                    self._email_port.send(ep)
+                except Exception:
+                    import logging
+
+                    logging.getLogger(__name__).warning("Inline email send failed for task %s", task_name)
+        return "inline"
+
+
 # Global container instance
 container = Container()
 
 
 def configure_container(
-    email_service: Optional[EmailPort] = None,
     queue_service: Optional[QueuePort] = None,
     project_repository: Optional[ProjectRepository] = None,
     user_repository: Optional[UserRepositoryPort] = None,
@@ -199,6 +289,9 @@ def configure_container(
     attachment_storage: Optional[IAttachmentStorage] = None,
     invoice_attachment_repository: Optional[IInvoiceAttachmentRepository] = None,
     task_repository: Optional[ITaskRepository] = None,
+    invitation_repo: Optional[Any] = None,
+    project_membership_repo: Optional[Any] = None,
+    role_repo: Optional[Any] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -209,7 +302,6 @@ def configure_container(
     global container
 
     container = Container(
-        email_service=email_service,
         queue_service=queue_service,
         project_repository=project_repository,
         user_repository=user_repository,
@@ -222,6 +314,9 @@ def configure_container(
         attachment_storage=attachment_storage,
         invoice_attachment_repository=invoice_attachment_repository,
         task_repository=task_repository,
+        invitation_repo=invitation_repo,
+        project_membership_repo=project_membership_repo,
+        role_repository=role_repo,
     )
 
     # Wire up domain services if repositories are provided
@@ -295,6 +390,63 @@ def configure_container(
         container.list_attachments_usecase = ListAttachmentsUseCase(invoice_attachment_repository)
         container.get_attachment_usecase = GetAttachmentUseCase(invoice_attachment_repository, attachment_storage)
         container.delete_attachment_usecase = DeleteAttachmentUseCase(invoice_attachment_repository, attachment_storage)
+
+    # Wire email port + renderer
+    container.email_port = _build_email_port()
+    container.email_renderer = _build_email_renderer()
+
+    # Wire invitation use cases (phase 05)
+    app_base_url = os.environ.get("APP_BASE_URL", "http://localhost:3000")
+    if (
+        invitation_repo is not None
+        and project_membership_repo is not None
+        and project_repository is not None
+        and role_repo is not None
+        and user_repository is not None
+    ):
+        # InMemory queue shim — use email_port directly if no real queue configured
+        _queue = queue_service if queue_service is not None else _DirectEmailQueue(container.email_port)
+
+        container.create_invitation_usecase = CreateInvitationUseCase(
+            invitation_repo=invitation_repo,
+            project_membership_repo=project_membership_repo,
+            user_repo=user_repository,
+            project_repo=project_repository,
+            role_repo=role_repo,
+            email_port=container.email_port,
+            email_renderer=container.email_renderer,
+            queue_port=_queue,
+            app_base_url=app_base_url,
+        )
+        container.verify_invitation_usecase = VerifyInvitationUseCase(
+            invitation_repo=invitation_repo,
+            project_repo=project_repository,
+            role_repo=role_repo,
+            user_repo=user_repository,
+        )
+        container.revoke_invitation_usecase = RevokeInvitationUseCase(
+            invitation_repo=invitation_repo,
+            user_repo=user_repository,
+        )
+        container.list_invitations_usecase = ListInvitationsUseCase(
+            invitation_repo=invitation_repo,
+            project_membership_repo=project_membership_repo,
+            role_repo=role_repo,
+            user_repo=user_repository,
+        )
+
+        # AcceptInvitationUseCase needs a db session; lazily import db here
+        if password_hasher is not None and token_issuer is not None:
+            from app import db as _db
+
+            container.accept_invitation_usecase = AcceptInvitationUseCase(
+                invitation_repo=invitation_repo,
+                user_repo=user_repository,
+                project_membership_repo=project_membership_repo,
+                password_hasher=password_hasher,
+                token_issuer=token_issuer,
+                db_session=_db.session,
+            )
 
     return container
 

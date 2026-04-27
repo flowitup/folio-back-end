@@ -47,6 +47,7 @@ role_permissions = Table(
 )
 
 # Association table: users <-> projects (many-to-many)
+# role_id and invited_by_user_id columns added in phase-01 migration
 user_projects = Table(
     "user_projects",
     Base.metadata,
@@ -63,4 +64,16 @@ user_projects = Table(
         primary_key=True,
     ),
     Column("assigned_at", DateTime, default=lambda: datetime.now(timezone.utc)),
+    Column(
+        "role_id",
+        UUID(as_uuid=True),
+        ForeignKey("roles.id", ondelete="RESTRICT"),
+        nullable=True,  # nullable in ORM mapping; DB enforces NOT NULL after backfill
+    ),
+    Column(
+        "invited_by_user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
 )

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 import logging
 
+from app.infrastructure.email.exceptions import EmailDeliveryError
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,48 +25,32 @@ class EmailPayload:
     from_address: Optional[str] = None
 
 
-def send_email(payload: Dict[str, Any]) -> bool:
+def send_email(payload: EmailPayload) -> None:
     """
-    Send an email task.
+    Send an email via the configured EmailPort adapter.
 
-    This is a stub implementation. In production, this would use
-    the configured email service from the DI container.
+    Resolves the email adapter from the DI container and delegates sending.
+    On EmailDeliveryError the exception is re-raised so the RQ retry policy
+    (exponential backoff) can handle transient failures.
 
     Args:
-        payload: Email payload containing:
-            - to: Recipient email address
-            - subject: Email subject
-            - body: Plain text body
-            - html_body: Optional HTML body
-            - from_address: Optional sender address
+        payload: EmailPayload dataclass with recipient, subject, and bodies.
 
-    Returns:
-        True if email was sent successfully, False otherwise
+    Raises:
+        EmailDeliveryError: propagated from the adapter on delivery failure.
     """
-    logger.info(f"[STUB] send_email called with payload: {payload}")
+    from wiring import get_container  # local import avoids circular deps at module load
 
-    # Validate payload
-    required_fields = ["to", "subject", "body"]
-    for field in required_fields:
-        if field not in payload:
-            logger.error(f"Missing required field: {field}")
-            return False
+    adapter = get_container().email_port
+    if adapter is None:
+        logger.warning("email_port not configured in container — email not sent to %s", payload.to)
+        return
 
-    # TODO: Implement actual email sending using the configured email service
-    # from wiring import get_container
-    # container = get_container()
-    # if container.email_service:
-    #     return container.email_service.send_email(
-    #         to=payload["to"],
-    #         subject=payload["subject"],
-    #         body=payload["body"],
-    #         html_body=payload.get("html_body"),
-    #     )
-
-    logger.info(f"[STUB] Would send email to: {payload['to']}")
-    logger.info(f"[STUB] Subject: {payload['subject']}")
-
-    return True
+    try:
+        adapter.send(payload)
+    except EmailDeliveryError:
+        logger.error("Email delivery failed for <%s>", payload.to)
+        raise
 
 
 def process_notification(payload: Dict[str, Any]) -> bool:
@@ -79,8 +65,5 @@ def process_notification(payload: Dict[str, Any]) -> bool:
     Returns:
         True if processed successfully
     """
-    logger.info(f"[STUB] process_notification called with payload: {payload}")
-
-    # TODO: Implement notification processing
-
+    logger.info("[STUB] process_notification called with payload: %s", payload)
     return True

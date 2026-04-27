@@ -1,0 +1,14 @@
+Vous avez été invité à rejoindre {{ project_name }} sur {{ app_name }}
+
+Bonjour,
+
+{{ inviter_name }} vous invite à rejoindre {{ project_name }} sur {{ app_name }} en tant que {{ role_name }}.
+
+Acceptez votre invitation ici :
+{{ accept_url }}
+
+Cette invitation expire dans {{ expires_in_days }} jours.
+
+Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet e-mail.
+
+— L'équipe {{ app_name }}

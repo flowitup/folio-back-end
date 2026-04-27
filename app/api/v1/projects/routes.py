@@ -10,7 +10,6 @@ from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
     CreateProjectRequest,
     UpdateProjectRequest,
-    AddUserRequest,
     ProjectResponse,
     ProjectListResponse,
     ErrorResponse,
@@ -240,30 +239,43 @@ def get_project_users(project_id: str):
 
 @projects_bp.route("/<project_id>/users", methods=["POST"])
 @jwt_required()
-@require_permission("project:manage_users")
 def add_user_to_project(project_id: str):
-    """Add a user to a project."""
-    try:
-        data = AddUserRequest(**request.get_json())
-    except ValidationError as e:
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-        return (
-            jsonify(
-                ErrorResponse(
-                    error="ValidationError",
-                    message=f"Invalid input: {', '.join(str(f) for f in error_fields)}",
-                    status_code=400,
-                ).model_dump()
-            ),
-            400,
-        )
+    """DEPRECATED — invite-only signup is the only membership-creation path.
+
+    This endpoint cannot satisfy the per-project role requirement (user_projects.role_id
+    is NOT NULL after migration e3f1a2b4c5d6) and is replaced by:
+      POST /api/v1/invitations  {project_id, email, role_id}
+
+    Returns 410 Gone for any caller. Kept registered (rather than removed) so legacy
+    clients receive a clear deprecation signal instead of a silent 404.
+    """
+    return (
+        jsonify(
+            ErrorResponse(
+                error="Gone",
+                message=(
+                    "POST /projects/<id>/users is deprecated. Use "
+                    "POST /api/v1/invitations with {project_id, email, role_id} instead."
+                ),
+                status_code=410,
+            ).model_dump()
+        ),
+        410,
+    )
+
+
+@projects_bp.route("/<uuid:project_id>/members", methods=["GET"])
+@jwt_required()
+@limiter.limit("60 per minute")
+def get_project_members(project_id: UUID):
+    """Return project members with role and join date. Requires project membership."""
+    from sqlalchemy import text
 
     container = get_container()
     user_id = UUID(get_jwt_identity())
 
-    # Verify project exists and caller owns it
     try:
-        project = container.get_project_usecase.execute(UUID(project_id))
+        project = container.get_project_usecase.execute(project_id)
     except ProjectNotFoundError:
         return (
             jsonify(
@@ -272,22 +284,42 @@ def add_user_to_project(project_id: str):
             404,
         )
 
-    if not can_mutate_project(project, user_id):
-        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+    # Allow project owner or any member
+    if project.owner_id != user_id and user_id not in project.user_ids:
+        from flask_jwt_extended import get_jwt
 
-    # Verify user exists
-    user = container.user_repository.find_by_id(UUID(data.user_id))
-    if not user:
-        return (
-            jsonify(
-                ErrorResponse(error="NotFound", message=f"User {data.user_id} not found", status_code=404).model_dump()
-            ),
-            404,
-        )
+        claims = get_jwt()
+        if "*:*" not in set(claims.get("permissions", [])):
+            return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
-    container.project_repository.add_user(UUID(project_id), UUID(data.user_id))
+    # Query members with role info via raw SQL (user_projects + roles + users join)
+    from app import db
 
-    return jsonify({"message": "User added to project"}), 200
+    rows = db.session.execute(
+        text(
+            """
+            SELECT u.id, u.email, u.display_name, r.name AS role_name, up.assigned_at
+            FROM user_projects up
+            JOIN users u ON u.id = up.user_id
+            LEFT JOIN roles r ON r.id = up.role_id
+            WHERE up.project_id = :pid
+            ORDER BY up.assigned_at
+            """
+        ),
+        {"pid": str(project_id)},
+    ).fetchall()
+
+    members = [
+        {
+            "user_id": str(row[0]),
+            "email": row[1],
+            "display_name": row[2],
+            "role_name": row[3],
+            "joined_at": row[4].isoformat() if row[4] else None,
+        }
+        for row in rows
+    ]
+    return jsonify({"members": members, "total": len(members)}), 200
 
 
 @projects_bp.route("/<project_id>/users/<user_id>", methods=["DELETE"])

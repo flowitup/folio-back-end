@@ -33,6 +33,7 @@ class User:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     roles: List[Role] = field(default_factory=list)
+    display_name: Optional[str] = None
 
     def __eq__(self, other: object) -> bool:
         """Users are equal if they have the same ID."""
@@ -44,14 +45,25 @@ class User:
         """Hash by ID for use in sets/dicts."""
         return hash(self.id)
 
+    @property
+    def display_or_email(self) -> str:
+        """Return display_name if set, otherwise the local part of the email address."""
+        return self.display_name or self.email.split("@")[0]
+
     @classmethod
-    def create(cls, email: str, password_hash: str) -> "User":
+    def create(
+        cls,
+        email: str,
+        password_hash: str,
+        display_name: Optional[str] = None,
+    ) -> "User":
         """
         Factory method to create a new User.
 
         Args:
             email: User's email address (validated for format)
             password_hash: Pre-hashed password
+            display_name: Optional human-readable name shown in the UI
 
         Returns:
             New User instance
@@ -72,6 +84,7 @@ class User:
             created_at=now,
             updated_at=now,
             roles=[],
+            display_name=display_name,
         )
 
     def add_role(self, role: Role) -> None:
