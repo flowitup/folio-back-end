@@ -290,6 +290,59 @@ def add_user_to_project(project_id: str):
     return jsonify({"message": "User added to project"}), 200
 
 
+@projects_bp.route("/<uuid:project_id>/members", methods=["GET"])
+@jwt_required()
+@limiter.limit("60 per minute")
+def get_project_members(project_id: UUID):
+    """Return project members with role and join date. Requires project membership."""
+    from sqlalchemy import text
+    container = get_container()
+    user_id = UUID(get_jwt_identity())
+
+    try:
+        project = container.get_project_usecase.execute(project_id)
+    except ProjectNotFoundError:
+        return (
+            jsonify(ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()),
+            404,
+        )
+
+    # Allow project owner or any member
+    if project.owner_id != user_id and user_id not in project.user_ids:
+        from flask_jwt_extended import get_jwt
+        claims = get_jwt()
+        if "*:*" not in set(claims.get("permissions", [])):
+            return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+
+    # Query members with role info via raw SQL (user_projects + roles + users join)
+    from app import db
+    rows = db.session.execute(
+        text(
+            """
+            SELECT u.id, u.email, u.display_name, r.name AS role_name, up.assigned_at
+            FROM user_projects up
+            JOIN users u ON u.id = up.user_id
+            LEFT JOIN roles r ON r.id = up.role_id
+            WHERE up.project_id = :pid
+            ORDER BY up.assigned_at
+            """
+        ),
+        {"pid": str(project_id)},
+    ).fetchall()
+
+    members = [
+        {
+            "user_id": str(row[0]),
+            "email": row[1],
+            "display_name": row[2],
+            "role_name": row[3],
+            "joined_at": row[4].isoformat() if row[4] else None,
+        }
+        for row in rows
+    ]
+    return jsonify({"members": members, "total": len(members)}), 200
+
+
 @projects_bp.route("/<project_id>/users/<user_id>", methods=["DELETE"])
 @jwt_required()
 @require_permission("project:manage_users")

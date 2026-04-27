@@ -82,6 +82,8 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.labor import labor_bp
     from app.api.v1.invoices import invoice_bp
     from app.api.v1.tasks import task_bp
+    from app.api.v1.invitations import invitations_bp
+    from app.api.v1.roles import roles_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -89,6 +91,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(labor_bp, url_prefix="/api/v1")
     app.register_blueprint(invoice_bp, url_prefix="/api/v1")
     app.register_blueprint(task_bp, url_prefix="/api/v1")
+    app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
+    app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
 
     # Initialize Swagger API documentation
     from app.api.swagger import init_swagger
@@ -112,6 +116,9 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
+    from app.infrastructure.database.repositories.sqlalchemy_invitation import SqlAlchemyInvitationRepository
+    from app.infrastructure.database.repositories.sqlalchemy_project_membership import SqlAlchemyProjectMembershipRepository
+    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from config import Config
 
     storage = S3AttachmentStorage(
@@ -129,6 +136,10 @@ def _configure_di_container() -> None:
 
         logging.getLogger(__name__).warning("S3 bucket bootstrap failed: %s (uploads will fail until resolved)", exc)
 
+    invitation_repo = SqlAlchemyInvitationRepository(db.session)
+    membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
+    role_repo = SqlAlchemyRoleRepository(db.session)
+
     configure_container(
         user_repository=SQLAlchemyUserRepository(db.session),
         project_repository=SQLAlchemyProjectRepository(db.session),
@@ -141,4 +152,7 @@ def _configure_di_container() -> None:
         password_hasher=Argon2PasswordHasher(),
         token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
         session_manager=FlaskSessionManager(),
+        invitation_repo=invitation_repo,
+        project_membership_repo=membership_repo,
+        role_repo=role_repo,
     )

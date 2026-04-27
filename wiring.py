@@ -181,6 +181,11 @@ class Container:
     update_project_usecase: Optional[UpdateProjectUseCase] = None
     delete_project_usecase: Optional[DeleteProjectUseCase] = None
 
+    # Invitation repos (bound in phase 05)
+    invitation_repo: Optional[Any] = None           # SqlAlchemyInvitationRepository
+    project_membership_repo: Optional[Any] = None   # SqlAlchemyProjectMembershipRepository
+    role_repository: Optional[Any] = None           # SqlAlchemyRoleRepository (also used by roles API)
+
     # Invitation use cases (repos wired in phase 05)
     # app_base_url is read from APP_BASE_URL env var at configure_container time
     create_invitation_usecase: Optional[CreateInvitationUseCase] = None
@@ -247,6 +252,33 @@ def _build_email_renderer() -> Any:
     return EmailRenderer(templates_dir=templates_dir)
 
 
+class _DirectEmailQueue:
+    """Fallback queue that sends emails inline (no Redis/Celery required).
+
+    Used when no real queue_service is configured (e.g. tests, dev with inmemory email).
+    The CreateInvitationUseCase calls queue.enqueue('tasks.send_email', {'payload': p}).
+    """
+
+    def __init__(self, email_port: Any) -> None:
+        self._email_port = email_port
+
+    def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str:
+        """Execute the email send inline instead of queuing."""
+        if self._email_port is None:
+            return "noop"
+        if task_name == "tasks.send_email":
+            ep = payload.get("payload")
+            if ep is not None:
+                try:
+                    self._email_port.send(ep)
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Inline email send failed for task %s", task_name
+                    )
+        return "inline"
+
+
 # Global container instance
 container = Container()
 
@@ -265,6 +297,9 @@ def configure_container(
     attachment_storage: Optional[IAttachmentStorage] = None,
     invoice_attachment_repository: Optional[IInvoiceAttachmentRepository] = None,
     task_repository: Optional[ITaskRepository] = None,
+    invitation_repo: Optional[Any] = None,
+    project_membership_repo: Optional[Any] = None,
+    role_repo: Optional[Any] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -288,6 +323,9 @@ def configure_container(
         attachment_storage=attachment_storage,
         invoice_attachment_repository=invoice_attachment_repository,
         task_repository=task_repository,
+        invitation_repo=invitation_repo,
+        project_membership_repo=project_membership_repo,
+        role_repository=role_repo,
     )
 
     # Wire up domain services if repositories are provided
@@ -366,33 +404,59 @@ def configure_container(
     container.email_port = _build_email_port()
     container.email_renderer = _build_email_renderer()
 
-    # Wire invitation use cases.
-    # NOTE: SQLAlchemy invitation/membership repos (InvitationSQLRepo,
-    # ProjectMembershipSQLRepo, RoleSQLRepo) are added in phase 05.
-    # Once those repos are available, wire here:
-    #
-    #   app_base_url = os.environ.get("APP_BASE_URL", "http://localhost:3000")
-    #   if invitation_repo and project_membership_repo and user_repository \
-    #           and project_repo and role_repo and queue_service \
-    #           and container.email_port and container.email_renderer:
-    #       container.create_invitation_usecase = CreateInvitationUseCase(
-    #           invitation_repo, project_membership_repo, user_repository,
-    #           project_repo, role_repo, container.email_port,
-    #           container.email_renderer, queue_service, app_base_url,
-    #       )
-    #       container.verify_invitation_usecase = VerifyInvitationUseCase(
-    #           invitation_repo, project_repo, role_repo, user_repository,
-    #       )
-    #       container.accept_invitation_usecase = AcceptInvitationUseCase(
-    #           invitation_repo, user_repository, project_membership_repo,
-    #           password_hasher, token_issuer, db_session,
-    #       )
-    #       container.revoke_invitation_usecase = RevokeInvitationUseCase(
-    #           invitation_repo, user_repository,
-    #       )
-    #       container.list_invitations_usecase = ListInvitationsUseCase(
-    #           invitation_repo, project_membership_repo, role_repo, user_repository,
-    #       )
+    # Wire invitation use cases (phase 05)
+    app_base_url = os.environ.get("APP_BASE_URL", "http://localhost:3000")
+    if (
+        invitation_repo is not None
+        and project_membership_repo is not None
+        and project_repository is not None
+        and role_repo is not None
+        and user_repository is not None
+    ):
+        # InMemory queue shim — use email_port directly if no real queue configured
+        _queue = queue_service if queue_service is not None else _DirectEmailQueue(
+            container.email_port
+        )
+
+        container.create_invitation_usecase = CreateInvitationUseCase(
+            invitation_repo=invitation_repo,
+            project_membership_repo=project_membership_repo,
+            user_repo=user_repository,
+            project_repo=project_repository,
+            role_repo=role_repo,
+            email_port=container.email_port,
+            email_renderer=container.email_renderer,
+            queue_port=_queue,
+            app_base_url=app_base_url,
+        )
+        container.verify_invitation_usecase = VerifyInvitationUseCase(
+            invitation_repo=invitation_repo,
+            project_repo=project_repository,
+            role_repo=role_repo,
+            user_repo=user_repository,
+        )
+        container.revoke_invitation_usecase = RevokeInvitationUseCase(
+            invitation_repo=invitation_repo,
+            user_repo=user_repository,
+        )
+        container.list_invitations_usecase = ListInvitationsUseCase(
+            invitation_repo=invitation_repo,
+            project_membership_repo=project_membership_repo,
+            role_repo=role_repo,
+            user_repo=user_repository,
+        )
+
+        # AcceptInvitationUseCase needs a db session; lazily import db here
+        if password_hasher is not None and token_issuer is not None:
+            from app import db as _db
+            container.accept_invitation_usecase = AcceptInvitationUseCase(
+                invitation_repo=invitation_repo,
+                user_repo=user_repository,
+                project_membership_repo=project_membership_repo,
+                password_hasher=password_hasher,
+                token_issuer=token_issuer,
+                db_session=_db.session,
+            )
 
     return container
 

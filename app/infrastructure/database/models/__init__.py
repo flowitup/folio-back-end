@@ -20,6 +20,7 @@ from app.infrastructure.database.models.labor_entry import LaborEntryModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
 from app.infrastructure.database.models.task import TaskModel
+from app.infrastructure.database.models.invitation import InvitationModel
 
 __all__ = [
     "Base",
@@ -35,4 +36,5 @@ __all__ = [
     "InvoiceModel",
     "InvoiceAttachmentModel",
     "TaskModel",
+    "InvitationModel",
 ]

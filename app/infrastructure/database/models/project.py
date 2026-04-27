@@ -29,7 +29,16 @@ class ProjectModel(Base):
 
     # Relationships
     owner = relationship("UserModel", foreign_keys=[owner_id])
-    users = relationship("UserModel", secondary=user_projects, back_populates="projects")
+    # primaryjoin/secondaryjoin required because user_projects now has two FKs
+    # to users (user_id + invited_by_user_id); we must pin to user_id only.
+    users = relationship(
+        "UserModel",
+        secondary=user_projects,
+        primaryjoin=id == user_projects.c.project_id,
+        secondaryjoin="UserModel.id == user_projects.c.user_id",
+        back_populates="projects",
+        foreign_keys=[user_projects.c.project_id, user_projects.c.user_id],
+    )
 
     def __repr__(self) -> str:
         return f"<Project {self.name}>"

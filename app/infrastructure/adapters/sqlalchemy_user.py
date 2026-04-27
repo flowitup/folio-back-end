@@ -49,12 +49,14 @@ class SQLAlchemyUserRepository:
             existing.email = user.email
             existing.password_hash = user.password_hash
             existing.is_active = user.is_active
+            existing.display_name = user.display_name
         else:
             user_model = UserModel(
                 id=user.id,
                 email=user.email,
                 password_hash=user.password_hash,
                 is_active=user.is_active,
+                display_name=user.display_name,
             )
             self._session.add(user_model)
         self._session.commit()
@@ -90,4 +92,5 @@ class SQLAlchemyUserRepository:
             created_at=model.created_at,
             updated_at=model.updated_at,
             roles=roles,
+            display_name=model.display_name,
         )

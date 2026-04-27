@@ -64,19 +64,21 @@ class CreateInvitationUseCase:
     ) -> CreateInvitationResultDto:
         """Run the invite flow; return DTO indicating what happened."""
 
-        # 1. Load inviter and verify permission
+        # 1. Load inviter
         inviter = self._user_repo.find_by_id(inviter_id)
         if inviter is None:
             raise PermissionDeniedError(f"Inviter {inviter_id} not found.")
-        if not self._can_invite(inviter, project_id):
-            raise PermissionDeniedError(
-                f"User {inviter_id} does not have 'project:invite' permission."
-            )
 
-        # 2. Load project
+        # 2. Load project (needed for owner check before permission gate)
         project = self._project_repo.find_by_id(project_id)
         if project is None:
             raise ProjectNotFoundError(str(project_id))
+
+        # Verify permission: role-based OR project owner
+        if not self._can_invite(inviter, project.owner_id, inviter_id):
+            raise PermissionDeniedError(
+                f"User {inviter_id} does not have 'project:invite' permission."
+            )
 
         # 3. Load role; guard superadmin
         role = self._role_repo.find_by_id(role_id)
@@ -154,14 +156,15 @@ class CreateInvitationUseCase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _can_invite(user: Any, project_id: UUID) -> bool:
-        """Return True if the user holds any invitation-granting permission."""
+    def _can_invite(user: Any, project_owner_id: UUID, inviter_id: UUID) -> bool:
+        """Return True if the user holds any invitation-granting permission or is the project owner."""
         if user.has_permission("*", "*"):
             return True
         if user.has_permission("project", "invite"):
             return True
-        # Project owner check — requires project.owner_id comparison by caller;
-        # here we rely on the role-based check only (owner wiring via API layer).
+        # Project owner may always invite — compare UUIDs directly
+        if project_owner_id == inviter_id:
+            return True
         return False
 
     def _enqueue_invite_email(
