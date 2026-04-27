@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
     ProjectMembershipRepositoryPort,
+    TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
 from app.application.ports.password_hasher import PasswordHasherPort
@@ -35,7 +35,7 @@ class AcceptInvitationUseCase:
         project_membership_repo: ProjectMembershipRepositoryPort,
         password_hasher: PasswordHasherPort,
         token_issuer: TokenIssuerPort,
-        db_session: Any,  # Protocol: .begin() context manager; commit/rollback managed by with-block
+        db_session: TransactionalSessionPort,
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo

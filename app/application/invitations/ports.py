@@ -1,6 +1,7 @@
 """Repository ports (Protocols) for the invitations application layer."""
 
-from typing import Optional, Protocol
+from contextlib import AbstractContextManager
+from typing import Any, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.invitation import Invitation, InvitationStatus
@@ -8,6 +9,22 @@ from app.domain.entities.project_membership import ProjectMembership
 from app.domain.entities.project import Project
 from app.domain.entities.role import Role
 from app.domain.entities.user import User
+
+
+class TransactionalSessionPort(Protocol):
+    """Minimal session contract used by AcceptInvitationUseCase.
+
+    Conforms to SQLAlchemy ``scoped_session`` / ``Session`` (from Flask-SQLAlchemy
+    or vanilla SA). Production code passes ``db.session``; tests pass a fake.
+    """
+
+    def begin_nested(self) -> AbstractContextManager[Any]:
+        """Open a SAVEPOINT block as a context manager."""
+        ...
+
+    def commit(self) -> None:
+        """Commit the outer transaction."""
+        ...
 
 
 class InvitationRepositoryPort(Protocol):
