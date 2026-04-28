@@ -17,7 +17,8 @@ class LaborEntryDetail:
     amount_override: Optional[float]
     effective_cost: float
     note: Optional[str]
-    shift_type: str
+    shift_type: Optional[str]
+    supplement_hours: int
     created_at: str
 
 
@@ -71,6 +72,7 @@ class ListLaborEntriesUseCase:
                     effective_cost=effective_cost,
                     note=entry.note,
                     shift_type=entry.shift_type,
+                    supplement_hours=entry.supplement_hours,
                     created_at=entry.created_at.isoformat(),
                 )
             )

@@ -103,13 +103,14 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             self._session.query(
                 WorkerModel.id.label("worker_id"),
                 WorkerModel.name.label("worker_name"),
+                WorkerModel.daily_rate.label("daily_rate"),
                 func.count(LaborEntryModel.id).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
                 func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
             )
             .join(LaborEntryModel, WorkerModel.id == LaborEntryModel.worker_id)
             .filter(WorkerModel.project_id == project_id)
-            .group_by(WorkerModel.id, WorkerModel.name)
+            .group_by(WorkerModel.id, WorkerModel.name, WorkerModel.daily_rate)
         )
 
         if date_from:
@@ -126,6 +127,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 days_worked=row.days_worked,
                 total_cost=Decimal(str(row.total_cost)) if row.total_cost else Decimal("0"),
                 banked_hours=int(row.banked_hours) if row.banked_hours else 0,
+                daily_rate=Decimal(str(row.daily_rate)) if row.daily_rate else Decimal("0"),
             )
             for row in rows
         ]

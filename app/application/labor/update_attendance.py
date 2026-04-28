@@ -15,6 +15,7 @@ class UpdateAttendanceRequest:
     amount_override: Optional[Decimal] = None
     note: Optional[str] = None
     shift_type: Optional[str] = None
+    supplement_hours: Optional[int] = None
 
 
 @dataclass
@@ -24,7 +25,8 @@ class UpdateAttendanceResponse:
     date: str
     amount_override: Optional[float]
     note: Optional[str]
-    shift_type: str
+    shift_type: Optional[str]
+    supplement_hours: int
     created_at: str
 
 
@@ -39,11 +41,13 @@ class UpdateAttendanceUseCase:
         if not entry:
             raise LaborEntryNotFoundError(str(request.entry_id))
 
-        # Update fields (allow setting to None to clear override)
+        # Update fields explicitly — avoid silent drops via **kwargs patterns
         entry.amount_override = request.amount_override
         entry.note = request.note.strip() if request.note else None
         if request.shift_type is not None:
             entry.shift_type = request.shift_type
+        if request.supplement_hours is not None:
+            entry.supplement_hours = request.supplement_hours
 
         saved = self._repo.update(entry)
 
@@ -54,5 +58,6 @@ class UpdateAttendanceUseCase:
             amount_override=float(saved.amount_override) if saved.amount_override else None,
             note=saved.note,
             shift_type=saved.shift_type,
+            supplement_hours=saved.supplement_hours,
             created_at=saved.created_at.isoformat(),
         )
