@@ -37,3 +37,14 @@ class InvalidWorkerDataError(LaborError):
 
     def __init__(self, message: str):
         super().__init__(message)
+
+
+class InvalidLaborEntryError(LaborError):
+    """Raised when a LaborEntry violates domain invariants.
+
+    Covers: out-of-range supplement_hours, empty entry (no shift + no supplement),
+    and amount_override set without a shift_type.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message)

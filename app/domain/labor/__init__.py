@@ -1,0 +1,1 @@
+"""Labor domain sub-package."""

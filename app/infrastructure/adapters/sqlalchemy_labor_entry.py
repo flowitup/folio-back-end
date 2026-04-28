@@ -29,6 +29,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             amount_override=entry.amount_override,
             note=entry.note,
             shift_type=entry.shift_type,
+            supplement_hours=entry.supplement_hours,
             created_at=entry.created_at,
         )
         try:
@@ -67,6 +68,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.amount_override = entry.amount_override
             model.note = entry.note
             model.shift_type = entry.shift_type
+            model.supplement_hours = entry.supplement_hours
             self._session.flush()
             return self._to_entity(model)
         return entry
@@ -81,27 +83,34 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
     ) -> List[LaborSummaryRow]:
-        # Effective cost: override wins; else daily_rate × shift multiplier
+        # Effective cost: supplement-only rows (shift_type IS NULL) contribute 0.
+        # For shift rows: override wins; else daily_rate × shift multiplier.
         shift_multiplier = sa_case(
             (LaborEntryModel.shift_type == "half", 0.5),
             (LaborEntryModel.shift_type == "overtime", 1.5),
             else_=1.0,
         )
-        effective_cost = func.coalesce(
+        shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
             WorkerModel.daily_rate * shift_multiplier,
+        )
+        effective_cost = sa_case(
+            (LaborEntryModel.shift_type.is_(None), 0),
+            else_=shift_cost,
         )
 
         query = (
             self._session.query(
                 WorkerModel.id.label("worker_id"),
                 WorkerModel.name.label("worker_name"),
-                func.count(LaborEntryModel.id).label("days_worked"),
+                WorkerModel.daily_rate.label("daily_rate"),
+                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
+                func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
             )
             .join(LaborEntryModel, WorkerModel.id == LaborEntryModel.worker_id)
             .filter(WorkerModel.project_id == project_id)
-            .group_by(WorkerModel.id, WorkerModel.name)
+            .group_by(WorkerModel.id, WorkerModel.name, WorkerModel.daily_rate)
         )
 
         if date_from:
@@ -117,6 +126,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 worker_name=row.worker_name,
                 days_worked=row.days_worked,
                 total_cost=Decimal(str(row.total_cost)) if row.total_cost else Decimal("0"),
+                banked_hours=int(row.banked_hours) if row.banked_hours else 0,
+                daily_rate=Decimal(str(row.daily_rate)) if row.daily_rate else Decimal("0"),
             )
             for row in rows
         ]
@@ -128,6 +139,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             date=model.date,
             amount_override=Decimal(str(model.amount_override)) if model.amount_override else None,
             note=model.note,
-            shift_type=model.shift_type or "full",
+            shift_type=model.shift_type,  # pass-through; may be None for supplement-only entries
+            supplement_hours=model.supplement_hours if model.supplement_hours is not None else 0,
             created_at=model.created_at,
         )

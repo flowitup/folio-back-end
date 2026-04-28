@@ -2,14 +2,17 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Tuple
 from uuid import UUID
 
-from flask import Response, jsonify, request
+from flask import jsonify, request
 from flask_jwt_extended import jwt_required
 from pydantic import ValidationError
 
 from app.api.v1.labor import labor_bp
+from app.api.v1.labor._labor_validation_error_helper import (
+    _error_response,
+    validation_error_response as _validation_error_response,
+)
 from app.api.v1.labor.schemas import (
     LogAttendanceRequest,
     UpdateAttendanceRequest,
@@ -17,7 +20,6 @@ from app.api.v1.labor.schemas import (
     LaborEntryListResponse,
     LaborSummaryResponse,
     WorkerSummaryRow,
-    ErrorResponse,
 )
 from app.api.v1.projects.decorators import require_permission
 from app.application.labor import (
@@ -42,17 +44,6 @@ def _parse_date(date_str: str) -> date:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
         raise ValueError(f"Invalid date format: {date_str}. Expected YYYY-MM-DD")
-
-
-def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
-    """Create standardized error response."""
-    return jsonify(ErrorResponse(error=error, message=message, status_code=status_code).model_dump()), status_code
-
-
-def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
-    """Create validation error response from Pydantic error."""
-    error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-    return _error_response("ValidationError", f"Invalid input: {', '.join(str(f) for f in error_fields)}", 400)
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["GET"])
@@ -88,6 +79,7 @@ def list_labor_entries(project_id: str):
                     effective_cost=e.effective_cost,
                     note=e.note,
                     shift_type=e.shift_type,
+                    supplement_hours=e.supplement_hours,
                     created_at=e.created_at,
                 )
                 for e in entries
@@ -117,6 +109,7 @@ def log_attendance(project_id: str):
                 amount_override=Decimal(str(data.amount_override)) if data.amount_override else None,
                 note=data.note,
                 shift_type=data.shift_type,
+                supplement_hours=data.supplement_hours,
             )
         )
     except ValueError as e:
@@ -133,6 +126,7 @@ def log_attendance(project_id: str):
                 "worker_id": result.worker_id,
                 "date": result.date,
                 "shift_type": result.shift_type,
+                "supplement_hours": result.supplement_hours,
                 "amount_override": result.amount_override,
                 "note": result.note,
                 "created_at": result.created_at,
@@ -160,6 +154,7 @@ def update_attendance(project_id: str, entry_id: str):
                 amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
                 note=data.note,
                 shift_type=data.shift_type,
+                supplement_hours=data.supplement_hours,
             )
         )
     except ValueError as e:
@@ -173,6 +168,7 @@ def update_attendance(project_id: str, entry_id: str):
             "worker_id": result.worker_id,
             "date": result.date,
             "shift_type": result.shift_type,
+            "supplement_hours": result.supplement_hours,
             "amount_override": result.amount_override,
             "note": result.note,
             "created_at": result.created_at,
@@ -223,10 +219,17 @@ def get_labor_summary(project_id: str):
                     worker_name=r.worker_name,
                     days_worked=r.days_worked,
                     total_cost=r.total_cost,
+                    banked_hours=r.banked_hours,
+                    bonus_full_days=r.bonus_full_days,
+                    bonus_half_days=r.bonus_half_days,
+                    bonus_cost=r.bonus_cost,
                 )
                 for r in result.rows
             ],
             total_days=result.total_days,
             total_cost=result.total_cost,
+            total_banked_hours=result.total_banked_hours,
+            total_bonus_days=result.total_bonus_days,
+            total_bonus_cost=result.total_bonus_cost,
         ).model_dump()
     )

@@ -19,6 +19,8 @@ class LaborSummaryRow:
     worker_name: str
     days_worked: int
     total_cost: Decimal
+    banked_hours: int = 0  # sum of supplement_hours for this worker over the period
+    daily_rate: Decimal = Decimal("0")  # worker's base rate; used for bonus-cost computation
 
 
 class IWorkerRepository(ABC):

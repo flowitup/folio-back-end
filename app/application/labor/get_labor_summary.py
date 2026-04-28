@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
@@ -14,6 +15,10 @@ class WorkerCostSummary:
     worker_name: str
     days_worked: int
     total_cost: float
+    banked_hours: int
+    bonus_full_days: int
+    bonus_half_days: int
+    bonus_cost: float
 
 
 @dataclass
@@ -21,6 +26,9 @@ class LaborSummaryResponse:
     rows: List[WorkerCostSummary]
     total_days: int
     total_cost: float
+    total_banked_hours: int
+    total_bonus_days: float
+    total_bonus_cost: float
 
 
 @dataclass
@@ -43,15 +51,39 @@ class GetLaborSummaryUseCase:
             date_to=request.date_to,
         )
 
-        rows = [
-            WorkerCostSummary(
-                worker_id=str(row.worker_id),
-                worker_name=row.worker_name,
-                days_worked=row.days_worked,
-                total_cost=float(row.total_cost),
+        rows: List[WorkerCostSummary] = []
+        total_banked_hours = 0
+        total_bonus_days = Decimal("0")
+        total_bonus_cost = Decimal("0")
+
+        for row in summary_rows:
+            banked = row.banked_hours or 0
+            bonus_full = banked // 8
+            bonus_half = 1 if (banked % 8) >= 4 else 0
+
+            daily_rate: Decimal = row.daily_rate
+            bonus_cost = Decimal(bonus_full) * daily_rate + Decimal(bonus_half) * daily_rate * Decimal("0.5")
+            priced_cost = row.total_cost  # already Decimal from repo
+            total_cost_for_worker = priced_cost + bonus_cost
+
+            worker_bonus_days = Decimal(bonus_full) + Decimal(bonus_half) * Decimal("0.5")
+
+            rows.append(
+                WorkerCostSummary(
+                    worker_id=str(row.worker_id),
+                    worker_name=row.worker_name,
+                    days_worked=row.days_worked,
+                    total_cost=float(total_cost_for_worker),
+                    banked_hours=banked,
+                    bonus_full_days=bonus_full,
+                    bonus_half_days=bonus_half,
+                    bonus_cost=float(bonus_cost),
+                )
             )
-            for row in summary_rows
-        ]
+
+            total_banked_hours += banked
+            total_bonus_days += worker_bonus_days
+            total_bonus_cost += bonus_cost
 
         total_days = sum(r.days_worked for r in rows)
         total_cost = sum(r.total_cost for r in rows)
@@ -60,4 +92,7 @@ class GetLaborSummaryUseCase:
             rows=rows,
             total_days=total_days,
             total_cost=total_cost,
+            total_banked_hours=total_banked_hours,
+            total_bonus_days=float(total_bonus_days),
+            total_bonus_cost=float(total_bonus_cost),
         )

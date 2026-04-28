@@ -17,7 +17,8 @@ class LaborEntryDetail:
     amount_override: Optional[float]
     effective_cost: float
     note: Optional[str]
-    shift_type: str
+    shift_type: Optional[str]
+    supplement_hours: int
     created_at: str
 
 
@@ -52,20 +53,14 @@ class ListLaborEntriesUseCase:
             worker_id=request.worker_id,
         )
 
-        _multipliers = {"full": 1.0, "half": 0.5, "overtime": 1.5}
-
         result = []
         for entry in entries:
             worker = worker_map.get(entry.worker_id)
             if not worker:
                 continue  # Skip orphaned entries
 
-            # Effective cost: override wins; else daily_rate × shift multiplier
-            if entry.amount_override is not None:
-                effective_cost = float(entry.amount_override)
-            else:
-                multiplier = _multipliers.get(entry.shift_type, 1.0)
-                effective_cost = float(worker.daily_rate) * multiplier
+            # Delegate effective cost to the domain entity
+            effective_cost = float(entry.effective_cost(worker.daily_rate))
 
             result.append(
                 LaborEntryDetail(
@@ -77,6 +72,7 @@ class ListLaborEntriesUseCase:
                     effective_cost=effective_cost,
                     note=entry.note,
                     shift_type=entry.shift_type,
+                    supplement_hours=entry.supplement_hours,
                     created_at=entry.created_at.isoformat(),
                 )
             )
