@@ -104,7 +104,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 WorkerModel.id.label("worker_id"),
                 WorkerModel.name.label("worker_name"),
                 WorkerModel.daily_rate.label("daily_rate"),
-                func.count(LaborEntryModel.id).label("days_worked"),
+                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
                 func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
             )

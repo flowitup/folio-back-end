@@ -404,7 +404,9 @@ class TestSQLAlchemyLaborEntryRepository:
         assert len(results) == 1
         row = results[0]
         assert row.banked_hours == 9  # 0 + 4 + 5
-        assert row.days_worked == 3  # all 3 rows counted
+        # Standalone supplement-only rows (shift_type=None) are not counted as worked days;
+        # they are off-day extra hours per Q5.
+        assert row.days_worked == 1
         # priced cost: 1 full day * 100 = 100; supplement-only days → 0
         assert row.total_cost == Decimal("100.00")
 
