@@ -24,6 +24,7 @@ from app.application.admin.exceptions import (
     TargetUserNotFoundError,
     TooManyProjectsError,
 )
+from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -36,15 +37,6 @@ _MIN_SEARCH_LEN = 3  # match the FE's min-3-char rule; defense-in-depth against 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _jwt_user_key() -> str:
-    """Rate-limit key scoped to authenticated JWT identity (falls back to IP)."""
-    try:
-        uid = get_jwt_identity()
-        return f"user:{uid}" if uid else request.remote_addr
-    except Exception:
-        return request.remote_addr
 
 
 def _err(code: int, error: str, message: str):
@@ -72,7 +64,7 @@ def _require_superadmin():
 
 @admin_bp.route("/users/<uuid:user_id>/memberships", methods=["POST"])
 @jwt_required()
-@limiter.limit("5 per hour", key_func=_jwt_user_key)
+@limiter.limit("5 per hour", key_func=jwt_user_key)
 @limiter.limit("10 per hour")
 def bulk_add_memberships(user_id: UUID):
     """Bulk-add an existing user to multiple projects with the given role.
@@ -133,7 +125,7 @@ def bulk_add_memberships(user_id: UUID):
 
 @admin_bp.route("/users", methods=["GET"])
 @jwt_required()
-@limiter.limit("30 per minute", key_func=_jwt_user_key)
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 def search_users():
     """Search users by email or display name (superadmin only).
 
