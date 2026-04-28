@@ -137,3 +137,78 @@ class TestEffectiveCost:
     def test_override_wins_for_half_shift(self):
         entry = _make_entry(shift_type="half", amount_override=Decimal("75.00"))
         assert entry.effective_cost(DAILY_RATE) == Decimal("75.00")
+
+
+# ---------------------------------------------------------------------------
+# __eq__ and __hash__ — identity semantics
+# ---------------------------------------------------------------------------
+
+
+class TestLaborEntryIdentity:
+    def test_equal_entries_share_id(self):
+        shared_id = uuid4()
+        entry_a = _make_entry(id=shared_id, shift_type="full")
+        entry_b = _make_entry(id=shared_id, shift_type="half")  # same id, different shift
+        assert entry_a == entry_b
+
+    def test_different_ids_are_not_equal(self):
+        entry_a = _make_entry(shift_type="full")
+        entry_b = _make_entry(shift_type="full")
+        assert entry_a != entry_b
+
+    def test_hash_equal_for_same_id(self):
+        shared_id = uuid4()
+        entry_a = _make_entry(id=shared_id, shift_type="full")
+        entry_b = _make_entry(id=shared_id, shift_type="overtime")
+        assert hash(entry_a) == hash(entry_b)
+
+    def test_not_equal_to_non_entry(self):
+        entry = _make_entry(shift_type="full")
+        # __eq__ returns NotImplemented for non-LaborEntry; Python falls back to
+        # identity comparison which yields False — the entry is NOT equal to a string.
+        assert not (entry == "not an entry")
+
+    def test_entries_usable_in_set(self):
+        shared_id = uuid4()
+        entry_a = _make_entry(id=shared_id, shift_type="full")
+        entry_b = _make_entry(id=shared_id, shift_type="half")
+        s = {entry_a, entry_b}
+        assert len(s) == 1  # same id → same bucket
+
+
+# ---------------------------------------------------------------------------
+# Boundary: supplement_hours at key threshold values
+# ---------------------------------------------------------------------------
+
+
+class TestSupplementHoursBoundaries:
+    """Explicit boundary tests: 0, 7, 8, 11, 12, 13."""
+
+    def test_zero_with_shift_valid(self):
+        entry = _make_entry(shift_type="full", supplement_hours=0)
+        assert entry.supplement_hours == 0
+
+    def test_seven_with_null_shift_valid(self):
+        """7h: just below the 8h full-day boundary — still valid."""
+        entry = _make_entry(shift_type=None, supplement_hours=7)
+        assert entry.supplement_hours == 7
+
+    def test_eight_with_null_shift_valid(self):
+        """8h: exactly 1 full-day threshold — valid."""
+        entry = _make_entry(shift_type=None, supplement_hours=8)
+        assert entry.supplement_hours == 8
+
+    def test_eleven_with_null_shift_valid(self):
+        """11h: just below cap — valid."""
+        entry = _make_entry(shift_type=None, supplement_hours=11)
+        assert entry.supplement_hours == 11
+
+    def test_twelve_at_cap_valid(self):
+        """12h: at cap — valid."""
+        entry = _make_entry(shift_type=None, supplement_hours=12)
+        assert entry.supplement_hours == 12
+
+    def test_thirteen_above_cap_raises(self):
+        """13h: over cap — must be rejected."""
+        with pytest.raises(InvalidLaborEntryError, match="0..12"):
+            _make_entry(shift_type=None, supplement_hours=13)

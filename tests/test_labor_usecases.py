@@ -579,3 +579,99 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         patched = mock_entry_repo.update.call_args[0][0]
         # supplement_hours not in request → entity keeps its original value (0)
         assert patched.supplement_hours == 0
+
+
+# ---------------------------------------------------------------------------
+# Parametrized bucket-math boundary table
+# ---------------------------------------------------------------------------
+
+# Each row: (banked_hours, expected_bonus_full, expected_bonus_half)
+BUCKET_MATH_TABLE = [
+    (0, 0, 0),
+    (3, 0, 0),
+    (4, 0, 1),
+    (7, 0, 1),
+    (8, 1, 0),
+    (11, 1, 0),
+    (12, 1, 1),
+    (16, 2, 0),
+    (23, 2, 1),
+]
+
+
+@pytest.mark.parametrize("banked,expected_full,expected_half", BUCKET_MATH_TABLE)
+def test_bucket_math_parametrized(mock_entry_repo, banked, expected_full, expected_half):
+    """Parametrized boundary table for bonus-day bucket math (all 9 boundary rows)."""
+    daily_rate = Decimal("100.00")
+    mock_entry_repo.get_summary.return_value = [
+        LaborSummaryRow(
+            worker_id=uuid4(),
+            worker_name="Bucket Worker",
+            days_worked=5,
+            total_cost=Decimal("500.00"),
+            banked_hours=banked,
+            daily_rate=daily_rate,
+        )
+    ]
+    usecase = GetLaborSummaryUseCase(mock_entry_repo)
+    result = usecase.execute(GetLaborSummaryRequest(project_id=uuid4()))
+
+    row = result.rows[0]
+    assert (
+        row.bonus_full_days == expected_full
+    ), f"banked={banked}: expected full={expected_full}, got {row.bonus_full_days}"
+    assert (
+        row.bonus_half_days == expected_half
+    ), f"banked={banked}: expected half={expected_half}, got {row.bonus_half_days}"
+
+    # Verify Decimal precision on bonus_cost
+    expected_cost = Decimal(str(expected_full)) * daily_rate + Decimal(str(expected_half)) * daily_rate * Decimal("0.5")
+    assert Decimal(str(row.bonus_cost)).quantize(Decimal("0.01")) == expected_cost.quantize(
+        Decimal("0.01")
+    ), f"banked={banked}: expected bonus_cost={expected_cost}, got {row.bonus_cost}"
+
+
+def test_bonus_cost_23h_decimal_precision(mock_entry_repo):
+    """23h banked → bonus_cost must be exactly Decimal('250.00') (2F + 1H * 100)."""
+    daily_rate = Decimal("100.00")
+    mock_entry_repo.get_summary.return_value = [
+        LaborSummaryRow(
+            worker_id=uuid4(),
+            worker_name="Precision Worker",
+            days_worked=5,
+            total_cost=Decimal("500.00"),
+            banked_hours=23,
+            daily_rate=daily_rate,
+        )
+    ]
+    usecase = GetLaborSummaryUseCase(mock_entry_repo)
+    result = usecase.execute(GetLaborSummaryRequest(project_id=uuid4()))
+
+    row = result.rows[0]
+    # 2 * 100 + 0.5 * 100 = 250
+    assert Decimal(str(row.bonus_cost)).quantize(Decimal("0.01")) == Decimal("250.00")
+    assert Decimal(str(result.total_bonus_cost)).quantize(Decimal("0.01")) == Decimal("250.00")
+
+
+def test_mixed_priced_plus_supplement_cost(mock_entry_repo):
+    """Mixed scenario: 2 priced full days (200) + 11h banked (1F=100, 0H) → total_cost=300."""
+    daily_rate = Decimal("100.00")
+    mock_entry_repo.get_summary.return_value = [
+        LaborSummaryRow(
+            worker_id=uuid4(),
+            worker_name="Mixed Worker",
+            days_worked=2,
+            total_cost=Decimal("200.00"),  # 2 full priced days
+            banked_hours=11,  # 11h banked → 1F bonus (11//8=1, 11%8=3 < 4 → 0H)
+            daily_rate=daily_rate,
+        )
+    ]
+    usecase = GetLaborSummaryUseCase(mock_entry_repo)
+    result = usecase.execute(GetLaborSummaryRequest(project_id=uuid4()))
+
+    row = result.rows[0]
+    assert row.bonus_full_days == 1
+    assert row.bonus_half_days == 0
+    assert Decimal(str(row.bonus_cost)).quantize(Decimal("0.01")) == Decimal("100.00")
+    # total_cost = priced(200) + bonus(100) = 300
+    assert Decimal(str(row.total_cost)).quantize(Decimal("0.01")) == Decimal("300.00")

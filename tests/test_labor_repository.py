@@ -300,3 +300,151 @@ class TestSQLAlchemyLaborEntryRepository:
         assert result[0].worker_name == "Worker A"
         assert result[0].days_worked == 3
         assert result[0].total_cost == Decimal("300.00")
+
+    def test_insert_null_shift_with_supplement_ok(self, entry_repo, worker_repo, sample_project):
+        """shift_type=NULL + supplement_hours=3 inserts and round-trips through _to_entity."""
+        from app.domain.entities.worker import Worker
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Null Shift Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        supplement_entry = LaborEntry(
+            id=uuid4(),
+            worker_id=worker.id,
+            date=date(2026, 5, 1),
+            shift_type=None,
+            supplement_hours=3,
+            created_at=datetime.now(timezone.utc),
+        )
+        result = entry_repo.create(supplement_entry)
+
+        assert result.shift_type is None
+        assert result.supplement_hours == 3
+
+    def test_null_shift_unique_constraint_per_day(self, entry_repo, worker_repo, sample_project):
+        """Unique (worker_id, date) constraint still holds for NULL-shift entries."""
+        from app.domain.entities.worker import Worker
+        from app.domain.exceptions.labor_exceptions import DuplicateEntryError
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Dup Null Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        entry1 = LaborEntry(
+            id=uuid4(),
+            worker_id=worker.id,
+            date=date(2026, 5, 2),
+            shift_type=None,
+            supplement_hours=3,
+            created_at=datetime.now(timezone.utc),
+        )
+        entry_repo.create(entry1)
+
+        entry2 = LaborEntry(
+            id=uuid4(),
+            worker_id=worker.id,
+            date=date(2026, 5, 2),  # same date
+            shift_type=None,
+            supplement_hours=2,
+            created_at=datetime.now(timezone.utc),
+        )
+        with pytest.raises(DuplicateEntryError):
+            entry_repo.create(entry2)
+
+    def test_get_summary_includes_banked_hours(self, entry_repo, worker_repo, sample_project):
+        """get_summary() correctly sums supplement_hours into banked_hours."""
+        from app.domain.entities.worker import Worker
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Banked Sum Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        # 3 entries: 1 priced full + 2 supplement-only
+        entries_data = [
+            (date(2026, 6, 1), "full", 0),  # priced day, 0 supplement
+            (date(2026, 6, 2), None, 4),  # supplement-only, 4h
+            (date(2026, 6, 3), None, 5),  # supplement-only, 5h
+        ]
+        for d, shift, sup in entries_data:
+            e = LaborEntry(
+                id=uuid4(),
+                worker_id=worker.id,
+                date=d,
+                shift_type=shift,
+                supplement_hours=sup,
+                created_at=datetime.now(timezone.utc),
+            )
+            entry_repo.create(e)
+
+        results = entry_repo.get_summary(
+            sample_project.id,
+            date_from=date(2026, 6, 1),
+            date_to=date(2026, 6, 30),
+        )
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.banked_hours == 9  # 0 + 4 + 5
+        assert row.days_worked == 3  # all 3 rows counted
+        # priced cost: 1 full day * 100 = 100; supplement-only days → 0
+        assert row.total_cost == Decimal("100.00")
+
+    def test_update_entry_patch_supplement_preserves_other_fields(self, entry_repo, worker_repo, sample_project):
+        """PATCH supplement_hours only — all other fields survive the round-trip."""
+        from app.domain.entities.worker import Worker
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Preserve Fields Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        original = LaborEntry(
+            id=uuid4(),
+            worker_id=worker.id,
+            date=date(2026, 7, 1),
+            shift_type="half",
+            supplement_hours=0,
+            note="original note",
+            created_at=datetime.now(timezone.utc),
+        )
+        entry_repo.create(original)
+
+        # Simulate PATCH: only supplement_hours changes
+        patched = LaborEntry(
+            id=original.id,
+            worker_id=original.worker_id,
+            date=original.date,
+            shift_type=original.shift_type,
+            supplement_hours=6,
+            note=original.note,
+            created_at=original.created_at,
+        )
+        result = entry_repo.update(patched)
+
+        assert result.supplement_hours == 6
+        assert result.shift_type == "half"
+        assert result.note == "original note"
