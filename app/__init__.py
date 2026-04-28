@@ -54,7 +54,16 @@ def create_app(config_class: type = Config) -> Flask:
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
-    CORS(app, supports_credentials=True, origins=cors_origins)
+    # expose_headers is critical for binary download endpoints (e.g. labor-export):
+    # cross-origin browser fetches cannot read non-default-safelisted headers without
+    # explicit exposure. Without this, fetchLaborExport's filename parsing falls back
+    # to a generic timestamped name in production.
+    CORS(
+        app,
+        supports_credentials=True,
+        origins=cors_origins,
+        expose_headers=["Content-Disposition", "X-Content-Type-Options"],
+    )
     db.init_app(app)
     jwt.init_app(app)
     limiter.init_app(app)
