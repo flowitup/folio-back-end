@@ -256,6 +256,37 @@ class TestUpdateAttendanceUseCase:
                 )
             )
 
+    def test_update_attendance_patch_preserves_untouched_fields(self, mock_entry_repo):
+        """PATCH with only supplement_hours must not wipe amount_override, note, or shift_type."""
+        worker_id = uuid4()
+        entry = LaborEntry(
+            id=uuid4(),
+            worker_id=worker_id,
+            date=date.today(),
+            shift_type="full",
+            amount_override=Decimal("150.00"),
+            note="original note",
+            supplement_hours=2,
+            created_at=datetime.now(timezone.utc),
+        )
+        # Repo returns the live entry; update saves and returns it too
+        mock_entry_repo.find_by_id.return_value = entry
+        mock_entry_repo.update.side_effect = lambda e: e
+
+        usecase = UpdateAttendanceUseCase(mock_entry_repo)
+        result = usecase.execute(
+            UpdateAttendanceRequest(
+                entry_id=entry.id,
+                supplement_hours=5,
+                # amount_override, note, shift_type all omitted (None) → must not be touched
+            )
+        )
+
+        assert result.supplement_hours == 5
+        assert result.amount_override == 150.0
+        assert result.note == "original note"
+        assert result.shift_type == "full"
+
 
 class TestDeleteAttendanceUseCase:
     """Tests for DeleteAttendanceUseCase."""

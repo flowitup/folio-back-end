@@ -41,9 +41,12 @@ class UpdateAttendanceUseCase:
         if not entry:
             raise LaborEntryNotFoundError(str(request.entry_id))
 
-        # Update fields explicitly — avoid silent drops via **kwargs patterns
-        entry.amount_override = request.amount_override
-        entry.note = request.note.strip() if request.note else None
+        # All four fields use PATCH semantics: None means "do not touch".
+        # A caller wanting to clear a field must send an explicit clearing value.
+        if request.amount_override is not None:
+            entry.amount_override = request.amount_override
+        if request.note is not None:
+            entry.note = request.note.strip() or None
         if request.shift_type is not None:
             entry.shift_type = request.shift_type
         if request.supplement_hours is not None:
