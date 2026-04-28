@@ -123,6 +123,7 @@ class TestLaborEntryModel:
             date=date.today(),
             amount_override=Decimal("120.00"),
             note="Overtime",
+            shift_type="full",
         )
         session.add(entry)
         session.commit()
@@ -147,6 +148,7 @@ class TestLaborEntryModel:
             id=uuid4(),
             worker_id=worker.id,
             date=date.today(),
+            shift_type="full",
         )
         session.add(entry1)
         session.commit()
@@ -155,6 +157,7 @@ class TestLaborEntryModel:
             id=uuid4(),
             worker_id=worker.id,
             date=date.today(),  # Same date
+            shift_type="full",
         )
         session.add(entry2)
 

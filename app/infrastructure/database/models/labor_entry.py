@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -20,7 +20,8 @@ class LaborEntryModel(Base):
     date = Column(Date, nullable=False)
     amount_override = Column(Numeric(10, 2), nullable=True)
     note = Column(String(500), nullable=True)
-    shift_type = Column(String(20), nullable=False, server_default="full")
+    shift_type = Column(String(20), nullable=True)
+    supplement_hours = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (UniqueConstraint("worker_id", "date", name="uq_worker_date"),)

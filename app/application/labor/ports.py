@@ -19,6 +19,7 @@ class LaborSummaryRow:
     worker_name: str
     days_worked: int
     total_cost: Decimal
+    banked_hours: int = 0  # sum of supplement_hours for this worker over the period
 
 
 class IWorkerRepository(ABC):
