@@ -2,14 +2,17 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Tuple
 from uuid import UUID
 
-from flask import Response, jsonify, request
+from flask import jsonify, request
 from flask_jwt_extended import jwt_required
 from pydantic import ValidationError
 
 from app.api.v1.labor import labor_bp
+from app.api.v1.labor._labor_validation_error_helper import (
+    _error_response,
+    validation_error_response as _validation_error_response,
+)
 from app.api.v1.labor.schemas import (
     LogAttendanceRequest,
     UpdateAttendanceRequest,
@@ -17,7 +20,6 @@ from app.api.v1.labor.schemas import (
     LaborEntryListResponse,
     LaborSummaryResponse,
     WorkerSummaryRow,
-    ErrorResponse,
 )
 from app.api.v1.projects.decorators import require_permission
 from app.application.labor import (
@@ -42,17 +44,6 @@ def _parse_date(date_str: str) -> date:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
         raise ValueError(f"Invalid date format: {date_str}. Expected YYYY-MM-DD")
-
-
-def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
-    """Create standardized error response."""
-    return jsonify(ErrorResponse(error=error, message=message, status_code=status_code).model_dump()), status_code
-
-
-def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
-    """Create validation error response from Pydantic error."""
-    error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-    return _error_response("ValidationError", f"Invalid input: {', '.join(str(f) for f in error_fields)}", 400)
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["GET"])

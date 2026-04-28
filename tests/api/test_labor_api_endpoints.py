@@ -368,22 +368,8 @@ class TestLaborEntryRoutes:
         )
         assert resp.status_code == 400
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG in entry_routes._validation_error_response (line 54): "
-            "model_validator errors have empty loc tuple — `err.get('loc', ['unknown'])[-1]` "
-            "raises IndexError. Fix: guard with `locs[-1] if locs else 'unknown'`. "
-            "This test is an xfail to document the bug without blocking CI."
-        ),
-    )
     def test_log_attendance_empty_row_422(self, labor_client, admin_token, labor_app):
-        """shift_type=None AND supplement_hours=0 → 400 (model_validator empty row).
-
-        KNOWN BUG: route crashes with IndexError before returning 400.
-        Schema-level validation (test_labor_schemas_validation.py) confirms
-        the Pydantic model correctly rejects this input.
-        """
+        """shift_type=None AND supplement_hours=0 → 400 (model_validator empty row)."""
         pid = labor_app._test_project_id
         worker_id = self._create_worker(labor_client, admin_token, labor_app, "Empty Row Worker")
         resp = labor_client.post(
@@ -398,21 +384,8 @@ class TestLaborEntryRoutes:
         )
         assert resp.status_code == 400
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG in entry_routes._validation_error_response (line 54): "
-            "model_validator errors have empty loc tuple — `err.get('loc', ['unknown'])[-1]` "
-            "raises IndexError. Fix: guard with `locs[-1] if locs else 'unknown'`. "
-            "This test is an xfail to document the bug without blocking CI."
-        ),
-    )
     def test_log_attendance_override_without_shift_422(self, labor_client, admin_token, labor_app):
-        """shift_type=None + amount_override set → 400 (model_validator).
-
-        KNOWN BUG: route crashes with IndexError before returning 400.
-        Schema-level validation confirmed separately in test_labor_schemas_validation.py.
-        """
+        """shift_type=None + amount_override set → 400 (model_validator)."""
         pid = labor_app._test_project_id
         worker_id = self._create_worker(labor_client, admin_token, labor_app, "Override No Shift Worker")
         resp = labor_client.post(
