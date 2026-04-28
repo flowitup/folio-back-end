@@ -147,6 +147,42 @@ class LaborSummaryResponse(BaseModel):
     total_bonus_cost: float
 
 
+class ExportLaborQuery(BaseModel):
+    """Query-string schema for GET /projects/<id>/labor-export.
+
+    Uses aliases so that ?from=YYYY-MM maps to from_month (Python keyword conflict).
+    """
+
+    from_month: str = Field(
+        ...,
+        alias="from",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        description="Start month, inclusive. Format: YYYY-MM",
+    )
+    to_month: str = Field(
+        ...,
+        alias="to",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        description="End month, inclusive. Format: YYYY-MM",
+    )
+    format: Literal["xlsx", "pdf"] = Field(..., description="Export format")
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "ExportLaborQuery":
+        from datetime import datetime as _dt
+
+        from_d = _dt.strptime(self.from_month, "%Y-%m").date().replace(day=1)
+        to_d = _dt.strptime(self.to_month, "%Y-%m").date().replace(day=1)
+        if from_d > to_d:
+            raise ValueError("'from' must be <= 'to'")
+        span = (to_d.year - from_d.year) * 12 + (to_d.month - from_d.month) + 1
+        if span > 24:
+            raise ValueError("range must be <= 24 months")
+        return self
+
+
 class ErrorResponse(BaseModel):
     """Error response format."""
 

@@ -80,6 +80,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.auth import auth_bp
     from app.api.v1.projects import projects_bp
     from app.api.v1.labor import labor_bp
+    from app.api.v1.labor.export_routes import labor_export_bp
     from app.api.v1.invoices import invoice_bp
     from app.api.v1.tasks import task_bp
     from app.api.v1.invitations import invitations_bp
@@ -92,6 +93,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
     app.register_blueprint(labor_bp, url_prefix="/api/v1")
+    app.register_blueprint(labor_export_bp, url_prefix="/api/v1")
     app.register_blueprint(invoice_bp, url_prefix="/api/v1")
     app.register_blueprint(task_bp, url_prefix="/api/v1")
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")

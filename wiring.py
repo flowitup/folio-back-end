@@ -45,6 +45,7 @@ from app.application.labor import (
     ListLaborEntriesUseCase,
     GetLaborSummaryUseCase,
 )
+from app.application.labor.export_labor_usecase import ExportLaborUseCase
 from app.application.invoice import (
     IInvoiceRepository,
     CreateInvoiceUseCase,
@@ -221,6 +222,7 @@ class Container:
     delete_attendance_usecase: Optional[DeleteAttendanceUseCase] = None
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
+    export_labor_usecase: Optional[ExportLaborUseCase] = None
 
 
 # =============================================================================
@@ -383,6 +385,15 @@ def configure_container(
         container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository)
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
+
+    if worker_repository and labor_entry_repository and project_repository:
+        container.export_labor_usecase = ExportLaborUseCase(
+            worker_repo=worker_repository,
+            entry_repo=labor_entry_repository,
+            summary_usecase=GetLaborSummaryUseCase(labor_entry_repository),
+            list_entries_usecase=ListLaborEntriesUseCase(worker_repository, labor_entry_repository),
+            project_repo=project_repository,
+        )
 
     # Wire invoice use cases
     if invoice_repository:
