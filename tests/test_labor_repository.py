@@ -235,6 +235,7 @@ class TestSQLAlchemyLaborEntryRepository:
             id=uuid4(),
             worker_id=sample_worker_entity.id,
             date=date.today(),
+            shift_type="full",
             created_at=datetime.now(timezone.utc),
         )
 
@@ -251,6 +252,7 @@ class TestSQLAlchemyLaborEntryRepository:
             id=uuid4(),
             worker_id=sample_worker_entity.id,
             date=date.today(),
+            shift_type="full",
             created_at=datetime.now(timezone.utc),
         )
         entry_repo.create(entry1)
@@ -259,6 +261,7 @@ class TestSQLAlchemyLaborEntryRepository:
             id=uuid4(),
             worker_id=sample_worker_entity.id,
             date=date.today(),  # Same date
+            shift_type="full",
             created_at=datetime.now(timezone.utc),
         )
 
@@ -283,6 +286,7 @@ class TestSQLAlchemyLaborEntryRepository:
                 id=uuid4(),
                 worker_id=worker1.id,
                 date=date(2026, 1, i + 1),
+                shift_type="full",
                 created_at=datetime.now(timezone.utc),
             )
             entry_repo.create(entry)

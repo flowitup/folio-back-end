@@ -21,6 +21,7 @@ from app.domain.exceptions.labor_exceptions import (
     LaborEntryNotFoundError,
     DuplicateEntryError,
     InvalidWorkerDataError,
+    InvalidLaborEntryError,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "LaborEntryNotFoundError",
     "DuplicateEntryError",
     "InvalidWorkerDataError",
+    "InvalidLaborEntryError",
 ]

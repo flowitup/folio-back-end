@@ -65,6 +65,7 @@ def sample_entry(sample_worker):
         date=date.today(),
         amount_override=None,
         note="Test note",
+        shift_type="full",
         created_at=datetime.now(timezone.utc),
     )
 
@@ -205,6 +206,7 @@ class TestLogAttendanceUseCase:
             date=date.today(),
             amount_override=Decimal("150.00"),
             note=None,
+            shift_type="full",
             created_at=datetime.now(timezone.utc),
         )
         mock_entry_repo.create.return_value = entry_with_override
