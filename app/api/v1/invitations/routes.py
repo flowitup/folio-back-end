@@ -32,19 +32,9 @@ from app.domain.exceptions.invitation_exceptions import (
     InvalidInvitationTokenError,
     RoleNotAllowedError,
 )
+from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
-
-
-def _jwt_user_key() -> str:
-    """Rate-limit key based on JWT identity (user ID) for authenticated endpoints."""
-    from flask_jwt_extended import get_jwt_identity as _get_jwt_identity
-
-    try:
-        uid = _get_jwt_identity()
-        return f"user:{uid}" if uid else request.remote_addr
-    except Exception:
-        return request.remote_addr
 
 
 def _err(code: int, error: str, message: str):
@@ -73,7 +63,7 @@ def _validation_err(e: ValidationError):
 
 @invitations_bp.route("", methods=["POST"])
 @jwt_required()
-@limiter.limit("10 per hour", key_func=_jwt_user_key)
+@limiter.limit("10 per hour", key_func=jwt_user_key)
 def create_invitation():
     """Create an invitation (or directly add existing user) to a project."""
     try:
@@ -190,7 +180,7 @@ def list_project_invitations(project_id: UUID):
 
 @invitations_bp.route("/<uuid:invitation_id>/revoke", methods=["POST"])
 @jwt_required()
-@limiter.limit("30 per minute", key_func=_jwt_user_key)
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 def revoke_invitation(invitation_id: UUID):
     """Revoke a pending invitation."""
     container = get_container()
