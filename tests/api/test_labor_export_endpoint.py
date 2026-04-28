@@ -12,8 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -367,3 +365,170 @@ def test_export_404_when_project_not_found(export_client, export_app, admin_toke
     assert resp.status_code == 404
     data = resp.get_json()
     assert data["error"] == "project_not_found"
+
+
+# ---------------------------------------------------------------------------
+# Content-Disposition filename pattern
+# ---------------------------------------------------------------------------
+
+
+def test_export_filename_matches_slug_and_range_pattern(export_client, export_app, admin_token):
+    """Content-Disposition filename = labor-{slug}-{from}-to-{to}.xlsx."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-03", "to": "2026-05", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 200
+    cd = resp.headers.get("Content-Disposition", "")
+    # Slug for "Labor API Test Project" → "labor-api-test-project"
+    assert "labor-labor-api-test-project-2026-03-to-2026-05.xlsx" in cd
+
+
+def test_export_pdf_filename_matches_slug_and_range_pattern(export_client, export_app, admin_token):
+    """Content-Disposition filename = labor-{slug}-{from}-to-{to}.pdf for pdf format."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-01", "to": "2026-02", "format": "pdf"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 200
+    cd = resp.headers.get("Content-Disposition", "")
+    assert "labor-api-test-project" in cd
+    assert "2026-01-to-2026-02" in cd
+    assert ".pdf" in cd
+
+
+# ---------------------------------------------------------------------------
+# Cache-Control and X-Content-Type-Options (must-revalidate + nosniff)
+# ---------------------------------------------------------------------------
+
+
+def test_export_cache_control_includes_must_revalidate(export_client, export_app, admin_token):
+    """Cache-Control must include must-revalidate as well as no-store."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 200
+    cc = resp.headers.get("Cache-Control", "")
+    assert "no-store" in cc
+    assert "must-revalidate" in cc
+
+
+def test_export_x_content_type_options_exact_value(export_client, export_app, admin_token):
+    """X-Content-Type-Options header value is exactly 'nosniff' (case-sensitive check)."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-01", "to": "2026-01", "format": "pdf"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+# ---------------------------------------------------------------------------
+# 422 error envelope JSON-serializability (regression — ctx-stripping fix)
+# ---------------------------------------------------------------------------
+
+
+def test_export_422_envelope_is_json_serializable(export_client, export_app, admin_token):
+    """422 response body is valid JSON with 'error', 'details', 'message' keys.
+
+    Regression guard: exc.errors() ctx dict may contain non-serializable objects
+    (e.g. ValueError instances). The route strips ctx to safe scalar fields only.
+    """
+    import json
+
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-06", "to": "2026-01", "format": "xlsx"},  # from > to
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 422
+
+    # Must be decodable JSON (no UnicodeDecodeError, no internal server error)
+    raw = resp.get_data(as_text=True)
+    parsed = json.loads(raw)  # raises if not valid JSON
+
+    assert "error" in parsed
+    assert parsed["error"] == "validation_error"
+    assert "details" in parsed
+    assert isinstance(parsed["details"], list)
+    assert "message" in parsed
+    assert isinstance(parsed["message"], str)
+
+    # Each detail entry must only have JSON-safe scalar values
+    for entry in parsed["details"]:
+        # Re-serialise to confirm no hidden non-serializable objects
+        json.dumps(entry)  # raises TypeError if not serializable
+
+
+def test_export_422_details_list_has_loc_msg_type(export_client, export_app, admin_token):
+    """Each entry in 422 'details' list has 'loc', 'msg', 'type' keys."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-1", "to": "2026-01", "format": "xlsx"},  # malformed from
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 422
+    data = resp.get_json()
+    assert len(data["details"]) > 0
+    for entry in data["details"]:
+        assert "loc" in entry
+        assert "msg" in entry
+        assert "type" in entry
+
+
+# ---------------------------------------------------------------------------
+# 401 — no auth token
+# ---------------------------------------------------------------------------
+
+
+def test_export_401_when_no_auth_token(export_client, export_app):
+    """Request without Authorization header → 401 (JWT required)."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Empty range — happy path (no labor entries → valid file bytes)
+# ---------------------------------------------------------------------------
+
+
+def test_export_empty_range_xlsx_200_with_valid_bytes(export_client, export_app, admin_token):
+    """Month range with no seeded entries still returns 200 with valid xlsx magic bytes."""
+    url = _export_url(export_app._test_project_id)
+    # Use a far-future month unlikely to have seeded data
+    resp = export_client.get(
+        url,
+        query_string={"from": "2099-01", "to": "2099-01", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 200
+    assert resp.content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert resp.data[:4] == b"PK\x03\x04"
+
+
+def test_export_empty_range_pdf_200_with_valid_bytes(export_client, export_app, admin_token):
+    """Month range with no seeded entries still returns 200 with valid pdf magic bytes."""
+    url = _export_url(export_app._test_project_id)
+    resp = export_client.get(
+        url,
+        query_string={"from": "2099-01", "to": "2099-01", "format": "pdf"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 200
+    assert resp.content_type == "application/pdf"
+    assert resp.data[:5] == b"%PDF-"
