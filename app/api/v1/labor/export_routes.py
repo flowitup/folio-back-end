@@ -13,6 +13,7 @@ from app.api.v1.projects.decorators import require_permission
 from app.application.labor.export_labor_usecase import ExportLaborRequest
 from app.api.v1.labor.schemas import ExportLaborQuery
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
+from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 labor_export_bp = Blueprint("labor_export", __name__)
@@ -20,6 +21,7 @@ labor_export_bp = Blueprint("labor_export", __name__)
 
 @labor_export_bp.route("/projects/<project_id>/labor-export", methods=["GET"])
 @jwt_required()
+@limiter.limit("5 per minute")
 @require_permission("project:read")
 def export_labor(project_id: str):
     """Stream xlsx or pdf export for a project's labor data.
