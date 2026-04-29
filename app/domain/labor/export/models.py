@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import List, Literal
+from decimal import Decimal
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from app.application.labor.get_labor_summary import LaborSummaryResponse
@@ -24,13 +25,20 @@ class ExportRange:
 
 @dataclass(frozen=True)
 class ExportContext:
-    """Metadata carried through the export pipeline."""
+    """Metadata carried through the export pipeline.
+
+    Single-worker mode is indicated by worker_name being set.
+    worker_daily_rate carries the worker's base daily rate for display in headers.
+    """
 
     project_name: str
     project_id: UUID
     range: ExportRange
     generated_at: datetime
     generated_by_email: str
+    # Optional single-worker scope — None means project-wide export
+    worker_name: Optional[str] = field(default=None)
+    worker_daily_rate: Optional[Decimal] = field(default=None)
 
 
 @dataclass(frozen=True)

@@ -82,6 +82,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         project_id: UUID,
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
+        worker_id: Optional[UUID] = None,
     ) -> List[LaborSummaryRow]:
         # Effective cost: supplement-only rows (shift_type IS NULL) contribute 0.
         # For shift rows: override wins; else daily_rate × shift multiplier.
@@ -117,6 +118,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             query = query.filter(LaborEntryModel.date >= date_from)
         if date_to:
             query = query.filter(LaborEntryModel.date <= date_to)
+        if worker_id:
+            query = query.filter(WorkerModel.id == worker_id)
 
         rows = query.order_by(WorkerModel.name).all()
 

@@ -92,8 +92,12 @@ class ILaborEntryRepository(ABC):
         project_id: UUID,
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
+        worker_id: Optional[UUID] = None,
     ) -> List[LaborSummaryRow]:
-        """Get aggregated labor summary per worker."""
+        """Get aggregated labor summary per worker.
+
+        When worker_id is provided, only that worker's rows are returned.
+        """
         ...
 
     @abstractmethod

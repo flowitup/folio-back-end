@@ -36,6 +36,7 @@ class GetLaborSummaryRequest:
     project_id: UUID
     date_from: Optional[date] = None
     date_to: Optional[date] = None
+    worker_id: Optional[UUID] = None
 
 
 class GetLaborSummaryUseCase:
@@ -49,6 +50,7 @@ class GetLaborSummaryUseCase:
             project_id=request.project_id,
             date_from=request.date_from,
             date_to=request.date_to,
+            worker_id=request.worker_id,
         )
 
         rows: List[WorkerCostSummary] = []

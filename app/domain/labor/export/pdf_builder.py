@@ -232,7 +232,11 @@ def _aggregate_across_buckets(buckets: List[MonthBucket]) -> List[_AggRow]:
 
 
 def _render_header(context: ExportContext, styles: dict) -> list:
-    """Build 4-paragraph header block for the export document."""
+    """Build header block for the export document.
+
+    Project-wide: 4 paragraphs (title, project, range, generated).
+    Single-worker: same 4 + extra worker line with name and daily rate.
+    """
     from_label = context.range.from_month.strftime("%b %Y")
     to_label = context.range.to_month.strftime("%b %Y")
     # Count months: inclusive range
@@ -252,6 +256,12 @@ def _render_header(context: ExportContext, styles: dict) -> list:
             styles["h2"],
         ),
     ]
+
+    if context.worker_name is not None:
+        rate = context.worker_daily_rate
+        rate_str = format_eur_fr(rate) if rate is not None else "—"
+        elements.append(Paragraph(f"Worker: {context.worker_name}    Rate: {rate_str}/day", styles["h2"]))
+
     return elements
 
 
@@ -403,6 +413,7 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
 
     Args:
         context: Export metadata (project name, range, generated_at, user email).
+                 When context.worker_name is set, renders single-worker view.
         buckets: One MonthBucket per calendar month in the export range.
 
     Returns:
@@ -411,6 +422,11 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     Empty-range behaviour:
         If all buckets have empty summary.rows, the PDF contains only the
         header + "No labor entries in range …" paragraph (no KPI / no table).
+
+    Single-worker mode (context.worker_name is set):
+        Header includes worker name + rate line.
+        KPI table and breakdown table show only that worker's aggregated rows.
+        (Daily detail is omitted — same as project-wide PDF; lives only in xlsx.)
     """
     _register_fonts()
 
@@ -431,7 +447,7 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     styles = _make_styles()
     footer_cb = _make_footer_callback(context)
 
-    # Determine empty-range case
+    # Determine empty-range case — summary.rows already scoped to worker by use-case
     all_empty = all(not bucket.summary.rows for bucket in buckets) if buckets else True
 
     story: list = []
@@ -448,6 +464,10 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
             )
         )
     else:
+        # KPI and breakdown tables work identically for both single-worker and
+        # project-wide modes because the buckets are already pre-filtered by
+        # worker_id in the use-case. The breakdown table will therefore contain
+        # exactly one worker row in single-worker mode.
         story.extend(_render_kpi_table(buckets, styles))
         story.append(Spacer(1, 6 * mm))
         story.extend(_render_breakdown_table(buckets, styles, usable_width))

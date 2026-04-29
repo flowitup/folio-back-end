@@ -346,24 +346,121 @@ def _set_detail_col_widths(ws: Worksheet) -> None:
         ws.column_dimensions[get_column_letter(i + 1)].width = width
 
 
+def _sanitize_sheet_name(name: str, fallback: str) -> str:
+    """Return a valid Excel sheet name (≤31 chars, no forbidden chars).
+
+    Excel forbids: [ ] : * ? / \\
+    If the sanitized name is empty, fall back to the first 8 chars of fallback.
+    """
+    import re
+
+    sanitized = re.sub(r"[\[\]:*?/\\]", "", name).strip()
+    if not sanitized:
+        sanitized = fallback[:8] or "Worker"
+    return sanitized[:31]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
+def _build_xlsx_single_worker(
+    context: ExportContext,
+    buckets: List[MonthBucket],
+    wb: openpyxl.Workbook,
+) -> None:
+    """Render a single-worker export into wb: one sheet with header + per-month tables.
+
+    Sheet name: sanitized worker name (≤31 chars, Excel-safe).
+    Layout per bucket (month):
+      - Section label "MMM YYYY"
+      - Monthly summary table (single worker row)
+      - Blank separator
+      - Daily detail table
+    Empty-range: single "No labor entries…" message cell, no tables.
+    """
+    worker_name = context.worker_name or "Worker"
+    sheet_title = _sanitize_sheet_name(worker_name, worker_name[:8])
+
+    ws = wb.active
+    ws.title = sheet_title
+
+    next_row = _write_header_block(ws, context, month_label=None)
+
+    # Add worker-specific sub-header (row 5 used by blank; write into row 5)
+    rate = context.worker_daily_rate
+    rate_str = str(rate) if rate is not None else "—"
+    ws.cell(row=next_row, column=1, value=f"Worker: {worker_name}    Rate: {rate_str}/day").font = Font(italic=True)
+    next_row += 1  # advance past worker sub-header (row 6 is now available for data)
+
+    all_empty = all(not bucket.summary.rows and not bucket.daily_entries for bucket in buckets) if buckets else True
+
+    if all_empty:
+        from_label = context.range.from_month.strftime("%b %Y")
+        to_label = context.range.to_month.strftime("%b %Y")
+        ws.cell(row=next_row, column=1, value=f"No labor entries in range {from_label} → {to_label}").font = Font(
+            italic=True
+        )
+        _set_summary_col_widths(ws)
+        _set_detail_col_widths(ws)
+        return
+
+    for bucket in sorted(buckets, key=lambda b: b.month):
+        month_label = bucket.month.strftime("%b %Y")
+
+        # Month section label
+        label_cell = ws.cell(row=next_row, column=1, value=month_label)
+        label_cell.font = Font(bold=True, size=12)
+        next_row += 1
+
+        # Per-worker monthly summary table (may be empty if worker had no entries this month)
+        month_rows = _month_agg_rows(bucket)
+        if month_rows:
+            next_row = _write_summary_table(ws, start_row=next_row, agg_rows=month_rows)
+        else:
+            ws.cell(row=next_row, column=1, value="No entries this month").font = Font(italic=True)
+            next_row += 1
+
+        _set_summary_col_widths(ws)
+
+        # Blank separator
+        next_row += 1
+
+        # Daily detail for this month
+        next_row = _write_daily_detail(ws, start_row=next_row, entries=bucket.daily_entries)
+        _set_detail_col_widths(ws)
+
+        # Extra blank row between months
+        next_row += 1
+
+
 def build_xlsx(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     """Generate an xlsx workbook and return its raw bytes.
 
-    Sheet layout:
+    Single-worker mode (context.worker_name is set):
+    - ONE sheet named after the worker
+    - Layout: header block, worker sub-header, then per-month: summary table + daily detail
+
+    Project-wide mode (context.worker_name is None):
     - Sheet 1 "Summary": aggregated per-worker across all months
     - Sheets 2..N+1 "MMM YYYY": per-worker monthly summary + daily detail
 
     Empty-range case: all buckets have empty summary.rows AND empty daily_entries.
-    → Only the Summary sheet is written with a single "No labor entries" message cell.
+    → Only the relevant sheet is written with a single "No labor entries" message cell.
 
     Currency cells store raw float values; number_format renders as fr-FR EUR in Excel.
     """
     wb = openpyxl.Workbook()
+
+    # --- Single-worker mode ---
+    if context.worker_name is not None:
+        _build_xlsx_single_worker(context, buckets, wb)
+        buf = BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    # --- Project-wide mode ---
 
     # Check empty-range case
     all_empty = all(not bucket.summary.rows and not bucket.daily_entries for bucket in buckets) if buckets else True
