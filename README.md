@@ -1,286 +1,132 @@
-# Construction Backend
+# Folio — Backend (API)
 
-Flask API for the Construction Management System, built with hexagonal architecture.
+The server side of **Folio**, a Construction Management System that helps small and mid-sized construction companies keep track of their projects, crews, hours worked, and invoices in one place.
 
-## Tech Stack
+This repository contains the API. The web app you actually click on is in the [folio-front-end](../folio-front-end) repository — they are designed to run together.
 
-- **Framework**: Flask 3.0+
-- **Language**: Python 3.12+
-- **Package Manager**: uv
-- **Task Queue**: RQ (Redis Queue)
-- **Architecture**: Hexagonal (Ports & Adapters)
+---
 
-## Project Structure
+## What you can do with Folio
 
-```
-construction-back-end/
-├── app/
-│   ├── __init__.py         # Application factory (create_app)
-│   └── api/
-│       └── v1/
-│           └── __init__.py # API v1 routes
-├── config/
-│   └── __init__.py         # Configuration from environment
-├── infrastructure/
-│   └── queue/
-│       └── rq_worker.py    # RQ worker entrypoint
-├── outbox/
-│   └── processor.py        # Outbox pattern processor
-├── wiring.py               # DI container (ports → adapters)
-├── tasks.py                # Background tasks (email, etc.)
-├── pyproject.toml          # Python project configuration
-├── Dockerfile              # Container image definition
-└── README.md               # This file
-```
+Folio is built around the day-to-day reality of running construction work:
 
-## Hexagonal Architecture
+- **Projects** — Create projects (e.g. "Downtown Office Tower", "Riverside Apartments"), give each one its own address and team, and switch between them from the top bar.
+- **Team & roles** — Invite people to a project by email. Each member gets a role (owner, manager, foreman, accountant, viewer) that decides what they can see and do.
+- **Labor tracking** — Keep a list of workers, their daily rate, and phone number. Log who showed up each day, full-day or half-day shifts, plus extra "supplement" hours that are automatically converted into bonus days at month-end.
+- **Labor cost summary** — See per-worker totals, including priced cost and bonus cost shown separately so nothing is hidden inside one big number.
+- **Excel & PDF exports** — Export labor reports for any 1-to-24-month window, either for the whole project or for a single worker. Excel uses French-format currency; PDFs render Vietnamese accents correctly.
+- **Invoices** — Issue Client, Labor and Supplier invoices. Each one has line items, totals, and a clean print-ready view.
+- **Notes & reminders** — Post notes on a project with a due date. Members get a reminder in the bell-icon dropdown when the lead time hits.
+- **Notifications** — In-app notifications for invitations, reminders, and project events.
 
-This project follows hexagonal (ports & adapters) architecture:
+A more visual walkthrough of every screen lives in [`FEATURES.md`](../FEATURES.md) at the root of the repo.
 
-- **Core Domain**: Pure business logic with no external dependencies
-- **Ports**: Interfaces (protocols) defining how core interacts with outside world
-- **Adapters**: Concrete implementations of ports (database, email, etc.)
+---
 
-### Core Purity Rule
+## Running the API
 
-> The core domain should **never** import from infrastructure or adapters.
-> All dependencies flow inward through ports defined in `wiring.py`.
+The API is the engine behind the web app. You only need to run it directly if you are setting up a local environment, integrating another system with it, or hosting your own copy.
 
-## Getting Started
+### Easiest way — Docker
 
-### Prerequisites
-
-- Python 3.12+ (installed via uv)
-- uv (Python package manager)
-- Redis (for task queue)
-- PostgreSQL (or SQLite for development)
-
-### Installing uv
-
-If you don't have uv installed:
+If Docker is installed, one command starts everything (API, background worker, database, Redis):
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
-```
-
-### Installation
-
-1. Install Python 3.12 (if not already installed):
-
-```bash
-uv python install 3.12
-```
-
-2. Create a virtual environment and install dependencies:
-
-```bash
-uv sync
-
-# For development with dev tools:
-uv sync --all-extras
-```
-
-3. Set up environment variables:
-
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-### Running the Application
-
-Start the Flask development server:
-
-```bash
-uv run flask run
-# or with debug mode:
-uv run flask run --debug
-```
-
-
-The API will be available at [http://localhost:5000](http://localhost:5000).
-
-### Health Check
-
-Verify the server is running:
-
-```bash
-curl http://localhost:5000/health
-# Response: {"status": "ok"}
-```
-
-## Running the RQ Worker
-
-The application uses RQ (Redis Queue) for background task processing.
-
-1. Ensure Redis is running:
-
-```bash
-# Using Docker:
-docker run -d -p 6379:6379 redis:7
-
-# Or install locally
-redis-server
-```
-
-2. Start the worker:
-
-```bash
-uv run python -m infrastructure.queue.rq_worker
-
-# Or specify queues:
-uv run python -m infrastructure.queue.rq_worker default emails outbox
-```
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | No | `sqlite:///dev.db` | Database connection string |
-| `SECRET_KEY` | Yes (prod) | `dev-secret-key` | Secret key for sessions |
-| `JWT_SECRET_KEY` | Yes (prod) | `dev-jwt-secret` | Secret key for JWT tokens |
-| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection URL |
-| `EMAIL_PROVIDER` | No | `smtp` | Email provider type |
-| `SMTP_HOST` | No | `localhost` | SMTP server host |
-| `SMTP_PORT` | No | `587` | SMTP server port |
-| `SMTP_USER` | No | - | SMTP username |
-| `SMTP_PASS` | No | - | SMTP password |
-| `SMTP_USE_TLS` | No | `true` | Use TLS for SMTP |
-| `FLASK_DEBUG` | No | `false` | Enable debug mode |
-
-## API Endpoints
-
-### Health Check
-- `GET /health` - Returns `{"status": "ok"}`
-
-### Authentication (API v1)
-- `POST /api/v1/auth/login` - Authenticate and get JWT tokens (rate limited: 5/min)
-- `POST /api/v1/auth/logout` - Logout and revoke token
-- `POST /api/v1/auth/refresh` - Refresh access token
-- `GET /api/v1/auth/me` - Get current user info
-
-#### CSRF Protection
-
-When using cookies for authentication (browser clients), CSRF protection is enabled.
-
-**Frontend Integration:**
-
-1. On login, the server sets cookies including a CSRF token
-2. For all state-changing requests (POST, PUT, DELETE), include the CSRF token header:
-
-```javascript
-// After login, get CSRF token from cookie
-const csrfToken = document.cookie
-  .split('; ')
-  .find(row => row.startsWith('csrf_access_token='))
-  ?.split('=')[1];
-
-// Include in subsequent requests
-fetch('/api/v1/auth/logout', {
-  method: 'POST',
-  headers: {
-    'X-CSRF-TOKEN': csrfToken,
-    'Content-Type': 'application/json'
-  },
-  credentials: 'include'
-});
-```
-
-**API Clients (non-browser):**
-
-Use the `Authorization: Bearer <token>` header instead of cookies. CSRF protection only applies to cookie-based auth.
-
-### Projects (API v1)
-- `GET /api/v1/projects` - List projects (requires `project:read`)
-- `POST /api/v1/projects` - Create project (requires `project:create`)
-- `GET /api/v1/projects/:id` - Get project (requires `project:read`)
-- `PUT /api/v1/projects/:id` - Update project (requires `project:update`)
-- `DELETE /api/v1/projects/:id` - Delete project (requires `project:delete`)
-
-### Users (API v1 - Stubs)
-- `GET /api/v1/users` - List users
-- `GET /api/v1/users/:id` - Get user
-
-## Development
-
-### Running Tests
-
-```bash
-uv run pytest
-```
-
-### Code Formatting
-
-```bash
-uv run black .
-uv run ruff check --fix .
-```
-
-### Type Checking
-
-```bash
-uv run mypy .
-```
-
-## Docker
-
-### Using Docker Compose (Recommended)
-
-Start all services (API, worker, PostgreSQL, Redis):
-
-```bash
-# Start all services in the background
 docker compose up -d
+```
 
-# View logs
-docker compose logs -f
+The API listens on **http://localhost:5000**. The front-end (separate repo) connects to it on that address.
 
-# Stop all services
+To stop everything:
+
+```bash
 docker compose down
 ```
 
-#### Environment Configuration
+### Manual setup (Python)
 
-Create a `.env` file to customize the configuration:
+If you'd rather run it on your own machine without Docker:
 
-```bash
-# Database
-POSTGRES_USER=myuser
-POSTGRES_PASSWORD=mysecurepassword
-POSTGRES_DB=construction
+1. Install [uv](https://docs.astral.sh/uv/) (a fast Python package manager).
+2. Install Python 3.12 and the project dependencies:
 
-# Application
-SECRET_KEY=your-production-secret-key
-FLASK_DEBUG=false
+   ```bash
+   uv python install 3.12
+   uv sync
+   ```
 
-# Email
-EMAIL_PROVIDER=smtp
-SMTP_HOST=smtp.example.com
-SMTP_USER=user@example.com
-SMTP_PASS=password
-```
+3. Copy the environment template and fill in your values:
 
-#### Services
+   ```bash
+   cp .env.example .env
+   ```
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `api` | 5000 | Flask API server |
-| `worker` | - | RQ background worker |
-| `db` | 5432 | PostgreSQL database |
-| `redis` | 6379 | Redis for task queue |
+4. Start the API:
 
-### Using Docker Only
+   ```bash
+   uv run flask run
+   ```
 
-Build and run the API container standalone:
+5. Start the background worker (handles emails, exports, reminders) in a second terminal:
+
+   ```bash
+   uv run python -m infrastructure.queue.rq_worker
+   ```
+
+A quick health check:
 
 ```bash
-# Build the image
-docker build -t construction-backend .
-
-# Run the container
-docker run -p 5000:5000 --env-file .env construction-backend
-
-# Run the worker
-docker run --env-file .env construction-backend python -m infrastructure.queue.rq_worker
+curl http://localhost:5000/health
+# {"status": "ok"}
 ```
+
+### Configuration
+
+The most useful settings, configured through environment variables:
+
+| Variable | What it controls |
+|---|---|
+| `DATABASE_URL` | Where Folio stores its data. PostgreSQL recommended for production. |
+| `SECRET_KEY` / `JWT_SECRET_KEY` | Sign-in tokens. Set unique values in production. |
+| `REDIS_URL` | Used for background jobs and rate-limiting. |
+| `EMAIL_PROVIDER`, `SMTP_*` | Outgoing email — invitations, password resets, reminders. |
+
+A full template lives in `.env.example`.
+
+---
+
+## What's inside the API
+
+The API exposes a small, predictable set of endpoints under `/api/v1/`:
+
+| Area | Endpoints |
+|---|---|
+| **Authentication** | Sign in, sign out, refresh, "who am I" |
+| **Projects** | List, create, view, update, delete |
+| **Project members** | Invite by email, list members, accept invitation |
+| **Workers** | Add, edit, deactivate workers in a project |
+| **Labor entries** | Log attendance and supplement hours |
+| **Labor exports** | Excel or PDF for the project or a single worker |
+| **Invoices** | Create, list, view, attach files |
+| **Notes** | Create, list, mark done, dismiss reminders |
+| **Notifications** | List, mark read |
+| **Admin** | Bulk-add users to projects, manage roles |
+
+Sign-in is JWT-based. Browsers use HTTP-only cookies (with CSRF protection); other clients can use a `Bearer` token in the `Authorization` header.
+
+---
+
+## Security at a glance
+
+- Sign-in is rate-limited (5 attempts per minute) and uses signed, expiring tokens.
+- Browser sessions are CSRF-protected.
+- Permissions are checked on every request — being a member of one project does not grant access to another.
+- Bulk admin operations (e.g. adding a user to many projects at once) are rate-limited per user and per IP.
+- Exported PDFs sanitize user-entered text to prevent markup injection.
+
+---
+
+## Support
+
+- Bug reports and feature requests: open an issue on the project tracker.
+- Operational issues (deployment, database, email): contact your administrator.
