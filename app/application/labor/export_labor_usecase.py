@@ -12,7 +12,7 @@ from app.application.labor.get_labor_summary import GetLaborSummaryUseCase, GetL
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
 from app.application.projects.ports import IProjectRepository
-from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
 
@@ -103,6 +103,8 @@ class ExportLaborUseCase:
             ProjectNotFoundError: if project does not exist.
             WorkerNotFoundError: if worker_id is set but worker does not exist or
                 belongs to a different project.
+            WorkerInactiveError: if the resolved worker is inactive (subclass of
+                WorkerNotFoundError; routes receive 404 with ``worker_inactive`` code).
         """
         # 1. Resolve project — raises ProjectNotFoundError if absent
         project = self._project_repo.find_by_id(req.project_id)
@@ -113,11 +115,10 @@ class ExportLaborUseCase:
         worker = None
         if req.worker_id is not None:
             worker = self._worker_repo.find_by_id(req.worker_id)
-            # NOTE: Inactive workers ARE exportable. Foremen need historical data for
-            # departed workers (payroll wrap-up). The FE hides the Download button on
-            # inactive rows (worker-list.tsx) but the API allows it deliberately.
             if worker is None or worker.project_id != req.project_id:
                 raise WorkerNotFoundError(str(req.worker_id))
+            if not worker.is_active:
+                raise WorkerInactiveError(str(req.worker_id))
 
         # 3. Parse month boundaries
         from_d = _parse_yyyy_mm(req.from_month)

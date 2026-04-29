@@ -6,14 +6,15 @@ from io import BytesIO
 from uuid import UUID
 
 from flask import Blueprint, jsonify, request, send_file
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api._helpers.requester_identity import get_requester_email
 from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.labor.export_labor_usecase import ExportLaborRequest
 from app.api.v1.labor.schemas import ExportLaborQuery
-from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -54,9 +55,7 @@ def export_labor(project_id: str):
 
     # --- Resolve acting user email (needed for file metadata) ---
     container = get_container()
-    requester_id = UUID(get_jwt_identity())
-    user = container.user_repository.find_by_id(requester_id)
-    requester_email = user.email if user else "unknown"
+    requester_email = get_requester_email(container.user_repository)
 
     # --- Execute use-case ---
     try:
@@ -122,9 +121,7 @@ def export_worker_labor(project_id: str, worker_id: str):
 
     # --- Resolve acting user email ---
     container = get_container()
-    requester_id = UUID(get_jwt_identity())
-    user = container.user_repository.find_by_id(requester_id)
-    requester_email = user.email if user else "unknown"
+    requester_email = get_requester_email(container.user_repository)
 
     # --- Execute use-case ---
     try:
@@ -140,6 +137,9 @@ def export_worker_labor(project_id: str, worker_id: str):
         )
     except ProjectNotFoundError:
         return jsonify({"error": "project_not_found", "message": f"Project {project_id} not found"}), 404
+    except WorkerInactiveError:
+        # Check sub-type first; WorkerInactiveError IS-A WorkerNotFoundError.
+        return jsonify({"error": "worker_inactive", "message": "Worker is inactive"}), 404
     except WorkerNotFoundError:
         return jsonify({"error": "worker_not_found", "message": f"Worker {worker_id} not found"}), 404
 

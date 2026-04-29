@@ -635,6 +635,16 @@ def worker_export_app():
             daily_rate=Decimal("250.00"),
         )
         db.session.add(other_project_worker)
+
+        # Inactive worker in the same project (for M-5 block test)
+        inactive_worker = WorkerModel(
+            id=uuid4(),
+            project_id=project.id,
+            name="Sophie Inactive",
+            daily_rate=Decimal("180.00"),
+            is_active=False,
+        )
+        db.session.add(inactive_worker)
         db.session.commit()
 
         configure_container(
@@ -655,6 +665,7 @@ def worker_export_app():
         test_app._test_worker_id = str(worker.id)
         test_app._test_worker_name = "Antoine Dupont"
         test_app._test_other_project_worker_id = str(other_project_worker.id)
+        test_app._test_inactive_worker_id = str(inactive_worker.id)
 
         yield test_app
 
@@ -909,6 +920,27 @@ class TestWorkerLaborExportEndpoint:
         pass  # See skip reason above
 
     # --- Case 14: 200 empty range — file has empty-state message; no crash ---
+
+    # --- Case 13.5 (M-5): 404 inactive worker blocked at backend ---
+
+    def test_404_inactive_worker_blocked(self, worker_export_client, worker_export_app, we_admin_token):
+        """Inactive worker → 404 with error code 'worker_inactive' (hard backend block).
+
+        The FE hides the export button for inactive workers, but a direct API call
+        must also be refused so the protection is not purely UI-gated.
+        """
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_inactive_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 404, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["error"] == "worker_inactive", f"Expected 'worker_inactive', got: {body}"
 
     def test_200_empty_range_xlsx_valid_bytes(self, worker_export_client, worker_export_app, we_admin_token):
         """Empty date range (no entries) → 200 with valid xlsx magic bytes, no crash."""

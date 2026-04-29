@@ -30,7 +30,7 @@ from app.application.labor.get_labor_summary import (
 from app.application.labor.list_labor_entries import LaborEntryDetail, ListLaborEntriesRequest, ListLaborEntriesUseCase
 from app.domain.entities.project import Project
 from app.domain.entities.worker import Worker
-from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 
 
@@ -839,3 +839,70 @@ class TestWorkerIdNotFound:
             uc.execute(req)
         # Worker repo should never be called if project is missing
         worker_repo.find_by_id.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# M-5 — inactive worker blocked
+# ---------------------------------------------------------------------------
+
+
+class TestInactiveWorkerBlocked:
+    """Inactive worker must raise WorkerInactiveError (subclass of WorkerNotFoundError)."""
+
+    def test_inactive_worker_raises_worker_inactive_error(self):
+        """Active=False worker → WorkerInactiveError, not a plain WorkerNotFoundError."""
+        pid = uuid4()
+        project = _make_project(project_id=pid)
+        # Build an inactive worker in the correct project
+        inactive_worker = _make_worker(project_id=pid, name="Jean Dupont")
+        object.__setattr__(inactive_worker, "is_active", False)
+
+        uc = _build_usecase_with_worker(project, inactive_worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=inactive_worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        with pytest.raises(WorkerInactiveError):
+            uc.execute(req)
+
+    def test_worker_inactive_error_is_subclass_of_worker_not_found(self):
+        """WorkerInactiveError must be catchable as WorkerNotFoundError."""
+        pid = uuid4()
+        project = _make_project(project_id=pid)
+        inactive_worker = _make_worker(project_id=pid)
+        object.__setattr__(inactive_worker, "is_active", False)
+
+        uc = _build_usecase_with_worker(project, inactive_worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=inactive_worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        with pytest.raises(WorkerNotFoundError):
+            uc.execute(req)
+
+    def test_active_worker_does_not_raise(self):
+        """Explicitly active worker (is_active=True) passes through without error."""
+        pid = uuid4()
+        project = _make_project(project_id=pid)
+        active_worker = _make_worker(project_id=pid)
+        # is_active defaults to True — verify no exception
+        assert active_worker.is_active is True
+        uc = _build_usecase_with_worker(project, active_worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=active_worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert result.content[:4] == b"PK\x03\x04"
