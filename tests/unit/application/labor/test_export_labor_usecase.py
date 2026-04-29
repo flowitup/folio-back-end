@@ -29,6 +29,8 @@ from app.application.labor.get_labor_summary import (
 )
 from app.application.labor.list_labor_entries import LaborEntryDetail, ListLaborEntriesRequest, ListLaborEntriesUseCase
 from app.domain.entities.project import Project
+from app.domain.entities.worker import Worker
+from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 
 
@@ -496,3 +498,344 @@ class TestCrossMonthAggregation:
         assert result.content[:4] == b"PK\x03\x04"
         # 2 months × entry calls happened
         assert entry_call_count[0] == 2
+
+
+# ---------------------------------------------------------------------------
+# Helpers for worker entity
+# ---------------------------------------------------------------------------
+
+
+def _make_worker(
+    *,
+    worker_id: UUID | None = None,
+    project_id: UUID | None = None,
+    name: str = "Antoine Dupont",
+    daily_rate: str = "200.00",
+) -> Worker:
+    from datetime import timezone
+    from decimal import Decimal
+
+    return Worker(
+        id=worker_id or uuid4(),
+        project_id=project_id or uuid4(),
+        name=name,
+        daily_rate=Decimal(daily_rate),
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def _build_usecase_with_worker(
+    project: Project | None,
+    worker: Worker | None,
+    summary_side_effect=None,
+    entries_side_effect=None,
+) -> ExportLaborUseCase:
+    """Construct use-case with worker_repo stub that returns `worker`."""
+    project_repo = MagicMock()
+    project_repo.find_by_id.return_value = project
+
+    worker_repo = MagicMock()
+    worker_repo.find_by_id.return_value = worker
+
+    summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+    if summary_side_effect is not None:
+        summary_uc.execute.side_effect = summary_side_effect
+    else:
+        summary_uc.execute.return_value = _empty_summary()
+
+    entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+    if entries_side_effect is not None:
+        entries_uc.execute.side_effect = entries_side_effect
+    else:
+        entries_uc.execute.return_value = []
+
+    return ExportLaborUseCase(
+        worker_repo=worker_repo,
+        entry_repo=MagicMock(),
+        summary_usecase=summary_uc,
+        list_entries_usecase=entries_uc,
+        project_repo=project_repo,
+    )
+
+
+# ---------------------------------------------------------------------------
+# worker_id=None regression
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerIdNoneRegression:
+    """Existing project-wide behaviour must be unchanged when worker_id is None."""
+
+    def test_worker_id_none_produces_valid_xlsx(self):
+        """worker_id=None (default) still yields valid xlsx bytes."""
+        project = _make_project("Test Project")
+        uc = _build_usecase(project)
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+            # worker_id omitted → defaults to None
+        )
+        result = uc.execute(req)
+        assert result.content[:4] == b"PK\x03\x04"
+
+    def test_worker_id_none_filename_has_no_worker_slug(self):
+        """Project-wide filename must NOT contain a worker slug segment."""
+        project = _make_project("Office Tower")
+        uc = _build_usecase(project)
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        # Format: labor-{project-slug}-{from}-to-{to}.xlsx (no worker segment)
+        assert result.filename.startswith("labor-")
+        assert "2026-01-to-2026-01" in result.filename
+
+    def test_worker_id_none_worker_repo_not_called(self):
+        """When worker_id=None, worker_repo.find_by_id must not be called."""
+        project = _make_project()
+        worker_repo = MagicMock()
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+        summary_uc.execute.return_value = _empty_summary()
+        entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+        entries_uc.execute.return_value = []
+
+        uc = ExportLaborUseCase(
+            worker_repo=worker_repo,
+            entry_repo=MagicMock(),
+            summary_usecase=summary_uc,
+            list_entries_usecase=entries_uc,
+            project_repo=project_repo,
+        )
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        uc.execute(req)
+        worker_repo.find_by_id.assert_not_called()
+
+    def test_summary_called_without_worker_id_filter(self):
+        """With worker_id=None, GetLaborSummaryRequest.worker_id must be None."""
+        project = _make_project()
+        summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+        summary_uc.execute.return_value = _empty_summary()
+        entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+        entries_uc.execute.return_value = []
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+
+        uc = ExportLaborUseCase(
+            worker_repo=MagicMock(),
+            entry_repo=MagicMock(),
+            summary_usecase=summary_uc,
+            list_entries_usecase=entries_uc,
+            project_repo=project_repo,
+        )
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        uc.execute(req)
+        call_arg: GetLaborSummaryRequest = summary_uc.execute.call_args[0][0]
+        assert call_arg.worker_id is None
+
+
+# ---------------------------------------------------------------------------
+# worker_id set — happy path
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerIdHappyPath:
+    def test_export_context_has_worker_name(self):
+        """When worker_id is set, ExportContext.worker_name == worker.name."""
+        pid = uuid4()
+        project = _make_project("Test Project", project_id=pid)
+        worker = _make_worker(project_id=pid, name="Marc Leblanc", daily_rate="250.00")
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        # The generated xlsx (single-worker) sheet name equals worker name
+        import openpyxl
+        from io import BytesIO
+
+        wb = openpyxl.load_workbook(BytesIO(result.content), data_only=True)
+        # Single-worker mode: sheet name is the sanitized worker name
+        assert len(wb.sheetnames) == 1
+        assert "Marc" in wb.sheetnames[0] or "leblanc" in wb.sheetnames[0].lower()
+
+    def test_filename_includes_worker_slug(self):
+        """With worker_id set, filename contains worker slug."""
+        pid = uuid4()
+        project = _make_project("Office Tower", project_id=pid)
+        worker = _make_worker(project_id=pid, name="Antoine Dupont")
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert "antoine-dupont" in result.filename, f"Worker slug not in filename: {result.filename}"
+
+    def test_filename_includes_project_slug_and_range(self):
+        """Filename format: labor-{project-slug}-{worker-slug}-{from}-to-{to}.xlsx"""
+        pid = uuid4()
+        project = _make_project("Office Tower", project_id=pid)
+        worker = _make_worker(project_id=pid, name="Marc Leblanc")
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-02",
+            to_month="2026-04",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert result.filename.startswith("labor-office-tower")
+        assert "marc-leblanc" in result.filename
+        assert "2026-02-to-2026-04" in result.filename
+        assert result.filename.endswith(".xlsx")
+
+    def test_summary_called_with_worker_id_filter(self):
+        """With worker_id set, GetLaborSummaryRequest.worker_id == worker.id."""
+        pid = uuid4()
+        project = _make_project(project_id=pid)
+        worker = _make_worker(project_id=pid)
+        summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+        summary_uc.execute.return_value = _empty_summary()
+        entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+        entries_uc.execute.return_value = []
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        worker_repo = MagicMock()
+        worker_repo.find_by_id.return_value = worker
+
+        uc = ExportLaborUseCase(
+            worker_repo=worker_repo,
+            entry_repo=MagicMock(),
+            summary_usecase=summary_uc,
+            list_entries_usecase=entries_uc,
+            project_repo=project_repo,
+        )
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        uc.execute(req)
+        call_arg: GetLaborSummaryRequest = summary_uc.execute.call_args[0][0]
+        assert call_arg.worker_id == worker.id
+
+    def test_pdf_filename_ends_with_pdf(self):
+        """Single-worker PDF filename ends with .pdf."""
+        pid = uuid4()
+        project = _make_project(project_id=pid)
+        worker = _make_worker(project_id=pid, name="Antoine Dupont")
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="pdf",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert result.filename.endswith(".pdf")
+        assert "antoine-dupont" in result.filename
+
+
+# ---------------------------------------------------------------------------
+# worker_id set — worker not found / wrong project
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerIdNotFound:
+    def test_worker_not_in_repo_raises_worker_not_found(self):
+        """worker_repo returns None → WorkerNotFoundError raised."""
+        pid = uuid4()
+        project = _make_project(project_id=pid)
+        uc = _build_usecase_with_worker(project, worker=None)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=uuid4(),
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        with pytest.raises(WorkerNotFoundError):
+            uc.execute(req)
+
+    def test_worker_belongs_to_different_project_raises_worker_not_found(self):
+        """Worker exists but project_id mismatch → WorkerNotFoundError."""
+        pid = uuid4()
+        other_pid = uuid4()
+        project = _make_project(project_id=pid)
+        # Worker belongs to other_pid, not pid
+        worker = _make_worker(project_id=other_pid, name="Alice")
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        with pytest.raises(WorkerNotFoundError):
+            uc.execute(req)
+
+    def test_project_not_found_takes_precedence_over_worker(self):
+        """ProjectNotFoundError raised before worker lookup."""
+        worker_repo = MagicMock()
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = None  # project missing
+
+        uc = ExportLaborUseCase(
+            worker_repo=worker_repo,
+            entry_repo=MagicMock(),
+            summary_usecase=MagicMock(spec=GetLaborSummaryUseCase),
+            list_entries_usecase=MagicMock(spec=ListLaborEntriesUseCase),
+            project_repo=project_repo,
+        )
+        req = ExportLaborRequest(
+            project_id=uuid4(),
+            worker_id=uuid4(),
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        with pytest.raises(ProjectNotFoundError):
+            uc.execute(req)
+        # Worker repo should never be called if project is missing
+        worker_repo.find_by_id.assert_not_called()

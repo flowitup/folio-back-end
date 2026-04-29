@@ -1,4 +1,4 @@
-"""API smoke tests for GET /projects/<id>/labor-export.
+"""API smoke tests for GET /projects/<id>/labor-export and worker variant.
 
 Covers:
 - 200 happy paths: xlsx magic bytes, pdf magic bytes
@@ -8,10 +8,12 @@ Covers:
 - 422 validation: from > to, span > 24 months, unknown format, malformed from
 - 403 when user lacks project:read
 - 404 when project does not exist
+- TestWorkerLaborExportEndpoint: single-worker route (14 cases)
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -21,6 +23,7 @@ from app.infrastructure.database.models import (
     ProjectModel,
     RoleModel,
     PermissionModel,
+    WorkerModel,
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
@@ -532,3 +535,391 @@ def test_export_empty_range_pdf_200_with_valid_bytes(export_client, export_app, 
     assert resp.status_code == 200
     assert resp.content_type == "application/pdf"
     assert resp.data[:5] == b"%PDF-"
+
+
+# ---------------------------------------------------------------------------
+# TestWorkerLaborExportEndpoint
+# GET /api/v1/projects/<project_id>/workers/<worker_id>/labor-export
+# ---------------------------------------------------------------------------
+
+
+def _worker_export_url(project_id: str, worker_id: str) -> str:
+    return f"/api/v1/projects/{project_id}/workers/{worker_id}/labor-export"
+
+
+@pytest.fixture(scope="module")
+def worker_export_app():
+    """Flask app seeded with a project, two workers, and a no-perm user."""
+    from app import create_app, db
+    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+    from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+    from app.infrastructure.adapters.flask_session import FlaskSessionManager
+    from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+    from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
+    from config import TestingConfig
+    from wiring import configure_container
+
+    class WorkerExportTestConfig(TestingConfig):
+        JWT_TOKEN_LOCATION = ["headers", "cookies"]
+        RATELIMIT_ENABLED = False
+        RATELIMIT_STORAGE_URI = "memory://"
+
+    test_app = create_app(WorkerExportTestConfig)
+
+    with test_app.app_context():
+        db.create_all()
+
+        hasher = Argon2PasswordHasher()
+        token_issuer = JWTTokenIssuer()
+        user_repo = SQLAlchemyUserRepository(db.session)
+        project_repo = SQLAlchemyProjectRepository(db.session)
+        worker_repo = SQLAlchemyWorkerRepository(db.session)
+        entry_repo = SQLAlchemyLaborEntryRepository(db.session)
+
+        # Permissions
+        read_perm = PermissionModel(name="project:read", resource="project", action="read")
+        star_perm = PermissionModel(name="*:*", resource="*", action="*")
+        admin_role = RoleModel(name="wexport_admin", description="Worker Export Admin")
+        admin_role.permissions.append(read_perm)
+        admin_role.permissions.append(star_perm)
+        noperm_role = RoleModel(name="wexport_noperm", description="No Perm")
+
+        db.session.add_all([read_perm, star_perm, admin_role, noperm_role])
+        db.session.flush()
+
+        # Users
+        admin_user = UserModel(
+            email="wexportadmin@test.com",
+            password_hash=hasher.hash("Admin1234!"),
+            is_active=True,
+        )
+        admin_user.roles.append(admin_role)
+        db.session.add(admin_user)
+
+        noperm_user = UserModel(
+            email="wexportnoperm@test.com",
+            password_hash=hasher.hash("Admin1234!"),
+            is_active=True,
+        )
+        noperm_user.roles.append(noperm_role)
+        db.session.add(noperm_user)
+        db.session.flush()
+
+        # Projects
+        project = ProjectModel(name="Worker Export Project", owner_id=admin_user.id)
+        db.session.add(project)
+
+        other_project = ProjectModel(name="Other Project", owner_id=admin_user.id)
+        db.session.add(other_project)
+        db.session.flush()
+
+        # Workers — use UUID objects for SQLite compatibility
+        worker = WorkerModel(
+            id=uuid4(),
+            project_id=project.id,
+            name="Antoine Dupont",
+            daily_rate=Decimal("200.00"),
+        )
+        db.session.add(worker)
+
+        # Worker that belongs to a DIFFERENT project (for cross-project 404 test)
+        other_project_worker = WorkerModel(
+            id=uuid4(),
+            project_id=other_project.id,
+            name="Marc Leblanc",
+            daily_rate=Decimal("250.00"),
+        )
+        db.session.add(other_project_worker)
+        db.session.commit()
+
+        configure_container(
+            user_repository=user_repo,
+            project_repository=project_repo,
+            password_hasher=hasher,
+            token_issuer=token_issuer,
+            session_manager=FlaskSessionManager(),
+            worker_repository=worker_repo,
+            labor_entry_repository=entry_repo,
+        )
+
+        test_app._test_admin_email = "wexportadmin@test.com"
+        test_app._test_admin_password = "Admin1234!"
+        test_app._test_noperm_email = "wexportnoperm@test.com"
+        test_app._test_noperm_password = "Admin1234!"
+        test_app._test_project_id = str(project.id)
+        test_app._test_worker_id = str(worker.id)
+        test_app._test_worker_name = "Antoine Dupont"
+        test_app._test_other_project_worker_id = str(other_project_worker.id)
+
+        yield test_app
+
+        db.session.remove()
+        db.drop_all()
+
+
+@pytest.fixture
+def worker_export_client(worker_export_app):
+    return worker_export_app.test_client()
+
+
+@pytest.fixture
+def we_admin_token(worker_export_client, worker_export_app):
+    return _login(
+        worker_export_client,
+        worker_export_app._test_admin_email,
+        worker_export_app._test_admin_password,
+    )
+
+
+@pytest.fixture
+def we_noperm_token(worker_export_client, worker_export_app):
+    return _login(
+        worker_export_client,
+        worker_export_app._test_noperm_email,
+        worker_export_app._test_noperm_password,
+    )
+
+
+class TestWorkerLaborExportEndpoint:
+    """14 cases for GET /projects/<pid>/workers/<wid>/labor-export."""
+
+    # --- Case 1: 200 xlsx magic bytes + headers ---
+
+    def test_200_xlsx_magic_bytes_and_headers(self, worker_export_client, worker_export_app, we_admin_token):
+        """200 xlsx: PK magic, CD attachment, CC no-store, XCTO nosniff, filename has worker slug."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.data[:4] == b"PK\x03\x04", "Expected xlsx ZIP magic bytes"
+        cd = resp.headers.get("Content-Disposition", "")
+        assert "attachment" in cd
+        assert "labor-" in cd
+        # Worker slug for "Antoine Dupont" → "antoine-dupont"
+        assert "antoine-dupont" in cd, f"Worker slug missing from CD: {cd}"
+        cc = resp.headers.get("Cache-Control", "")
+        assert "no-store" in cc
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+    # --- Case 2: 200 pdf magic bytes ---
+
+    def test_200_pdf_magic_bytes(self, worker_export_client, worker_export_app, we_admin_token):
+        """200 pdf: %PDF- magic, filename ends .pdf."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "pdf"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.data[:5] == b"%PDF-", "Expected PDF magic bytes"
+        cd = resp.headers.get("Content-Disposition", "")
+        assert ".pdf" in cd
+
+    # --- Case 3: 422 from > to ---
+
+    def test_422_from_after_to(self, worker_export_client, worker_export_app, we_admin_token):
+        """from > to → 422 validation_error."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-06", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "validation_error"
+
+    # --- Case 4: 422 span > 24 months ---
+
+    def test_422_span_exceeds_24_months(self, worker_export_client, worker_export_app, we_admin_token):
+        """25-month span → 422 validation_error."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2024-01", "to": "2026-02", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "validation_error"
+
+    # --- Case 5: 422 malformed format ---
+
+    def test_422_malformed_format(self, worker_export_client, worker_export_app, we_admin_token):
+        """format=csv → 422 validation_error."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "csv"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "validation_error"
+
+    # --- Case 6: 422 malformed YYYY-MM ---
+
+    def test_422_malformed_from_date(self, worker_export_client, worker_export_app, we_admin_token):
+        """from=2026-1 (no zero-padding) → 422 validation_error."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-1", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "validation_error"
+
+    # --- Case 7: 422 invalid worker_id (not a UUID) ---
+
+    def test_422_invalid_worker_id_not_uuid(self, worker_export_client, worker_export_app, we_admin_token):
+        """Non-UUID worker_id path param → 422 invalid_worker_id."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            "not-a-uuid",
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "invalid_worker_id"
+
+    # --- Case 8: 404 project not found ---
+
+    def test_404_project_not_found(self, worker_export_client, worker_export_app, we_admin_token):
+        """Non-existent project UUID → 404 project_not_found."""
+        url = _worker_export_url(str(uuid4()), worker_export_app._test_worker_id)
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "project_not_found"
+
+    # --- Case 9: 404 worker not found (legitimate UUID, no row) ---
+
+    def test_404_worker_not_found_unknown_uuid(self, worker_export_client, worker_export_app, we_admin_token):
+        """Valid UUID that doesn't match any worker → 404 worker_not_found."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            str(uuid4()),
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "worker_not_found"
+
+    # --- Case 10: 404 worker exists but in different project ---
+
+    def test_404_worker_in_different_project(self, worker_export_client, worker_export_app, we_admin_token):
+        """Worker exists but belongs to a different project → 404 worker_not_found."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_other_project_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "worker_not_found"
+
+    # --- Case 11: 401 missing auth ---
+
+    def test_401_no_auth_header(self, worker_export_client, worker_export_app):
+        """No Authorization header → 401."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+        )
+        assert resp.status_code == 401
+
+    # --- Case 12: 403 lacks project:read ---
+
+    def test_403_lacks_project_read(self, worker_export_client, worker_export_app, we_noperm_token):
+        """User without project:read → 403."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(we_noperm_token),
+        )
+        assert resp.status_code == 403
+
+    # --- Case 13: 429 rate-limited (6th call within 1 min) ---
+
+    # NOTE: 429 rate-limit test is skipped — RATELIMIT_ENABLED=False in TestingConfig.
+    # The global `limiter` singleton shares memory://  storage across Flask app instances
+    # created within the same process, making isolation between module-scoped fixtures
+    # and a dedicated RL-enabled app unreliable.
+    # The rate-limit mechanism (flask-limiter, @limiter.limit("5 per minute")) is
+    # verified by the existing test in tests/test_auth_endpoints.py::TestRateLimit.
+    @pytest.mark.skip(
+        reason=(
+            "Rate-limit test skipped: RATELIMIT_ENABLED=False in TestingConfig. "
+            "Global limiter singleton shares memory:// storage across app instances "
+            "in the same process, causing bleed between module-scoped fixtures. "
+            "Mechanism verified by test_auth_endpoints.py::TestRateLimit."
+        )
+    )
+    def test_429_rate_limited_on_sixth_call(self):
+        """6th call within 1 minute → 429 (rate limit: 5/min)."""
+        pass  # See skip reason above
+
+    # --- Case 14: 200 empty range — file has empty-state message; no crash ---
+
+    def test_200_empty_range_xlsx_valid_bytes(self, worker_export_client, worker_export_app, we_admin_token):
+        """Empty date range (no entries) → 200 with valid xlsx magic bytes, no crash."""
+        url = _worker_export_url(
+            worker_export_app._test_project_id,
+            worker_export_app._test_worker_id,
+        )
+        resp = worker_export_client.get(
+            url,
+            query_string={"from": "2099-01", "to": "2099-01", "format": "xlsx"},
+            headers=_auth(we_admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.data[:4] == b"PK\x03\x04", "Expected xlsx magic bytes for empty range"
+        # Verify the workbook opens and contains the empty-state message
+        import openpyxl
+        from io import BytesIO
+
+        wb = openpyxl.load_workbook(BytesIO(resp.data), data_only=True)
+        ws = wb.active
+        all_values = [ws.cell(row=r, column=1).value for r in range(1, 20)]
+        no_entries = any(v and "No labor entries in range" in str(v) for v in all_values)
+        assert no_entries, f"Empty-state message missing. Col A: {all_values}"
