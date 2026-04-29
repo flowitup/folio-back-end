@@ -15,6 +15,22 @@ class WorkerNotFoundError(LaborError):
         super().__init__(f"Worker not found: {worker_id}")
 
 
+class WorkerInactiveError(WorkerNotFoundError):
+    """Raised when export is requested for an inactive worker.
+
+    Subclasses WorkerNotFoundError so existing ``except WorkerNotFoundError``
+    clauses in route handlers catch it automatically. Routes can distinguish
+    the sub-type via ``isinstance(exc, WorkerInactiveError)`` to emit a more
+    specific error code if desired.
+    """
+
+    def __init__(self, worker_id: str):
+        # Call LaborError.__init__ directly to set our own message while still
+        # setting self.worker_id via the parent __init__ chain.
+        self.worker_id = worker_id
+        LaborError.__init__(self, f"Worker is inactive: {worker_id}")
+
+
 class LaborEntryNotFoundError(LaborError):
     """Raised when labor entry does not exist."""
 

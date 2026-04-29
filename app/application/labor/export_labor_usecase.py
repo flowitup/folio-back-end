@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from app.application.labor.get_labor_summary import GetLaborSummaryUseCase, GetLaborSummaryRequest
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
 from app.application.projects.ports import IProjectRepository
+from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
 
@@ -25,6 +26,8 @@ class ExportLaborRequest:
     to_month: str  # YYYY-MM  e.g. "2026-03"
     format: ExportFormat  # "xlsx" | "pdf"
     acting_user_email: str
+    # Optional: when set, scopes entire export to a single worker
+    worker_id: Optional[UUID] = field(default=None)
 
 
 @dataclass
@@ -90,24 +93,38 @@ class ExportLaborUseCase:
         """Generate export file.
 
         Args:
-            req: ExportLaborRequest with project_id, from_month, to_month, format, acting_user_email.
+            req: ExportLaborRequest with project_id, from_month, to_month, format,
+                 acting_user_email, and optional worker_id for single-worker scope.
 
         Returns:
             ExportLaborResult with raw bytes, filename, and MIME type.
 
         Raises:
             ProjectNotFoundError: if project does not exist.
+            WorkerNotFoundError: if worker_id is set but worker does not exist or
+                belongs to a different project.
+            WorkerInactiveError: if the resolved worker is inactive (subclass of
+                WorkerNotFoundError; routes receive 404 with ``worker_inactive`` code).
         """
         # 1. Resolve project — raises ProjectNotFoundError if absent
         project = self._project_repo.find_by_id(req.project_id)
         if project is None:
             raise ProjectNotFoundError(str(req.project_id))
 
-        # 2. Parse month boundaries
+        # 2. Optionally resolve worker (single-worker scope)
+        worker = None
+        if req.worker_id is not None:
+            worker = self._worker_repo.find_by_id(req.worker_id)
+            if worker is None or worker.project_id != req.project_id:
+                raise WorkerNotFoundError(str(req.worker_id))
+            if not worker.is_active:
+                raise WorkerInactiveError(str(req.worker_id))
+
+        # 3. Parse month boundaries
         from_d = _parse_yyyy_mm(req.from_month)
         to_d = _parse_yyyy_mm(req.to_month)
 
-        # 3. Build per-month buckets
+        # 4. Build per-month buckets
         buckets: List[MonthBucket] = []
         for month_first in _enumerate_months(from_d, to_d):
             month_start, month_end = _month_bounds(month_first)
@@ -117,6 +134,7 @@ class ExportLaborUseCase:
                     project_id=req.project_id,
                     date_from=month_start,
                     date_to=month_end,
+                    worker_id=req.worker_id,
                 )
             )
 
@@ -125,6 +143,7 @@ class ExportLaborUseCase:
                     project_id=req.project_id,
                     date_from=month_start,
                     date_to=month_end,
+                    worker_id=req.worker_id,
                 )
             )
 
@@ -139,17 +158,19 @@ class ExportLaborUseCase:
                 )
             )
 
-        # 4. Build export context
+        # 5. Build export context
         context = ExportContext(
             project_name=project.name,
             project_id=req.project_id,
             range=ExportRange(from_month=from_d, to_month=to_d),
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
+            worker_name=worker.name if worker is not None else None,
+            worker_daily_rate=worker.daily_rate if worker is not None else None,
         )
 
-        # 5. Dispatch to builder
-        from app.domain.labor.export.format import slugify_project_name
+        # 6. Dispatch to builder
+        from app.domain.labor.export.format import slugify_project_name, slugify_worker_name
 
         if req.format == "xlsx":
             from app.domain.labor.export.xlsx_builder import build_xlsx
@@ -164,9 +185,13 @@ class ExportLaborUseCase:
             mime_type = "application/pdf"
             ext = "pdf"
 
-        # 6. Generate filename
-        slug = slugify_project_name(project.name, str(project.id))
-        filename = f"labor-{slug}-{req.from_month}-to-{req.to_month}.{ext}"
+        # 7. Generate filename
+        project_slug = slugify_project_name(project.name, str(project.id))
+        if worker is not None:
+            worker_slug = slugify_worker_name(worker.name, str(worker.id))
+            filename = f"labor-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
+        else:
+            filename = f"labor-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"
 
         return ExportLaborResult(
             content=file_bytes,

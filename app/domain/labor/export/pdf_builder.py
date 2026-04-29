@@ -31,6 +31,7 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import List
+from xml.sax.saxutils import escape as _xml_escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -43,12 +44,22 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from .format import format_eur_fr
 from .models import ExportContext, MonthBucket
 
+
+def _format_fr_float(v: float, decimals: int = 1) -> str:
+    """Format a float using fr-FR decimal notation (comma separator).
+
+    Used for non-currency float KPIs such as ``total_bonus_days`` so they
+    render consistently with other fr-FR formatted values on the page.
+    Integer values (days, banked hours) should use ``str()`` directly.
+    """
+    return f"{v:.{decimals}f}".replace(".", ",")
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 _FONTS_DIR = Path(__file__).parent / "fonts"
-_FONT_REGISTERED = False
 
 # Table column headers (8 columns)
 _BREAKDOWN_HEADERS = [
@@ -79,15 +90,16 @@ _NUMERIC_COLS = {1, 2, 3, 4, 5, 6, 7}
 
 
 # ---------------------------------------------------------------------------
-# Font registration (run-once, idempotent)
+# Font registration — executed at module import time (M-1 fix)
 # ---------------------------------------------------------------------------
+# Running registration once at import eliminates the lazy-flag race condition
+# where two concurrent requests could both observe _FONT_REGISTERED==False and
+# double-register. Module-level code is serialised by the Python import system.
+# A try/except guards against missing font files so import never hard-crashes;
+# build_pdf() will still fail (via ReportLab) if fonts are absent, which
+# surfaces the error at the right call site with a clear traceback.
 
-
-def _register_fonts() -> None:
-    """Register DejaVu Sans + Bold for Vietnamese / French / Latin support."""
-    global _FONT_REGISTERED
-    if _FONT_REGISTERED:
-        return
+try:
     pdfmetrics.registerFont(TTFont("DejaVu", str(_FONTS_DIR / "DejaVuSans.ttf")))
     pdfmetrics.registerFont(TTFont("DejaVu-Bold", str(_FONTS_DIR / "DejaVuSans-Bold.ttf")))
     pdfmetrics.registerFontFamily(
@@ -97,7 +109,14 @@ def _register_fonts() -> None:
         italic="DejaVu",
         boldItalic="DejaVu-Bold",
     )
-    _FONT_REGISTERED = True
+except Exception as _font_err:  # noqa: BLE001
+    import warnings
+
+    warnings.warn(
+        f"pdf_builder: DejaVu font registration failed ({_font_err}). "
+        "PDF generation will fail if fonts are unavailable.",
+        stacklevel=1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +251,11 @@ def _aggregate_across_buckets(buckets: List[MonthBucket]) -> List[_AggRow]:
 
 
 def _render_header(context: ExportContext, styles: dict) -> list:
-    """Build 4-paragraph header block for the export document."""
+    """Build header block for the export document.
+
+    Project-wide: 4 paragraphs (title, project, range, generated).
+    Single-worker: same 4 + extra worker line with name and daily rate.
+    """
     from_label = context.range.from_month.strftime("%b %Y")
     to_label = context.range.to_month.strftime("%b %Y")
     # Count months: inclusive range
@@ -242,16 +265,23 @@ def _render_header(context: ExportContext, styles: dict) -> list:
 
     elements = [
         Paragraph("Folio · Labor Export", styles["h1"]),
-        Paragraph(f"Project: {context.project_name}", styles["h2"]),
+        Paragraph(f"Project: {_xml_escape(context.project_name)}", styles["h2"]),
         Paragraph(
             f"Range: {from_label} → {to_label} ({n_months} month{'s' if n_months != 1 else ''})",
             styles["h2"],
         ),
         Paragraph(
-            f"Generated: {context.generated_at.strftime('%Y-%m-%d %H:%M UTC')} " f"by {context.generated_by_email}",
+            f"Generated: {context.generated_at.strftime('%Y-%m-%d %H:%M UTC')} "
+            f"by {_xml_escape(context.generated_by_email)}",
             styles["h2"],
         ),
     ]
+
+    if context.worker_name is not None:
+        rate = context.worker_daily_rate
+        rate_str = format_eur_fr(rate) if rate is not None else "—"
+        elements.append(Paragraph(f"Worker: {_xml_escape(context.worker_name)}    Rate: {rate_str}/day", styles["h2"]))
+
     return elements
 
 
@@ -285,7 +315,7 @@ def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
             Paragraph(format_eur_fr(total_cost), styles["kpi_value"]),
             Paragraph(str(total_days), styles["kpi_value"]),
             Paragraph(format_eur_fr(total_bonus_cost), styles["kpi_value"]),
-            Paragraph(str(total_bonus_days), styles["kpi_value"]),
+            Paragraph(_format_fr_float(total_bonus_days), styles["kpi_value"]),
             Paragraph(str(total_banked_hours), styles["kpi_value"]),
         ],
     ]
@@ -403,6 +433,7 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
 
     Args:
         context: Export metadata (project name, range, generated_at, user email).
+                 When context.worker_name is set, renders single-worker view.
         buckets: One MonthBucket per calendar month in the export range.
 
     Returns:
@@ -411,9 +442,12 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     Empty-range behaviour:
         If all buckets have empty summary.rows, the PDF contains only the
         header + "No labor entries in range …" paragraph (no KPI / no table).
-    """
-    _register_fonts()
 
+    Single-worker mode (context.worker_name is set):
+        Header includes worker name + rate line.
+        KPI table and breakdown table show only that worker's aggregated rows.
+        (Daily detail is omitted — same as project-wide PDF; lives only in xlsx.)
+    """
     buf = BytesIO()
     margin = 15 * mm
     doc = SimpleDocTemplate(
@@ -431,7 +465,7 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     styles = _make_styles()
     footer_cb = _make_footer_callback(context)
 
-    # Determine empty-range case
+    # Determine empty-range case — summary.rows already scoped to worker by use-case
     all_empty = all(not bucket.summary.rows for bucket in buckets) if buckets else True
 
     story: list = []
@@ -448,6 +482,10 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
             )
         )
     else:
+        # KPI and breakdown tables work identically for both single-worker and
+        # project-wide modes because the buckets are already pre-filtered by
+        # worker_id in the use-case. The breakdown table will therefore contain
+        # exactly one worker row in single-worker mode.
         story.extend(_render_kpi_table(buckets, styles))
         story.append(Spacer(1, 6 * mm))
         story.extend(_render_breakdown_table(buckets, styles, usable_width))

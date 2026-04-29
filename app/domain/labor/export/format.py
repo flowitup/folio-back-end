@@ -55,6 +55,28 @@ def slugify_project_name(name: str, fallback_id: str) -> str:
     return slug
 
 
+def slugify_worker_name(name: str, fallback_id: str) -> str:
+    """Convert a worker name to a kebab-case filename slug (≤32 chars).
+
+    Same algorithm as slugify_project_name; separate function to make intent
+    explicit at call sites.
+    Falls back to the first 8 chars of fallback_id when the slug would be empty
+    or the name has no Latin/digit characters.
+    """
+    import unicodedata
+
+    from slugify import slugify
+
+    has_latin_content = any(unicodedata.category(c) in ("Ll", "Lu", "Nd") for c in (name or ""))
+    if not has_latin_content:
+        return (fallback_id or "")[:8] or "worker"
+
+    slug = slugify(name, max_length=32, word_boundary=True, save_order=True)
+    if not slug:
+        slug = (fallback_id or "")[:8] or "worker"
+    return slug
+
+
 if __name__ == "__main__":
     # Quick smoke-test for manual verification
     print(repr(format_eur_fr(Decimal("200"))))  # '200,00\xa0€'
