@@ -31,6 +31,7 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import List
+from xml.sax.saxutils import escape as _xml_escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -246,13 +247,14 @@ def _render_header(context: ExportContext, styles: dict) -> list:
 
     elements = [
         Paragraph("Folio · Labor Export", styles["h1"]),
-        Paragraph(f"Project: {context.project_name}", styles["h2"]),
+        Paragraph(f"Project: {_xml_escape(context.project_name)}", styles["h2"]),
         Paragraph(
             f"Range: {from_label} → {to_label} ({n_months} month{'s' if n_months != 1 else ''})",
             styles["h2"],
         ),
         Paragraph(
-            f"Generated: {context.generated_at.strftime('%Y-%m-%d %H:%M UTC')} " f"by {context.generated_by_email}",
+            f"Generated: {context.generated_at.strftime('%Y-%m-%d %H:%M UTC')} "
+            f"by {_xml_escape(context.generated_by_email)}",
             styles["h2"],
         ),
     ]
@@ -260,7 +262,7 @@ def _render_header(context: ExportContext, styles: dict) -> list:
     if context.worker_name is not None:
         rate = context.worker_daily_rate
         rate_str = format_eur_fr(rate) if rate is not None else "—"
-        elements.append(Paragraph(f"Worker: {context.worker_name}    Rate: {rate_str}/day", styles["h2"]))
+        elements.append(Paragraph(f"Worker: {_xml_escape(context.worker_name)}    Rate: {rate_str}/day", styles["h2"]))
 
     return elements
 

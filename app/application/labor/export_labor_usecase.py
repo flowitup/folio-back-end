@@ -113,6 +113,9 @@ class ExportLaborUseCase:
         worker = None
         if req.worker_id is not None:
             worker = self._worker_repo.find_by_id(req.worker_id)
+            # NOTE: Inactive workers ARE exportable. Foremen need historical data for
+            # departed workers (payroll wrap-up). The FE hides the Download button on
+            # inactive rows (worker-list.tsx) but the API allows it deliberately.
             if worker is None or worker.project_id != req.project_id:
                 raise WorkerNotFoundError(str(req.worker_id))
 

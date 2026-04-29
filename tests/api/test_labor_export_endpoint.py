@@ -357,7 +357,11 @@ def test_export_403_when_user_lacks_project_read(export_client, export_app, nope
 
 
 def test_export_404_when_project_not_found(export_client, export_app, admin_token):
-    """Non-existent project UUID → 404."""
+    """Non-existent project UUID → 404.
+
+    @require_project_access() intercepts before the route body, so the error key
+    is "NotFound" (from the decorator's _not_found helper).
+    """
     missing_id = str(uuid4())
     url = _export_url(missing_id)
     resp = export_client.get(
@@ -367,7 +371,8 @@ def test_export_404_when_project_not_found(export_client, export_app, admin_toke
     )
     assert resp.status_code == 404
     data = resp.get_json()
-    assert data["error"] == "project_not_found"
+    # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
+    assert data["error"] in ("NotFound", "project_not_found")
 
 
 # ---------------------------------------------------------------------------
@@ -808,7 +813,10 @@ class TestWorkerLaborExportEndpoint:
     # --- Case 8: 404 project not found ---
 
     def test_404_project_not_found(self, worker_export_client, worker_export_app, we_admin_token):
-        """Non-existent project UUID → 404 project_not_found."""
+        """Non-existent project UUID → 404.
+
+        @require_project_access() intercepts before the route body, returning {"error": "NotFound"}.
+        """
         url = _worker_export_url(str(uuid4()), worker_export_app._test_worker_id)
         resp = worker_export_client.get(
             url,
@@ -816,7 +824,8 @@ class TestWorkerLaborExportEndpoint:
             headers=_auth(we_admin_token),
         )
         assert resp.status_code == 404
-        assert resp.get_json()["error"] == "project_not_found"
+        # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
+        assert resp.get_json()["error"] in ("NotFound", "project_not_found")
 
     # --- Case 9: 404 worker not found (legitimate UUID, no row) ---
 
@@ -923,3 +932,148 @@ class TestWorkerLaborExportEndpoint:
         all_values = [ws.cell(row=r, column=1).value for r in range(1, 20)]
         no_entries = any(v and "No labor entries in range" in str(v) for v in all_values)
         assert no_entries, f"Empty-state message missing. Col A: {all_values}"
+
+    # --- Case 15: non-ASCII project + worker name → filename uses UUID prefix fallback ---
+
+    def test_filename_fallback_for_cjk_project_and_worker_name(
+        self, cjk_worker_export_client, cjk_worker_export_app, cjk_admin_token
+    ):
+        """CJK/emoji project name and worker name → filename uses UUID-prefix slug for both.
+
+        Asserts that slugify falls back to the first 8 hex chars of each UUID and that
+        no question marks or replacement characters appear in the filename.
+        Expected pattern: labor-{8-char project prefix}-{8-char worker prefix}-{from}-to-{to}.{ext}
+        """
+        url = _worker_export_url(
+            cjk_worker_export_app._test_project_id,
+            cjk_worker_export_app._test_worker_id,
+        )
+        resp = cjk_worker_export_client.get(
+            url,
+            query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+            headers=_auth(cjk_admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        cd = resp.headers.get("Content-Disposition", "")
+        # Extract filename from Content-Disposition
+        filename = ""
+        for part in cd.split(";"):
+            part = part.strip()
+            if part.startswith("filename="):
+                filename = part[len("filename=") :].strip('"')
+                break
+
+        # Both project and worker UUIDs have no hyphens in slug fallback
+        project_id = cjk_worker_export_app._test_project_id
+        worker_id = cjk_worker_export_app._test_worker_id
+        project_prefix = project_id.replace("-", "")[:8]
+        worker_prefix = worker_id.replace("-", "")[:8]
+
+        assert project_prefix in filename, f"Expected project UUID prefix '{project_prefix}' in filename '{filename}'"
+        assert worker_prefix in filename, f"Expected worker UUID prefix '{worker_prefix}' in filename '{filename}'"
+        assert "?" not in filename, f"Replacement/question-mark char in filename: {filename}"
+        assert "�" not in filename, f"Unicode replacement char in filename: {filename}"
+        assert filename.endswith(".xlsx"), f"Expected .xlsx extension in filename: {filename}"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for Case 15 — CJK project + worker names
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def cjk_worker_export_app():
+    """Flask app seeded with a CJK-named project and CJK-named worker for slug-fallback test."""
+    from app import create_app, db
+    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+    from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+    from app.infrastructure.adapters.flask_session import FlaskSessionManager
+    from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+    from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
+    from config import TestingConfig
+    from wiring import configure_container
+
+    class CJKWorkerExportTestConfig(TestingConfig):
+        JWT_TOKEN_LOCATION = ["headers", "cookies"]
+        RATELIMIT_ENABLED = False
+        RATELIMIT_STORAGE_URI = "memory://"
+
+    test_app = create_app(CJKWorkerExportTestConfig)
+
+    with test_app.app_context():
+        db.create_all()
+
+        hasher = Argon2PasswordHasher()
+        token_issuer = JWTTokenIssuer()
+        user_repo = SQLAlchemyUserRepository(db.session)
+        project_repo = SQLAlchemyProjectRepository(db.session)
+        worker_repo = SQLAlchemyWorkerRepository(db.session)
+        entry_repo = SQLAlchemyLaborEntryRepository(db.session)
+
+        read_perm = PermissionModel(name="project:read", resource="project", action="read")
+        star_perm = PermissionModel(name="*:*", resource="*", action="*")
+        admin_role = RoleModel(name="cjk_admin_role", description="CJK Admin")
+        admin_role.permissions.append(read_perm)
+        admin_role.permissions.append(star_perm)
+
+        db.session.add_all([read_perm, star_perm, admin_role])
+        db.session.flush()
+
+        admin_user = UserModel(
+            email="cjkadmin@test.com",
+            password_hash=hasher.hash("Admin1234!"),
+            is_active=True,
+        )
+        admin_user.roles.append(admin_role)
+        db.session.add(admin_user)
+        db.session.flush()
+
+        # Project whose name is pure CJK + emoji → slug falls back to UUID prefix
+        cjk_project = ProjectModel(name="工地🏗️", owner_id=admin_user.id)
+        db.session.add(cjk_project)
+        db.session.flush()
+
+        # Worker whose name is pure CJK → slug falls back to UUID prefix
+        cjk_worker = WorkerModel(
+            id=uuid4(),
+            project_id=cjk_project.id,
+            name="工人",
+            daily_rate=Decimal("180.00"),
+        )
+        db.session.add(cjk_worker)
+        db.session.commit()
+
+        configure_container(
+            user_repository=user_repo,
+            project_repository=project_repo,
+            password_hasher=hasher,
+            token_issuer=token_issuer,
+            session_manager=FlaskSessionManager(),
+            worker_repository=worker_repo,
+            labor_entry_repository=entry_repo,
+        )
+
+        test_app._test_project_id = str(cjk_project.id)
+        test_app._test_worker_id = str(cjk_worker.id)
+        test_app._test_admin_email = "cjkadmin@test.com"
+        test_app._test_admin_password = "Admin1234!"
+
+        yield test_app
+
+        db.session.remove()
+        db.drop_all()
+
+
+@pytest.fixture
+def cjk_worker_export_client(cjk_worker_export_app):
+    return cjk_worker_export_app.test_client()
+
+
+@pytest.fixture
+def cjk_admin_token(cjk_worker_export_client, cjk_worker_export_app):
+    return _login(
+        cjk_worker_export_client,
+        cjk_worker_export_app._test_admin_email,
+        cjk_worker_export_app._test_admin_password,
+    )

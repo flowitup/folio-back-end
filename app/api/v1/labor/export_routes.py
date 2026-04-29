@@ -9,7 +9,8 @@ from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
-from app.api.v1.projects.decorators import require_permission
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.labor.export_labor_usecase import ExportLaborRequest
 from app.api.v1.labor.schemas import ExportLaborQuery
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
@@ -22,8 +23,9 @@ labor_export_bp = Blueprint("labor_export", __name__)
 
 @labor_export_bp.route("/projects/<project_id>/labor-export", methods=["GET"])
 @jwt_required()
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
+@require_project_access()
 def export_labor(project_id: str):
     """Stream xlsx or pdf export for a project's labor data.
 
@@ -87,8 +89,9 @@ def export_labor(project_id: str):
     methods=["GET"],
 )
 @jwt_required()
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
+@require_project_access()
 def export_worker_labor(project_id: str, worker_id: str):
     """Stream xlsx or pdf export for a single worker's labor data.
 
