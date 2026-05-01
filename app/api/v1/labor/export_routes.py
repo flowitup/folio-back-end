@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.requester_identity import get_requester_email
 from app.api.v1.projects.decorators import require_permission, require_project_access
@@ -46,12 +47,7 @@ def export_labor(project_id: str):
     try:
         query = ExportLaborQuery.model_validate(request.args.to_dict())
     except ValidationError as exc:
-        # Build a JSON-safe error list — exc.errors() may embed ValueError objects
-        # in the 'ctx' field when model_validators raise, which Flask's jsonify
-        # cannot serialise.
-        safe_errors = [{"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
-        detail = "; ".join(f"{('.'.join(str(loc) for loc in e['loc']) or 'value')}: {e['msg']}" for e in safe_errors)
-        return jsonify({"error": "validation_error", "details": safe_errors, "message": detail}), 422
+        return format_validation_error(exc)
 
     # --- Resolve acting user email (needed for file metadata) ---
     container = get_container()
@@ -115,9 +111,7 @@ def export_worker_labor(project_id: str, worker_id: str):
     try:
         query = ExportLaborQuery.model_validate(request.args.to_dict())
     except ValidationError as exc:
-        safe_errors = [{"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
-        detail = "; ".join(f"{('.'.join(str(loc) for loc in e['loc']) or 'value')}: {e['msg']}" for e in safe_errors)
-        return jsonify({"error": "validation_error", "details": safe_errors, "message": detail}), 422
+        return format_validation_error(exc)
 
     # --- Resolve acting user email ---
     container = get_container()

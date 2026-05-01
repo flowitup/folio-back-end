@@ -65,17 +65,15 @@ def export_app():
 
         # Permissions
         read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
 
-        # Role with project:read
+        # Role with project:read only — *:* omitted so require_permission("project:read") is exercised
         admin_role = RoleModel(name="export_admin", description="Export Admin")
         admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(star_perm)
 
         # Role without project:read
         noperm_role = RoleModel(name="no_read_role", description="No Read")
 
-        db.session.add_all([read_perm, star_perm, admin_role, noperm_role])
+        db.session.add_all([read_perm, admin_role, noperm_role])
         db.session.flush()
 
         # Admin user (has project:read)
@@ -583,13 +581,12 @@ def worker_export_app():
 
         # Permissions
         read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
+        # *:* omitted — require_permission("project:read") must actually match
         admin_role = RoleModel(name="wexport_admin", description="Worker Export Admin")
         admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(star_perm)
         noperm_role = RoleModel(name="wexport_noperm", description="No Perm")
 
-        db.session.add_all([read_perm, star_perm, admin_role, noperm_role])
+        db.session.add_all([read_perm, admin_role, noperm_role])
         db.session.flush()
 
         # Users
@@ -1044,12 +1041,11 @@ def cjk_worker_export_app():
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
         read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
+        # *:* omitted — require_permission("project:read") must actually match
         admin_role = RoleModel(name="cjk_admin_role", description="CJK Admin")
         admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(star_perm)
 
-        db.session.add_all([read_perm, star_perm, admin_role])
+        db.session.add_all([read_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(

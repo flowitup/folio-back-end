@@ -146,12 +146,14 @@ class ExportInvoicesUseCase:
             content = build_xlsx(context, bundle)
             mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ext = "xlsx"
-        else:  # pdf
+        elif req.format == "pdf":
             from app.domain.invoice.export.pdf_builder import build_pdf
 
             content = build_pdf(context, bundle)
             mime_type = "application/pdf"
             ext = "pdf"
+        else:
+            raise ValueError(f"Unsupported export format: {req.format!r}")
 
         # 8. Generate filename
         slug = slugify_project_name(project.name, str(project.id))

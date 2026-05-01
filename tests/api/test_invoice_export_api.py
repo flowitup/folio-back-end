@@ -12,15 +12,19 @@ Covers:
 - 200 xlsx smoke — magic bytes PK, content-type, Content-Disposition
 - 200 pdf smoke — magic bytes %PDF-, content-type
 - type filter in filename — ?type=labor → filename has '-labor'
+- multi-invoice xlsx + pdf smoke (MED-7)
 """
 
 from __future__ import annotations
 
+import datetime
+from io import BytesIO
 from uuid import uuid4
 
 import pytest
 
 from app.infrastructure.database.models import (
+    InvoiceModel,
     PermissionModel,
     ProjectModel,
     RoleModel,
@@ -63,17 +67,15 @@ def inv_export_app():
 
         # Permissions
         read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
 
-        # Role with project:read
+        # Role with project:read only — *:* omitted so require_permission("project:read") is exercised
         admin_role = RoleModel(name="inv_export_admin", description="Inv Export Admin")
         admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(star_perm)
 
         # Role without project:read
         noperm_role = RoleModel(name="inv_export_noperm", description="No Read")
 
-        db.session.add_all([read_perm, star_perm, admin_role, noperm_role])
+        db.session.add_all([read_perm, admin_role, noperm_role])
         db.session.flush()
 
         # Admin user
@@ -270,3 +272,107 @@ def test_type_filter_in_filename(inv_export_client, inv_export_app, admin_token)
     cd = resp.headers.get("Content-Disposition", "")
     assert "-labor" in cd, f"Expected '-labor' suffix in Content-Disposition; got: {cd}"
     assert ".xlsx" in cd
+
+
+# ---------------------------------------------------------------------------
+# MED-7 — multi-invoice xlsx + pdf integration smoke
+# ---------------------------------------------------------------------------
+
+
+def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, admin_token):
+    """Seed 3 invoices (2 client + 1 labor), export xlsx and pdf, validate content.
+
+    xlsx assertions:
+    - 200, xlsx content-type, PK magic bytes
+    - openpyxl opens successfully
+    - Sheet names include Summary, Client invoices, Labor invoices
+    - "Supplier invoices" sheet absent (no supplier invoices seeded)
+    - Summary sheet contains GRAND TOTAL label
+
+    pdf assertions:
+    - 200, pdf content-type, %PDF- magic bytes
+    - At least 4 /Type /Page markers (1 summary + 3 invoices)
+    """
+    import openpyxl
+
+    from app import db
+
+    project_id_str = inv_export_app._test_project_id
+
+    # --- Seed 3 invoices directly via ORM ---
+    with inv_export_app.app_context():
+        import uuid
+
+        project_uuid = uuid.UUID(project_id_str)
+        items_payload = [{"description": "Service", "quantity": 1.0, "unit_price": 100.0}]
+
+        inv1 = InvoiceModel(
+            id=uuid4(),
+            project_id=project_uuid,
+            invoice_number="MULTI-C001",
+            type="client",
+            issue_date=datetime.date(2026, 3, 1),
+            recipient_name="Client Alpha",
+            items=items_payload,
+        )
+        inv2 = InvoiceModel(
+            id=uuid4(),
+            project_id=project_uuid,
+            invoice_number="MULTI-C002",
+            type="client",
+            issue_date=datetime.date(2026, 3, 15),
+            recipient_name="Client Beta",
+            items=items_payload,
+        )
+        inv3 = InvoiceModel(
+            id=uuid4(),
+            project_id=project_uuid,
+            invoice_number="MULTI-L001",
+            type="labor",
+            issue_date=datetime.date(2026, 3, 20),
+            recipient_name="Labor Gamma",
+            items=items_payload,
+        )
+        db.session.add_all([inv1, inv2, inv3])
+        db.session.commit()
+
+    url = _export_url(project_id_str)
+
+    # --- xlsx ---
+    resp_xlsx = inv_export_client.get(
+        url,
+        query_string={"from": "2026-03", "to": "2026-03", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp_xlsx.status_code == 200, resp_xlsx.get_data(as_text=True)
+    assert resp_xlsx.content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert resp_xlsx.data[:4] == b"PK\x03\x04", "Expected xlsx ZIP magic bytes"
+
+    wb = openpyxl.load_workbook(BytesIO(resp_xlsx.data), data_only=True)
+    sheet_names = wb.sheetnames
+
+    assert "Summary" in sheet_names, f"Missing 'Summary' sheet; got: {sheet_names}"
+    assert "Client invoices" in sheet_names, f"Missing 'Client invoices' sheet; got: {sheet_names}"
+    assert "Labor invoices" in sheet_names, f"Missing 'Labor invoices' sheet; got: {sheet_names}"
+    assert (
+        "Supplier invoices" not in sheet_names
+    ), f"Unexpected 'Supplier invoices' sheet (no supplier invoices seeded); got: {sheet_names}"
+
+    # Summary sheet must contain GRAND TOTAL label somewhere
+    ws_summary = wb["Summary"]
+    all_summary_values = [ws_summary.cell(row=r, column=1).value for r in range(1, 30)]
+    has_grand_total = any(v and "GRAND TOTAL" in str(v).upper() for v in all_summary_values)
+    assert has_grand_total, f"GRAND TOTAL label not found in Summary col A: {all_summary_values}"
+
+    # --- pdf ---
+    resp_pdf = inv_export_client.get(
+        url,
+        query_string={"from": "2026-03", "to": "2026-03", "format": "pdf"},
+        headers=_auth(admin_token),
+    )
+    assert resp_pdf.status_code == 200, resp_pdf.get_data(as_text=True)
+    assert resp_pdf.content_type == "application/pdf"
+    assert resp_pdf.data[:5] == b"%PDF-", "Expected PDF magic bytes"
+
+    page_count = resp_pdf.data.count(b"/Type /Page")
+    assert page_count >= 4, f"Expected >= 4 /Type /Page markers (1 summary + 3 invoices); got {page_count}"

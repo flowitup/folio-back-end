@@ -156,13 +156,14 @@ def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContex
         label_cell.fill = fill
         label_cell.border = thin
 
-        val_cell = ws.cell(row=r, column=2, value=value)
-        val_cell.border = thin
-        if i == 1:  # Grand total row — currency
-            val_cell.value = float(bundle.grand_total)
+        if i == 1:  # Grand total row — write float once, apply currency format
+            cell_value = float(bundle.grand_total)
+            val_cell = ws.cell(row=r, column=2, value=cell_value)
             val_cell.number_format = EUR_FR_FORMAT
         else:
+            val_cell = ws.cell(row=r, column=2, value=value)
             val_cell.alignment = Alignment(horizontal="left")
+        val_cell.border = thin
 
     ws.column_dimensions["A"].width = _KPI_COL_WIDTHS[0]
     ws.column_dimensions["B"].width = _KPI_COL_WIDTHS[1]

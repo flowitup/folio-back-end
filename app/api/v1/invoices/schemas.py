@@ -42,7 +42,7 @@ class UpdateInvoiceSchema(BaseModel):
     items: Optional[List[InvoiceItemSchema]] = None
 
 
-_YYYY_MM = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
 
 
 class ExportInvoicesQuery(BaseModel):
