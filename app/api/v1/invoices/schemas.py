@@ -1,9 +1,10 @@
 """Invoice API request/response schemas."""
 
+import re
 from datetime import date
 from typing import Literal, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error schema
 
@@ -41,10 +42,43 @@ class UpdateInvoiceSchema(BaseModel):
     items: Optional[List[InvoiceItemSchema]] = None
 
 
+_YYYY_MM = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+class ExportInvoicesQuery(BaseModel):
+    """Pydantic v2 model for GET /invoices-export query params."""
+
+    from_month: str = Field(alias="from")
+    to_month: str = Field(alias="to")
+    format: Literal["xlsx", "pdf"]
+    type: Optional[Literal["client", "labor", "supplier"]] = None
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("from_month", "to_month")
+    @classmethod
+    def _yyyy_mm(cls, v: str) -> str:
+        if not _YYYY_MM.match(v):
+            raise ValueError("must be YYYY-MM")
+        return v
+
+    @model_validator(mode="after")
+    def _range(self):
+        if self.from_month > self.to_month:
+            raise ValueError("from must be <= to")
+        fy, fm = int(self.from_month[:4]), int(self.from_month[5:7])
+        ty, tm = int(self.to_month[:4]), int(self.to_month[5:7])
+        span = (ty - fy) * 12 + (tm - fm) + 1
+        if span > 24:
+            raise ValueError("range may not exceed 24 months")
+        return self
+
+
 # Re-export for convenience
 __all__ = [
     "InvoiceItemSchema",
     "CreateInvoiceSchema",
     "UpdateInvoiceSchema",
+    "ExportInvoicesQuery",
     "ErrorResponse",
 ]
