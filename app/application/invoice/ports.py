@@ -1,6 +1,7 @@
 """Invoice repository port — persistence contract for the invoice domain."""
 
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import BinaryIO, Optional
 from uuid import UUID
 
@@ -27,6 +28,18 @@ class IInvoiceRepository(ABC):
 
     @abstractmethod
     def next_invoice_number(self, project_id: UUID) -> str: ...
+
+    @abstractmethod
+    def find_by_project_in_range(
+        self,
+        project_id: UUID,
+        date_from: date,
+        date_to: date,
+        type_filter: Optional[InvoiceType] = None,
+    ) -> list[Invoice]:
+        """Return invoices for the project where issue_date ∈ [date_from, date_to],
+        optionally filtered by type. Returns [] if none."""
+        ...
 
 
 class IAttachmentStorage(ABC):
