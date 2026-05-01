@@ -1,6 +1,6 @@
 """SQLAlchemy implementation of invoice repository."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
@@ -125,6 +125,28 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         result = self._session.query(InvoiceModel).filter_by(id=invoice_id).delete()
         self._session.commit()
         return result > 0
+
+    def find_by_project_in_range(
+        self,
+        project_id: UUID,
+        date_from: date,
+        date_to: date,
+        type_filter: Optional[InvoiceType] = None,
+    ) -> List[Invoice]:
+        """Return invoices where issue_date ∈ [date_from, date_to], optionally filtered by type.
+
+        items is stored as a JSONB column (not a relationship), so there is no N+1 risk here.
+        """
+        q = (
+            self._session.query(InvoiceModel)
+            .filter(InvoiceModel.project_id == project_id)
+            .filter(InvoiceModel.issue_date >= date_from)
+            .filter(InvoiceModel.issue_date <= date_to)
+        )
+        if type_filter is not None:
+            q = q.filter(InvoiceModel.type == type_filter.value)
+        rows = q.order_by(InvoiceModel.issue_date, InvoiceModel.invoice_number).all()
+        return [_model_to_entity(r) for r in rows]
 
     def next_invoice_number(self, project_id: UUID) -> str:
         """Generate next sequential invoice number: INV-YYYY-NNNN."""

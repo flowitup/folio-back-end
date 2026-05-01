@@ -46,6 +46,7 @@ from app.application.labor import (
     GetLaborSummaryUseCase,
 )
 from app.application.labor.export_labor_usecase import ExportLaborUseCase
+from app.application.invoice.export_invoices_usecase import ExportInvoicesUseCase
 from app.application.invoice import (
     IInvoiceRepository,
     CreateInvoiceUseCase,
@@ -211,6 +212,9 @@ class Container:
     mark_note_open_usecase: Optional[MarkNoteOpenUseCase] = None
     list_due_notifications_usecase: Optional[ListDueNotificationsUseCase] = None
     dismiss_notification_usecase: Optional[DismissNotificationUseCase] = None
+
+    # Invoice export use case
+    export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
@@ -407,6 +411,13 @@ def configure_container(
             invoice_repository,
             invoice_attachment_repository,
             attachment_storage,
+        )
+
+    # Wire invoice export use case (requires both invoice_repository and project_repository)
+    if invoice_repository and project_repository:
+        container.export_invoices_usecase = ExportInvoicesUseCase(
+            invoice_repo=invoice_repository,
+            project_repo=project_repository,
         )
 
     # Wire task (planning) use cases

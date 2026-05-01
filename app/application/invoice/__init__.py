@@ -20,6 +20,11 @@ from app.application.invoice.manage_attachments import (
     DeleteAttachmentUseCase,
     AttachmentNotFoundError,
 )
+from app.application.invoice.export_invoices_usecase import (
+    ExportInvoicesUseCase,
+    ExportInvoicesRequest,
+    ExportInvoicesResult,
+)
 
 __all__ = [
     # Ports
@@ -43,6 +48,10 @@ __all__ = [
     "ListAttachmentsUseCase",
     "GetAttachmentUseCase",
     "DeleteAttachmentUseCase",
+    # Export use case
+    "ExportInvoicesUseCase",
+    "ExportInvoicesRequest",
+    "ExportInvoicesResult",
     # Errors and constants
     "FileTooLargeError",
     "UnsupportedFileTypeError",

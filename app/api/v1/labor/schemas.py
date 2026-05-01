@@ -156,13 +156,13 @@ class ExportLaborQuery(BaseModel):
     from_month: str = Field(
         ...,
         alias="from",
-        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        pattern=r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$",
         description="Start month, inclusive. Format: YYYY-MM",
     )
     to_month: str = Field(
         ...,
         alias="to",
-        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        pattern=r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$",
         description="End month, inclusive. Format: YYYY-MM",
     )
     format: Literal["xlsx", "pdf"] = Field(..., description="Export format")
