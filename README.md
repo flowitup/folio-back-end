@@ -130,3 +130,4 @@ Sign-in is JWT-based. Browsers use HTTP-only cookies (with CSRF protection); oth
 
 - Bug reports and feature requests: open an issue on the project tracker.
 - Operational issues (deployment, database, email): contact your administrator.
+
