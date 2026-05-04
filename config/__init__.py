@@ -73,13 +73,17 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(minutes=30)
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
     JWT_TOKEN_LOCATION: tuple = ("headers", "cookies")
-    # For cross-origin requests (frontend:3000 -> backend:5000), we need SameSite=None
-    # SameSite=None requires Secure=True, but for local dev over HTTP we must use False
-    # In production, both should be True over HTTPS
+    # JWT cookie security — secure-by-default everywhere.
+    #   Production (FLASK_ENV=production)        : Secure=True,  CSRF=True,  SameSite=Strict.
+    #   Non-prod default                         : Secure=True,  CSRF=True,  SameSite=Lax.
+    #   Non-prod with FLASK_DEV_INSECURE=1 opt-in: Secure=False, CSRF=False, SameSite=None
+    #     (legacy localhost-over-HTTP dev only — production refuses to boot in this mode,
+    #      see app/__init__.py).
     _is_production: bool = get_env("FLASK_ENV", default="development") == "production"
-    JWT_COOKIE_SECURE: bool = _is_production
-    JWT_COOKIE_CSRF_PROTECT: bool = _is_production  # Disable CSRF for dev (cross-origin)
-    JWT_COOKIE_SAMESITE: str = "None" if not _is_production else "Strict"
+    _dev_insecure: bool = (not _is_production) and get_env("FLASK_DEV_INSECURE", default="0") == "1"
+    JWT_COOKIE_SECURE: bool = not _dev_insecure
+    JWT_COOKIE_CSRF_PROTECT: bool = not _dev_insecure
+    JWT_COOKIE_SAMESITE: str = "Strict" if _is_production else ("None" if _dev_insecure else "Lax")
 
     # Rate Limiting (flask-limiter reads RATELIMIT_STORAGE_URI from app config)
     RATELIMIT_STORAGE_URI: str = get_env("REDIS_URL", default="redis://localhost:6379/1")

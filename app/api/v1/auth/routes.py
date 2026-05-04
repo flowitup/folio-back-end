@@ -1,5 +1,6 @@
 """Auth API routes."""
 
+import logging
 from uuid import UUID
 
 from flask import jsonify, request, make_response
@@ -25,6 +26,8 @@ from app.api.v1.auth.schemas import (
 from app.domain.exceptions.auth_exceptions import InvalidCredentialsError, UserNotFoundError, UserInactiveError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+logger = logging.getLogger(__name__)
 
 
 @auth_bp.route("/login", methods=["POST"])
@@ -63,6 +66,11 @@ def login():
             500,
         )
 
+    # Normalize all login-failure paths to a single 401 response so attackers cannot
+    # distinguish "user does not exist" / "wrong password" / "account deactivated"
+    # via status code or body. Deactivated-account UX (a friendlier message) is
+    # surfaced post-authentication via the dedicated user-status flow, never on
+    # the unauthenticated /login endpoint.
     try:
         result = container.login_usecase.execute(data.email, data.password)
     except (InvalidCredentialsError, UserNotFoundError):
@@ -73,9 +81,13 @@ def login():
             401,
         )
     except UserInactiveError:
+        # Emit a separate ops-side signal for visibility without leaking via HTTP.
+        logger.info("auth.login.deactivated_attempt email=%s", data.email)
         return (
-            jsonify(ErrorResponse(error="Forbidden", message="Account is deactivated", status_code=403).model_dump()),
-            403,
+            jsonify(
+                ErrorResponse(error="Unauthorized", message="Invalid email or password", status_code=401).model_dump()
+            ),
+            401,
         )
 
     # Get user for response

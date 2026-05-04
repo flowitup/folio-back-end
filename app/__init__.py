@@ -38,12 +38,28 @@ def create_app(config_class: type = Config) -> Flask:
 
     # Production security check — fail fast rather than run with insecure defaults
     if os.environ.get("FLASK_ENV") == "production":
+        # Cheapest env-only check first: FLASK_DEV_INSECURE only relaxes cookie flags in
+        # non-prod and must never be honored in production.
+        if os.environ.get("FLASK_DEV_INSECURE") == "1":
+            raise RuntimeError("CRITICAL: FLASK_DEV_INSECURE=1 is not permitted when FLASK_ENV=production.")
         jwt_secret = getattr(config_class, "JWT_SECRET_KEY", "")
         if not jwt_secret or "dev-" in jwt_secret.lower():
             raise RuntimeError("CRITICAL: JWT_SECRET_KEY must be set in production.")
         secret_key = getattr(config_class, "SECRET_KEY", "")
         if not secret_key or "dev-" in secret_key.lower():
             raise RuntimeError("CRITICAL: SECRET_KEY must be set in production.")
+
+    # Catch the dev-trap: a non-production environment behind a public https origin
+    # would issue cookies without Secure / CSRF (in legacy FLASK_DEV_INSECURE mode).
+    if (
+        os.environ.get("FLASK_ENV") != "production"
+        and os.environ.get("FLASK_DEV_INSECURE") == "1"
+        and "https://" in os.environ.get("CORS_ORIGINS", "")
+    ):
+        raise RuntimeError(
+            "CRITICAL: FLASK_DEV_INSECURE=1 is incompatible with https:// CORS origins. "
+            "Either drop FLASK_DEV_INSECURE or use http://localhost-style origins for dev."
+        )
 
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
