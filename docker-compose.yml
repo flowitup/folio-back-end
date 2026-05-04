@@ -32,7 +32,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m infrastructure.queue.rq_worker
+    command: python -m stack.queue.rq_worker
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-construction}:${POSTGRES_PASSWORD:-construction}@db:5432/${POSTGRES_DB:-construction}
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
