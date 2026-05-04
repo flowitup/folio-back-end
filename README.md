@@ -15,7 +15,7 @@ Folio is built around the day-to-day reality of running construction work:
 - **Labor tracking** — Keep a list of workers, their daily rate, and phone number. Log who showed up each day, full-day or half-day shifts, plus extra "supplement" hours that are automatically converted into bonus days at month-end.
 - **Labor cost summary** — See per-worker totals, including priced cost and bonus cost shown separately so nothing is hidden inside one big number.
 - **Excel & PDF exports** — Export labor reports for any 1-to-24-month window, either for the whole project or for a single worker. Excel uses French-format currency; PDFs render Vietnamese accents correctly.
-- **Invoices** — Issue Client, Labor and Supplier invoices. Each one has line items, totals, and a clean print-ready view.
+- **Invoices** — Issue Client, Labor, and Supplier invoices. Each one has line items, totals, and a clean print-ready view.
 - **Notes & reminders** — Post notes on a project with a due date. Members get a reminder in the bell-icon dropdown when the lead time hits.
 - **Notifications** — In-app notifications for invitations, reminders, and project events.
 
