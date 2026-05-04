@@ -70,7 +70,7 @@ If you'd rather run it on your own machine without Docker:
 5. Start the background worker (handles emails, exports, reminders) in a second terminal:
 
    ```bash
-   uv run python -m infrastructure.queue.rq_worker
+   uv run python -m stack.queue.rq_worker
    ```
 
 A quick health check:

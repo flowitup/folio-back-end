@@ -2,7 +2,7 @@
 RQ Worker Entrypoint
 
 This module provides the entrypoint for running RQ (Redis Queue) workers.
-Run with: python -m infrastructure.queue.rq_worker
+Run with: python -m stack.queue.rq_worker
 """
 
 import os
