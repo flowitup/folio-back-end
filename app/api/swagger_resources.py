@@ -62,12 +62,11 @@ def register_resources(auth_ns: Namespace, models: dict) -> None:
             if not container.login_usecase:
                 return {"error": "ServerError", "message": "Auth not configured", "status_code": 500}, 500
 
+            # Login-failure paths are normalized to a single 401 — no enumeration via status/body.
             try:
                 result = container.login_usecase.execute(data.email, data.password)
-            except (InvalidCredentialsError, UserNotFoundError):
+            except (InvalidCredentialsError, UserNotFoundError, UserInactiveError):
                 return {"error": "Unauthorized", "message": "Invalid email or password", "status_code": 401}, 401
-            except UserInactiveError:
-                return {"error": "Forbidden", "message": "Account deactivated", "status_code": 403}, 403
 
             user = container.user_repository.find_by_id(result.user_id)
             response_data = LoginResponse(

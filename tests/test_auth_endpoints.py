@@ -202,13 +202,34 @@ class TestLoginEndpoint:
         assert data["error"] == "Unauthorized"
 
     def test_login_with_inactive_user(self, client):
-        """Test login with deactivated account."""
+        """Deactivated account must return the same generic 401 as bad credentials —
+        no enumeration via status code or body (B-2)."""
         response = client.post("/api/v1/auth/login", json={"email": "inactive@example.com", "password": "password123"})
 
-        assert response.status_code == 403
+        assert response.status_code == 401
         data = response.get_json()
-        assert data["error"] == "Forbidden"
-        assert "deactivated" in data["message"].lower()
+        assert data["error"] == "Unauthorized"
+        assert data["message"] == "Invalid email or password"
+
+    def test_login_inactive_response_indistinguishable_from_invalid(self, client):
+        """Regression for B-2 — deactivated, unknown-email, and wrong-password
+        login responses must be byte-identical (status + body) so an attacker
+        cannot enumerate active users from the login endpoint."""
+        invalid_email = client.post(
+            "/api/v1/auth/login",
+            json={"email": "nonexistent@example.com", "password": "password123"},
+        )
+        invalid_password = client.post(
+            "/api/v1/auth/login",
+            json={"email": "active@example.com", "password": "wrongpassword"},
+        )
+        deactivated = client.post(
+            "/api/v1/auth/login",
+            json={"email": "inactive@example.com", "password": "password123"},
+        )
+
+        assert invalid_email.status_code == invalid_password.status_code == deactivated.status_code == 401
+        assert invalid_email.get_json() == invalid_password.get_json() == deactivated.get_json()
 
     def test_login_with_missing_email(self, client):
         """Test login without email field."""
