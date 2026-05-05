@@ -86,6 +86,27 @@ from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
 from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
 from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
 
+# Billing use-cases (phase 04)
+from app.application.billing import (
+    CreateBillingDocumentUseCase,
+    CloneBillingDocumentUseCase,
+    ConvertDevisToFactureUseCase,
+    UpdateBillingDocumentUseCase,
+    UpdateBillingDocumentStatusUseCase,
+    ListBillingDocumentsUseCase,
+    GetBillingDocumentUseCase,
+    DeleteBillingDocumentUseCase,
+    RenderBillingDocumentPdfUseCase,
+    CreateTemplateUseCase,
+    UpdateTemplateUseCase,
+    ListTemplatesUseCase,
+    GetTemplateUseCase,
+    DeleteTemplateUseCase,
+    ApplyTemplateToCreateDocumentUseCase,
+    GetCompanyProfileUseCase,
+    UpsertCompanyProfileUseCase,
+)
+
 # =============================================================================
 # PORTS (Interfaces)
 # =============================================================================
@@ -215,6 +236,38 @@ class Container:
 
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
+
+    # -----------------------------------------------------------------------
+    # Billing repos + use-cases (phase 04)
+    # -----------------------------------------------------------------------
+    billing_document_repo: Optional[Any] = None  # SqlAlchemyBillingDocumentRepository
+    billing_template_repo: Optional[Any] = None  # SqlAlchemyBillingTemplateRepository
+    company_profile_repo: Optional[Any] = None  # SqlAlchemyCompanyProfileRepository
+    billing_counter_repo: Optional[Any] = None  # SqlAlchemyBillingNumberCounterRepository
+    billing_pdf_renderer: Optional[Any] = None  # ReportLabBillingDocumentPdfRenderer
+
+    # billing-document use-cases
+    create_billing_document_usecase: Optional[CreateBillingDocumentUseCase] = None
+    clone_billing_document_usecase: Optional[CloneBillingDocumentUseCase] = None
+    convert_devis_to_facture_usecase: Optional[ConvertDevisToFactureUseCase] = None
+    update_billing_document_usecase: Optional[UpdateBillingDocumentUseCase] = None
+    update_billing_document_status_usecase: Optional[UpdateBillingDocumentStatusUseCase] = None
+    list_billing_documents_usecase: Optional[ListBillingDocumentsUseCase] = None
+    get_billing_document_usecase: Optional[GetBillingDocumentUseCase] = None
+    delete_billing_document_usecase: Optional[DeleteBillingDocumentUseCase] = None
+    render_billing_document_pdf_usecase: Optional[RenderBillingDocumentPdfUseCase] = None
+
+    # billing-template use-cases
+    create_billing_template_usecase: Optional[CreateTemplateUseCase] = None
+    update_billing_template_usecase: Optional[UpdateTemplateUseCase] = None
+    list_billing_templates_usecase: Optional[ListTemplatesUseCase] = None
+    get_billing_template_usecase: Optional[GetTemplateUseCase] = None
+    delete_billing_template_usecase: Optional[DeleteTemplateUseCase] = None
+    apply_template_usecase: Optional[ApplyTemplateToCreateDocumentUseCase] = None
+
+    # company-profile use-cases
+    get_company_profile_usecase: Optional[GetCompanyProfileUseCase] = None
+    upsert_company_profile_usecase: Optional[UpsertCompanyProfileUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
