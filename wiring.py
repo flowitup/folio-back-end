@@ -86,6 +86,23 @@ from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
 from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
 from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
 
+# Companies use-cases (phase 03)
+from app.application.companies import (
+    CreateCompanyUseCase,
+    UpdateCompanyUseCase,
+    DeleteCompanyUseCase,
+    ListAllCompaniesUseCase,
+    GenerateInviteTokenUseCase,
+    RevokeInviteTokenUseCase,
+    ListAttachedUsersUseCase,
+    BootAttachedUserUseCase,
+    ListMyCompaniesUseCase,
+    GetCompanyUseCase,
+    RedeemInviteTokenUseCase,
+    SetPrimaryCompanyUseCase,
+    DetachCompanyUseCase,
+)
+
 # Billing use-cases (phase 04)
 from app.application.billing import (
     CreateBillingDocumentUseCase,
@@ -236,6 +253,30 @@ class Container:
 
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
+
+    # -----------------------------------------------------------------------
+    # Companies repos + use-cases (phase 03)
+    # -----------------------------------------------------------------------
+    company_repo: Optional[Any] = None  # SqlAlchemyCompanyRepository
+    user_company_access_repo: Optional[Any] = None  # SqlAlchemyUserCompanyAccessRepository
+    company_invite_token_repo: Optional[Any] = None  # SqlAlchemyCompanyInviteTokenRepository
+
+    # companies use-cases: admin
+    create_company_usecase: Optional[CreateCompanyUseCase] = None
+    update_company_usecase: Optional[UpdateCompanyUseCase] = None
+    delete_company_usecase: Optional[DeleteCompanyUseCase] = None
+    list_all_companies_usecase: Optional[ListAllCompaniesUseCase] = None
+    generate_invite_token_usecase: Optional[GenerateInviteTokenUseCase] = None
+    revoke_invite_token_usecase: Optional[RevokeInviteTokenUseCase] = None
+    list_attached_users_usecase: Optional[ListAttachedUsersUseCase] = None
+    boot_attached_user_usecase: Optional[BootAttachedUserUseCase] = None
+
+    # companies use-cases: authenticated user
+    list_my_companies_usecase: Optional[ListMyCompaniesUseCase] = None
+    get_company_usecase: Optional[GetCompanyUseCase] = None
+    redeem_invite_token_usecase: Optional[RedeemInviteTokenUseCase] = None
+    set_primary_company_usecase: Optional[SetPrimaryCompanyUseCase] = None
+    detach_company_usecase: Optional[DetachCompanyUseCase] = None
 
     # -----------------------------------------------------------------------
     # Billing repos + use-cases (phase 04)

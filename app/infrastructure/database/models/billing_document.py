@@ -92,6 +92,16 @@ class BillingDocumentModel(Base):
     issuer_bic = Column(String(32), nullable=True)
     issuer_logo_url = Column(Text, nullable=True)
 
+    # Company reference — populated at document create time.
+    # NULL for legacy documents created before the companies module migration.
+    # ON DELETE SET NULL: deleting a company preserves historical documents
+    # (issuer_* snapshot columns already capture the needed data for PDFs).
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     source_devis_id = Column(
         UUID(as_uuid=True),
         ForeignKey("billing_documents.id", ondelete="SET NULL"),
@@ -113,6 +123,7 @@ class BillingDocumentModel(Base):
     # Relationships
     user = relationship("UserModel", foreign_keys=[user_id])
     project = relationship("ProjectModel", foreign_keys=[project_id])
+    company = relationship("CompanyModel", foreign_keys=[company_id])
     source_devis = relationship(
         "BillingDocumentModel",
         foreign_keys=[source_devis_id],

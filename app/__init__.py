@@ -274,6 +274,119 @@ def _configure_di_container() -> None:
     )
 
     # -----------------------------------------------------------------------
+    # Companies DI wiring (phase 03)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_company_repository import (
+        SqlAlchemyCompanyRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
+        SqlAlchemyUserCompanyAccessRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_company_invite_token_repository import (
+        SqlAlchemyCompanyInviteTokenRepository,
+    )
+    from app.infrastructure.security.argon2_hasher import Argon2Hasher
+    from app.infrastructure.security.secure_token_generator import SecureTokenGenerator
+    from app.application.companies import (
+        CreateCompanyUseCase as _CreateCompanyUseCase,
+        UpdateCompanyUseCase as _UpdateCompanyUseCase,
+        DeleteCompanyUseCase as _DeleteCompanyUseCase,
+        ListAllCompaniesUseCase as _ListAllCompaniesUseCase,
+        GenerateInviteTokenUseCase as _GenerateInviteTokenUseCase,
+        RevokeInviteTokenUseCase as _RevokeInviteTokenUseCase,
+        ListAttachedUsersUseCase as _ListAttachedUsersUseCase,
+        BootAttachedUserUseCase as _BootAttachedUserUseCase,
+        ListMyCompaniesUseCase as _ListMyCompaniesUseCase,
+        GetCompanyUseCase as _GetCompanyUseCase,
+        RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
+        SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
+        DetachCompanyUseCase as _DetachCompanyUseCase,
+    )
+    import datetime as _dt
+
+    class _UtcClock:
+        """Minimal ClockPort implementation returning UTC now."""
+
+        def now(self) -> _dt.datetime:
+            return _dt.datetime.now(_dt.timezone.utc)
+
+    _company_repo = SqlAlchemyCompanyRepository(db.session)
+    _access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
+    _token_repo = SqlAlchemyCompanyInviteTokenRepository(db.session)
+    _argon2_hasher = Argon2Hasher()
+    _token_generator = SecureTokenGenerator()
+    _clock = _UtcClock()
+    # Reuse authorization_service as RoleCheckerPort (structurally compatible)
+    _role_checker = _c.authorization_service
+
+    _c.company_repo = _company_repo
+    _c.user_company_access_repo = _access_repo
+    _c.company_invite_token_repo = _token_repo
+
+    # admin use-cases
+    _c.create_company_usecase = _CreateCompanyUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.update_company_usecase = _UpdateCompanyUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.delete_company_usecase = _DeleteCompanyUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.generate_invite_token_usecase = _GenerateInviteTokenUseCase(
+        company_repo=_company_repo,
+        token_repo=_token_repo,
+        hasher=_argon2_hasher,
+        token_generator=_token_generator,
+        clock=_clock,
+        role_checker=_role_checker,
+    )
+    _c.revoke_invite_token_usecase = _RevokeInviteTokenUseCase(
+        company_repo=_company_repo,
+        token_repo=_token_repo,
+        role_checker=_role_checker,
+    )
+    _c.list_attached_users_usecase = _ListAttachedUsersUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+    _c.boot_attached_user_usecase = _BootAttachedUserUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+    # user use-cases
+    _c.list_my_companies_usecase = _ListMyCompaniesUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.get_company_usecase = _GetCompanyUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+    _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
+        token_repo=_token_repo,
+        access_repo=_access_repo,
+        hasher=_argon2_hasher,
+        clock=_clock,
+    )
+    _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
+        access_repo=_access_repo,
+    )
+    _c.detach_company_usecase = _DetachCompanyUseCase(
+        access_repo=_access_repo,
+    )
+
+    # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)
     # -----------------------------------------------------------------------
     from app.infrastructure.database.repositories.sqlalchemy_billing_document_repository import (
