@@ -114,6 +114,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.admin import admin_bp
     from app.api.v1.notes import notes_bp
     from app.api.v1.notifications import notifications_bp
+    from app.api.v1.billing import billing_documents_bp, billing_templates_bp, company_profile_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -128,6 +129,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
+    app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
+    app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
+    app.register_blueprint(company_profile_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -267,4 +271,121 @@ def _configure_di_container() -> None:
         dismissal_repo=_dismissal_repo,
         membership_reader=_membership_reader,
         db_session=db.session,
+    )
+
+    # -----------------------------------------------------------------------
+    # Billing DI wiring (phase 04)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_billing_document_repository import (
+        SqlAlchemyBillingDocumentRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_billing_template_repository import (
+        SqlAlchemyBillingTemplateRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_company_profile_repository import (
+        SqlAlchemyCompanyProfileRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
+        SqlAlchemyBillingNumberCounterRepository,
+    )
+    from app.infrastructure.pdf.billing_document_pdf_renderer import (
+        ReportLabBillingDocumentPdfRenderer,
+    )
+    from app.application.billing import (
+        CreateBillingDocumentUseCase,
+        CloneBillingDocumentUseCase,
+        ConvertDevisToFactureUseCase,
+        UpdateBillingDocumentUseCase,
+        UpdateBillingDocumentStatusUseCase,
+        ListBillingDocumentsUseCase,
+        GetBillingDocumentUseCase,
+        DeleteBillingDocumentUseCase,
+        RenderBillingDocumentPdfUseCase,
+        CreateTemplateUseCase,
+        UpdateTemplateUseCase,
+        ListTemplatesUseCase,
+        GetTemplateUseCase,
+        DeleteTemplateUseCase,
+        ApplyTemplateToCreateDocumentUseCase,
+        GetCompanyProfileUseCase,
+        UpsertCompanyProfileUseCase,
+    )
+
+    _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
+    _billing_tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
+    _company_profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
+    _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
+    _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
+
+    _c.billing_document_repo = _billing_doc_repo
+    _c.billing_template_repo = _billing_tpl_repo
+    _c.company_profile_repo = _company_profile_repo
+    _c.billing_counter_repo = _billing_counter_repo
+    _c.billing_pdf_renderer = _billing_pdf_renderer
+
+    # billing-document use-cases
+    _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+        counter_repo=_billing_counter_repo,
+        profile_repo=_company_profile_repo,
+    )
+    _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+        counter_repo=_billing_counter_repo,
+        profile_repo=_company_profile_repo,
+    )
+    _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
+        doc_repo=_billing_doc_repo,
+        counter_repo=_billing_counter_repo,
+        profile_repo=_company_profile_repo,
+    )
+    _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+    )
+    _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
+        doc_repo=_billing_doc_repo,
+    )
+    _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
+        doc_repo=_billing_doc_repo,
+    )
+    _c.get_billing_document_usecase = GetBillingDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+    )
+    _c.delete_billing_document_usecase = DeleteBillingDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+    )
+    _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
+        doc_repo=_billing_doc_repo,
+        pdf_renderer=_billing_pdf_renderer,
+    )
+
+    # billing-template use-cases
+    _c.create_billing_template_usecase = CreateTemplateUseCase(
+        template_repo=_billing_tpl_repo,
+    )
+    _c.update_billing_template_usecase = UpdateTemplateUseCase(
+        template_repo=_billing_tpl_repo,
+    )
+    _c.list_billing_templates_usecase = ListTemplatesUseCase(
+        template_repo=_billing_tpl_repo,
+    )
+    _c.get_billing_template_usecase = GetTemplateUseCase(
+        template_repo=_billing_tpl_repo,
+    )
+    _c.delete_billing_template_usecase = DeleteTemplateUseCase(
+        template_repo=_billing_tpl_repo,
+    )
+    _c.apply_template_usecase = ApplyTemplateToCreateDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+        template_repo=_billing_tpl_repo,
+        counter_repo=_billing_counter_repo,
+        profile_repo=_company_profile_repo,
+    )
+
+    # company-profile use-cases
+    _c.get_company_profile_usecase = GetCompanyProfileUseCase(
+        profile_repo=_company_profile_repo,
+    )
+    _c.upsert_company_profile_usecase = UpsertCompanyProfileUseCase(
+        profile_repo=_company_profile_repo,
     )
