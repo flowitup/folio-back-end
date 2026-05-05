@@ -7,7 +7,11 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.billing.dtos import BillingDocumentResponse
-from app.application.billing.ports import BillingDocumentRepositoryPort
+from app.application.billing.ports import (
+    BillingDocumentRepositoryPort,
+    ProjectReadPort,
+    assert_project_read_access,
+)
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 
 
@@ -28,8 +32,13 @@ class ListBillingDocumentsUseCase:
     The repository enforces the ownership filter via the user_id param.
     """
 
-    def __init__(self, doc_repo: BillingDocumentRepositoryPort) -> None:
+    def __init__(
+        self,
+        doc_repo: BillingDocumentRepositoryPort,
+        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
+    ) -> None:
         self._doc_repo = doc_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
@@ -40,6 +49,9 @@ class ListBillingDocumentsUseCase:
         limit: int = 50,
         offset: int = 0,
     ) -> ListBillingDocumentsResult:
+        # H1: Verify project:read access before filtering by project_id
+        assert_project_read_access(self._project_repo, project_id, user_id)
+
         docs, total = self._doc_repo.list_for_user(
             user_id=user_id,
             kind=kind,

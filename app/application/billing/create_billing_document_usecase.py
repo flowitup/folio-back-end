@@ -14,7 +14,9 @@ from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
     CompanyProfileRepositoryPort,
+    ProjectReadPort,
     TransactionalSessionPort,
+    assert_project_read_access,
 )
 from app.domain.billing.exceptions import MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
@@ -36,34 +38,39 @@ class CreateBillingDocumentUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
         profile_repo: CompanyProfileRepositoryPort,
+        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
         self._profile_repo = profile_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
         inp: CreateBillingDocumentInput,
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
-        # 1. Require company profile — snapshot issuer info
+        # 1. Verify project:read access if project_id supplied (H1 — auth boundary)
+        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+
+        # 2. Require company profile — snapshot issuer info
         profile = self._profile_repo.find_by_user_id(inp.user_id)
         if profile is None:
             raise MissingCompanyProfileError(inp.user_id)
 
         issuer_snapshot = _snapshot_issuer(profile)
 
-        # 2. Validate + convert items
+        # 3. Validate + convert items
         if not inp.items:
             raise ValueError("At least one line item is required")
         items = _items_from_inputs(inp.items)
 
-        # 3. Validate recipient name
+        # 4. Validate recipient name
         recipient_name = inp.recipient_name.strip() if inp.recipient_name else ""
         if not recipient_name:
             raise ValueError("Recipient name is required")
 
-        # 4. Atomically generate document number
+        # 5. Atomically generate document number
         issue_date = inp.issue_date if inp.issue_date is not None else datetime.now(timezone.utc).date()
         year = issue_date.year
         sequence = self._counter_repo.next_value(inp.user_id, inp.kind, year)
@@ -74,12 +81,12 @@ class CreateBillingDocumentUseCase:
             sequence=sequence,
         )
 
-        # 5. Resolve payment_terms: use input value or fall back to profile default
+        # 6. Resolve payment_terms: use input value or fall back to profile default
         payment_terms = inp.payment_terms
         if payment_terms is None and inp.kind.value == "facture":
             payment_terms = profile.default_payment_terms
 
-        # 6. Build and persist document
+        # 7. Build and persist document
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
             kind=inp.kind,

@@ -14,7 +14,9 @@ from app.application.billing.ports import (
     BillingNumberCounterRepositoryPort,
     BillingTemplateRepositoryPort,
     CompanyProfileRepositoryPort,
+    ProjectReadPort,
     TransactionalSessionPort,
+    assert_project_read_access,
 )
 from app.domain.billing.exceptions import (
     BillingTemplateNotFoundError,
@@ -42,36 +44,41 @@ class ApplyTemplateToCreateDocumentUseCase:
         template_repo: BillingTemplateRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
         profile_repo: CompanyProfileRepositoryPort,
+        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._template_repo = template_repo
         self._counter_repo = counter_repo
         self._profile_repo = profile_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
         inp: ApplyTemplateInput,
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
-        # 1. Load and authorise template
+        # 1. Verify project:read access if project_id supplied (H1 — auth boundary)
+        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+
+        # 2. Load and authorise template
         template = self._template_repo.find_by_id(inp.template_id)
         if template is None:
             raise BillingTemplateNotFoundError(inp.template_id)
         if template.user_id != inp.user_id:
             raise ForbiddenBillingDocumentError(inp.template_id)
 
-        # 2. Require company profile
+        # 3. Require company profile
         profile = self._profile_repo.find_by_user_id(inp.user_id)
         if profile is None:
             raise MissingCompanyProfileError(inp.user_id)
         issuer_snapshot = _snapshot_issuer(profile)
 
-        # 3. Validate recipient name
+        # 4. Validate recipient name
         recipient_name = inp.recipient_name.strip() if inp.recipient_name else ""
         if not recipient_name:
             raise ValueError("Recipient name is required")
 
-        # 4. Resolve issue_date and atomically generate document number
+        # 5. Resolve issue_date and atomically generate document number
         today = datetime.now(timezone.utc).date()
         issue_date = inp.issue_date if inp.issue_date is not None else today
         sequence = self._counter_repo.next_value(inp.user_id, template.kind, issue_date.year)
@@ -82,12 +89,12 @@ class ApplyTemplateToCreateDocumentUseCase:
             sequence=sequence,
         )
 
-        # 5. Resolve payment_terms from profile default (facture only)
+        # 6. Resolve payment_terms from profile default (facture only)
         payment_terms = None
         if template.kind.value == "facture":
             payment_terms = profile.default_payment_terms
 
-        # 6. Build document — items and notes/terms copied from template
+        # 7. Build document — items and notes/terms copied from template
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
             kind=template.kind,

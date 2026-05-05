@@ -79,7 +79,8 @@ def upsert_company_profile():
         tva_number=body.tva_number,
         iban=body.iban,
         bic=body.bic,
-        logo_url=body.logo_url,
+        # Pydantic HttpUrl → str; keeps only http/https URLs at the API boundary.
+        logo_url=str(body.logo_url) if body.logo_url is not None else None,
         default_payment_terms=body.default_payment_terms,
         prefix_override=body.prefix_override,
     )

@@ -49,9 +49,9 @@ from app.application.billing import (
     UpdateStatusInput,
     BillingDocumentNotFoundError,
     BillingTemplateNotFoundError,
-    BillingNumberCollisionError,
     DevisAlreadyConvertedError,
     ForbiddenBillingDocumentError,
+    ForbiddenProjectAccessError,
     InvalidStatusTransitionError,
     MissingCompanyProfileError,
 )
@@ -82,7 +82,12 @@ def _items_from_schema(raw_items) -> list[ItemInput]:
 
 
 def _doc_to_json(dto) -> dict:
-    """Convert a BillingDocumentResponse dataclass to a JSON-safe dict."""
+    """Convert a BillingDocumentResponse dataclass to a JSON-safe dict.
+
+    dataclasses.asdict() produces plain Python types; Decimal fields are left as
+    Decimal objects which Flask's JSON provider (via simplejson or stdlib json with
+    encoder override) serialises to strings — preserving precision without float drift.
+    """
     return dataclasses.asdict(dto)
 
 
@@ -122,7 +127,7 @@ def list_billing_documents():
             return _err("ValidationError", "Invalid project_id", 400)
 
     try:
-        limit = int(request.args.get("limit", 50))
+        limit = min(int(request.args.get("limit", 50)), 200)  # clamp to 200 max (H5)
         offset = int(request.args.get("offset", 0))
     except ValueError:
         return _err("ValidationError", "limit and offset must be integers", 400)
@@ -186,8 +191,8 @@ def create_billing_document():
         result = get_container().create_billing_document_usecase.execute(inp, db.session)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
-    except BillingNumberCollisionError:
-        return _err("Conflict", "Document number collision, please retry", 409)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -252,6 +257,8 @@ def update_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -314,8 +321,8 @@ def clone_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
-    except BillingNumberCollisionError:
-        return _err("Conflict", "Document number collision, please retry", 409)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -351,6 +358,7 @@ def convert_to_facture(doc_id: str, billing_doc):
     )
 
     from app import db
+    from sqlalchemy.exc import IntegrityError
 
     try:
         result = get_container().convert_devis_to_facture_usecase.execute(inp, db.session)
@@ -362,8 +370,11 @@ def convert_to_facture(doc_id: str, billing_doc):
         return _err("Conflict", "This devis was already converted to a facture", 409)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
-    except BillingNumberCollisionError:
-        return _err("Conflict", "Document number collision, please retry", 409)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
+    except IntegrityError:
+        # M5: DB partial unique on source_devis_id fired — concurrent convert race
+        return _err("Conflict", "This devis was already converted to a facture", 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -491,8 +502,8 @@ def create_document_from_template(template_id: str):
         return _err("NotFound", f"Billing template {template_id} not found", 404)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
-    except BillingNumberCollisionError:
-        return _err("Conflict", "Document number collision, please retry", 409)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 

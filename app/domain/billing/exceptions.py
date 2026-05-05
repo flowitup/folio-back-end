@@ -63,3 +63,19 @@ class ForbiddenBillingDocumentError(BillingDomainError):
     def __init__(self, document_id: UUID) -> None:
         self.document_id = document_id
         super().__init__(f"Access denied to billing document {document_id}")
+
+
+class ForbiddenProjectAccessError(BillingDomainError):
+    """Raised when a user links a billing document to a project they cannot read."""
+
+    def __init__(self, project_id: UUID) -> None:
+        self.project_id = project_id
+        super().__init__(f"User does not have project:read access on project {project_id}")
+
+
+class BillingTemplateNameConflictError(BillingDomainError):
+    """Raised when a template with the same (user_id, kind, name) already exists."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"A template named {name!r} already exists for this kind")

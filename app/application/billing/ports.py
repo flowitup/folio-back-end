@@ -14,6 +14,7 @@ from app.domain.billing.company_profile import CompanyProfile
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
+from app.domain.billing.exceptions import ForbiddenProjectAccessError
 
 
 class BillingDocumentRepositoryPort(Protocol):
@@ -116,6 +117,44 @@ class BillingNumberCounterRepositoryPort(Protocol):
         Creates the counter row with value=1 if it does not yet exist.
         """
         ...
+
+
+class ProjectReadPort(Protocol):
+    """Minimal project read port for billing project:read authorization checks.
+
+    Billing use-cases only need to verify that a user can read a project.
+    They do not need full project CRUD operations.
+    """
+
+    def find_by_id(self, project_id: UUID) -> Optional[Any]:
+        """Return the project entity by UUID, or None if not found."""
+        ...
+
+
+def assert_project_read_access(
+    project_repo: Optional[ProjectReadPort],
+    project_id: Optional[UUID],
+    user_id: UUID,
+) -> None:
+    """Verify the user has project:read access on *project_id*.
+
+    A user has project:read if they are the project owner or a project member.
+    Raises ForbiddenProjectAccessError if access is denied.
+    Raises ValueError if the project does not exist.
+    No-op when project_id is None or project_repo is None (test / no-project context).
+    """
+    if project_id is None or project_repo is None:
+        return
+
+    project = project_repo.find_by_id(project_id)
+    if project is None:
+        raise ValueError(f"Project {project_id} not found")
+
+    if project.owner_id == user_id:
+        return
+    if user_id in (project.user_ids or []):
+        return
+    raise ForbiddenProjectAccessError(project_id)
 
 
 class BillingDocumentPdfRendererPort(Protocol):

@@ -14,7 +14,9 @@ from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
     CompanyProfileRepositoryPort,
+    ProjectReadPort,
     TransactionalSessionPort,
+    assert_project_read_access,
 )
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import (
@@ -45,10 +47,12 @@ class ConvertDevisToFactureUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
         profile_repo: CompanyProfileRepositoryPort,
+        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
         self._profile_repo = profile_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
@@ -73,6 +77,9 @@ class ConvertDevisToFactureUseCase:
         existing = self._doc_repo.find_by_source_devis_id(inp.source_devis_id)
         if existing is not None:
             raise DevisAlreadyConvertedError(inp.source_devis_id)
+
+        # H1: Verify project:read access if source doc has a project_id
+        assert_project_read_access(self._project_repo, source.project_id, inp.user_id)
 
         # 4. Require company profile
         profile = self._profile_repo.find_by_user_id(inp.user_id)

@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 
 from app.application.billing._helpers import _assert_owner, _items_from_inputs
 from app.application.billing.dtos import BillingDocumentResponse, UpdateBillingDocumentInput
-from app.application.billing.ports import BillingDocumentRepositoryPort, TransactionalSessionPort
+from app.application.billing.ports import (
+    BillingDocumentRepositoryPort,
+    ProjectReadPort,
+    TransactionalSessionPort,
+    assert_project_read_access,
+)
+from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
 
 
@@ -19,8 +25,13 @@ class UpdateBillingDocumentUseCase:
     Applies only fields that are explicitly set (not None) in the input DTO.
     """
 
-    def __init__(self, doc_repo: BillingDocumentRepositoryPort) -> None:
+    def __init__(
+        self,
+        doc_repo: BillingDocumentRepositoryPort,
+        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
+    ) -> None:
         self._doc_repo = doc_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
@@ -31,6 +42,18 @@ class UpdateBillingDocumentUseCase:
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
         _assert_owner(doc, inp.user_id)
+
+        # M3: Reject kind-incompatible field updates before touching the DB.
+        if doc.kind == BillingDocumentKind.DEVIS:
+            if inp.payment_due_date is not None or inp.payment_terms is not None:
+                raise ValueError("payment_due_date and payment_terms are only valid on facture documents")
+        if doc.kind == BillingDocumentKind.FACTURE:
+            if inp.validity_until is not None:
+                raise ValueError("validity_until is only valid on devis documents")
+
+        # H1: Verify project:read access when changing project_id
+        if inp.project_id is not None:
+            assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
 

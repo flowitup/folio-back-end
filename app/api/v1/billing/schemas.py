@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, HttpUrl
 
 
 class _StrictBase(BaseModel):
@@ -26,9 +26,9 @@ class _StrictBase(BaseModel):
 class ItemSchema(_StrictBase):
     """A single line item used in create / update / template schemas."""
 
-    description: str = Field(..., max_length=500)
-    quantity: Decimal = Field(..., gt=Decimal("0"))
-    unit_price: Decimal = Field(..., ge=Decimal("0"))
+    description: str = Field(..., min_length=1, max_length=500)
+    quantity: Decimal = Field(..., gt=Decimal("0"), le=Decimal("9999999"))
+    unit_price: Decimal = Field(..., ge=Decimal("0"), le=Decimal("999999999"))
     vat_rate: Decimal = Field(..., ge=Decimal("0"), le=Decimal("100"))
 
 
@@ -42,17 +42,17 @@ class CreateBillingDocumentRequest(_StrictBase):
 
     kind: Literal["devis", "facture"]
     recipient_name: str = Field(..., min_length=1, max_length=255)
-    items: list[ItemSchema] = Field(..., min_length=1)
+    items: list[ItemSchema] = Field(..., min_length=1, max_length=200)
     project_id: Optional[UUID] = None
-    recipient_address: Optional[str] = None
+    recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
     recipient_siret: Optional[str] = None
-    notes: Optional[str] = None
-    terms: Optional[str] = None
-    signature_block_text: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=2000)
+    terms: Optional[str] = Field(None, max_length=2000)
+    signature_block_text: Optional[str] = Field(None, max_length=500)
     validity_until: Optional[date] = None
     payment_due_date: Optional[date] = None
-    payment_terms: Optional[str] = None
+    payment_terms: Optional[str] = Field(None, max_length=500)
     issue_date: Optional[date] = None
 
 
@@ -65,17 +65,17 @@ class UpdateBillingDocumentRequest(_StrictBase):
     """
 
     recipient_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    items: Optional[list[ItemSchema]] = None
+    items: Optional[list[ItemSchema]] = Field(None, max_length=200)
     project_id: Optional[UUID] = None
-    recipient_address: Optional[str] = None
+    recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
     recipient_siret: Optional[str] = None
-    notes: Optional[str] = None
-    terms: Optional[str] = None
-    signature_block_text: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=2000)
+    terms: Optional[str] = Field(None, max_length=2000)
+    signature_block_text: Optional[str] = Field(None, max_length=500)
     validity_until: Optional[date] = None
     payment_due_date: Optional[date] = None
-    payment_terms: Optional[str] = None
+    payment_terms: Optional[str] = Field(None, max_length=500)
     issue_date: Optional[date] = None
 
 
@@ -152,6 +152,6 @@ class UpsertCompanyProfileRequest(_StrictBase):
     tva_number: Optional[str] = None
     iban: Optional[str] = None
     bic: Optional[str] = None
-    logo_url: Optional[str] = None
-    default_payment_terms: Optional[str] = None
-    prefix_override: Optional[str] = Field(None, max_length=8)
+    logo_url: Optional[HttpUrl] = None
+    default_payment_terms: Optional[str] = Field(None, max_length=500)
+    prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$", max_length=8)

@@ -23,8 +23,12 @@ Logo fetch: 3-second timeout, fail-open (logo skipped on any error).
 
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import logging
 import os
+import socket
+import urllib.parse
 import warnings
 from io import BytesIO
 from pathlib import Path
@@ -132,17 +136,55 @@ def _styles() -> dict:
 _SKIP_LOGO_ENV = "FOLIO_SKIP_LOGO_FETCH"
 
 
+def _validate_logo_url(url: str) -> None:
+    """Validate that *url* is safe to fetch as a logo.
+
+    Raises ValueError if:
+    - Scheme is not http or https.
+    - Resolved host IP is private, loopback, or link-local (SSRF block).
+
+    AWS instance metadata (169.254.169.254) is covered by the link-local
+    check but is also explicit to make the guard obvious in code review.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Logo URL scheme must be http or https, got: {parsed.scheme!r}")
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError("Logo URL missing host")
+
+    try:
+        resolved_ip = socket.gethostbyname(host)
+        ip_obj = ipaddress.ip_address(resolved_ip)
+    except (socket.gaierror, ValueError) as exc:
+        raise ValueError(f"Logo URL host could not be resolved: {exc}") from exc
+
+    # Explicit AWS metadata check (also covered by is_link_local, but kept
+    # as a named guard so auditors can spot it without reasoning about CIDR).
+    if resolved_ip == "169.254.169.254":
+        raise ValueError("Logo URL resolves to AWS metadata endpoint — blocked")
+
+    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+        raise ValueError(f"Logo URL resolves to a non-public address — blocked ({resolved_ip})")
+
+
 def _fetch_logo(url: Optional[str]) -> Optional[BytesIO]:
     """Fetch an image from *url* and return its bytes in a BytesIO buffer.
 
     Returns None on any error (network failure, timeout, bad content-type,
-    empty URL, env skip flag). Never raises.
+    empty URL, env skip flag, SSRF validation failure). Never raises.
+
+    Security: URL is validated by _validate_logo_url (scheme + IP checks)
+    before any network I/O is performed.
     """
     if not url:
         return None
     if os.environ.get(_SKIP_LOGO_ENV, "").strip() == "1":
         return None
     try:
+        _validate_logo_url(url)
+
         import urllib.request
 
         req = urllib.request.Request(url, headers={"User-Agent": "Folio-PDF/1.0"})
@@ -151,8 +193,15 @@ def _fetch_logo(url: Optional[str]) -> Optional[BytesIO]:
         if not data:
             return None
         return BytesIO(data)
+    except ValueError as exc:
+        # Log a fingerprint hash only — never log the user-supplied URL to
+        # avoid leaking SSRF probe targets in application logs (M10).
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:12]
+        logger.warning("billing_pdf: logo fetch rejected (url_hash=%s): %s", url_hash, exc)
+        return None
     except Exception as err:  # noqa: BLE001
-        logger.debug("billing_pdf: logo fetch failed for %s: %s", url, err)
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:12]
+        logger.debug("billing_pdf: logo fetch failed (url_hash=%s): %s", url_hash, type(err).__name__)
         return None
 
 

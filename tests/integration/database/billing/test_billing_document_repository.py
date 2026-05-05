@@ -17,6 +17,7 @@ from app.infrastructure.database.repositories.sqlalchemy_billing_document_reposi
     SqlAlchemyBillingDocumentRepository,
 )
 from app.infrastructure.database.models import UserModel
+from app.infrastructure.database.models.company_profile import CompanyProfileModel
 
 
 # ---------------------------------------------------------------------------
@@ -195,22 +196,51 @@ class TestBillingDocumentRepositoryCRUD:
         assert found.items[0].unit_price == Decimal("99.99")
         assert found.items[0].vat_rate == Decimal("5.5")
 
-    def test_test_issuer_snapshot_immutability(self, session):
-        """Spec #5: create doc, mutate issuer info, reload doc — issuer_legal_name unchanged.
+    def test_issuer_snapshot_immutability(self, session):
+        """Spec §6: create doc with issuer snapshot, mutate company_profile, reload doc — snapshot unchanged.
 
-        Uses with_updates to simulate a company_profile update. The doc's issuer
-        snapshot is captured at create time and must not reflect post-create changes.
+        Steps:
+          1. Seed a company_profile row with original legal_name.
+          2. Create a billing document whose issuer_legal_name is copied from that profile.
+          3. UPDATE the company_profile's legal_name in-place (simulates a Settings save).
+          4. Reload the billing document.
+          5. Assert the doc still carries the ORIGINAL legal_name — snapshot isolation confirmed.
         """
         user_id = _seed_user(session)
         repo = SqlAlchemyBillingDocumentRepository(session)
 
         original_name = "Original Company SAS"
-        doc = _make_doc(user_id, issuer_legal_name=original_name)
-        saved = repo.save(doc)
-        doc_id = UUID(str(saved.id))
+        mutated_name = "Renamed Company SARL"
+        original_address = "1 rue de la Paix, 75001 Paris"
+        mutated_address = "99 avenue des Champs, 75008 Paris"
 
-        # Simulate company_profile update: mutate a *different* doc; existing doc unchanged
+        # Seed company_profile with original values
+        profile_row = CompanyProfileModel(
+            user_id=user_id,
+            legal_name=original_name,
+            address=original_address,
+            created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            updated_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        )
+        session.add(profile_row)
         session.flush()
 
+        # Create billing document with snapshot of original issuer info
+        doc = _make_doc(user_id, issuer_legal_name=original_name, issuer_address=original_address)
+        saved = repo.save(doc)
+        doc_id = UUID(str(saved.id))
+        session.flush()
+
+        # Mutate the company_profile in-place (simulates user updating company settings)
+        profile_row.legal_name = mutated_name
+        profile_row.address = mutated_address
+        session.flush()
+
+        # Reload the billing document and verify snapshot is unchanged
         reloaded = repo.find_by_id(doc_id)
-        assert reloaded.issuer_legal_name == original_name
+        assert (
+            reloaded.issuer_legal_name == original_name
+        ), f"Expected snapshot to retain {original_name!r}, got {reloaded.issuer_legal_name!r}"
+        assert (
+            reloaded.issuer_address == original_address
+        ), f"Expected snapshot to retain {original_address!r}, got {reloaded.issuer_address!r}"

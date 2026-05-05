@@ -30,6 +30,7 @@ from app.application.billing import (
     ItemInput,
     UpdateTemplateInput,
     BillingTemplateNotFoundError,
+    BillingTemplateNameConflictError,
     ForbiddenBillingDocumentError,
 )
 from app.domain.billing.enums import BillingDocumentKind
@@ -120,6 +121,8 @@ def create_billing_template():
 
     try:
         result = get_container().create_billing_template_usecase.execute(inp, db.session)
+    except BillingTemplateNameConflictError as exc:
+        return _err("Conflict", str(exc), 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 

@@ -5,9 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
+
 from app.application.billing._helpers import _items_from_inputs
 from app.application.billing.dtos import BillingTemplateResponse, CreateTemplateInput
 from app.application.billing.ports import BillingTemplateRepositoryPort, TransactionalSessionPort
+from app.domain.billing.exceptions import BillingTemplateNameConflictError
 from app.domain.billing.template import BillingDocumentTemplate
 
 
@@ -42,6 +45,10 @@ class CreateTemplateUseCase:
             updated_at=now,
         )
 
-        saved = self._template_repo.save(template)
-        db_session.commit()
+        try:
+            saved = self._template_repo.save(template)
+            db_session.commit()
+        except IntegrityError as exc:
+            # M2: unique constraint (user_id, kind, name) violated → 409, not 500
+            raise BillingTemplateNameConflictError(name) from exc
         return BillingTemplateResponse.from_entity(saved)

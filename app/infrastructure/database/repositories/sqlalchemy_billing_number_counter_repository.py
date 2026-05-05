@@ -1,9 +1,14 @@
 """SQLAlchemy adapter implementing BillingNumberCounterRepositoryPort.
 
-next_value() uses SELECT FOR UPDATE to guarantee atomicity under concurrent
-document creates. On SQLite (tests) the FOR UPDATE hint is silently dropped
-by SQLAlchemy — single-threaded tests remain correct, concurrent SQLite tests
-are not meaningful (SQLite does not support row-level locking).
+On Postgres: next_value() uses an atomic INSERT ... ON CONFLICT DO UPDATE RETURNING
+(upsert) that collapses the select-or-insert into a single statement, eliminating the
+race window that SELECT FOR UPDATE has on *first insert* (FOR UPDATE cannot lock a row
+that does not yet exist, causing IntegrityError when two concurrent transactions both
+see row=None and both try to INSERT).
+
+On SQLite (unit/integration tests): falls back to the legacy SELECT FOR UPDATE path.
+SQLite does not support row-level locking so concurrent tests are meaningless anyway,
+and the simple path keeps test fakes working without dialect-specific SQL.
 """
 
 from __future__ import annotations
@@ -28,15 +33,50 @@ class SqlAlchemyBillingNumberCounterRepository:
     def next_value(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
         """Return the next sequence value (1-based, monotonically increasing).
 
-        Algorithm:
-          1. Lock the counter row with SELECT FOR UPDATE (prevents concurrent
-             readers from reading the same value before it is incremented).
-          2. If no row exists, insert one with next_value=1 and return 1.
-          3. Otherwise read current next_value, increment in-place, flush, return.
+        Postgres path (atomic, race-free):
+          Uses INSERT ... ON CONFLICT DO UPDATE ... RETURNING in a single statement.
+          The claimed value is (returned next_value - 1) because the upsert stores
+          the *next* value to issue on the next call (next_value=2 on first insert,
+          meaning sequence 1 is claimed; next_value increments by 1 on conflict).
+
+        SQLite fallback (best-effort, single-threaded tests):
+          SELECT FOR UPDATE → insert-or-increment. Not race-safe under concurrent
+          load, which is acceptable for tests (SQLite has no row-level locking).
 
         The session must be inside an active transaction at call time; the
         caller's commit finalises the lock release.
         """
+        # Detect dialect: session.bind may be None with scoped sessions; fall back
+        # to checking the engine via get_bind() which resolves scoped session engines.
+        try:
+            bind = self._session.get_bind()
+            dialect = bind.dialect.name
+        except Exception:  # noqa: BLE001
+            dialect = "sqlite"  # safe fallback for test environments
+
+        if dialect == "postgresql":
+            return self._next_value_postgres(user_id, kind, year)
+        return self._next_value_sqlite_fallback(user_id, kind, year)
+
+    def _next_value_postgres(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+        """Atomic Postgres upsert — eliminates first-insert race (H3+M1)."""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = (
+            pg_insert(BillingNumberCounterModel)
+            .values(user_id=user_id, kind=kind.value, year=year, next_value=2)
+            .on_conflict_do_update(
+                index_elements=["user_id", "kind", "year"],
+                set_={"next_value": BillingNumberCounterModel.next_value + 1},
+            )
+            .returning(BillingNumberCounterModel.next_value)
+        )
+        new_next = self._session.execute(stmt).scalar_one()
+        # new_next is the value now stored; the value claimed is one less.
+        return new_next - 1
+
+    def _next_value_sqlite_fallback(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+        """Legacy SELECT FOR UPDATE path — SQLite / test environments only."""
         stmt = (
             select(BillingNumberCounterModel)
             .where(

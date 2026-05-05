@@ -8,6 +8,7 @@ import pytest
 
 from app.application.billing.update_billing_document_usecase import UpdateBillingDocumentUseCase
 from app.application.billing.dtos import ItemInput, UpdateBillingDocumentInput
+from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, ForbiddenBillingDocumentError
 from tests.unit.application.billing.conftest import make_doc
 
@@ -84,18 +85,32 @@ class TestUpdateBillingDocumentHappyPath:
         assert result.terms == "Net 30"
         assert result.signature_block_text == "Signed by CEO"
 
-    def test_update_date_fields(self, usecase, fake_session, user_id, saved_doc):
-        """Covers validity_until, payment_due_date, payment_terms, issue_date branches."""
+    def test_update_devis_date_fields(self, usecase, fake_session, user_id, doc_repo):
+        """Covers validity_until and issue_date branches on a devis (kind-compatible fields)."""
+        devis_doc = make_doc(user_id=user_id, kind=BillingDocumentKind.DEVIS)
+        doc_repo.save(devis_doc)
         inp = UpdateBillingDocumentInput(
-            id=saved_doc.id,
+            id=devis_doc.id,
             user_id=user_id,
             validity_until=date(2026, 3, 1),
+            issue_date=date(2026, 2, 1),
+        )
+        result = usecase.execute(inp, fake_session)
+        assert result.validity_until == date(2026, 3, 1)
+        assert result.issue_date == date(2026, 2, 1)
+
+    def test_update_facture_date_fields(self, usecase, fake_session, user_id, doc_repo):
+        """Covers payment_due_date and payment_terms branches on a facture (kind-compatible fields)."""
+        facture_doc = make_doc(user_id=user_id, kind=BillingDocumentKind.FACTURE, doc_number="FAC-2026-001")
+        doc_repo.save(facture_doc)
+        inp = UpdateBillingDocumentInput(
+            id=facture_doc.id,
+            user_id=user_id,
             payment_due_date=date(2026, 4, 1),
             payment_terms="30 days",
             issue_date=date(2026, 2, 1),
         )
         result = usecase.execute(inp, fake_session)
-        assert result.validity_until == date(2026, 3, 1)
         assert result.payment_due_date == date(2026, 4, 1)
         assert result.payment_terms == "30 days"
 
@@ -116,6 +131,30 @@ class TestUpdateBillingDocumentErrors:
     def test_wrong_owner_raises(self, usecase, fake_session, other_user_id, saved_doc):
         inp = UpdateBillingDocumentInput(id=saved_doc.id, user_id=other_user_id, notes="x")
         with pytest.raises(ForbiddenBillingDocumentError):
+            usecase.execute(inp, fake_session)
+
+    def test_devis_rejects_payment_due_date(self, usecase, fake_session, user_id, doc_repo):
+        """M3: PUT a devis with payment_due_date → ValueError (kind-incompatible field)."""
+        devis_doc = make_doc(user_id=user_id, kind=BillingDocumentKind.DEVIS)
+        doc_repo.save(devis_doc)
+        inp = UpdateBillingDocumentInput(id=devis_doc.id, user_id=user_id, payment_due_date=date(2026, 4, 1))
+        with pytest.raises(ValueError, match="facture"):
+            usecase.execute(inp, fake_session)
+
+    def test_devis_rejects_payment_terms(self, usecase, fake_session, user_id, doc_repo):
+        """M3: PUT a devis with payment_terms → ValueError (kind-incompatible field)."""
+        devis_doc = make_doc(user_id=user_id, kind=BillingDocumentKind.DEVIS)
+        doc_repo.save(devis_doc)
+        inp = UpdateBillingDocumentInput(id=devis_doc.id, user_id=user_id, payment_terms="Net 30")
+        with pytest.raises(ValueError, match="facture"):
+            usecase.execute(inp, fake_session)
+
+    def test_facture_rejects_validity_until(self, usecase, fake_session, user_id, doc_repo):
+        """M3: PUT a facture with validity_until → ValueError (kind-incompatible field)."""
+        facture_doc = make_doc(user_id=user_id, kind=BillingDocumentKind.FACTURE, doc_number="FAC-2026-999")
+        doc_repo.save(facture_doc)
+        inp = UpdateBillingDocumentInput(id=facture_doc.id, user_id=user_id, validity_until=date(2026, 6, 1))
+        with pytest.raises(ValueError, match="devis"):
             usecase.execute(inp, fake_session)
 
     def test_empty_recipient_name_raises(self, usecase, fake_session, user_id, saved_doc):

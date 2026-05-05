@@ -14,8 +14,11 @@ from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
     CompanyProfileRepositoryPort,
+    ProjectReadPort,
     TransactionalSessionPort,
+    assert_project_read_access,
 )
+from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
 
@@ -37,10 +40,12 @@ class CloneBillingDocumentUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
         profile_repo: CompanyProfileRepositoryPort,
+        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
         self._profile_repo = profile_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
@@ -62,6 +67,9 @@ class CloneBillingDocumentUseCase:
         # 3. Determine target kind
         target_kind = inp.override_kind if inp.override_kind is not None else source.kind
 
+        # H1: Verify project:read access if source doc has a project_id
+        assert_project_read_access(self._project_repo, source.project_id, inp.user_id)
+
         # 4. Atomically generate new document number
         today = datetime.now(timezone.utc).date()
         sequence = self._counter_repo.next_value(inp.user_id, target_kind, today.year)
@@ -72,7 +80,16 @@ class CloneBillingDocumentUseCase:
             sequence=sequence,
         )
 
-        # 5. Build new doc — dates reset, issuer from current profile
+        # 5. Build new doc — dates reset, issuer from current profile.
+        # H2: When changing kind, zero out the fields that are incompatible with the
+        # target kind to avoid violating the ck_billing_doc_payment_fields_facture_only
+        # DB CHECK constraint (kind='devis' must have payment_terms=NULL, payment_due_date=NULL;
+        # kind='facture' must have validity_until=NULL — enforced in _build_doc_from_inputs).
+        source_payment_terms = source.payment_terms
+        if target_kind == BillingDocumentKind.DEVIS and source.kind != BillingDocumentKind.DEVIS:
+            # facture → devis: drop payment fields
+            source_payment_terms = None
+
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
             kind=target_kind,
@@ -88,8 +105,11 @@ class CloneBillingDocumentUseCase:
             notes=source.notes,
             terms=source.terms,
             signature_block_text=source.signature_block_text,
-            # validity_until / payment_due_date left None → defaults applied in _build_doc_from_inputs
-            payment_terms=source.payment_terms,
+            # validity_until / payment_due_date left None → defaults applied in _build_doc_from_inputs.
+            # For devis→facture clone, validity_until=None is already correct (helper defaults it to
+            # None for facture). For facture→devis, passing None clears the devis validity_until
+            # so the helper's +30-day default is applied instead.
+            payment_terms=source_payment_terms,
             source_devis_id=None,  # plain clone — no audit trail link
         )
 

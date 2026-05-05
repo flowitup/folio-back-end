@@ -316,6 +316,8 @@ def _configure_di_container() -> None:
     _company_profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
     _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
     _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
+    # project_repository is already wired via configure_container
+    _project_repo = _c.project_repository
 
     _c.billing_document_repo = _billing_doc_repo
     _c.billing_template_repo = _billing_tpl_repo
@@ -328,25 +330,30 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
+        project_repo=_project_repo,  # H1 — project:read authorization
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
+        project_repo=_project_repo,  # H1 — project:read authorization
     )
     _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
+        project_repo=_project_repo,  # H1 — project:read authorization
     )
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
+        project_repo=_project_repo,  # H1 — project:read authorization
     )
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
+        project_repo=_project_repo,  # H1 — project:read authorization
     )
     _c.get_billing_document_usecase = GetBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
@@ -380,6 +387,7 @@ def _configure_di_container() -> None:
         template_repo=_billing_tpl_repo,
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
+        project_repo=_project_repo,  # H1 — project:read authorization
     )
 
     # company-profile use-cases

@@ -70,6 +70,8 @@ from app.domain.billing.exceptions import (
     BillingNumberCollisionError,
     DevisAlreadyConvertedError,
     ForbiddenBillingDocumentError,
+    ForbiddenProjectAccessError,
+    BillingTemplateNameConflictError,
 )
 
 __all__ = [
@@ -126,4 +128,6 @@ __all__ = [
     "BillingNumberCollisionError",
     "DevisAlreadyConvertedError",
     "ForbiddenBillingDocumentError",
+    "ForbiddenProjectAccessError",
+    "BillingTemplateNameConflictError",
 ]

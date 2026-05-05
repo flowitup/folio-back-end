@@ -50,6 +50,10 @@ def next_document_number(
         Formatted document number string.
     """
     token = kind_to_token(kind)
+    # Sequence is zero-padded to 3 digits. For sequence > 999 the format
+    # grows to 4+ digits (e.g. "1000"), breaking the zero-pad symmetry.
+    # This is intentional — unlimited growth is preferable to a hard cap
+    # that would block document creation. The asymmetry is cosmetic only.
     seq_str = f"{sequence:03d}"
     if prefix_override:
         return f"{prefix_override}-{token}-{year}-{seq_str}"
