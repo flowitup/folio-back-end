@@ -49,16 +49,18 @@ class SqlAlchemyBillingNumberCounterRepository:
         row = self._session.execute(stmt).scalar_one_or_none()
 
         if row is None:
+            # First sequence number is 1; store 2 as the *next* value to return.
             row = BillingNumberCounterModel(
                 user_id=user_id,
                 kind=kind.value,
                 year=year,
-                next_value=1,
+                next_value=2,
             )
             self._session.add(row)
             self._session.flush()
             return 1
 
+        # Read, advance, and return the value that was claimed.
         current = row.next_value
         row.next_value = current + 1
         self._session.flush()
