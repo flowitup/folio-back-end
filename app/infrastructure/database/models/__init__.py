@@ -22,6 +22,10 @@ from app.infrastructure.database.models.invoice_attachment import InvoiceAttachm
 from app.infrastructure.database.models.task import TaskModel
 from app.infrastructure.database.models.invitation import InvitationModel
 from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOrm
+from app.infrastructure.database.models.billing_document import BillingDocumentModel
+from app.infrastructure.database.models.billing_document_template import BillingDocumentTemplateModel
+from app.infrastructure.database.models.company_profile import CompanyProfileModel
+from app.infrastructure.database.models.billing_number_counter import BillingNumberCounterModel
 
 __all__ = [
     "Base",
@@ -40,4 +44,8 @@ __all__ = [
     "InvitationModel",
     "NoteOrm",
     "NoteDismissalOrm",
+    "BillingDocumentModel",
+    "BillingDocumentTemplateModel",
+    "CompanyProfileModel",
+    "BillingNumberCounterModel",
 ]
