@@ -58,8 +58,16 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         return project
 
     def delete(self, project_id: UUID) -> bool:
-        result = self._session.query(ProjectModel).filter_by(id=project_id).delete()
-        return result > 0
+        # Load the entity so SQLAlchemy unit-of-work fires ORM-level cascades
+        # alongside the FK ON DELETE CASCADE the schema already configures
+        # (workers, labor entries, tasks, invoices, notes, invitations,
+        # memberships). bulk-query .delete() bypasses ORM events.
+        project = self._session.query(ProjectModel).filter_by(id=project_id).first()
+        if project is None:
+            return False
+        self._session.delete(project)
+        self._session.commit()
+        return True
 
     def add_user(self, project_id: UUID, user_id: UUID) -> None:
         project = (
