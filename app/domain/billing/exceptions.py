@@ -79,3 +79,19 @@ class BillingTemplateNameConflictError(BillingDomainError):
     def __init__(self, name: str) -> None:
         self.name = name
         super().__init__(f"A template named {name!r} already exists for this kind")
+
+
+class CompanyNotAttachedError(BillingDomainError):
+    """Raised when a user submits a billing document for a company they are no longer attached to.
+
+    Distinct from MissingCompanyProfileError (which was the old no-profile case).
+    Used for the 409 'company_no_longer_attached' race-condition guard.
+    """
+
+    def __init__(self, user_id: UUID, company_id: UUID) -> None:
+        self.user_id = user_id
+        self.company_id = company_id
+        super().__init__(
+            f"User {user_id} is no longer attached to company {company_id}. "
+            "Re-attach before creating billing documents."
+        )

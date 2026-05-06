@@ -57,6 +57,9 @@ class BillingDocument:
     # --- line items ---
     items: tuple[BillingDocumentItem, ...] = field(default_factory=tuple)
 
+    # --- issuing company (FK to companies; nullable for legacy documents) ---
+    company_id: Optional[UUID] = None
+
     # --- optional project link ---
     project_id: Optional[UUID] = None
 

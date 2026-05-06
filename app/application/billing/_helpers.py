@@ -16,6 +16,7 @@ from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import ForbiddenBillingDocumentError
 from app.domain.billing.value_objects import BillingDocumentItem
+from app.domain.companies.company import Company
 from app.application.billing.dtos import ItemInput
 
 _DEFAULT_VALIDITY_DAYS = 30  # devis
@@ -43,6 +44,34 @@ def _snapshot_issuer(profile: CompanyProfile) -> dict:
         "issuer_bic": profile.bic,
         "issuer_logo_url": profile.logo_url,
     }
+
+
+def _snapshot_issuer_from_company(company: Company) -> dict:
+    """Copy all issuer fields from a Company entity by value.
+
+    Mirrors _snapshot_issuer but reads from the new Company domain entity
+    (used by the post-phase-04 billing use-cases that accept company_id).
+    Also derives effective_prefix from company.prefix_override (may be None).
+    Returns a plain dict ready to be unpacked into BillingDocument kwargs.
+    """
+    return {
+        "issuer_legal_name": company.legal_name,
+        "issuer_address": company.address,
+        "issuer_siret": company.siret,
+        "issuer_tva_number": company.tva_number,
+        "issuer_iban": company.iban,
+        "issuer_bic": company.bic,
+        "issuer_logo_url": company.logo_url,
+    }
+
+
+def _effective_prefix_from_company(company: Company) -> Optional[str]:
+    """Return the effective document-number prefix for a company.
+
+    Mirrors CompanyProfile.effective_prefix: returns prefix_override if set,
+    otherwise None (the numbering module uses a default prefix in that case).
+    """
+    return company.prefix_override
 
 
 def _compute_default_validity_until(issue_date: date) -> date:
@@ -95,6 +124,7 @@ def _build_doc_from_inputs(
     recipient_name: str,
     items: tuple[BillingDocumentItem, ...],
     issue_date: Optional[date] = None,
+    company_id: Optional[UUID] = None,
     project_id: Optional[UUID] = None,
     recipient_address: Optional[str] = None,
     recipient_email: Optional[str] = None,
@@ -128,6 +158,7 @@ def _build_doc_from_inputs(
     return BillingDocument(
         id=uuid4(),
         user_id=user_id,
+        company_id=company_id,
         kind=kind,
         document_number=document_number,
         status=BillingDocumentStatus.DRAFT,

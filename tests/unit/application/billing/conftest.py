@@ -50,6 +50,7 @@ class InMemoryBillingDocumentRepository:
         kind: BillingDocumentKind,
         status: Optional[BillingDocumentStatus] = None,
         project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[BillingDocument], int]:
@@ -58,6 +59,8 @@ class InMemoryBillingDocumentRepository:
             docs = [d for d in docs if d.status == status]
         if project_id is not None:
             docs = [d for d in docs if d.project_id == project_id]
+        if company_id is not None:
+            docs = [d for d in docs if d.company_id == company_id]
         total = len(docs)
         return docs[offset : offset + limit], total
 

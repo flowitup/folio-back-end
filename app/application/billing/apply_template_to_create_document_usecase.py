@@ -1,12 +1,21 @@
-"""ApplyTemplateToCreateDocumentUseCase — create a document pre-filled from a template."""
+"""ApplyTemplateToCreateDocumentUseCase — create a document pre-filled from a template.
+
+Phase 04 migration:
+  - Accepts optional company_id from ApplyTemplateInput.
+  - When company_id provided: validates attachment, snapshots from Company entity.
+  - When company_id is None: falls back to CompanyProfileRepository (legacy path).
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import UUID
 
 from app.application.billing._helpers import (
     _build_doc_from_inputs,
+    _effective_prefix_from_company,
     _snapshot_issuer,
+    _snapshot_issuer_from_company,
 )
 from app.application.billing.dtos import ApplyTemplateInput, BillingDocumentResponse
 from app.application.billing.ports import (
@@ -14,9 +23,12 @@ from app.application.billing.ports import (
     BillingNumberCounterRepositoryPort,
     BillingTemplateRepositoryPort,
     CompanyProfileRepositoryPort,
+    CompanyRepositoryPort,
     ProjectReadPort,
     TransactionalSessionPort,
+    UserCompanyAccessRepositoryPort,
     assert_project_read_access,
+    assert_user_company_access,
 )
 from app.domain.billing.exceptions import (
     BillingTemplateNotFoundError,
@@ -31,11 +43,11 @@ class ApplyTemplateToCreateDocumentUseCase:
 
     The template supplies: kind, items, notes, terms.
     The caller supplies: recipient_*, project_id, issue_date.
-    The current company_profile supplies: issuer snapshot + payment_terms default.
+    The current company (or company_profile for legacy) supplies: issuer snapshot + payment_terms default.
 
     Validation:
       - Template must exist and be owned by user.
-      - User must have a CompanyProfile.
+      - User must be attached to the resolved company (or have a CompanyProfile).
     """
 
     def __init__(
@@ -45,12 +57,16 @@ class ApplyTemplateToCreateDocumentUseCase:
         counter_repo: BillingNumberCounterRepositoryPort,
         profile_repo: CompanyProfileRepositoryPort,
         project_repo: ProjectReadPort = None,  # type: ignore[assignment]
+        company_repo: CompanyRepositoryPort = None,  # type: ignore[assignment]
+        access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._template_repo = template_repo
         self._counter_repo = counter_repo
         self._profile_repo = profile_repo
         self._project_repo = project_repo
+        self._company_repo = company_repo
+        self._access_repo = access_repo
 
     def execute(
         self,
@@ -67,11 +83,25 @@ class ApplyTemplateToCreateDocumentUseCase:
         if template.user_id != inp.user_id:
             raise ForbiddenBillingDocumentError(inp.template_id)
 
-        # 3. Require company profile
-        profile = self._profile_repo.find_by_user_id(inp.user_id)
-        if profile is None:
-            raise MissingCompanyProfileError(inp.user_id)
-        issuer_snapshot = _snapshot_issuer(profile)
+        # 3. Resolve issuer snapshot + counter key
+        company = None
+        if inp.company_id is not None:
+            company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
+
+        if company is not None:
+            issuer_snapshot = _snapshot_issuer_from_company(company)
+            effective_prefix = _effective_prefix_from_company(company) or ""
+            counter_key: UUID = inp.company_id  # type: ignore[assignment]
+            default_payment_terms = company.default_payment_terms
+        else:
+            # Legacy path: use CompanyProfile
+            profile = self._profile_repo.find_by_user_id(inp.user_id) if self._profile_repo else None
+            if profile is None:
+                raise MissingCompanyProfileError(inp.user_id)
+            issuer_snapshot = _snapshot_issuer(profile)
+            effective_prefix = profile.effective_prefix
+            counter_key = inp.user_id  # type: ignore[assignment]
+            default_payment_terms = profile.default_payment_terms
 
         # 4. Validate recipient name
         recipient_name = inp.recipient_name.strip() if inp.recipient_name else ""
@@ -81,27 +111,28 @@ class ApplyTemplateToCreateDocumentUseCase:
         # 5. Resolve issue_date and atomically generate document number
         today = datetime.now(timezone.utc).date()
         issue_date = inp.issue_date if inp.issue_date is not None else today
-        sequence = self._counter_repo.next_value(inp.user_id, template.kind, issue_date.year)
+        sequence = self._counter_repo.next_value(counter_key, template.kind, issue_date.year)
         document_number = next_document_number(
-            prefix_override=profile.effective_prefix,
+            prefix_override=effective_prefix,
             kind=template.kind,
             year=issue_date.year,
             sequence=sequence,
         )
 
-        # 6. Resolve payment_terms from profile default (facture only)
+        # 6. Resolve payment_terms from company/profile default (facture only)
         payment_terms = None
         if template.kind.value == "facture":
-            payment_terms = profile.default_payment_terms
+            payment_terms = default_payment_terms
 
         # 7. Build document — items and notes/terms copied from template
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
+            company_id=inp.company_id,
             kind=template.kind,
             document_number=document_number,
             issuer_snapshot=issuer_snapshot,
             recipient_name=recipient_name,
-            items=template.items,  # already tuple[BillingDocumentItem, ...]
+            items=template.items,
             issue_date=issue_date,
             project_id=inp.project_id,
             recipient_address=inp.recipient_address,
@@ -110,7 +141,6 @@ class ApplyTemplateToCreateDocumentUseCase:
             notes=template.notes,
             terms=template.terms,
             payment_terms=payment_terms,
-            # validity_until / payment_due_date: None → defaults in _build_doc_from_inputs
         )
 
         saved = self._doc_repo.save(doc)

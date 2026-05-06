@@ -115,6 +115,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.notes import notes_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp, company_profile_bp
+    from app.api.v1.companies import companies_bp, users_me_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -132,6 +133,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
     app.register_blueprint(company_profile_bp, url_prefix="/api/v1")
+    app.register_blueprint(companies_bp, url_prefix="/api/v1")
+    app.register_blueprint(users_me_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -444,18 +447,24 @@ def _configure_di_container() -> None:
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,  # phase 04 — company_id path
+        access_repo=_access_repo,  # phase 04 — attachment validation
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )
     _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
@@ -501,6 +510,8 @@ def _configure_di_container() -> None:
         counter_repo=_billing_counter_repo,
         profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )
 
     # company-profile use-cases

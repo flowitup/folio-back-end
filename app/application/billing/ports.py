@@ -14,7 +14,9 @@ from app.domain.billing.company_profile import CompanyProfile
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
-from app.domain.billing.exceptions import ForbiddenProjectAccessError
+from app.domain.billing.exceptions import CompanyNotAttachedError, ForbiddenProjectAccessError
+from app.domain.companies.company import Company
+from app.domain.companies.user_company_access import UserCompanyAccess
 
 
 class BillingDocumentRepositoryPort(Protocol):
@@ -38,12 +40,13 @@ class BillingDocumentRepositoryPort(Protocol):
         kind: BillingDocumentKind,
         status: Optional[BillingDocumentStatus] = None,
         project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents for a user, with total count.
 
-        Filters: kind required; status and project_id are optional.
+        Filters: kind required; status, project_id, and company_id are optional.
         Returns (items, total_count) where total_count is the unfiltered total
         matching user_id + kind + optional filters (for pagination metadata).
         """
@@ -155,6 +158,54 @@ def assert_project_read_access(
     if user_id in (project.user_ids or []):
         return
     raise ForbiddenProjectAccessError(project_id)
+
+
+class CompanyRepositoryPort(Protocol):
+    """Minimal company read port for billing use-cases.
+
+    Only the subset of CompanyRepositoryPort needed to snapshot issuer fields.
+    """
+
+    def find_by_id(self, company_id: UUID) -> Optional[Company]:
+        """Return company by UUID, or None if not found."""
+        ...
+
+
+class UserCompanyAccessRepositoryPort(Protocol):
+    """Minimal user-company access read port for billing attachment checks."""
+
+    def find(self, user_id: UUID, company_id: UUID) -> Optional[UserCompanyAccess]:
+        """Return the access row for (user_id, company_id), or None."""
+        ...
+
+
+def assert_user_company_access(
+    access_repo: Optional[UserCompanyAccessRepositoryPort],
+    company_repo: Optional[CompanyRepositoryPort],
+    user_id: UUID,
+    company_id: Optional[UUID],
+) -> Optional[Company]:
+    """Verify the user is attached to company_id and return the full Company snapshot.
+
+    Returns None when company_id is None (no company context; backwards-compatible).
+    Raises CompanyNotAttachedError if the user has no access row (race condition guard).
+    Raises ValueError if the company does not exist.
+    No-op (returns None) when either repo is None (test / legacy context).
+    """
+    if company_id is None:
+        return None
+    if access_repo is None or company_repo is None:
+        return None
+
+    company = company_repo.find_by_id(company_id)
+    if company is None:
+        raise ValueError(f"Company {company_id} not found")
+
+    access = access_repo.find(user_id, company_id)
+    if access is None:
+        raise CompanyNotAttachedError(user_id, company_id)
+
+    return company
 
 
 class BillingDocumentPdfRendererPort(Protocol):

@@ -42,6 +42,7 @@ from app.api.v1.billing.schemas import (
 from app.application.billing import (
     ApplyTemplateInput,
     CloneBillingDocumentInput,
+    CompanyNotAttachedError,
     ConvertDevisToFactureInput,
     CreateBillingDocumentInput,
     ItemInput,
@@ -126,6 +127,14 @@ def list_billing_documents():
         except ValueError:
             return _err("ValidationError", "Invalid project_id", 400)
 
+    company_id = None
+    company_id_str = request.args.get("company_id")
+    if company_id_str:
+        try:
+            company_id = UUID(company_id_str)
+        except ValueError:
+            return _err("ValidationError", "Invalid company_id", 400)
+
     try:
         limit = min(int(request.args.get("limit", 50)), 200)  # clamp to 200 max (H5)
         offset = int(request.args.get("offset", 0))
@@ -138,6 +147,7 @@ def list_billing_documents():
         kind=kind,
         status=status,
         project_id=project_id,
+        company_id=company_id,
         limit=limit,
         offset=offset,
     )
@@ -172,6 +182,7 @@ def create_billing_document():
         kind=BillingDocumentKind(body.kind),
         recipient_name=body.recipient_name,
         items=_items_from_schema(body.items),
+        company_id=body.company_id,
         project_id=body.project_id,
         recipient_address=body.recipient_address,
         recipient_email=str(body.recipient_email) if body.recipient_email else None,
@@ -191,6 +202,8 @@ def create_billing_document():
         result = get_container().create_billing_document_usecase.execute(inp, db.session)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
+    except CompanyNotAttachedError:
+        return jsonify({"error": "Conflict", "reason": "company_no_longer_attached"}), 409
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:
@@ -311,6 +324,7 @@ def clone_billing_document(doc_id: str, billing_doc):
         source_id=billing_doc.id,
         user_id=user_id,
         override_kind=override_kind,
+        company_id=body.company_id,
     )
 
     from app import db
@@ -321,6 +335,8 @@ def clone_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
+    except CompanyNotAttachedError:
+        return jsonify({"error": "Conflict", "reason": "company_no_longer_attached"}), 409
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:
@@ -355,6 +371,7 @@ def convert_to_facture(doc_id: str, billing_doc):
         user_id=user_id,
         payment_due_date=body.payment_due_date,
         payment_terms=body.payment_terms,
+        company_id=body.company_id,
     )
 
     from app import db
@@ -370,6 +387,8 @@ def convert_to_facture(doc_id: str, billing_doc):
         return _err("Conflict", "This devis was already converted to a facture", 409)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
+    except CompanyNotAttachedError:
+        return jsonify({"error": "Conflict", "reason": "company_no_longer_attached"}), 409
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
     except IntegrityError:
@@ -485,6 +504,7 @@ def create_document_from_template(template_id: str):
         template_id=tpl_uuid,
         user_id=user_id,
         recipient_name=body.recipient_name,
+        company_id=body.company_id,
         project_id=body.project_id,
         recipient_address=body.recipient_address,
         recipient_email=str(body.recipient_email) if body.recipient_email else None,
@@ -502,6 +522,8 @@ def create_document_from_template(template_id: str):
         return _err("NotFound", f"Billing template {template_id} not found", 404)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
+    except CompanyNotAttachedError:
+        return jsonify({"error": "Conflict", "reason": "company_no_longer_attached"}), 409
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
     except ValueError as exc:

@@ -55,6 +55,8 @@ from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingTemplateRepositoryPort,
     CompanyProfileRepositoryPort,
+    CompanyRepositoryPort,
+    UserCompanyAccessRepositoryPort,
     BillingNumberCounterRepositoryPort,
     BillingDocumentPdfRendererPort,
     TransactionalSessionPort,
@@ -72,6 +74,7 @@ from app.domain.billing.exceptions import (
     ForbiddenBillingDocumentError,
     ForbiddenProjectAccessError,
     BillingTemplateNameConflictError,
+    CompanyNotAttachedError,
 )
 
 __all__ = [
@@ -116,6 +119,8 @@ __all__ = [
     "BillingDocumentRepositoryPort",
     "BillingTemplateRepositoryPort",
     "CompanyProfileRepositoryPort",
+    "CompanyRepositoryPort",
+    "UserCompanyAccessRepositoryPort",
     "BillingNumberCounterRepositoryPort",
     "BillingDocumentPdfRendererPort",
     "TransactionalSessionPort",
@@ -130,4 +135,5 @@ __all__ = [
     "ForbiddenBillingDocumentError",
     "ForbiddenProjectAccessError",
     "BillingTemplateNameConflictError",
+    "CompanyNotAttachedError",
 ]

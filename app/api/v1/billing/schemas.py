@@ -43,6 +43,7 @@ class CreateBillingDocumentRequest(_StrictBase):
     kind: Literal["devis", "facture"]
     recipient_name: str = Field(..., min_length=1, max_length=255)
     items: list[ItemSchema] = Field(..., min_length=1, max_length=200)
+    company_id: Optional[UUID] = None  # None → falls back to CompanyProfile (legacy path)
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
@@ -89,6 +90,7 @@ class CloneRequest(_StrictBase):
     """Optional body for POST /billing-documents/<id>/clone."""
 
     override_kind: Optional[Literal["devis", "facture"]] = None
+    company_id: Optional[UUID] = None  # None → inherit from source document
 
 
 class ConvertRequest(_StrictBase):
@@ -99,12 +101,14 @@ class ConvertRequest(_StrictBase):
 
     payment_due_date: Optional[date] = None
     payment_terms: Optional[str] = None
+    company_id: Optional[UUID] = None  # None → inherit from source document
 
 
 class ApplyTemplateRequest(_StrictBase):
     """Body for POST /billing-documents/from-template/<template_id>."""
 
     recipient_name: str = Field(..., min_length=1, max_length=255)
+    company_id: Optional[UUID] = None  # None → falls back to CompanyProfile (legacy)
     recipient_address: Optional[str] = None
     recipient_email: Optional[EmailStr] = None
     recipient_siret: Optional[str] = None

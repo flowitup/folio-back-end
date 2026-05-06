@@ -48,6 +48,7 @@ class CreateBillingDocumentInput:
     kind: BillingDocumentKind
     recipient_name: str
     items: list[ItemInput]
+    company_id: Optional[UUID] = None
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = None
     recipient_email: Optional[str] = None
@@ -89,6 +90,7 @@ class CloneBillingDocumentInput:
     source_id: UUID
     user_id: UUID
     override_kind: Optional[BillingDocumentKind] = None  # None = same kind as source
+    company_id: Optional[UUID] = None  # None → use source doc's company_id
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ class ConvertDevisToFactureInput:
     user_id: UUID
     payment_due_date: Optional[date] = None
     payment_terms: Optional[str] = None
+    company_id: Optional[UUID] = None  # None → use source doc's company_id
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,7 @@ class ApplyTemplateInput:
     template_id: UUID
     user_id: UUID
     recipient_name: str
+    company_id: Optional[UUID] = None
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = None
     recipient_email: Optional[str] = None
@@ -216,6 +220,7 @@ class BillingDocumentResponse:
     total_ht: Decimal
     total_tva: Decimal
     total_ttc: Decimal
+    company_id: Optional[UUID] = None
     project_id: Optional[UUID] = None
     validity_until: Optional[date] = None
     payment_due_date: Optional[date] = None
@@ -251,6 +256,7 @@ class BillingDocumentResponse:
         return BillingDocumentResponse(
             id=doc.id,
             user_id=doc.user_id,
+            company_id=doc.company_id,
             kind=doc.kind.value,
             document_number=doc.document_number,
             status=doc.status.value,
