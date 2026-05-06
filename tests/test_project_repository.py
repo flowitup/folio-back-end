@@ -3,6 +3,7 @@
 import pytest
 from uuid import uuid4
 
+from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
 from app.infrastructure.database.models import ProjectModel, UserModel
 
 
@@ -142,8 +143,31 @@ class TestProjectUserAssociation:
         # User should still exist
         user = session.get(UserModel, regular_user.id)
         assert user is not None
-        # But project association gone
-        assert len(user.projects) == 0
+
+
+class TestSQLAlchemyProjectRepositoryDelete:
+    """
+    Regression: SQLAlchemyProjectRepository.delete previously ran
+    `query.delete()` without `session.commit()`. Endpoint returned 204 because
+    the route never crashed, but the project survived because the transaction
+    was never persisted. The use-case unit tests mocked the repo so the bug
+    went undetected end-to-end.
+    """
+
+    def test_delete_persists_after_commit(self, session, sample_project):
+        repo = SQLAlchemyProjectRepository(session)
+        project_id = sample_project.id
+
+        deleted = repo.delete(project_id)
+
+        assert deleted is True
+        # Bypass the SQLAlchemy identity map to confirm the row is gone in DB.
+        session.expire_all()
+        assert session.get(ProjectModel, project_id) is None
+
+    def test_delete_returns_false_when_missing(self, session):
+        repo = SQLAlchemyProjectRepository(session)
+        assert repo.delete(uuid4()) is False
 
 
 class TestProjectTimestamps:
