@@ -7,6 +7,23 @@ share a single source of truth for field mapping.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    """Attach UTC timezone to naive datetimes returned by SQLite.
+
+    SQLite does not store timezone info; DateTime(timezone=True) columns
+    return naive datetimes on SQLite. Postgres returns aware datetimes.
+    This helper normalises both so domain code can always compare safely.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 from app.domain.companies.company import Company
 from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.user_company_access import UserCompanyAccess
@@ -34,8 +51,8 @@ def deserialize_company_orm(row: CompanyModel) -> Company:
         default_payment_terms=row.default_payment_terms,
         prefix_override=row.prefix_override,
         created_by=row.created_by,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+        created_at=_ensure_utc(row.created_at),
+        updated_at=_ensure_utc(row.updated_at),
     )
 
 
@@ -67,7 +84,7 @@ def deserialize_access_orm(row: UserCompanyAccessModel) -> UserCompanyAccess:
         user_id=row.user_id,
         company_id=row.company_id,
         is_primary=row.is_primary,
-        attached_at=row.attached_at,
+        attached_at=_ensure_utc(row.attached_at),
     )
 
 
@@ -91,9 +108,9 @@ def deserialize_token_orm(row: CompanyInviteTokenModel) -> CompanyInviteToken:
         company_id=row.company_id,
         token_hash=row.token_hash,
         created_by=row.created_by,
-        created_at=row.created_at,
-        expires_at=row.expires_at,
-        redeemed_at=row.redeemed_at,
+        created_at=_ensure_utc(row.created_at),
+        expires_at=_ensure_utc(row.expires_at),
+        redeemed_at=_ensure_utc(row.redeemed_at),
         redeemed_by=row.redeemed_by,
     )
 

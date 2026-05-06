@@ -1,23 +1,19 @@
 """CreateBillingDocumentUseCase — create a new billing document from scratch.
 
-Phase 04 migration:
-  - Accepts company_id from CreateBillingDocumentInput.
-  - When company_id is provided: validates user attachment via UserCompanyAccessRepository,
-    snapshots issuer fields from Company entity, keys counter by company_id.
-  - When company_id is None (legacy path): falls back to CompanyProfileRepository
-    (kept for backward-compat during test migration in phase 05).
+Phase 05 tightening:
+  - company_id is now REQUIRED in CreateBillingDocumentInput.
+  - Legacy CompanyProfile fallback removed.
+  - CompanyProfileRepositoryPort still accepted for wiring compat but unused.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import UUID
 
 from app.application.billing._helpers import (
     _build_doc_from_inputs,
     _effective_prefix_from_company,
     _items_from_inputs,
-    _snapshot_issuer,
     _snapshot_issuer_from_company,
 )
 from app.application.billing.dtos import BillingDocumentResponse, CreateBillingDocumentInput
@@ -40,8 +36,7 @@ class CreateBillingDocumentUseCase:
     """Create a new billing document.
 
     Pre-conditions:
-      - When company_id provided: user must be attached to that company.
-      - When company_id is None (legacy): user must have a CompanyProfile.
+      - company_id is required; user must be attached to that company.
       - At least one line item required.
       - Number generated atomically via counter repo (SELECT FOR UPDATE).
 
@@ -52,14 +47,14 @@ class CreateBillingDocumentUseCase:
         self,
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
-        profile_repo: CompanyProfileRepositoryPort,
+        profile_repo: CompanyProfileRepositoryPort,  # kept for wiring compat, unused
         project_repo: ProjectReadPort = None,  # type: ignore[assignment]
         company_repo: CompanyRepositoryPort = None,  # type: ignore[assignment]
         access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
-        self._profile_repo = profile_repo
+        self._profile_repo = profile_repo  # no longer used — kept to avoid wiring drift
         self._project_repo = project_repo
         self._company_repo = company_repo
         self._access_repo = access_repo
@@ -72,34 +67,21 @@ class CreateBillingDocumentUseCase:
         # 1. Verify project:read access if project_id supplied (H1 — auth boundary)
         assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
 
-        # 2. Resolve issuer snapshot + counter key + default_payment_terms
-        default_payment_terms = None
-        if inp.company_id is not None:
-            # Phase 04+ path: validate attachment and snapshot from Company entity
-            company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
-            if company is None:
-                # company_id supplied but repos not wired — treat as legacy path
-                profile = self._profile_repo.find_by_user_id(inp.user_id) if self._profile_repo else None
-                if profile is None:
-                    raise MissingCompanyProfileError(inp.user_id)
-                issuer_snapshot = _snapshot_issuer(profile)
-                effective_prefix = profile.effective_prefix
-                counter_key: UUID = inp.user_id  # type: ignore[assignment]
-                default_payment_terms = profile.default_payment_terms
-            else:
-                issuer_snapshot = _snapshot_issuer_from_company(company)
-                effective_prefix = _effective_prefix_from_company(company) or ""
-                counter_key = inp.company_id
-                default_payment_terms = company.default_payment_terms
-        else:
-            # Legacy path: use CompanyProfile
-            profile = self._profile_repo.find_by_user_id(inp.user_id) if self._profile_repo else None
-            if profile is None:
-                raise MissingCompanyProfileError(inp.user_id)
-            issuer_snapshot = _snapshot_issuer(profile)
-            effective_prefix = profile.effective_prefix
-            counter_key = inp.user_id  # type: ignore[assignment]
-            default_payment_terms = profile.default_payment_terms
+        # 2. company_id is required — validate attachment and snapshot from Company entity
+        if inp.company_id is None:
+            raise MissingCompanyProfileError(inp.user_id)
+
+        company = assert_user_company_access(
+            self._access_repo, self._company_repo, inp.user_id, inp.company_id
+        )
+        if company is None:
+            # repos not wired (unlikely in prod) — surface as missing-profile error
+            raise MissingCompanyProfileError(inp.user_id)
+
+        issuer_snapshot = _snapshot_issuer_from_company(company)
+        effective_prefix = _effective_prefix_from_company(company) or ""
+        counter_key = inp.company_id
+        default_payment_terms = company.default_payment_terms
 
         # 3. Validate + convert items
         if not inp.items:
@@ -122,13 +104,10 @@ class CreateBillingDocumentUseCase:
             sequence=sequence,
         )
 
-        # 6. Resolve payment_terms: use input value or fall back to company/profile default
+        # 6. Resolve payment_terms: use input value or fall back to company default
         payment_terms = inp.payment_terms
         if payment_terms is None and inp.kind.value == "facture":
-            if inp.company_id is not None and company is not None:
-                payment_terms = company.default_payment_terms
-            elif "profile" in dir() and profile is not None:  # type: ignore[possibly-undefined]
-                payment_terms = profile.default_payment_terms  # type: ignore[possibly-undefined]
+            payment_terms = default_payment_terms
 
         # 7. Build and persist document
         doc = _build_doc_from_inputs(

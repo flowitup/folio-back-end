@@ -131,7 +131,11 @@ class TestUpdateTemplate:
         # Apply the template — extra field `kind` in body is rejected by schema
         apply_resp = inv_client.post(
             f"/api/v1/billing-documents/from-template/{tpl_id}",
-            json={"recipient_name": "Client", "kind": "facture"},  # kind not allowed
+            json={
+                "recipient_name": "Client",
+                "kind": "facture",  # kind not allowed in ApplyTemplateRequest
+                "company_id": billing_profile["company_id"],
+            },
             headers=_auth(billing_token),
         )
         assert apply_resp.status_code == 422
@@ -165,7 +169,10 @@ class TestApplyTemplate:
     def test_apply_template_creates_doc(self, inv_client, billing_token, billing_profile, seeded_template):
         resp = inv_client.post(
             f"/api/v1/billing-documents/from-template/{seeded_template['id']}",
-            json={"recipient_name": "Client via Template"},
+            json={
+                "recipient_name": "Client via Template",
+                "company_id": billing_profile["company_id"],
+            },
             headers=_auth(billing_token),
         )
         assert resp.status_code == 201
@@ -176,7 +183,7 @@ class TestApplyTemplate:
     def test_apply_nonexistent_template_returns_404(self, inv_client, billing_token, billing_profile):
         resp = inv_client.post(
             f"/api/v1/billing-documents/from-template/{uuid.uuid4()}",
-            json={"recipient_name": "X"},
+            json={"recipient_name": "X", "company_id": billing_profile["company_id"]},
             headers=_auth(billing_token),
         )
         assert resp.status_code == 404

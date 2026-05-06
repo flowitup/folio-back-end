@@ -47,7 +47,11 @@ from tests.unit.application.billing.conftest import (
     InMemoryBillingNumberCounterRepository,
     InMemoryBillingTemplateRepository,
     InMemoryCompanyProfileRepository,
+    InMemoryCompanyRepository,
+    InMemoryUserCompanyAccessRepository,
     _FakeSession,
+    make_access,
+    make_company,
     make_doc,
     make_profile,
 )
@@ -199,105 +203,7 @@ class TestH1ProjectAuthorizationCreate:
         return uuid4()
 
     @pytest.fixture
-    def doc_repo(self):
-        return InMemoryBillingDocumentRepository()
-
-    @pytest.fixture
-    def counter_repo(self):
-        return InMemoryBillingNumberCounterRepository()
-
-    @pytest.fixture
-    def profile_repo(self, user_id):
-        repo = InMemoryCompanyProfileRepository()
-        repo.save(make_profile(user_id))
-        return repo
-
-    @pytest.fixture
-    def project_repo(self):
-        return InMemoryProjectRepository()
-
-    @pytest.fixture
-    def usecase(self, doc_repo, counter_repo, profile_repo, project_repo):
-        return CreateBillingDocumentUseCase(
-            doc_repo=doc_repo,
-            counter_repo=counter_repo,
-            profile_repo=profile_repo,
-            project_repo=project_repo,
-        )
-
-    def test_user_cannot_create_doc_for_unowned_project(self, usecase, user_id, other_user_id, project_repo):
-        """H1: user not member of project → ForbiddenProjectAccessError."""
-        project = _Project(owner_id=other_user_id)
-        project_repo.save(project)
-
-        inp = CreateBillingDocumentInput(
-            user_id=user_id,
-            kind=BillingDocumentKind.DEVIS,
-            recipient_name="Client Corp",
-            items=[
-                ItemInput(description="S", quantity=Decimal("1"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
-            ],
-            project_id=project.id,
-        )
-        with pytest.raises(ForbiddenProjectAccessError):
-            usecase.execute(inp, _FakeSession())
-
-    def test_owner_can_create_doc_with_project(self, usecase, user_id, project_repo):
-        """H1: project owner can create a doc linked to their project."""
-        project = _Project(owner_id=user_id)
-        project_repo.save(project)
-
-        inp = CreateBillingDocumentInput(
-            user_id=user_id,
-            kind=BillingDocumentKind.DEVIS,
-            recipient_name="Client Corp",
-            items=[
-                ItemInput(description="S", quantity=Decimal("1"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
-            ],
-            project_id=project.id,
-        )
-        result = usecase.execute(inp, _FakeSession())
-        assert result.project_id == project.id
-
-    def test_member_can_create_doc_with_project(self, usecase, user_id, other_user_id, project_repo):
-        """H1: project member can create a doc linked to the project."""
-        project = _Project(owner_id=other_user_id, user_ids=[user_id])
-        project_repo.save(project)
-
-        inp = CreateBillingDocumentInput(
-            user_id=user_id,
-            kind=BillingDocumentKind.DEVIS,
-            recipient_name="Client Corp",
-            items=[
-                ItemInput(description="S", quantity=Decimal("1"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
-            ],
-            project_id=project.id,
-        )
-        result = usecase.execute(inp, _FakeSession())
-        assert result.project_id == project.id
-
-    def test_no_project_id_skips_auth_check(self, usecase, user_id):
-        """H1: no project_id → no auth check → succeeds normally."""
-        inp = CreateBillingDocumentInput(
-            user_id=user_id,
-            kind=BillingDocumentKind.DEVIS,
-            recipient_name="Client Corp",
-            items=[
-                ItemInput(description="S", quantity=Decimal("1"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
-            ],
-        )
-        result = usecase.execute(inp, _FakeSession())
-        assert result.project_id is None
-
-
-# ---------------------------------------------------------------------------
-# H2 — Clone CHECK constraint: kind-incompatible fields zeroed out
-# ---------------------------------------------------------------------------
-
-
-class TestH2CloneKindIncompatibleFields:
-    @pytest.fixture
-    def user_id(self):
+    def company_id(self):
         return uuid4()
 
     @pytest.fixture
@@ -315,14 +221,131 @@ class TestH2CloneKindIncompatibleFields:
         return repo
 
     @pytest.fixture
-    def usecase(self, doc_repo, counter_repo, profile_repo):
+    def company_repo(self, user_id, company_id):
+        repo = InMemoryCompanyRepository()
+        repo.save(make_company(owner_id=user_id, company_id=company_id))
+        return repo
+
+    @pytest.fixture
+    def access_repo(self, user_id, company_id):
+        repo = InMemoryUserCompanyAccessRepository()
+        repo.save(make_access(user_id=user_id, company_id=company_id))
+        return repo
+
+    @pytest.fixture
+    def project_repo(self):
+        return InMemoryProjectRepository()
+
+    @pytest.fixture
+    def usecase(self, doc_repo, counter_repo, profile_repo, project_repo, company_repo, access_repo):
+        return CreateBillingDocumentUseCase(
+            doc_repo=doc_repo,
+            counter_repo=counter_repo,
+            profile_repo=profile_repo,
+            project_repo=project_repo,
+            company_repo=company_repo,
+            access_repo=access_repo,
+        )
+
+    def _base_inp(self, user_id, company_id, **overrides):
+        defaults = dict(
+            user_id=user_id,
+            kind=BillingDocumentKind.DEVIS,
+            recipient_name="Client Corp",
+            company_id=company_id,
+            items=[
+                ItemInput(description="S", quantity=Decimal("1"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
+            ],
+        )
+        defaults.update(overrides)
+        return CreateBillingDocumentInput(**defaults)
+
+    def test_user_cannot_create_doc_for_unowned_project(self, usecase, user_id, company_id, other_user_id,
+                                                         project_repo):
+        """H1: user not member of project → ForbiddenProjectAccessError."""
+        project = _Project(owner_id=other_user_id)
+        project_repo.save(project)
+
+        inp = self._base_inp(user_id, company_id, project_id=project.id)
+        with pytest.raises(ForbiddenProjectAccessError):
+            usecase.execute(inp, _FakeSession())
+
+    def test_owner_can_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
+        """H1: project owner can create a doc linked to their project."""
+        project = _Project(owner_id=user_id)
+        project_repo.save(project)
+
+        inp = self._base_inp(user_id, company_id, project_id=project.id)
+        result = usecase.execute(inp, _FakeSession())
+        assert result.project_id == project.id
+
+    def test_member_can_create_doc_with_project(self, usecase, user_id, company_id, other_user_id, project_repo):
+        """H1: project member can create a doc linked to the project."""
+        project = _Project(owner_id=other_user_id, user_ids=[user_id])
+        project_repo.save(project)
+
+        inp = self._base_inp(user_id, company_id, project_id=project.id)
+        result = usecase.execute(inp, _FakeSession())
+        assert result.project_id == project.id
+
+    def test_no_project_id_skips_auth_check(self, usecase, user_id, company_id):
+        """H1: no project_id → no auth check → succeeds normally."""
+        inp = self._base_inp(user_id, company_id)
+        result = usecase.execute(inp, _FakeSession())
+        assert result.project_id is None
+
+
+# ---------------------------------------------------------------------------
+# H2 — Clone CHECK constraint: kind-incompatible fields zeroed out
+# ---------------------------------------------------------------------------
+
+
+class TestH2CloneKindIncompatibleFields:
+    @pytest.fixture
+    def user_id(self):
+        return uuid4()
+
+    @pytest.fixture
+    def company_id(self):
+        return uuid4()
+
+    @pytest.fixture
+    def doc_repo(self):
+        return InMemoryBillingDocumentRepository()
+
+    @pytest.fixture
+    def counter_repo(self):
+        return InMemoryBillingNumberCounterRepository()
+
+    @pytest.fixture
+    def profile_repo(self, user_id):
+        repo = InMemoryCompanyProfileRepository()
+        repo.save(make_profile(user_id))
+        return repo
+
+    @pytest.fixture
+    def company_repo(self, user_id, company_id):
+        repo = InMemoryCompanyRepository()
+        repo.save(make_company(owner_id=user_id, company_id=company_id))
+        return repo
+
+    @pytest.fixture
+    def access_repo(self, user_id, company_id):
+        repo = InMemoryUserCompanyAccessRepository()
+        repo.save(make_access(user_id=user_id, company_id=company_id))
+        return repo
+
+    @pytest.fixture
+    def usecase(self, doc_repo, counter_repo, profile_repo, company_repo, access_repo):
         return CloneBillingDocumentUseCase(
             doc_repo=doc_repo,
             counter_repo=counter_repo,
             profile_repo=profile_repo,
+            company_repo=company_repo,
+            access_repo=access_repo,
         )
 
-    def test_facture_to_devis_clone_removes_payment_fields(self, usecase, doc_repo, user_id):
+    def test_facture_to_devis_clone_removes_payment_fields(self, usecase, doc_repo, user_id, company_id):
         """H2: Cloning a facture (with payment_terms) as devis zeros out payment_terms."""
         facture = make_doc(
             user_id=user_id,
@@ -330,6 +353,7 @@ class TestH2CloneKindIncompatibleFields:
             doc_number="FAC-2026-001",
             payment_terms="Net 30",
             payment_due_date=date(2026, 6, 1),
+            company_id=company_id,
         )
         doc_repo.save(facture)
 
@@ -338,17 +362,17 @@ class TestH2CloneKindIncompatibleFields:
             user_id=user_id,
             override_kind=BillingDocumentKind.DEVIS,
         )
-        # Must not raise (InMemory repo has no DB CHECK, but verifies business logic)
         result = usecase.execute(inp, _FakeSession())
         assert result.kind == "devis"
         assert result.payment_terms is None
 
-    def test_devis_to_facture_clone_succeeds(self, usecase, doc_repo, user_id):
+    def test_devis_to_facture_clone_succeeds(self, usecase, doc_repo, user_id, company_id):
         """H2: Cloning a devis as facture succeeds (validity_until cleared by _build_doc_from_inputs)."""
         devis = make_doc(
             user_id=user_id,
             kind=BillingDocumentKind.DEVIS,
             doc_number="DEV-2026-001",
+            company_id=company_id,
         )
         doc_repo.save(devis)
 
@@ -359,16 +383,16 @@ class TestH2CloneKindIncompatibleFields:
         )
         result = usecase.execute(inp, _FakeSession())
         assert result.kind == "facture"
-        # validity_until is a devis-only field; facture result should not have it set
         assert result.validity_until is None
 
-    def test_same_kind_clone_preserves_payment_terms(self, usecase, doc_repo, user_id):
+    def test_same_kind_clone_preserves_payment_terms(self, usecase, doc_repo, user_id, company_id):
         """H2: Same-kind clone preserves payment_terms (no zeroing)."""
         facture = make_doc(
             user_id=user_id,
             kind=BillingDocumentKind.FACTURE,
             doc_number="FAC-2026-002",
             payment_terms="Net 30",
+            company_id=company_id,
         )
         doc_repo.save(facture)
 
@@ -397,9 +421,11 @@ class TestH5SchemaBounds:
         return base
 
     def _base_create(self, **overrides) -> dict:
+        import uuid as _uuid
         body = {
             "kind": "devis",
             "recipient_name": "Client",
+            "company_id": str(_uuid.uuid4()),
             "items": [self._base_item()],
         }
         body.update(overrides)

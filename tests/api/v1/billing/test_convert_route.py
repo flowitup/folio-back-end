@@ -48,6 +48,7 @@ class TestConvertDevisToFacture:
             json={
                 "kind": "devis",
                 "recipient_name": "Draft Client",
+                "company_id": billing_profile["company_id"],
                 "items": [{"description": "X", "quantity": "1", "unit_price": "100", "vat_rate": "20"}],
             },
             headers=_auth(billing_token),
@@ -71,6 +72,7 @@ class TestConvertDevisToFacture:
             json={
                 "kind": "facture",
                 "recipient_name": "Facture Client",
+                "company_id": billing_profile["company_id"],
                 "items": [{"description": "X", "quantity": "1", "unit_price": "100", "vat_rate": "20"}],
             },
             headers=_auth(billing_token),

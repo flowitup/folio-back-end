@@ -1,9 +1,9 @@
 """ConvertDevisToFactureUseCase — convert an accepted devis into a new facture draft.
 
-Phase 04 migration:
-  - Accepts optional company_id from ConvertDevisToFactureInput.
-  - When company_id provided: validates attachment, snapshots from Company entity.
-  - When company_id is None: falls back to source doc's company_id, then CompanyProfile.
+Phase 05 tightening:
+  - company_id must always resolve to a non-None value after the convert logic.
+  - Legacy CompanyProfile fallback removed.
+  - If no explicit company_id and source doc has none, raises MissingCompanyProfileError.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from app.application.billing._helpers import (
     _assert_owner,
     _build_doc_from_inputs,
     _effective_prefix_from_company,
-    _snapshot_issuer,
     _snapshot_issuer_from_company,
 )
 from app.application.billing.dtos import BillingDocumentResponse, ConvertDevisToFactureInput
@@ -50,21 +49,21 @@ class ConvertDevisToFactureUseCase:
     Pre-conditions:
       - source_devis must exist, be owned by user, kind=DEVIS, status=ACCEPTED.
       - No existing facture linked to source_devis_id (raises DevisAlreadyConvertedError).
-      - User must be attached to the resolved company (or have a CompanyProfile for legacy).
+      - company_id must resolve to non-None; user must be attached to that company.
     """
 
     def __init__(
         self,
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
-        profile_repo: CompanyProfileRepositoryPort,
+        profile_repo: CompanyProfileRepositoryPort,  # kept for wiring compat, unused
         project_repo: ProjectReadPort = None,  # type: ignore[assignment]
         company_repo: CompanyRepositoryPort = None,  # type: ignore[assignment]
         access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
-        self._profile_repo = profile_repo
+        self._profile_repo = profile_repo  # no longer used — kept to avoid wiring drift
         self._project_repo = project_repo
         self._company_repo = company_repo
         self._access_repo = access_repo
@@ -99,29 +98,23 @@ class ConvertDevisToFactureUseCase:
         # 4. Resolve effective company_id: prefer explicit override, then source doc's
         effective_company_id: UUID | None = inp.company_id if inp.company_id is not None else source.company_id
 
-        # 5. Resolve issuer snapshot + counter key
-        company = None
-        if effective_company_id is not None:
-            company = assert_user_company_access(
-                self._access_repo, self._company_repo, inp.user_id, effective_company_id
-            )
+        # 5. company_id must always be non-None after phase 05 tightening
+        if effective_company_id is None:
+            raise MissingCompanyProfileError(inp.user_id)
 
-        if company is not None:
-            issuer_snapshot = _snapshot_issuer_from_company(company)
-            effective_prefix = _effective_prefix_from_company(company) or ""
-            counter_key: UUID = effective_company_id  # type: ignore[assignment]
-            default_payment_terms = company.default_payment_terms
-        else:
-            # Legacy path: use CompanyProfile
-            profile = self._profile_repo.find_by_user_id(inp.user_id) if self._profile_repo else None
-            if profile is None:
-                raise MissingCompanyProfileError(inp.user_id)
-            issuer_snapshot = _snapshot_issuer(profile)
-            effective_prefix = profile.effective_prefix
-            counter_key = inp.user_id  # type: ignore[assignment]
-            default_payment_terms = profile.default_payment_terms
+        # 6. Validate attachment and snapshot from Company entity
+        company = assert_user_company_access(
+            self._access_repo, self._company_repo, inp.user_id, effective_company_id
+        )
+        if company is None:
+            raise MissingCompanyProfileError(inp.user_id)
 
-        # 6. Atomically generate facture number
+        issuer_snapshot = _snapshot_issuer_from_company(company)
+        effective_prefix = _effective_prefix_from_company(company) or ""
+        counter_key: UUID = effective_company_id
+        default_payment_terms = company.default_payment_terms
+
+        # 7. Atomically generate facture number
         today = datetime.now(timezone.utc).date()
         sequence = self._counter_repo.next_value(counter_key, BillingDocumentKind.FACTURE, today.year)
         document_number = next_document_number(
@@ -131,10 +124,10 @@ class ConvertDevisToFactureUseCase:
             sequence=sequence,
         )
 
-        # 7. Resolve payment_terms
+        # 8. Resolve payment_terms
         payment_terms = inp.payment_terms if inp.payment_terms is not None else default_payment_terms
 
-        # 8. Build new facture
+        # 9. Build new facture
         facture = _build_doc_from_inputs(
             user_id=inp.user_id,
             company_id=effective_company_id,

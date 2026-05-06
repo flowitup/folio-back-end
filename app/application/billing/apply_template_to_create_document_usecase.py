@@ -1,9 +1,9 @@
 """ApplyTemplateToCreateDocumentUseCase — create a document pre-filled from a template.
 
-Phase 04 migration:
-  - Accepts optional company_id from ApplyTemplateInput.
-  - When company_id provided: validates attachment, snapshots from Company entity.
-  - When company_id is None: falls back to CompanyProfileRepository (legacy path).
+Phase 05 tightening:
+  - company_id is now REQUIRED in ApplyTemplateInput.
+  - Legacy CompanyProfile fallback removed.
+  - CompanyProfileRepositoryPort still accepted for wiring compat but unused.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from uuid import UUID
 from app.application.billing._helpers import (
     _build_doc_from_inputs,
     _effective_prefix_from_company,
-    _snapshot_issuer,
     _snapshot_issuer_from_company,
 )
 from app.application.billing.dtos import ApplyTemplateInput, BillingDocumentResponse
@@ -43,11 +42,11 @@ class ApplyTemplateToCreateDocumentUseCase:
 
     The template supplies: kind, items, notes, terms.
     The caller supplies: recipient_*, project_id, issue_date.
-    The current company (or company_profile for legacy) supplies: issuer snapshot + payment_terms default.
+    The current company supplies: issuer snapshot + payment_terms default.
 
     Validation:
       - Template must exist and be owned by user.
-      - User must be attached to the resolved company (or have a CompanyProfile).
+      - company_id is required; user must be attached to that company.
     """
 
     def __init__(
@@ -55,7 +54,7 @@ class ApplyTemplateToCreateDocumentUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         template_repo: BillingTemplateRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
-        profile_repo: CompanyProfileRepositoryPort,
+        profile_repo: CompanyProfileRepositoryPort,  # kept for wiring compat, unused
         project_repo: ProjectReadPort = None,  # type: ignore[assignment]
         company_repo: CompanyRepositoryPort = None,  # type: ignore[assignment]
         access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
@@ -63,7 +62,7 @@ class ApplyTemplateToCreateDocumentUseCase:
         self._doc_repo = doc_repo
         self._template_repo = template_repo
         self._counter_repo = counter_repo
-        self._profile_repo = profile_repo
+        self._profile_repo = profile_repo  # no longer used — kept to avoid wiring drift
         self._project_repo = project_repo
         self._company_repo = company_repo
         self._access_repo = access_repo
@@ -83,25 +82,18 @@ class ApplyTemplateToCreateDocumentUseCase:
         if template.user_id != inp.user_id:
             raise ForbiddenBillingDocumentError(inp.template_id)
 
-        # 3. Resolve issuer snapshot + counter key
-        company = None
-        if inp.company_id is not None:
-            company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
+        # 3. company_id is required — validate attachment and snapshot from Company entity
+        if inp.company_id is None:
+            raise MissingCompanyProfileError(inp.user_id)
 
-        if company is not None:
-            issuer_snapshot = _snapshot_issuer_from_company(company)
-            effective_prefix = _effective_prefix_from_company(company) or ""
-            counter_key: UUID = inp.company_id  # type: ignore[assignment]
-            default_payment_terms = company.default_payment_terms
-        else:
-            # Legacy path: use CompanyProfile
-            profile = self._profile_repo.find_by_user_id(inp.user_id) if self._profile_repo else None
-            if profile is None:
-                raise MissingCompanyProfileError(inp.user_id)
-            issuer_snapshot = _snapshot_issuer(profile)
-            effective_prefix = profile.effective_prefix
-            counter_key = inp.user_id  # type: ignore[assignment]
-            default_payment_terms = profile.default_payment_terms
+        company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
+        if company is None:
+            raise MissingCompanyProfileError(inp.user_id)
+
+        issuer_snapshot = _snapshot_issuer_from_company(company)
+        effective_prefix = _effective_prefix_from_company(company) or ""
+        counter_key: UUID = inp.company_id
+        default_payment_terms = company.default_payment_terms
 
         # 4. Validate recipient name
         recipient_name = inp.recipient_name.strip() if inp.recipient_name else ""
@@ -119,7 +111,7 @@ class ApplyTemplateToCreateDocumentUseCase:
             sequence=sequence,
         )
 
-        # 6. Resolve payment_terms from company/profile default (facture only)
+        # 6. Resolve payment_terms from company default (facture only)
         payment_terms = None
         if template.kind.value == "facture":
             payment_terms = default_payment_terms

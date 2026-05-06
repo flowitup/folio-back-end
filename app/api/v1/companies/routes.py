@@ -153,8 +153,10 @@ def create_company():
         prefix_override=body.prefix_override,
     )
 
+    from app import db
+
     try:
-        result = get_container().create_company_usecase.execute(inp)
+        result = get_container().create_company_usecase.execute(inp, db.session)
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
@@ -226,8 +228,10 @@ def update_company(company_id: str):
         prefix_override=body.prefix_override,
     )
 
+    from app import db
+
     try:
-        result = get_container().update_company_usecase.execute(inp)
+        result = get_container().update_company_usecase.execute(inp, db.session)
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
     except ForbiddenCompanyError:
@@ -299,8 +303,10 @@ def generate_invite_token(company_id: str):
         regenerate=regenerate,
     )
 
+    from app import db
+
     try:
-        result = get_container().generate_invite_token_usecase.execute(inp)
+        result = get_container().generate_invite_token_usecase.execute(inp, db.session)
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
     except ForbiddenCompanyError:
@@ -345,10 +351,11 @@ def revoke_invite_token(company_id: str):
         return _err("NotFound", f"Company {company_id} not found", 404)
 
     caller_id = UUID(get_jwt_identity())
-    inp = RevokeInviteTokenInput(company_id=company_uuid, caller_id=caller_id)
+
+    from app import db
 
     try:
-        get_container().revoke_invite_token_usecase.execute(inp)
+        get_container().revoke_invite_token_usecase.execute(caller_id, company_uuid, db.session)
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
     except InviteTokenNotFoundError:

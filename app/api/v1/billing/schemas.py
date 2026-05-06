@@ -43,7 +43,7 @@ class CreateBillingDocumentRequest(_StrictBase):
     kind: Literal["devis", "facture"]
     recipient_name: str = Field(..., min_length=1, max_length=255)
     items: list[ItemSchema] = Field(..., min_length=1, max_length=200)
-    company_id: Optional[UUID] = None  # None → falls back to CompanyProfile (legacy path)
+    company_id: UUID  # required — legacy CompanyProfile fallback removed in phase 05
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
@@ -108,7 +108,7 @@ class ApplyTemplateRequest(_StrictBase):
     """Body for POST /billing-documents/from-template/<template_id>."""
 
     recipient_name: str = Field(..., min_length=1, max_length=255)
-    company_id: Optional[UUID] = None  # None → falls back to CompanyProfile (legacy)
+    company_id: Optional[UUID] = None  # None → resolved to caller's primary company
     recipient_address: Optional[str] = None
     recipient_email: Optional[EmailStr] = None
     recipient_siret: Optional[str] = None

@@ -5,6 +5,8 @@ Fakes:
   InMemoryBillingTemplateRepository
   InMemoryCompanyProfileRepository
   InMemoryBillingNumberCounterRepository
+  InMemoryCompanyRepository        — for phase-05 company_repo wiring
+  InMemoryUserCompanyAccessRepository — for phase-05 access_repo wiring
   FakePdfRenderer
   _FakeSession
 """
@@ -24,6 +26,8 @@ from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.value_objects import BillingDocumentItem
+from app.domain.companies.company import Company
+from app.domain.companies.user_company_access import UserCompanyAccess
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +147,64 @@ class FakePdfRenderer:
         return b"%PDF-1.4 fake"
 
 
+class InMemoryCompanyRepository:
+    """Lightweight company store for billing unit tests (phase-05 company_repo wiring)."""
+
+    def __init__(self):
+        self._store: dict[UUID, Company] = {}
+
+    def find_by_id(self, company_id: UUID) -> Optional[Company]:
+        return self._store.get(company_id)
+
+    def find_by_id_for_update(self, company_id: UUID) -> Optional[Company]:
+        return self.find_by_id(company_id)
+
+    def list_all(self, limit: int = 50, offset: int = 0) -> tuple[list[Company], int]:
+        all_c = list(self._store.values())
+        return all_c[offset : offset + limit], len(all_c)
+
+    def list_attached_for_user(self, user_id: UUID) -> list[tuple[Company, UserCompanyAccess]]:
+        return []
+
+    def save(self, company: Company) -> Company:
+        self._store[company.id] = company
+        return company
+
+    def delete(self, company_id: UUID) -> None:
+        self._store.pop(company_id, None)
+
+
+class InMemoryUserCompanyAccessRepository:
+    """Lightweight access store for billing unit tests (phase-05 access_repo wiring)."""
+
+    def __init__(self):
+        self._store: dict[tuple[UUID, UUID], UserCompanyAccess] = {}
+
+    def find(self, user_id: UUID, company_id: UUID) -> Optional[UserCompanyAccess]:
+        return self._store.get((user_id, company_id))
+
+    def find_for_update(self, user_id: UUID, company_id: UUID) -> Optional[UserCompanyAccess]:
+        return self.find(user_id, company_id)
+
+    def list_for_user(self, user_id: UUID) -> list[UserCompanyAccess]:
+        return [a for (uid, _), a in self._store.items() if uid == user_id]
+
+    def list_for_company(self, company_id: UUID) -> list[UserCompanyAccess]:
+        return [a for (_, cid), a in self._store.items() if cid == company_id]
+
+    def save(self, access: UserCompanyAccess) -> UserCompanyAccess:
+        self._store[(access.user_id, access.company_id)] = access
+        return access
+
+    def delete(self, user_id: UUID, company_id: UUID) -> None:
+        self._store.pop((user_id, company_id), None)
+
+    def clear_primary_for_user(self, user_id: UUID) -> None:
+        for key, access in list(self._store.items()):
+            if key[0] == user_id and access.is_primary:
+                self._store[key] = access.with_updates(is_primary=False)
+
+
 class _FakeSession:
     """Minimal TransactionalSessionPort stub — all ops are no-ops."""
 
@@ -160,6 +222,37 @@ class _FakeSession:
 # ---------------------------------------------------------------------------
 # Shared fixture builders
 # ---------------------------------------------------------------------------
+
+
+def make_company(owner_id: UUID, company_id: Optional[UUID] = None, prefix: str = "") -> Company:
+    """Build a minimal Company domain entity for billing unit tests."""
+    now = datetime.now(timezone.utc)
+    return Company(
+        id=company_id or uuid4(),
+        legal_name="Test Company SAS",
+        address="1 rue de la Paix, 75001 Paris",
+        siret=None,
+        tva_number=None,
+        iban=None,
+        bic=None,
+        logo_url=None,
+        default_payment_terms=None,
+        prefix_override=prefix or None,
+        created_by=owner_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def make_access(user_id: UUID, company_id: UUID, is_primary: bool = True) -> UserCompanyAccess:
+    """Build a UserCompanyAccess domain entity for billing unit tests."""
+    now = datetime.now(timezone.utc)
+    return UserCompanyAccess(
+        user_id=user_id,
+        company_id=company_id,
+        is_primary=is_primary,
+        attached_at=now,
+    )
 
 
 def make_profile(user_id: UUID, prefix: str = "") -> CompanyProfile:
@@ -274,6 +367,32 @@ def user_id():
 @pytest.fixture
 def other_user_id():
     return uuid4()
+
+
+@pytest.fixture
+def company_repo():
+    return InMemoryCompanyRepository()
+
+
+@pytest.fixture
+def access_repo():
+    return InMemoryUserCompanyAccessRepository()
+
+
+@pytest.fixture
+def company_id():
+    """Stable company UUID reused across billing unit tests."""
+    return uuid4()
+
+
+@pytest.fixture
+def seeded_company(company_repo, access_repo, user_id, company_id):
+    """Seed a Company + primary UserCompanyAccess for the billing unit test user."""
+    company = make_company(owner_id=user_id, company_id=company_id)
+    company_repo.save(company)
+    access = make_access(user_id=user_id, company_id=company_id, is_primary=True)
+    access_repo.save(access)
+    return company
 
 
 @pytest.fixture
