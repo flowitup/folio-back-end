@@ -10,7 +10,6 @@ from contextlib import AbstractContextManager
 from typing import Any, Optional, Protocol
 from uuid import UUID
 
-from app.domain.billing.company_profile import CompanyProfile
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
@@ -90,18 +89,6 @@ class BillingTemplateRepositoryPort(Protocol):
 
     def delete(self, template_id: UUID) -> None:
         """Hard-delete a template by UUID."""
-        ...
-
-
-class CompanyProfileRepositoryPort(Protocol):
-    """Persistence contract for CompanyProfile (one row per user)."""
-
-    def find_by_user_id(self, user_id: UUID) -> Optional[CompanyProfile]:
-        """Return the company profile for a user, or None if not configured."""
-        ...
-
-    def save(self, profile: CompanyProfile) -> CompanyProfile:
-        """Insert or upsert a company profile. Returns the persisted instance."""
         ...
 
 

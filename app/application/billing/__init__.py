@@ -28,10 +28,6 @@ from app.application.billing.get_template_usecase import GetTemplateUseCase
 from app.application.billing.delete_template_usecase import DeleteTemplateUseCase
 from app.application.billing.apply_template_to_create_document_usecase import ApplyTemplateToCreateDocumentUseCase
 
-# --- Use-cases: company profile ---
-from app.application.billing.get_company_profile_usecase import GetCompanyProfileUseCase
-from app.application.billing.upsert_company_profile_usecase import UpsertCompanyProfileUseCase
-
 # --- DTOs ---
 from app.application.billing.dtos import (
     ItemInput,
@@ -43,18 +39,15 @@ from app.application.billing.dtos import (
     CreateTemplateInput,
     UpdateTemplateInput,
     ApplyTemplateInput,
-    UpsertCompanyProfileInput,
     ItemResponse,
     BillingDocumentResponse,
     BillingTemplateResponse,
-    CompanyProfileResponse,
 )
 
 # --- Ports ---
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingTemplateRepositoryPort,
-    CompanyProfileRepositoryPort,
     CompanyRepositoryPort,
     UserCompanyAccessRepositoryPort,
     BillingNumberCounterRepositoryPort,
@@ -97,9 +90,6 @@ __all__ = [
     "GetTemplateUseCase",
     "DeleteTemplateUseCase",
     "ApplyTemplateToCreateDocumentUseCase",
-    # use-cases: company profile
-    "GetCompanyProfileUseCase",
-    "UpsertCompanyProfileUseCase",
     # DTOs
     "ItemInput",
     "CreateBillingDocumentInput",
@@ -110,15 +100,12 @@ __all__ = [
     "CreateTemplateInput",
     "UpdateTemplateInput",
     "ApplyTemplateInput",
-    "UpsertCompanyProfileInput",
     "ItemResponse",
     "BillingDocumentResponse",
     "BillingTemplateResponse",
-    "CompanyProfileResponse",
     # ports
     "BillingDocumentRepositoryPort",
     "BillingTemplateRepositoryPort",
-    "CompanyProfileRepositoryPort",
     "CompanyRepositoryPort",
     "UserCompanyAccessRepositoryPort",
     "BillingNumberCounterRepositoryPort",

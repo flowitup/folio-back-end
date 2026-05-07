@@ -114,7 +114,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.admin import admin_bp
     from app.api.v1.notes import notes_bp
     from app.api.v1.notifications import notifications_bp
-    from app.api.v1.billing import billing_documents_bp, billing_templates_bp, company_profile_bp
+    from app.api.v1.billing import billing_documents_bp, billing_templates_bp
     from app.api.v1.companies import companies_bp, users_me_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
@@ -132,7 +132,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
-    app.register_blueprint(company_profile_bp, url_prefix="/api/v1")
+    # company_profile_bp retired — table dropped in migration 2d9c35848b9b (C2)
     app.register_blueprint(companies_bp, url_prefix="/api/v1")
     app.register_blueprint(users_me_bp, url_prefix="/api/v1")
 
@@ -398,9 +398,6 @@ def _configure_di_container() -> None:
     from app.infrastructure.database.repositories.sqlalchemy_billing_template_repository import (
         SqlAlchemyBillingTemplateRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_company_profile_repository import (
-        SqlAlchemyCompanyProfileRepository,
-    )
     from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
         SqlAlchemyBillingNumberCounterRepository,
     )
@@ -423,13 +420,10 @@ def _configure_di_container() -> None:
         GetTemplateUseCase,
         DeleteTemplateUseCase,
         ApplyTemplateToCreateDocumentUseCase,
-        GetCompanyProfileUseCase,
-        UpsertCompanyProfileUseCase,
     )
 
     _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
     _billing_tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
-    _company_profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
     _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
     _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
     # project_repository is already wired via configure_container
@@ -437,7 +431,6 @@ def _configure_di_container() -> None:
 
     _c.billing_document_repo = _billing_doc_repo
     _c.billing_template_repo = _billing_tpl_repo
-    _c.company_profile_repo = _company_profile_repo
     _c.billing_counter_repo = _billing_counter_repo
     _c.billing_pdf_renderer = _billing_pdf_renderer
 
@@ -445,15 +438,13 @@ def _configure_di_container() -> None:
     _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
-        company_repo=_company_repo,  # phase 04 — company_id path
-        access_repo=_access_repo,  # phase 04 — attachment validation
+        company_repo=_company_repo,  # company_id path
+        access_repo=_access_repo,  # attachment validation
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
         company_repo=_company_repo,
         access_repo=_access_repo,
@@ -461,7 +452,6 @@ def _configure_di_container() -> None:
     _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
         company_repo=_company_repo,
         access_repo=_access_repo,
@@ -508,16 +498,7 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         template_repo=_billing_tpl_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
         company_repo=_company_repo,
         access_repo=_access_repo,
-    )
-
-    # company-profile use-cases
-    _c.get_company_profile_usecase = GetCompanyProfileUseCase(
-        profile_repo=_company_profile_repo,
-    )
-    _c.upsert_company_profile_usecase = UpsertCompanyProfileUseCase(
-        profile_repo=_company_profile_repo,
     )

@@ -11,7 +11,6 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
 
-from app.domain.billing.company_profile import CompanyProfile
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import ForbiddenBillingDocumentError
@@ -27,23 +26,6 @@ def _assert_owner(doc: BillingDocument, user_id: UUID) -> None:
     """Raise ForbiddenBillingDocumentError if user_id does not own doc."""
     if doc.user_id != user_id:
         raise ForbiddenBillingDocumentError(doc.id)
-
-
-def _snapshot_issuer(profile: CompanyProfile) -> dict:
-    """Copy all issuer fields from CompanyProfile by value.
-
-    Returns a plain dict ready to be unpacked into BillingDocument kwargs.
-    This is a deep copy by construction (all fields are immutable scalars).
-    """
-    return {
-        "issuer_legal_name": profile.legal_name,
-        "issuer_address": profile.address,
-        "issuer_siret": profile.siret,
-        "issuer_tva_number": profile.tva_number,
-        "issuer_iban": profile.iban,
-        "issuer_bic": profile.bic,
-        "issuer_logo_url": profile.logo_url,
-    }
 
 
 def _snapshot_issuer_from_company(company: Company) -> dict:

@@ -120,8 +120,6 @@ from app.application.billing import (
     GetTemplateUseCase,
     DeleteTemplateUseCase,
     ApplyTemplateToCreateDocumentUseCase,
-    GetCompanyProfileUseCase,
-    UpsertCompanyProfileUseCase,
 )
 
 # =============================================================================
@@ -283,7 +281,6 @@ class Container:
     # -----------------------------------------------------------------------
     billing_document_repo: Optional[Any] = None  # SqlAlchemyBillingDocumentRepository
     billing_template_repo: Optional[Any] = None  # SqlAlchemyBillingTemplateRepository
-    company_profile_repo: Optional[Any] = None  # SqlAlchemyCompanyProfileRepository
     billing_counter_repo: Optional[Any] = None  # SqlAlchemyBillingNumberCounterRepository
     billing_pdf_renderer: Optional[Any] = None  # ReportLabBillingDocumentPdfRenderer
 
@@ -305,10 +302,6 @@ class Container:
     get_billing_template_usecase: Optional[GetTemplateUseCase] = None
     delete_billing_template_usecase: Optional[DeleteTemplateUseCase] = None
     apply_template_usecase: Optional[ApplyTemplateToCreateDocumentUseCase] = None
-
-    # company-profile use-cases
-    get_company_profile_usecase: Optional[GetCompanyProfileUseCase] = None
-    upsert_company_profile_usecase: Optional[UpsertCompanyProfileUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None

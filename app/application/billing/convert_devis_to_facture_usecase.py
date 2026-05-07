@@ -21,7 +21,6 @@ from app.application.billing.dtos import BillingDocumentResponse, ConvertDevisTo
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
-    CompanyProfileRepositoryPort,
     CompanyRepositoryPort,
     ProjectReadPort,
     TransactionalSessionPort,
@@ -56,14 +55,12 @@ class ConvertDevisToFactureUseCase:
         self,
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
-        profile_repo: CompanyProfileRepositoryPort,  # kept for wiring compat, unused
-        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
-        company_repo: CompanyRepositoryPort = None,  # type: ignore[assignment]
-        access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
+        project_repo: ProjectReadPort,
+        company_repo: CompanyRepositoryPort,
+        access_repo: UserCompanyAccessRepositoryPort,
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
-        self._profile_repo = profile_repo  # no longer used — kept to avoid wiring drift
         self._project_repo = project_repo
         self._company_repo = company_repo
         self._access_repo = access_repo

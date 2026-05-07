@@ -1,9 +1,7 @@
 """ApplyTemplateToCreateDocumentUseCase — create a document pre-filled from a template.
 
-Phase 05 tightening:
-  - company_id is now REQUIRED in ApplyTemplateInput.
-  - Legacy CompanyProfile fallback removed.
-  - CompanyProfileRepositoryPort still accepted for wiring compat but unused.
+H2 fix: if company_id is None, resolve to the caller's primary company via
+access_repo. If user has no attached companies, raises MissingCompanyProfileError.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
     BillingTemplateRepositoryPort,
-    CompanyProfileRepositoryPort,
     CompanyRepositoryPort,
     ProjectReadPort,
     TransactionalSessionPort,
@@ -46,7 +43,9 @@ class ApplyTemplateToCreateDocumentUseCase:
 
     Validation:
       - Template must exist and be owned by user.
-      - company_id is required; user must be attached to that company.
+      - If company_id is None, the user's primary company is resolved automatically.
+      - If user has no attached companies, raises MissingCompanyProfileError (409).
+      - User must be attached to the resolved company.
     """
 
     def __init__(
@@ -54,15 +53,13 @@ class ApplyTemplateToCreateDocumentUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         template_repo: BillingTemplateRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
-        profile_repo: CompanyProfileRepositoryPort,  # kept for wiring compat, unused
-        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
-        company_repo: CompanyRepositoryPort = None,  # type: ignore[assignment]
-        access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
+        project_repo: ProjectReadPort,
+        company_repo: CompanyRepositoryPort,
+        access_repo: UserCompanyAccessRepositoryPort,
     ) -> None:
         self._doc_repo = doc_repo
         self._template_repo = template_repo
         self._counter_repo = counter_repo
-        self._profile_repo = profile_repo  # no longer used — kept to avoid wiring drift
         self._project_repo = project_repo
         self._company_repo = company_repo
         self._access_repo = access_repo
@@ -82,17 +79,23 @@ class ApplyTemplateToCreateDocumentUseCase:
         if template.user_id != inp.user_id:
             raise ForbiddenBillingDocumentError(inp.template_id)
 
-        # 3. company_id is required — validate attachment and snapshot from Company entity
-        if inp.company_id is None:
-            raise MissingCompanyProfileError(inp.user_id)
+        # 3. Resolve company_id — H2: fall back to caller's primary company if None
+        company_id = inp.company_id
+        if company_id is None:
+            # Find the primary access row for this user
+            accesses = self._access_repo.list_for_user(inp.user_id)
+            primary = next((a for a in accesses if a.is_primary), None)
+            if primary is None:
+                raise MissingCompanyProfileError(inp.user_id)
+            company_id = primary.company_id
 
-        company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
+        company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, company_id)
         if company is None:
             raise MissingCompanyProfileError(inp.user_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
         effective_prefix = _effective_prefix_from_company(company) or ""
-        counter_key: UUID = inp.company_id
+        counter_key: UUID = company_id  # resolved above (may differ from inp.company_id if primary fallback)
         default_payment_terms = company.default_payment_terms
 
         # 4. Validate recipient name
@@ -119,7 +122,7 @@ class ApplyTemplateToCreateDocumentUseCase:
         # 7. Build document — items and notes/terms copied from template
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
-            company_id=inp.company_id,
+            company_id=company_id,  # resolved company_id (primary fallback applied)
             kind=template.kind,
             document_number=document_number,
             issuer_snapshot=issuer_snapshot,

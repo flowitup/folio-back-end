@@ -18,7 +18,6 @@ from uuid import UUID
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
-from app.domain.billing.company_profile import CompanyProfile
 
 # ---------------------------------------------------------------------------
 # Shared sub-input
@@ -162,25 +161,6 @@ class ApplyTemplateInput:
     issue_date: Optional[date] = None  # defaults to today
 
 
-# ---------------------------------------------------------------------------
-# Company profile input DTO
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class UpsertCompanyProfileInput:
-    """Input for UpsertCompanyProfileUseCase."""
-
-    user_id: UUID
-    legal_name: str
-    address: str
-    siret: Optional[str] = None
-    tva_number: Optional[str] = None
-    iban: Optional[str] = None
-    bic: Optional[str] = None
-    logo_url: Optional[str] = None
-    default_payment_terms: Optional[str] = None
-    prefix_override: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -333,37 +313,3 @@ class BillingTemplateResponse:
         )
 
 
-@dataclass(frozen=True)
-class CompanyProfileResponse:
-    """Serialisable company profile."""
-
-    user_id: UUID
-    legal_name: str
-    address: str
-    created_at: datetime
-    updated_at: datetime
-    siret: Optional[str] = None
-    tva_number: Optional[str] = None
-    iban: Optional[str] = None
-    bic: Optional[str] = None
-    logo_url: Optional[str] = None
-    default_payment_terms: Optional[str] = None
-    prefix_override: Optional[str] = None
-
-    @staticmethod
-    def from_entity(profile: CompanyProfile) -> "CompanyProfileResponse":
-        """Build response DTO from a domain entity."""
-        return CompanyProfileResponse(
-            user_id=profile.user_id,
-            legal_name=profile.legal_name,
-            address=profile.address,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
-            siret=profile.siret,
-            tva_number=profile.tva_number,
-            iban=profile.iban,
-            bic=profile.bic,
-            logo_url=profile.logo_url,
-            default_payment_terms=profile.default_payment_terms,
-            prefix_override=profile.prefix_override,
-        )
