@@ -35,9 +35,10 @@ def _validate_logo_url(v: Optional[HttpUrl]) -> Optional[HttpUrl]:
     host = v.host
     if host is None:
         raise ValueError("logo_url must have a valid hostname")
-    scheme = v.scheme
-    if scheme not in ("http", "https"):
-        raise ValueError("logo_url must use http or https scheme")
+    # N8: HttpUrl already enforces http/https scheme; redundant check removed.
+    # M5 (DNS-rebinding): BE validates once at save time; the FE/PDF renderer does
+    # its own DNS lookup later which is a documented acceptable risk (same-host
+    # SSRF surface is small since BE does not fetch the URL itself).
     # Attempt to resolve hostname; catch all DNS errors gracefully
     try:
         addrs = socket.getaddrinfo(host, None)

@@ -17,6 +17,7 @@ from uuid import UUID
 from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
@@ -38,7 +39,6 @@ from app.application.companies import (
     ListAllCompaniesInput,
     ListAttachedUsersInput,
     RedeemInviteTokenInput,
-    RevokeInviteTokenInput,
     SetPrimaryCompanyInput,
     UpdateCompanyInput,
     ActiveInviteTokenAlreadyExistsError,
@@ -48,6 +48,7 @@ from app.application.companies import (
     InviteTokenAlreadyRedeemedError,
     InviteTokenExpiredError,
     InviteTokenNotFoundError,
+    InviteTokenSystemOverloadError,
     MissingPrimaryCompanyError,
     UserCompanyAccessNotFoundError,
 )
@@ -80,6 +81,7 @@ def _company_to_dict(dto: CompanyResponse) -> dict:
 
 @companies_bp.route("/companies", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 def list_companies():
     """List companies.
 
@@ -170,6 +172,7 @@ def create_company():
 
 @companies_bp.route("/companies/<company_id>", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 def get_company(company_id: str):
     """Get a company by ID.
 
@@ -247,6 +250,7 @@ def update_company(company_id: str):
 
 @companies_bp.route("/companies/<company_id>", methods=["DELETE"])
 @jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
 def delete_company(company_id: str):
     """Delete a company (admin only)."""
@@ -322,6 +326,18 @@ def generate_invite_token(company_id: str):
             ),
             409,
         )
+    except IntegrityError:
+        # H1: concurrent regenerate race — partial-unique index fired; safe to retry
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": "Concurrent token regeneration detected. Please retry.",
+                    "reason": "concurrent_regenerate",
+                }
+            ),
+            409,
+        )
 
     return (
         jsonify(
@@ -342,6 +358,7 @@ def generate_invite_token(company_id: str):
 
 @companies_bp.route("/companies/<company_id>/invite-tokens/active", methods=["DELETE"])
 @jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
 def revoke_invite_token(company_id: str):
     """Revoke the active invite token for a company (admin only)."""
@@ -394,6 +411,18 @@ def redeem_invite_token():
 
     try:
         get_container().redeem_invite_token_usecase.execute(inp, db.session)
+    except InviteTokenSystemOverloadError:
+        # H3: DOS guard fired — admin must clean up stale tokens first
+        return (
+            jsonify(
+                {
+                    "error": "ServiceUnavailable",
+                    "message": "Token redemption is temporarily unavailable. Contact your administrator.",
+                    "reason": "redeem_overloaded",
+                }
+            ),
+            503,
+        )
     except InviteTokenNotFoundError:
         # Token not found after argon2 match attempt — uniform 410
         return jsonify({"error": "Gone", "reason": "invalid"}), 410
@@ -402,6 +431,18 @@ def redeem_invite_token():
     except InviteTokenAlreadyRedeemedError:
         return jsonify({"error": "Gone", "reason": "already_redeemed"}), 410
     except CompanyAlreadyAttachedError:
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": "You are already attached to this company.",
+                    "reason": "already_attached",
+                }
+            ),
+            409,
+        )
+    except IntegrityError:
+        # H1: PK violation — concurrent attach via two tokens for same (user, company)
         return (
             jsonify(
                 {
@@ -481,6 +522,18 @@ def boot_attached_user(company_id: str, target_user_id: str):
         return _err("NotFound", f"User {target_user_id} is not attached to this company", 404)
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
+    except IntegrityError:
+        # H1: concurrent boot / auto-promote race
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": "Concurrent operation detected. Please retry.",
+                    "reason": "concurrent_boot",
+                }
+            ),
+            409,
+        )
 
     return "", 204
 
@@ -492,16 +545,27 @@ def boot_attached_user(company_id: str, target_user_id: str):
 
 @companies_bp.route("/companies/<company_id>/attached-users", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
 def list_attached_users(company_id: str):
-    """List all users attached to a company (admin only)."""
+    """List users attached to a company (admin only).
+
+    Supports pagination via ?limit (default 50, max 200) and ?offset (default 0).
+    Returns { users: [...], total: int }.
+    """
     try:
         company_uuid = UUID(company_id)
     except ValueError:
         return _err("NotFound", f"Company {company_id} not found", 404)
 
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        return _err("ValidationError", "limit and offset must be integers", 400)
+
     caller_id = UUID(get_jwt_identity())
-    inp = ListAttachedUsersInput(caller_id=caller_id, company_id=company_uuid)
+    inp = ListAttachedUsersInput(caller_id=caller_id, company_id=company_uuid, limit=limit, offset=offset)
 
     try:
         result = get_container().list_attached_users_usecase.execute(inp)
@@ -510,7 +574,7 @@ def list_attached_users(company_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
-    return jsonify({"items": [dataclasses.asdict(r) for r in result]})
+    return jsonify({"users": [dataclasses.asdict(r) for r in result.items], "total": result.total})
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +608,18 @@ def set_primary_company():
                     "error": "Conflict",
                     "message": "No attached companies found. Attach to a company first.",
                     "reason": "no_attached_companies",
+                }
+            ),
+            409,
+        )
+    except IntegrityError:
+        # H1: concurrent set-primary race — partial-unique index fired
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": "Concurrent primary change detected. Please retry.",
+                    "reason": "concurrent_primary_change",
                 }
             ),
             409,

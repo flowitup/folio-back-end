@@ -160,10 +160,23 @@ class GetCompanyInput:
 
 @dataclass(frozen=True)
 class ListAttachedUsersInput:
-    """Input for ListAttachedUsersUseCase (admin view of a company's users)."""
+    """Input for ListAttachedUsersUseCase (admin view of a company's users).
+
+    limit/offset: H5 pagination (default 50, max 200 enforced at API layer).
+    """
 
     caller_id: UUID
     company_id: UUID
+    limit: int = 50
+    offset: int = 0
+
+
+@dataclass(frozen=True)
+class ListAttachedUsersResult:
+    """Paginated result for ListAttachedUsersUseCase."""
+
+    items: list  # list[UserCompanyAccessResponse] — forward-ref avoided
+    total: int
 
 
 # ---------------------------------------------------------------------------

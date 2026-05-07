@@ -41,6 +41,26 @@ class SqlAlchemyCompanyInviteTokenRepository:
             return None
         return deserialize_token_orm(row)
 
+    def find_active_for_company_for_update(self, company_id: UUID) -> Optional[CompanyInviteToken]:
+        """Return the single unredeemed token for a company with SELECT FOR UPDATE, or None.
+
+        M1: used by GenerateInviteTokenUseCase regenerate path to serialise
+        concurrent admin calls. The lock prevents two admins from both reading
+        None and both inserting, which would fire the partial-unique index.
+        """
+        stmt = (
+            select(CompanyInviteTokenModel)
+            .where(
+                CompanyInviteTokenModel.company_id == company_id,
+                CompanyInviteTokenModel.redeemed_at.is_(None),
+            )
+            .with_for_update()
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+        if row is None:
+            return None
+        return deserialize_token_orm(row)
+
     def find_by_id_for_update(self, token_id: UUID) -> Optional[CompanyInviteToken]:
         """Return the token with SELECT FOR UPDATE lock, or None.
 

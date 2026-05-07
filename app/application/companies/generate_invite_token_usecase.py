@@ -77,8 +77,12 @@ class GenerateInviteTokenUseCase:
         if company is None:
             raise CompanyNotFoundError(inp.company_id)
 
-        # 3. Check for existing active token
-        existing = self._token_repo.find_active_for_company(inp.company_id)
+        # 3. Check for existing active token — use FOR UPDATE on regenerate path (M1)
+        # to serialise concurrent admin calls and prevent partial-unique IntegrityError.
+        if inp.regenerate:
+            existing = self._token_repo.find_active_for_company_for_update(inp.company_id)
+        else:
+            existing = self._token_repo.find_active_for_company(inp.company_id)
         if existing is not None:
             if not inp.regenerate:
                 raise ActiveInviteTokenAlreadyExistsError(inp.company_id)

@@ -27,6 +27,10 @@ class UserCompanyAccess:
     company_id: UUID
 
     # --- primary flag ---
+    # is_primary=True marks this as the user's default company for billing documents.
+    # At most one access row per user may have is_primary=True (DB partial-unique index).
+    # No implicit "fallback" logic exists in the application layer for None company_id;
+    # H2 (apply_template primary resolution) is the explicit lookup path.
     is_primary: bool
 
     # --- audit ---

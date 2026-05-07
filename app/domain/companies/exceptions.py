@@ -86,3 +86,18 @@ class MissingPrimaryCompanyError(CompaniesDomainError):
     def __init__(self, user_id: UUID) -> None:
         self.user_id = user_id
         super().__init__(f"User {user_id} has no attached company. Attach a company first.")
+
+
+class InviteTokenSystemOverloadError(CompaniesDomainError):
+    """Raised when the DOS guard fires: too many active invite tokens in the system.
+
+    The route handler maps this to HTTP 503 with reason=redeem_overloaded so
+    callers can surface a user-friendly message and retry after admin cleanup.
+    """
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+        super().__init__(
+            f"Too many active invite tokens ({count}). "
+            "Admin must revoke stale tokens before redemption is allowed."
+        )

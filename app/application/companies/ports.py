@@ -25,10 +25,6 @@ class CompanyRepositoryPort(Protocol):
         """Return company by UUID, or None if not found."""
         ...
 
-    def find_by_id_for_update(self, company_id: UUID) -> Optional[Company]:
-        """Return company by UUID with SELECT FOR UPDATE lock, or None."""
-        ...
-
     def list_all(self, limit: int, offset: int) -> tuple[list[Company], int]:
         """Return paginated companies with total count (admin view)."""
         ...
@@ -86,7 +82,19 @@ class CompanyInviteTokenRepositoryPort(Protocol):
     """Persistence contract for CompanyInviteToken records."""
 
     def find_active_for_company(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the single unredeemed, non-expired token for a company, or None."""
+        """Return the single unredeemed token for a company, or None.
+
+        Does not filter by expiry here — expiry check is the use-case responsibility.
+        """
+        ...
+
+    def find_active_for_company_for_update(self, company_id: UUID) -> Optional[CompanyInviteToken]:
+        """Return the single unredeemed token for a company with SELECT FOR UPDATE, or None.
+
+        M1: used by GenerateInviteTokenUseCase (regenerate=True path) to serialise
+        concurrent admin calls and prevent the partial-unique IntegrityError 500.
+        Does not filter by expiry.
+        """
         ...
 
     def find_by_id_for_update(self, token_id: UUID) -> Optional[CompanyInviteToken]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.application.companies._helpers import _assert_admin
 from app.application.companies.dtos import (
     ListAttachedUsersInput,
+    ListAttachedUsersResult,
     UserCompanyAccessResponse,
 )
 from app.application.companies.ports import (
@@ -18,10 +19,10 @@ _ADMIN_PERMISSION = "*:*"
 
 
 class ListAttachedUsersUseCase:
-    """Return all user_company_access rows for a given company (admin only).
+    """Return paginated user_company_access rows for a given company (admin only).
 
-    Returns UserCompanyAccessResponse list; the API layer may enrich with
-    user display names by joining against the users table (phase 04).
+    H5: supports limit/offset pagination; returns ListAttachedUsersResult
+    with items and total count.
     """
 
     def __init__(
@@ -34,7 +35,7 @@ class ListAttachedUsersUseCase:
         self._access_repo = access_repo
         self._role_checker = role_checker
 
-    def execute(self, inp: ListAttachedUsersInput) -> list[UserCompanyAccessResponse]:
+    def execute(self, inp: ListAttachedUsersInput) -> ListAttachedUsersResult:
         # 1. Admin guard
         is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
         _assert_admin(inp.caller_id, inp.company_id, is_admin)
@@ -44,6 +45,9 @@ class ListAttachedUsersUseCase:
         if company is None:
             raise CompanyNotFoundError(inp.company_id)
 
-        # 3. Return access rows
-        accesses = self._access_repo.list_for_company(inp.company_id)
-        return [UserCompanyAccessResponse.from_entity(a) for a in accesses]
+        # 3. Return paginated access rows
+        all_accesses = self._access_repo.list_for_company(inp.company_id)
+        total = len(all_accesses)
+        page = all_accesses[inp.offset : inp.offset + inp.limit]
+        items = [UserCompanyAccessResponse.from_entity(a) for a in page]
+        return ListAttachedUsersResult(items=items, total=total)

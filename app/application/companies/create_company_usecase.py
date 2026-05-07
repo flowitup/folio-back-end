@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.application.companies._helpers import (
     _assert_admin,
@@ -46,8 +46,8 @@ class CreateCompanyUseCase:
     ) -> CompanyResponse:
         # 1. Admin guard
         is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
-        # Use a sentinel UUID for the "company being created" — no id yet
-        _assert_admin(inp.caller_id, inp.caller_id, is_admin)
+        # N1: UUID(int=0) as sentinel for "no company yet" — passing caller_id was misleading
+        _assert_admin(inp.caller_id, UUID(int=0), is_admin)
 
         # 2. Validate inputs
         legal_name = _validate_legal_name(inp.legal_name)

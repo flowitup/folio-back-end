@@ -20,6 +20,8 @@ asserting redeemed_at and writing user_company_access.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.application.companies.dtos import RedeemInviteTokenInput
 from app.application.companies.ports import (
     Argon2HasherPort,
@@ -33,6 +35,7 @@ from app.domain.companies.exceptions import (
     InviteTokenAlreadyRedeemedError,
     InviteTokenExpiredError,
     InviteTokenNotFoundError,
+    InviteTokenSystemOverloadError,
 )
 from app.domain.companies.user_company_access import UserCompanyAccess
 
@@ -60,7 +63,7 @@ class RedeemInviteTokenUseCase:
             (should not occur via normal flow since only active tokens are
             fetched, but included for defence-in-depth after FOR UPDATE).
         CompanyAlreadyAttachedError: User already has access to this company.
-        ValueError: DOS guard — more than 1000 active tokens in system.
+        InviteTokenSystemOverloadError: DOS guard — more than 1000 active tokens in system.
     """
 
     def __init__(
@@ -82,13 +85,11 @@ class RedeemInviteTokenUseCase:
     ) -> None:
         now = self._clock.now()
 
-        # 1. Fetch all active tokens (unredeemed + non-expired)
+        # 1. Fetch all active tokens (unredeemed — expiry not filtered by repo)
         candidates = self._token_repo.list_active()
         if len(candidates) > _DOS_GUARD_LIMIT:
-            raise ValueError(
-                f"Too many active invite tokens ({len(candidates)}). "
-                "Admin must revoke stale tokens before redemption is allowed."
-            )
+            # H3: raise typed domain error → route maps to 503 reason=redeem_overloaded
+            raise InviteTokenSystemOverloadError(len(candidates))
 
         # 2. Find the matching token via constant-time argon2 verify
         matched_id = None
@@ -98,12 +99,8 @@ class RedeemInviteTokenUseCase:
                 break  # tokens are unique; stop on first match
 
         if matched_id is None:
-            raise InviteTokenNotFoundError(
-                # Use a zero UUID as sentinel — no specific ID is known
-                next(iter([c.id for c in candidates]), __import__("uuid").UUID(int=0))
-                if not candidates
-                else candidates[0].id  # error context only, not leaked to caller
-            )
+            # H4: always use zero UUID sentinel — never leak a real candidate ID
+            raise InviteTokenNotFoundError(UUID(int=0))
 
         # 3. Re-fetch with SELECT FOR UPDATE to serialise concurrent redeems
         token = self._token_repo.find_by_id_for_update(matched_id)
