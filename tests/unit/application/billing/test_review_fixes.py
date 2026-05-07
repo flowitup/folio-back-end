@@ -46,14 +46,12 @@ from tests.unit.application.billing.conftest import (
     InMemoryBillingDocumentRepository,
     InMemoryBillingNumberCounterRepository,
     InMemoryBillingTemplateRepository,
-    InMemoryCompanyProfileRepository,
     InMemoryCompanyRepository,
     InMemoryUserCompanyAccessRepository,
     _FakeSession,
     make_access,
     make_company,
     make_doc,
-    make_profile,
 )
 
 
@@ -215,12 +213,6 @@ class TestH1ProjectAuthorizationCreate:
         return InMemoryBillingNumberCounterRepository()
 
     @pytest.fixture
-    def profile_repo(self, user_id):
-        repo = InMemoryCompanyProfileRepository()
-        repo.save(make_profile(user_id))
-        return repo
-
-    @pytest.fixture
     def company_repo(self, user_id, company_id):
         repo = InMemoryCompanyRepository()
         repo.save(make_company(owner_id=user_id, company_id=company_id))
@@ -237,11 +229,10 @@ class TestH1ProjectAuthorizationCreate:
         return InMemoryProjectRepository()
 
     @pytest.fixture
-    def usecase(self, doc_repo, counter_repo, profile_repo, project_repo, company_repo, access_repo):
+    def usecase(self, doc_repo, counter_repo, project_repo, company_repo, access_repo):
         return CreateBillingDocumentUseCase(
             doc_repo=doc_repo,
             counter_repo=counter_repo,
-            profile_repo=profile_repo,
             project_repo=project_repo,
             company_repo=company_repo,
             access_repo=access_repo,
@@ -318,12 +309,6 @@ class TestH2CloneKindIncompatibleFields:
         return InMemoryBillingNumberCounterRepository()
 
     @pytest.fixture
-    def profile_repo(self, user_id):
-        repo = InMemoryCompanyProfileRepository()
-        repo.save(make_profile(user_id))
-        return repo
-
-    @pytest.fixture
     def company_repo(self, user_id, company_id):
         repo = InMemoryCompanyRepository()
         repo.save(make_company(owner_id=user_id, company_id=company_id))
@@ -336,11 +321,11 @@ class TestH2CloneKindIncompatibleFields:
         return repo
 
     @pytest.fixture
-    def usecase(self, doc_repo, counter_repo, profile_repo, company_repo, access_repo):
+    def usecase(self, doc_repo, counter_repo, company_repo, access_repo):
         return CloneBillingDocumentUseCase(
             doc_repo=doc_repo,
             counter_repo=counter_repo,
-            profile_repo=profile_repo,
+            project_repo=None,
             company_repo=company_repo,
             access_repo=access_repo,
         )

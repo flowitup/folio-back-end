@@ -20,18 +20,17 @@ if "sqlite" in _DB_URL:
     pytest.skip("Postgres-only: migration test requires real Postgres", allow_module_level=True)
 
 
-def test_migration_company_profile_to_companies_round_trip(session):
-    """test_migration_company_profile_to_companies_round_trip — required by spec.
+def test_post_companies_invariants(session):
+    """Post-migration invariants for the companies module (C3 rename).
 
-    This test verifies the data-migration invariants documented in phase 03:
-      1. Every user who had a company_profile row now has a primary company.
-      2. All old billing_number_counter rows (keyed by user_id) are migrated
-         to new rows keyed by company_id.
-      3. billing_documents.company_id is backfilled to the primary company.
-      4. The company_profile table still exists (kept for legacy endpoint compat).
+    Renamed from test_migration_company_profile_to_companies_round_trip since
+    this test does NOT run the migration itself — it validates current DB state.
+    A separate test_migration_full_upgrade_path exercises the actual Alembic run.
 
-    NOTE: In the phase 05 test environment the migration has already run.
-    This test validates post-migration invariants by querying current state.
+    Invariants:
+      1. Every user_company_access primary row has a matching company.
+      2. billing_documents with non-null company_id reference live companies.
+      3. The company_profile table does NOT exist (dropped in migration 2d9c35848b9b).
     """
     from sqlalchemy import text
 
@@ -56,6 +55,16 @@ def test_migration_company_profile_to_companies_round_trip(session):
     )
     dangling = result.scalar()
     assert dangling == 0, f"{dangling} billing_documents.company_id references missing companies"
+
+    # C2: company_profile table must NOT exist (dropped in migration 2d9c35848b9b)
+    result = session.execute(
+        text(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_name = 'company_profile' AND table_schema = 'public'"
+        )
+    )
+    table_count = result.scalar()
+    assert table_count == 0, "company_profile table still exists — migration 2d9c35848b9b did not drop it"
 
 
 def test_doc_company_id_set_null_after_company_delete(session):

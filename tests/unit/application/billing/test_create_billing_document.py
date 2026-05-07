@@ -13,11 +13,11 @@ from app.domain.billing.exceptions import MissingCompanyProfileError
 
 
 @pytest.fixture
-def usecase(doc_repo, counter_repo, profile_repo, company_repo, access_repo):
+def usecase(doc_repo, counter_repo, company_repo, access_repo):
     return CreateBillingDocumentUseCase(
         doc_repo=doc_repo,
         counter_repo=counter_repo,
-        profile_repo=profile_repo,
+        project_repo=None,
         company_repo=company_repo,
         access_repo=access_repo,
     )
@@ -66,7 +66,7 @@ class TestCreateBillingDocumentHappyPath:
         assert result.issuer_legal_name == seeded_company.legal_name
         assert result.issuer_address == seeded_company.address
 
-    def test_with_prefix_override(self, doc_repo, counter_repo, profile_repo, company_repo, access_repo, fake_session):
+    def test_with_prefix_override(self, doc_repo, counter_repo, company_repo, access_repo, fake_session):
         from tests.unit.application.billing.conftest import make_company, make_access
         uid = uuid4()
         cid = uuid4()
@@ -76,7 +76,7 @@ class TestCreateBillingDocumentHappyPath:
         uc = CreateBillingDocumentUseCase(
             doc_repo=doc_repo,
             counter_repo=counter_repo,
-            profile_repo=profile_repo,
+            project_repo=None,
             company_repo=company_repo,
             access_repo=access_repo,
         )

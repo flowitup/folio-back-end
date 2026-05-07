@@ -14,7 +14,9 @@ from app.application.companies.dtos import RedeemInviteTokenInput
 from app.application.companies.redeem_invite_token_usecase import RedeemInviteTokenUseCase
 from app.domain.companies.exceptions import (
     CompanyAlreadyAttachedError,
+    InviteTokenExpiredError,
     InviteTokenNotFoundError,
+    InviteTokenSystemOverloadError,
 )
 from tests.unit.application.companies.conftest import make_access, make_token
 
@@ -124,6 +126,10 @@ class TestRedeemInviteTokenErrorPaths:
     def test_expired_token_raises_expired(
         self, usecase, token_repo, seeded_company, admin_id, user_id, clock, fake_session
     ):
+        """M3: fake list_active now matches real repo (returns all unredeemed regardless
+        of expiry). Expired token hash matches → use-case raises InviteTokenExpiredError,
+        not InviteTokenNotFoundError. This matches the production 410 reason=expired path.
+        """
         plaintext = "fake_token_expired"
         token = make_token(
             company_id=seeded_company.id,
@@ -134,8 +140,9 @@ class TestRedeemInviteTokenErrorPaths:
         )
         token_repo.save(token)
         inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token=plaintext)
-        # Expired tokens not returned by list_active → InviteTokenNotFoundError
-        with pytest.raises(InviteTokenNotFoundError):
+        # Now that fake matches real (returns unredeemed regardless of expiry),
+        # the hash matches → use-case proceeds to expiry check → InviteTokenExpiredError
+        with pytest.raises(InviteTokenExpiredError):
             usecase.execute(inp, fake_session)
 
     def test_already_attached_raises_conflict(
@@ -154,3 +161,46 @@ class TestRedeemInviteTokenErrorPaths:
         inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token="any_token")
         with pytest.raises(InviteTokenNotFoundError):
             usecase.execute(inp, fake_session)
+
+    def test_dos_guard_1001_tokens_raises_overload(
+        self, usecase, token_repo, user_id, admin_id, clock, fake_session
+    ):
+        """M4 / H3: DOS guard fires at N > 1000 — raises InviteTokenSystemOverloadError.
+
+        Route maps this to 503 reason=redeem_overloaded.
+        """
+        from uuid import uuid4
+
+        # Seed 1001 active (unredeemed, non-expired) tokens across distinct companies
+        for i in range(1001):
+            cid = uuid4()
+            token = make_token(
+                company_id=cid,
+                created_by=admin_id,
+                clock=clock,
+                token_hash=f"argon2_dos_token_{i:04d}",
+                days_until_expiry=7,
+            )
+            token_repo.save(token)
+
+        inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token="any_token")
+        with pytest.raises(InviteTokenSystemOverloadError) as exc_info:
+            usecase.execute(inp, fake_session)
+        assert exc_info.value.count == 1001
+
+    def test_not_found_sentinel_uses_zero_uuid(
+        self, usecase, token_repo, seeded_company, admin_id, user_id, clock, fake_session
+    ):
+        """H4: wrong token raises InviteTokenNotFoundError with token_id == UUID(int=0).
+
+        Ensures no real candidate ID is leaked in the error context.
+        """
+        from uuid import UUID
+
+        _seed_active_token(token_repo, seeded_company.id, admin_id, clock, plaintext="real_token")
+        inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token="wrong_token")
+        with pytest.raises(InviteTokenNotFoundError) as exc_info:
+            usecase.execute(inp, fake_session)
+        assert exc_info.value.token_id == UUID(int=0), (
+            "sentinel must be zero UUID, not a real candidate ID"
+        )

@@ -12,11 +12,11 @@ from tests.unit.application.billing.conftest import make_doc
 
 
 @pytest.fixture
-def usecase(doc_repo, counter_repo, profile_repo, company_repo, access_repo):
+def usecase(doc_repo, counter_repo, company_repo, access_repo):
     return CloneBillingDocumentUseCase(
         doc_repo=doc_repo,
         counter_repo=counter_repo,
-        profile_repo=profile_repo,
+        project_repo=None,
         company_repo=company_repo,
         access_repo=access_repo,
     )

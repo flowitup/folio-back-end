@@ -457,9 +457,6 @@ def invitation_app():
         from app.infrastructure.database.repositories.sqlalchemy_billing_template_repository import (
             SqlAlchemyBillingTemplateRepository,
         )
-        from app.infrastructure.database.repositories.sqlalchemy_company_profile_repository import (
-            SqlAlchemyCompanyProfileRepository,
-        )
         from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
             SqlAlchemyBillingNumberCounterRepository,
         )
@@ -482,40 +479,36 @@ def invitation_app():
             GetTemplateUseCase,
             DeleteTemplateUseCase,
             ApplyTemplateToCreateDocumentUseCase,
-            GetCompanyProfileUseCase,
-            UpsertCompanyProfileUseCase,
         )
 
         _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
         _billing_tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
-        _company_profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
         _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
         _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
 
         _c.billing_document_repo = _billing_doc_repo
         _c.billing_template_repo = _billing_tpl_repo
-        _c.company_profile_repo = _company_profile_repo
         _c.billing_counter_repo = _billing_counter_repo
         _c.billing_pdf_renderer = _billing_pdf_renderer
 
         _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
         _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
         _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
@@ -557,15 +550,9 @@ def invitation_app():
             doc_repo=_billing_doc_repo,
             template_repo=_billing_tpl_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
             company_repo=_company_repo,
             access_repo=_access_repo,
-        )
-        _c.get_company_profile_usecase = GetCompanyProfileUseCase(
-            profile_repo=_company_profile_repo,
-        )
-        _c.upsert_company_profile_usecase = UpsertCompanyProfileUseCase(
-            profile_repo=_company_profile_repo,
         )
 
         yield test_app

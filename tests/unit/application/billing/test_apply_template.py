@@ -18,12 +18,12 @@ from tests.unit.application.billing.conftest import make_template
 
 
 @pytest.fixture
-def usecase(doc_repo, template_repo, counter_repo, profile_repo, company_repo, access_repo):
+def usecase(doc_repo, template_repo, counter_repo, company_repo, access_repo):
     return ApplyTemplateToCreateDocumentUseCase(
         doc_repo=doc_repo,
         template_repo=template_repo,
         counter_repo=counter_repo,
-        profile_repo=profile_repo,
+        project_repo=None,
         company_repo=company_repo,
         access_repo=access_repo,
     )
@@ -107,8 +107,23 @@ class TestApplyTemplateErrors:
         with pytest.raises(ForbiddenBillingDocumentError):
             usecase.execute(_inp(other_user_id, devis_template.id, company_id=company_id), fake_session)
 
-    def test_missing_company_id_raises(self, usecase, fake_session, user_id, devis_template):
-        """company_id=None → MissingCompanyProfileError (required in phase 05)."""
+    def test_company_id_none_with_primary_resolves_automatically(
+        self, usecase, fake_session, user_id, company_id, seeded_company, devis_template
+    ):
+        """H2: company_id=None resolves to caller's primary company.
+
+        seeded_company fixture creates a primary access row for user_id.
+        The use-case should find it and use it as issuer.
+        """
+        result = usecase.execute(_inp(user_id, devis_template.id, company_id=None), fake_session)
+        assert result.kind == "devis"
+        assert result.company_id == company_id  # resolved from primary
+
+    def test_company_id_none_without_primary_raises(
+        self, usecase, fake_session, user_id, devis_template
+    ):
+        """H2: company_id=None with no attached company → MissingCompanyProfileError."""
+        # user_id has no access rows in this test (seeded_company not used)
         with pytest.raises(MissingCompanyProfileError):
             usecase.execute(_inp(user_id, devis_template.id, company_id=None), fake_session)
 

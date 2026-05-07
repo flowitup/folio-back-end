@@ -97,18 +97,28 @@ class InMemoryCompanyInviteTokenRepository:
         self._store: dict[UUID, CompanyInviteToken] = {}
 
     def find_active_for_company(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        now = datetime.now(timezone.utc)
+        """Return unredeemed token for company regardless of expiry (matches real repo).
+
+        M3: real repo does not filter by expiry; use-case handles expiry check.
+        """
         for token in self._store.values():
-            if token.company_id == company_id and token.is_active(now):
+            if token.company_id == company_id and token.redeemed_at is None:
                 return token
         return None
+
+    def find_active_for_company_for_update(self, company_id: UUID) -> Optional[CompanyInviteToken]:
+        """M1: in-memory fake — same as find_active_for_company (no lock needed in tests)."""
+        return self.find_active_for_company(company_id)
 
     def find_by_id_for_update(self, token_id: UUID) -> Optional[CompanyInviteToken]:
         return self._store.get(token_id)
 
     def list_active(self) -> list[CompanyInviteToken]:
-        now = datetime.now(timezone.utc)
-        return [t for t in self._store.values() if t.is_active(now)]
+        """Return all unredeemed tokens regardless of expiry (matches real repo semantics).
+
+        M3 fix: real repo does not filter by expiry; use-case checks expiry.
+        """
+        return [t for t in self._store.values() if t.redeemed_at is None]
 
     def save(self, token: CompanyInviteToken) -> CompanyInviteToken:
         self._store[token.id] = token
