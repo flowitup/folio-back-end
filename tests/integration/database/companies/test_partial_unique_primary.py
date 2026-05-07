@@ -26,6 +26,7 @@ if "sqlite" in _DB_URL:
 def pg_session(engine, tables):
     """Session using the real Postgres engine from conftest."""
     from sqlalchemy.orm import sessionmaker
+
     connection = engine.connect()
     transaction = connection.begin()
     Session = sessionmaker(bind=connection)

@@ -155,16 +155,12 @@ class TestRedeemInviteTokenErrorPaths:
         with pytest.raises(CompanyAlreadyAttachedError):
             usecase.execute(inp, fake_session)
 
-    def test_no_active_tokens_raises_not_found(
-        self, usecase, user_id, fake_session
-    ):
+    def test_no_active_tokens_raises_not_found(self, usecase, user_id, fake_session):
         inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token="any_token")
         with pytest.raises(InviteTokenNotFoundError):
             usecase.execute(inp, fake_session)
 
-    def test_dos_guard_1001_tokens_raises_overload(
-        self, usecase, token_repo, user_id, admin_id, clock, fake_session
-    ):
+    def test_dos_guard_1001_tokens_raises_overload(self, usecase, token_repo, user_id, admin_id, clock, fake_session):
         """M4 / H3: DOS guard fires at N > 1000 — raises InviteTokenSystemOverloadError.
 
         Route maps this to 503 reason=redeem_overloaded.
@@ -201,6 +197,4 @@ class TestRedeemInviteTokenErrorPaths:
         inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token="wrong_token")
         with pytest.raises(InviteTokenNotFoundError) as exc_info:
             usecase.execute(inp, fake_session)
-        assert exc_info.value.token_id == UUID(int=0), (
-            "sentinel must be zero UUID, not a real candidate ID"
-        )
+        assert exc_info.value.token_id == UUID(int=0), "sentinel must be zero UUID, not a real candidate ID"

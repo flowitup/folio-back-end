@@ -17,9 +17,7 @@ def usecase(access_repo):
 
 
 class TestDetachCompany:
-    def test_detach_removes_access(
-        self, usecase, access_repo, seeded_company, user_id, fake_session
-    ):
+    def test_detach_removes_access(self, usecase, access_repo, seeded_company, user_id, fake_session):
         access_repo.save(make_access(user_id=user_id, company_id=seeded_company.id, is_primary=True))
         inp = DetachCompanyInput(user_id=user_id, company_id=seeded_company.id)
         usecase.execute(inp, fake_session)
@@ -62,17 +60,13 @@ class TestDetachCompany:
         primary = access_repo.find(user_id, seeded_company.id)
         assert primary.is_primary is True
 
-    def test_detach_last_company_leaves_no_primary(
-        self, usecase, access_repo, seeded_company, user_id, fake_session
-    ):
+    def test_detach_last_company_leaves_no_primary(self, usecase, access_repo, seeded_company, user_id, fake_session):
         access_repo.save(make_access(user_id=user_id, company_id=seeded_company.id, is_primary=True))
         inp = DetachCompanyInput(user_id=user_id, company_id=seeded_company.id)
         usecase.execute(inp, fake_session)
         assert access_repo.list_for_user(user_id) == []
 
-    def test_not_attached_raises_not_found(
-        self, usecase, seeded_company, user_id, fake_session
-    ):
+    def test_not_attached_raises_not_found(self, usecase, seeded_company, user_id, fake_session):
         inp = DetachCompanyInput(user_id=user_id, company_id=seeded_company.id)
         with pytest.raises(UserCompanyAccessNotFoundError):
             usecase.execute(inp, fake_session)

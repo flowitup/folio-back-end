@@ -117,9 +117,7 @@ def test_doc_company_id_set_null_after_company_delete(session):
 
     # billing_document.company_id is NULL but issuer snapshot remains
     row = session.execute(
-        text(
-            "SELECT company_id, issuer_legal_name FROM billing_documents WHERE id = :id"
-        ),
+        text("SELECT company_id, issuer_legal_name FROM billing_documents WHERE id = :id"),
         {"id": str(doc_id)},
     ).fetchone()
 

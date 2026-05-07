@@ -23,10 +23,16 @@ def _make_company(session, created_by: UUID) -> Company:
         id=uuid4(),
         legal_name="Token Test SAS",
         address="1 rue Test",
-        siret=None, tva_number=None, iban=None, bic=None,
-        logo_url=None, default_payment_terms=None, prefix_override=None,
+        siret=None,
+        tva_number=None,
+        iban=None,
+        bic=None,
+        logo_url=None,
+        default_payment_terms=None,
+        prefix_override=None,
         created_by=created_by,
-        created_at=now, updated_at=now,
+        created_at=now,
+        updated_at=now,
     )
     return SqlAlchemyCompanyRepository(session).save(company)
 

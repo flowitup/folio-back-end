@@ -404,16 +404,20 @@ def invitation_app():
         _c.company_invite_token_repo = _token_repo
 
         _c.create_company_usecase = _CreateCompanyUseCase(
-            company_repo=_company_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            role_checker=_role_checker,
         )
         _c.update_company_usecase = _UpdateCompanyUseCase(
-            company_repo=_company_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            role_checker=_role_checker,
         )
         _c.delete_company_usecase = _DeleteCompanyUseCase(
-            company_repo=_company_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            role_checker=_role_checker,
         )
         _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
-            company_repo=_company_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            role_checker=_role_checker,
         )
         _c.generate_invite_token_usecase = _GenerateInviteTokenUseCase(
             company_repo=_company_repo,
@@ -424,22 +428,34 @@ def invitation_app():
             role_checker=_role_checker,
         )
         _c.revoke_invite_token_usecase = _RevokeInviteTokenUseCase(
-            company_repo=_company_repo, token_repo=_token_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            token_repo=_token_repo,
+            role_checker=_role_checker,
         )
         _c.list_attached_users_usecase = _ListAttachedUsersUseCase(
-            company_repo=_company_repo, access_repo=_access_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+            role_checker=_role_checker,
         )
         _c.boot_attached_user_usecase = _BootAttachedUserUseCase(
-            company_repo=_company_repo, access_repo=_access_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+            role_checker=_role_checker,
         )
         _c.list_my_companies_usecase = _ListMyCompaniesUseCase(
-            company_repo=_company_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            role_checker=_role_checker,
         )
         _c.get_company_usecase = _GetCompanyUseCase(
-            company_repo=_company_repo, access_repo=_access_repo, role_checker=_role_checker,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+            role_checker=_role_checker,
         )
         _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
-            token_repo=_token_repo, access_repo=_access_repo, hasher=_argon2_hasher, clock=_clock,
+            token_repo=_token_repo,
+            access_repo=_access_repo,
+            hasher=_argon2_hasher,
+            clock=_clock,
         )
         _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(access_repo=_access_repo)
         _c.detach_company_usecase = _DetachCompanyUseCase(access_repo=_access_repo)

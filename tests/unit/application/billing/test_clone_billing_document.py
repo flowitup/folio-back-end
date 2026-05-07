@@ -25,8 +25,7 @@ def usecase(doc_repo, counter_repo, company_repo, access_repo):
 @pytest.fixture
 def source_doc(doc_repo, user_id, company_id, seeded_company):
     """Source doc with company_id set so clone can resolve issuer."""
-    doc = make_doc(user_id=user_id, status=BillingDocumentStatus.SENT, doc_number="DEV-2026-099",
-                   company_id=company_id)
+    doc = make_doc(user_id=user_id, status=BillingDocumentStatus.SENT, doc_number="DEV-2026-099", company_id=company_id)
     doc_repo.save(doc)
     return doc
 
@@ -41,8 +40,9 @@ class TestCloneBillingDocumentHappyPath:
         assert result.kind == source_doc.kind.value
         assert result.recipient_name == source_doc.recipient_name
 
-    def test_clone_resets_source_devis_id_to_none(self, usecase, doc_repo, fake_session, user_id,
-                                                   company_id, seeded_company):
+    def test_clone_resets_source_devis_id_to_none(
+        self, usecase, doc_repo, fake_session, user_id, company_id, seeded_company
+    ):
         """Spec: source_devis_id is None on a clone (only set on convert)."""
         converted = make_doc(
             user_id=user_id,
@@ -79,8 +79,7 @@ class TestCloneBillingDocumentErrors:
 
     def test_missing_company_id_in_source_raises(self, usecase, doc_repo, fake_session, user_id):
         """Source doc has company_id=None + inp has no company_id → MissingCompanyProfileError."""
-        doc = make_doc(user_id=user_id, status=BillingDocumentStatus.SENT, doc_number="DEV-2026-099",
-                       company_id=None)
+        doc = make_doc(user_id=user_id, status=BillingDocumentStatus.SENT, doc_number="DEV-2026-099", company_id=None)
         doc_repo.save(doc)
         inp = CloneBillingDocumentInput(source_id=doc.id, user_id=user_id)
         with pytest.raises(MissingCompanyProfileError):

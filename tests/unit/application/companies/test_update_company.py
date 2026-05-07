@@ -52,6 +52,7 @@ class TestUpdateCompanyGuards:
 
     def test_unknown_company_raises_not_found(self, usecase, admin_id, fake_session):
         from uuid import uuid4
+
         inp = UpdateCompanyInput(id=uuid4(), caller_id=admin_id, legal_name="X")
         with pytest.raises(CompanyNotFoundError):
             usecase.execute(inp, fake_session)

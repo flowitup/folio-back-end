@@ -42,6 +42,7 @@ class TestGenerateInviteTokenHappyPath:
 
     def test_expires_at_set_7_days_out(self, usecase, seeded_company, admin_id, clock, fake_session):
         from datetime import timedelta
+
         inp = GenerateInviteTokenInput(company_id=seeded_company.id, caller_id=admin_id)
         result = usecase.execute(inp, fake_session)
         expected = clock.now() + timedelta(days=7)
@@ -62,9 +63,7 @@ class TestGenerateInviteTokenHappyPath:
 
 
 class TestGenerateInviteTokenConflict:
-    def test_second_generate_without_regenerate_raises(
-        self, usecase, seeded_company, admin_id, fake_session
-    ):
+    def test_second_generate_without_regenerate_raises(self, usecase, seeded_company, admin_id, fake_session):
         inp = GenerateInviteTokenInput(company_id=seeded_company.id, caller_id=admin_id)
         usecase.execute(inp, fake_session)
         with pytest.raises(ActiveInviteTokenAlreadyExistsError):

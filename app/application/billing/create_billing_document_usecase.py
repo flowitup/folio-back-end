@@ -67,9 +67,7 @@ class CreateBillingDocumentUseCase:
         if inp.company_id is None:
             raise MissingCompanyProfileError(inp.user_id)
 
-        company = assert_user_company_access(
-            self._access_repo, self._company_repo, inp.user_id, inp.company_id
-        )
+        company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
         if company is None:
             # repos not wired (unlikely in prod) — surface as missing-profile error
             raise MissingCompanyProfileError(inp.user_id)

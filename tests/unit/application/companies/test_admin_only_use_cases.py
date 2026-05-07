@@ -28,8 +28,16 @@ from app.domain.companies.exceptions import ForbiddenCompanyError
 
 
 def test_role_guard_on_admin_endpoints(
-    company_repo, access_repo, token_repo, role_service,
-    hasher, token_generator, clock, fake_session, user_id, seeded_company
+    company_repo,
+    access_repo,
+    token_repo,
+    role_service,
+    hasher,
+    token_generator,
+    clock,
+    fake_session,
+    user_id,
+    seeded_company,
 ):
     """test_role_guard_on_admin_endpoints — required by spec.
 

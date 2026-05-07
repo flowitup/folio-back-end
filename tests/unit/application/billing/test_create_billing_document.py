@@ -68,6 +68,7 @@ class TestCreateBillingDocumentHappyPath:
 
     def test_with_prefix_override(self, doc_repo, counter_repo, company_repo, access_repo, fake_session):
         from tests.unit.application.billing.conftest import make_company, make_access
+
         uid = uuid4()
         cid = uuid4()
         company = make_company(owner_id=uid, company_id=cid, prefix="FLW")

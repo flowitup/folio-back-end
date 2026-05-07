@@ -55,9 +55,7 @@ class TestSetPrimaryCompany:
         assert updated_a.is_primary is False
         assert updated_b.is_primary is True
 
-    def test_not_attached_raises_not_found(
-        self, usecase, seeded_company, user_id, fake_session
-    ):
+    def test_not_attached_raises_not_found(self, usecase, seeded_company, user_id, fake_session):
         inp = SetPrimaryCompanyInput(user_id=user_id, company_id=seeded_company.id)
         with pytest.raises(UserCompanyAccessNotFoundError):
             usecase.execute(inp, fake_session)

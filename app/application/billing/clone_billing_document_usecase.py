@@ -80,9 +80,7 @@ class CloneBillingDocumentUseCase:
             raise MissingCompanyProfileError(inp.user_id)
 
         # 4. Validate attachment and snapshot from Company entity
-        company = assert_user_company_access(
-            self._access_repo, self._company_repo, inp.user_id, effective_company_id
-        )
+        company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, effective_company_id)
         if company is None:
             raise MissingCompanyProfileError(inp.user_id)
 

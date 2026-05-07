@@ -130,9 +130,9 @@ class TestMaskCompany:
             raw = getattr(c, field)
             masked = getattr(result, field)
             if raw is not None:
-                assert raw not in (masked or ""), (
-                    f"Field {field!r}: full value {raw!r} leaked in masked output {masked!r}"
-                )
+                assert raw not in (
+                    masked or ""
+                ), f"Field {field!r}: full value {raw!r} leaked in masked output {masked!r}"
 
     def test_admin_sees_full(self):
         """test_admin_sees_full — required by spec."""

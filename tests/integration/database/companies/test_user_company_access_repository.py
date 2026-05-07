@@ -19,15 +19,22 @@ from app.infrastructure.database.repositories.sqlalchemy_user_company_access_rep
 
 def _make_company(session, created_by: UUID, legal_name: str = "Test SAS") -> Company:
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc)
     company = Company(
         id=uuid4(),
         legal_name=legal_name,
         address="1 rue Test",
-        siret=None, tva_number=None, iban=None, bic=None,
-        logo_url=None, default_payment_terms=None, prefix_override=None,
+        siret=None,
+        tva_number=None,
+        iban=None,
+        bic=None,
+        logo_url=None,
+        default_payment_terms=None,
+        prefix_override=None,
         created_by=created_by,
-        created_at=now, updated_at=now,
+        created_at=now,
+        updated_at=now,
     )
     repo = SqlAlchemyCompanyRepository(session)
     return repo.save(company)

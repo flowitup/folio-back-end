@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from sqlalchemy import text
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -51,10 +52,7 @@ def _table_exists(conn, table_name: str) -> bool:
     from sqlalchemy import text
 
     result = conn.execute(
-        text(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name = :tbl"
-        ),
+        text("SELECT COUNT(*) FROM information_schema.tables " "WHERE table_schema = 'public' AND table_name = :tbl"),
         {"tbl": table_name},
     )
     return result.scalar() == 1
@@ -72,12 +70,8 @@ def test_migration_full_upgrade_path(alembic_cfg, pg_engine):
     command.stamp(alembic_cfg, "97e7156ea751")
 
     with pg_engine.connect() as conn:
-        assert _table_exists(conn, "billing_documents"), (
-            "billing_documents must exist after stamping 97e7156ea751"
-        )
-        assert not _table_exists(conn, "companies"), (
-            "companies table must NOT exist before upgrade"
-        )
+        assert _table_exists(conn, "billing_documents"), "billing_documents must exist after stamping 97e7156ea751"
+        assert not _table_exists(conn, "companies"), "companies table must NOT exist before upgrade"
 
     # Step 2 — Upgrade to companies module
     command.upgrade(alembic_cfg, "2d9c35848b9b")
@@ -85,51 +79,35 @@ def test_migration_full_upgrade_path(alembic_cfg, pg_engine):
     with pg_engine.connect() as conn:
         # Core companies tables created
         assert _table_exists(conn, "companies"), "companies table missing after upgrade"
-        assert _table_exists(conn, "user_company_access"), (
-            "user_company_access table missing after upgrade"
-        )
-        assert _table_exists(conn, "company_invite_tokens"), (
-            "company_invite_tokens table missing after upgrade"
-        )
+        assert _table_exists(conn, "user_company_access"), "user_company_access table missing after upgrade"
+        assert _table_exists(conn, "company_invite_tokens"), "company_invite_tokens table missing after upgrade"
 
         # C2 invariant: company_profile MUST NOT exist
-        assert not _table_exists(conn, "company_profile"), (
-            "company_profile table must NOT exist after upgrade — was it dropped?"
-        )
+        assert not _table_exists(
+            conn, "company_profile"
+        ), "company_profile table must NOT exist after upgrade — was it dropped?"
 
         # billing_documents still intact with company_id column
-        assert _table_exists(conn, "billing_documents"), (
-            "billing_documents table must survive upgrade"
-        )
+        assert _table_exists(conn, "billing_documents"), "billing_documents table must survive upgrade"
         result = conn.execute(
             text(
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_name = 'billing_documents' AND column_name = 'company_id'"
             )
         )
-        assert result.fetchone() is not None, (
-            "billing_documents.company_id column missing after upgrade"
-        )
+        assert result.fetchone() is not None, "billing_documents.company_id column missing after upgrade"
 
     # Step 3 — Downgrade back one step (to 97e7156ea751)
     command.downgrade(alembic_cfg, "-1")
 
     with pg_engine.connect() as conn:
         # Companies tables removed
-        assert not _table_exists(conn, "companies"), (
-            "companies table must be gone after downgrade"
-        )
-        assert not _table_exists(conn, "user_company_access"), (
-            "user_company_access must be gone after downgrade"
-        )
-        assert not _table_exists(conn, "company_invite_tokens"), (
-            "company_invite_tokens must be gone after downgrade"
-        )
+        assert not _table_exists(conn, "companies"), "companies table must be gone after downgrade"
+        assert not _table_exists(conn, "user_company_access"), "user_company_access must be gone after downgrade"
+        assert not _table_exists(conn, "company_invite_tokens"), "company_invite_tokens must be gone after downgrade"
 
         # billing_documents still intact
-        assert _table_exists(conn, "billing_documents"), (
-            "billing_documents must survive downgrade"
-        )
+        assert _table_exists(conn, "billing_documents"), "billing_documents must survive downgrade"
 
     # Restore to head so subsequent tests have a clean DB
     command.upgrade(alembic_cfg, "head")

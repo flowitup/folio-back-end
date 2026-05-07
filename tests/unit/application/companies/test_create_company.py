@@ -39,8 +39,14 @@ class TestCreateCompanyHappyPath:
 
     def test_optional_fields_passed_through(self, usecase, company_repo, admin_id, fake_session):
         result = usecase.execute(
-            _inp(admin_id, siret="12345678901234", tva_number="FR12345678901",
-                 iban="FR76300", bic="BNPAFRPP", prefix_override="TST"),
+            _inp(
+                admin_id,
+                siret="12345678901234",
+                tva_number="FR12345678901",
+                iban="FR76300",
+                bic="BNPAFRPP",
+                prefix_override="TST",
+            ),
             fake_session,
         )
         assert result.siret == "12345678901234"

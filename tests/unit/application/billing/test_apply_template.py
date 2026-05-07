@@ -55,21 +55,24 @@ def _inp(user_id, template_id, company_id=None, recipient="Client Corp", **overr
 
 
 class TestApplyTemplateHappyPath:
-    def test_creates_doc_from_devis_template(self, usecase, fake_session, user_id, company_id, seeded_company,
-                                              devis_template):
+    def test_creates_doc_from_devis_template(
+        self, usecase, fake_session, user_id, company_id, seeded_company, devis_template
+    ):
         result = usecase.execute(_inp(user_id, devis_template.id, company_id=company_id), fake_session)
         assert result.kind == "devis"
         assert result.status == "draft"
         assert result.recipient_name == "Client Corp"
 
-    def test_items_copied_from_template(self, usecase, fake_session, user_id, company_id, seeded_company,
-                                        devis_template):
+    def test_items_copied_from_template(
+        self, usecase, fake_session, user_id, company_id, seeded_company, devis_template
+    ):
         result = usecase.execute(_inp(user_id, devis_template.id, company_id=company_id), fake_session)
         assert len(result.items) == len(devis_template.items)
         assert result.items[0].description == devis_template.items[0].description
 
-    def test_notes_copied_from_template(self, usecase, fake_session, user_id, company_id, seeded_company,
-                                        template_repo):
+    def test_notes_copied_from_template(
+        self, usecase, fake_session, user_id, company_id, seeded_company, template_repo
+    ):
         from datetime import datetime, timezone
         from uuid import uuid4 as _uuid4
         from app.domain.billing.template import BillingDocumentTemplate
@@ -100,8 +103,7 @@ class TestApplyTemplateErrors:
         with pytest.raises(BillingTemplateNotFoundError):
             usecase.execute(_inp(user_id, uuid4(), company_id=company_id), fake_session)
 
-    def test_wrong_owner_raises(self, usecase, fake_session, other_user_id, company_id, seeded_company,
-                                devis_template):
+    def test_wrong_owner_raises(self, usecase, fake_session, other_user_id, company_id, seeded_company, devis_template):
         # other_user_id tries to apply a template owned by user_id →
         # ForbiddenBillingDocumentError (ownership check before company check)
         with pytest.raises(ForbiddenBillingDocumentError):
@@ -119,9 +121,7 @@ class TestApplyTemplateErrors:
         assert result.kind == "devis"
         assert result.company_id == company_id  # resolved from primary
 
-    def test_company_id_none_without_primary_raises(
-        self, usecase, fake_session, user_id, devis_template
-    ):
+    def test_company_id_none_without_primary_raises(self, usecase, fake_session, user_id, devis_template):
         """H2: company_id=None with no attached company → MissingCompanyProfileError."""
         # user_id has no access rows in this test (seeded_company not used)
         with pytest.raises(MissingCompanyProfileError):
@@ -132,7 +132,8 @@ class TestApplyTemplateErrors:
         with pytest.raises((ValueError, MissingCompanyProfileError)):
             usecase.execute(_inp(user_id, devis_template.id, company_id=uuid4()), fake_session)
 
-    def test_empty_recipient_name_raises(self, usecase, fake_session, user_id, company_id, seeded_company,
-                                         devis_template):
+    def test_empty_recipient_name_raises(
+        self, usecase, fake_session, user_id, company_id, seeded_company, devis_template
+    ):
         with pytest.raises(ValueError, match="Recipient name"):
             usecase.execute(_inp(user_id, devis_template.id, company_id=company_id, recipient="  "), fake_session)

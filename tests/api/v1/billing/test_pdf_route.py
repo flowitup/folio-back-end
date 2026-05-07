@@ -203,16 +203,25 @@ def rate_limit_app():
         _c.company_repo = _company_repo
         _c.user_company_access_repo = _access_repo
         _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
-            doc_repo=_doc_repo, counter_repo=_counter_repo,
-            project_repo=None, company_repo=_company_repo, access_repo=_access_repo,
+            doc_repo=_doc_repo,
+            counter_repo=_counter_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
-            doc_repo=_doc_repo, counter_repo=_counter_repo,
-            project_repo=None, company_repo=_company_repo, access_repo=_access_repo,
+            doc_repo=_doc_repo,
+            counter_repo=_counter_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
-            doc_repo=_doc_repo, counter_repo=_counter_repo,
-            project_repo=None, company_repo=_company_repo, access_repo=_access_repo,
+            doc_repo=_doc_repo,
+            counter_repo=_counter_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(doc_repo=_doc_repo)
         _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(doc_repo=_doc_repo)
@@ -289,10 +298,16 @@ def rl_doc(rl_client, rl_token, rate_limit_app):
             id=company_id,
             legal_name="RL Co",
             address="1 rue Test",
-            siret=None, tva_number=None, iban=None, bic=None,
-            logo_url=None, default_payment_terms=None, prefix_override=None,
+            siret=None,
+            tva_number=None,
+            iban=None,
+            bic=None,
+            logo_url=None,
+            default_payment_terms=None,
+            prefix_override=None,
             created_by=admin_user_id,
-            created_at=now, updated_at=now,
+            created_at=now,
+            updated_at=now,
         )
         SqlAlchemyCompanyRepository(db.session).save(company)
 

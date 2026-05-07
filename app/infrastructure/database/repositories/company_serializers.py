@@ -9,6 +9,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.domain.companies.company import Company
+from app.domain.companies.invite_token import CompanyInviteToken
+from app.domain.companies.user_company_access import UserCompanyAccess
+from app.infrastructure.database.models.company import CompanyModel
+from app.infrastructure.database.models.company_invite_token import CompanyInviteTokenModel
+from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
 
 def _ensure_utc(dt: datetime | None) -> datetime | None:
     """Attach UTC timezone to naive datetimes returned by SQLite.
@@ -22,14 +29,6 @@ def _ensure_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-from app.domain.companies.company import Company
-from app.domain.companies.invite_token import CompanyInviteToken
-from app.domain.companies.user_company_access import UserCompanyAccess
-from app.infrastructure.database.models.company import CompanyModel
-from app.infrastructure.database.models.company_invite_token import CompanyInviteTokenModel
-from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
 
 # ---------------------------------------------------------------------------

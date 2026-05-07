@@ -98,6 +98,5 @@ class InviteTokenSystemOverloadError(CompaniesDomainError):
     def __init__(self, count: int) -> None:
         self.count = count
         super().__init__(
-            f"Too many active invite tokens ({count}). "
-            "Admin must revoke stale tokens before redemption is allowed."
+            f"Too many active invite tokens ({count}). " "Admin must revoke stale tokens before redemption is allowed."
         )

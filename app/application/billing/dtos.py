@@ -161,8 +161,6 @@ class ApplyTemplateInput:
     issue_date: Optional[date] = None  # defaults to today
 
 
-
-
 # ---------------------------------------------------------------------------
 # Response DTOs
 # ---------------------------------------------------------------------------
@@ -311,5 +309,3 @@ class BillingTemplateResponse:
             terms=tpl.terms,
             default_vat_rate=tpl.default_vat_rate,
         )
-
-

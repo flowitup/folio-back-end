@@ -251,8 +251,9 @@ class TestH1ProjectAuthorizationCreate:
         defaults.update(overrides)
         return CreateBillingDocumentInput(**defaults)
 
-    def test_user_cannot_create_doc_for_unowned_project(self, usecase, user_id, company_id, other_user_id,
-                                                         project_repo):
+    def test_user_cannot_create_doc_for_unowned_project(
+        self, usecase, user_id, company_id, other_user_id, project_repo
+    ):
         """H1: user not member of project → ForbiddenProjectAccessError."""
         project = _Project(owner_id=other_user_id)
         project_repo.save(project)
@@ -407,6 +408,7 @@ class TestH5SchemaBounds:
 
     def _base_create(self, **overrides) -> dict:
         import uuid as _uuid
+
         body = {
             "kind": "devis",
             "recipient_name": "Client",

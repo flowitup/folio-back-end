@@ -92,7 +92,10 @@ class TestCompanyRepositoryCRUD:
     def test_optional_fields_persisted_as_none(self, repo, creator_id):
         company = _make_company(
             created_by=creator_id,
-            siret=None, tva_number=None, iban=None, bic=None,
+            siret=None,
+            tva_number=None,
+            iban=None,
+            bic=None,
         )
         repo.save(company)
         found = repo.find_by_id(company.id)

@@ -92,8 +92,9 @@ class TestConvertDevisToFactureErrors:
         with pytest.raises(ValueError, match="not a devis"):
             usecase.execute(inp, fake_session)
 
-    def test_convert_devis_not_accepted_raises(self, usecase, fake_session, user_id, company_id, seeded_company,
-                                               doc_repo):
+    def test_convert_devis_not_accepted_raises(
+        self, usecase, fake_session, user_id, company_id, seeded_company, doc_repo
+    ):
         """Spec #9: devis with status=draft → ValueError."""
         draft_devis = make_doc(
             user_id=user_id,
@@ -106,8 +107,9 @@ class TestConvertDevisToFactureErrors:
         with pytest.raises(ValueError, match="accepted"):
             usecase.execute(inp, fake_session)
 
-    def test_convert_devis_already_converted_raises(self, usecase, fake_session, user_id, seeded_company,
-                                                     doc_repo, accepted_devis):
+    def test_convert_devis_already_converted_raises(
+        self, usecase, fake_session, user_id, seeded_company, doc_repo, accepted_devis
+    ):
         """Spec #7: second convert call on the same accepted devis fails."""
         inp = ConvertDevisToFactureInput(source_devis_id=accepted_devis.id, user_id=user_id)
         usecase.execute(inp, fake_session)  # first succeeds

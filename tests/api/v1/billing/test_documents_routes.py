@@ -67,6 +67,7 @@ class TestCreateBillingDocument:
     def test_create_doc_with_unattached_company_returns_4xx(self, inv_client, billing_token, billing_profile):
         """Spec #7: company_id provided but company doesn't exist → 4xx error."""
         import uuid
+
         fake_company_id = str(uuid.uuid4())
         body = {**_CREATE_BASE, "company_id": fake_company_id}
         resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
