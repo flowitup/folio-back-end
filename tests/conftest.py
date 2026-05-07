@@ -354,18 +354,124 @@ def invitation_app():
         )
 
         # ------------------------------------------------------------------
+        # Wire companies use-cases (phase 03) — mirrors app/__init__.py wiring.
+        # These were already wired by _configure_di_container() during create_app,
+        # but we must also wire the company/access repos into the billing use-cases
+        # below so they satisfy the phase-05 company_id requirement.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_company_repository import (
+            SqlAlchemyCompanyRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
+            SqlAlchemyUserCompanyAccessRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_company_invite_token_repository import (
+            SqlAlchemyCompanyInviteTokenRepository,
+        )
+        from app.infrastructure.security.argon2_hasher import Argon2Hasher
+        from app.infrastructure.security.secure_token_generator import SecureTokenGenerator
+        from app.application.companies import (
+            CreateCompanyUseCase as _CreateCompanyUseCase,
+            UpdateCompanyUseCase as _UpdateCompanyUseCase,
+            DeleteCompanyUseCase as _DeleteCompanyUseCase,
+            ListAllCompaniesUseCase as _ListAllCompaniesUseCase,
+            GenerateInviteTokenUseCase as _GenerateInviteTokenUseCase,
+            RevokeInviteTokenUseCase as _RevokeInviteTokenUseCase,
+            ListAttachedUsersUseCase as _ListAttachedUsersUseCase,
+            BootAttachedUserUseCase as _BootAttachedUserUseCase,
+            ListMyCompaniesUseCase as _ListMyCompaniesUseCase,
+            GetCompanyUseCase as _GetCompanyUseCase,
+            RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
+            SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
+            DetachCompanyUseCase as _DetachCompanyUseCase,
+        )
+        import datetime as _dt
+
+        class _UtcClock:
+            def now(self) -> _dt.datetime:
+                return _dt.datetime.now(_dt.timezone.utc)
+
+        _company_repo = SqlAlchemyCompanyRepository(db.session)
+        _access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
+        _token_repo = SqlAlchemyCompanyInviteTokenRepository(db.session)
+        _argon2_hasher = Argon2Hasher()
+        _token_generator = SecureTokenGenerator()
+        _clock = _UtcClock()
+        _role_checker = _c.authorization_service
+
+        _c.company_repo = _company_repo
+        _c.user_company_access_repo = _access_repo
+        _c.company_invite_token_repo = _token_repo
+
+        _c.create_company_usecase = _CreateCompanyUseCase(
+            company_repo=_company_repo,
+            role_checker=_role_checker,
+        )
+        _c.update_company_usecase = _UpdateCompanyUseCase(
+            company_repo=_company_repo,
+            role_checker=_role_checker,
+        )
+        _c.delete_company_usecase = _DeleteCompanyUseCase(
+            company_repo=_company_repo,
+            role_checker=_role_checker,
+        )
+        _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
+            company_repo=_company_repo,
+            role_checker=_role_checker,
+        )
+        _c.generate_invite_token_usecase = _GenerateInviteTokenUseCase(
+            company_repo=_company_repo,
+            token_repo=_token_repo,
+            hasher=_argon2_hasher,
+            token_generator=_token_generator,
+            clock=_clock,
+            role_checker=_role_checker,
+        )
+        _c.revoke_invite_token_usecase = _RevokeInviteTokenUseCase(
+            company_repo=_company_repo,
+            token_repo=_token_repo,
+            role_checker=_role_checker,
+        )
+        _c.list_attached_users_usecase = _ListAttachedUsersUseCase(
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+            role_checker=_role_checker,
+        )
+        _c.boot_attached_user_usecase = _BootAttachedUserUseCase(
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+            role_checker=_role_checker,
+        )
+        _c.list_my_companies_usecase = _ListMyCompaniesUseCase(
+            company_repo=_company_repo,
+            role_checker=_role_checker,
+        )
+        _c.get_company_usecase = _GetCompanyUseCase(
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+            role_checker=_role_checker,
+        )
+        _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
+            token_repo=_token_repo,
+            access_repo=_access_repo,
+            hasher=_argon2_hasher,
+            clock=_clock,
+        )
+        _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(access_repo=_access_repo)
+        _c.detach_company_usecase = _DetachCompanyUseCase(access_repo=_access_repo)
+
+        # ------------------------------------------------------------------
         # Wire billing use-cases (phase 05) — mirrors app/__init__.py wiring.
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the test fixture will drift from production wiring.
+        # Phase 05: billing use-cases now receive company_repo + access_repo
+        # so company_id validation works end-to-end in tests.
         # ------------------------------------------------------------------
         from app.infrastructure.database.repositories.sqlalchemy_billing_document_repository import (
             SqlAlchemyBillingDocumentRepository,
         )
         from app.infrastructure.database.repositories.sqlalchemy_billing_template_repository import (
             SqlAlchemyBillingTemplateRepository,
-        )
-        from app.infrastructure.database.repositories.sqlalchemy_company_profile_repository import (
-            SqlAlchemyCompanyProfileRepository,
         )
         from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
             SqlAlchemyBillingNumberCounterRepository,
@@ -389,36 +495,38 @@ def invitation_app():
             GetTemplateUseCase,
             DeleteTemplateUseCase,
             ApplyTemplateToCreateDocumentUseCase,
-            GetCompanyProfileUseCase,
-            UpsertCompanyProfileUseCase,
         )
 
         _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
         _billing_tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
-        _company_profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
         _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
         _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
 
         _c.billing_document_repo = _billing_doc_repo
         _c.billing_template_repo = _billing_tpl_repo
-        _c.company_profile_repo = _company_profile_repo
         _c.billing_counter_repo = _billing_counter_repo
         _c.billing_pdf_renderer = _billing_pdf_renderer
 
         _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
@@ -458,13 +566,9 @@ def invitation_app():
             doc_repo=_billing_doc_repo,
             template_repo=_billing_tpl_repo,
             counter_repo=_billing_counter_repo,
-            profile_repo=_company_profile_repo,
-        )
-        _c.get_company_profile_usecase = GetCompanyProfileUseCase(
-            profile_repo=_company_profile_repo,
-        )
-        _c.upsert_company_profile_usecase = UpsertCompanyProfileUseCase(
-            profile_repo=_company_profile_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
 
         yield test_app

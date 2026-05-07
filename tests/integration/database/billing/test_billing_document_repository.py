@@ -17,7 +17,7 @@ from app.infrastructure.database.repositories.sqlalchemy_billing_document_reposi
     SqlAlchemyBillingDocumentRepository,
 )
 from app.infrastructure.database.models import UserModel
-from app.infrastructure.database.models.company_profile import CompanyProfileModel
+from app.infrastructure.database.models.company import CompanyModel
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +197,12 @@ class TestBillingDocumentRepositoryCRUD:
         assert found.items[0].vat_rate == Decimal("5.5")
 
     def test_issuer_snapshot_immutability(self, session):
-        """Spec §6: create doc with issuer snapshot, mutate company_profile, reload doc — snapshot unchanged.
+        """Spec §6: create doc with issuer snapshot, mutate company, reload doc — snapshot unchanged.
 
         Steps:
-          1. Seed a company_profile row with original legal_name.
-          2. Create a billing document whose issuer_legal_name is copied from that profile.
-          3. UPDATE the company_profile's legal_name in-place (simulates a Settings save).
+          1. Seed a company row with original legal_name.
+          2. Create a billing document whose issuer_legal_name is copied from that company.
+          3. UPDATE the company's legal_name in-place (simulates an admin rename).
           4. Reload the billing document.
           5. Assert the doc still carries the ORIGINAL legal_name — snapshot isolation confirmed.
         """
@@ -213,16 +213,17 @@ class TestBillingDocumentRepositoryCRUD:
         mutated_name = "Renamed Company SARL"
         original_address = "1 rue de la Paix, 75001 Paris"
         mutated_address = "99 avenue des Champs, 75008 Paris"
+        now = datetime.now(timezone.utc)
 
-        # Seed company_profile with original values
-        profile_row = CompanyProfileModel(
-            user_id=user_id,
+        # Seed company with original values
+        company_row = CompanyModel(
             legal_name=original_name,
             address=original_address,
-            created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-            updated_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            created_by=user_id,
+            created_at=now,
+            updated_at=now,
         )
-        session.add(profile_row)
+        session.add(company_row)
         session.flush()
 
         # Create billing document with snapshot of original issuer info
@@ -231,9 +232,9 @@ class TestBillingDocumentRepositoryCRUD:
         doc_id = UUID(str(saved.id))
         session.flush()
 
-        # Mutate the company_profile in-place (simulates user updating company settings)
-        profile_row.legal_name = mutated_name
-        profile_row.address = mutated_address
+        # Mutate the company in-place (simulates admin renaming the company)
+        company_row.legal_name = mutated_name
+        company_row.address = mutated_address
         session.flush()
 
         # Reload the billing document and verify snapshot is unchanged

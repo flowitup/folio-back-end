@@ -24,8 +24,11 @@ from app.infrastructure.database.models.invitation import InvitationModel
 from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOrm
 from app.infrastructure.database.models.billing_document import BillingDocumentModel
 from app.infrastructure.database.models.billing_document_template import BillingDocumentTemplateModel
-from app.infrastructure.database.models.company_profile import CompanyProfileModel
+
 from app.infrastructure.database.models.billing_number_counter import BillingNumberCounterModel
+from app.infrastructure.database.models.company import CompanyModel
+from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from app.infrastructure.database.models.company_invite_token import CompanyInviteTokenModel
 
 __all__ = [
     "Base",
@@ -46,6 +49,8 @@ __all__ = [
     "NoteDismissalOrm",
     "BillingDocumentModel",
     "BillingDocumentTemplateModel",
-    "CompanyProfileModel",
     "BillingNumberCounterModel",
+    "CompanyModel",
+    "UserCompanyAccessModel",
+    "CompanyInviteTokenModel",
 ]

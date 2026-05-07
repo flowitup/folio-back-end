@@ -158,9 +158,6 @@ def rate_limit_app():
         from app.infrastructure.database.repositories.sqlalchemy_billing_template_repository import (
             SqlAlchemyBillingTemplateRepository,
         )
-        from app.infrastructure.database.repositories.sqlalchemy_company_profile_repository import (
-            SqlAlchemyCompanyProfileRepository,
-        )
         from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
             SqlAlchemyBillingNumberCounterRepository,
         )
@@ -183,30 +180,48 @@ def rate_limit_app():
             GetTemplateUseCase,
             DeleteTemplateUseCase,
             ApplyTemplateToCreateDocumentUseCase,
-            GetCompanyProfileUseCase,
-            UpsertCompanyProfileUseCase,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_company_repository import (
+            SqlAlchemyCompanyRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
+            SqlAlchemyUserCompanyAccessRepository,
         )
 
         _c = _get_container()
         _doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
         _tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
-        _profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
         _counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
         _pdf_renderer = ReportLabBillingDocumentPdfRenderer()
+        _company_repo = SqlAlchemyCompanyRepository(db.session)
+        _access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
 
         _c.billing_document_repo = _doc_repo
         _c.billing_template_repo = _tpl_repo
-        _c.company_profile_repo = _profile_repo
         _c.billing_counter_repo = _counter_repo
         _c.billing_pdf_renderer = _pdf_renderer
+        _c.company_repo = _company_repo
+        _c.user_company_access_repo = _access_repo
         _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
-            doc_repo=_doc_repo, counter_repo=_counter_repo, profile_repo=_profile_repo
+            doc_repo=_doc_repo,
+            counter_repo=_counter_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
-            doc_repo=_doc_repo, counter_repo=_counter_repo, profile_repo=_profile_repo
+            doc_repo=_doc_repo,
+            counter_repo=_counter_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
-            doc_repo=_doc_repo, counter_repo=_counter_repo, profile_repo=_profile_repo
+            doc_repo=_doc_repo,
+            counter_repo=_counter_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
         _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(doc_repo=_doc_repo)
         _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(doc_repo=_doc_repo)
@@ -225,10 +240,10 @@ def rate_limit_app():
             doc_repo=_doc_repo,
             template_repo=_tpl_repo,
             counter_repo=_counter_repo,
-            profile_repo=_profile_repo,
+            project_repo=None,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
         )
-        _c.get_company_profile_usecase = GetCompanyProfileUseCase(profile_repo=_profile_repo)
-        _c.upsert_company_profile_usecase = UpsertCompanyProfileUseCase(profile_repo=_profile_repo)
 
         yield test_app
 
@@ -255,23 +270,67 @@ def rl_token(rl_client, rate_limit_app):
 
 
 @pytest.fixture
-def rl_doc(rl_client, rl_token):
-    """Seed company profile + billing doc for rate-limit tests."""
-    rl_client.put(
-        "/api/v1/company-profile",
-        json={"legal_name": "RL Co", "address": "1 rue Test"},
-        headers=_auth(rl_token),
+def rl_doc(rl_client, rl_token, rate_limit_app):
+    """Seed company + billing doc for rate-limit tests (phase-05: company_id required)."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from app import db
+    from app.domain.companies.company import Company
+    from app.domain.companies.user_company_access import UserCompanyAccess
+    from app.infrastructure.database.repositories.sqlalchemy_company_repository import (
+        SqlAlchemyCompanyRepository,
     )
+    from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
+        SqlAlchemyUserCompanyAccessRepository,
+    )
+    from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+
+    # Resolve rl_admin user_id from DB
+    with rate_limit_app.app_context():
+        user_repo = SQLAlchemyUserRepository(db.session)
+        user = user_repo.find_by_email(rate_limit_app._rl_admin_email)
+        admin_user_id = user.id
+
+        # Create company + attach user directly via repos (avoids needing companies use-cases)
+        now = datetime.now(timezone.utc)
+        company_id = _uuid.uuid4()
+        company = Company(
+            id=company_id,
+            legal_name="RL Co",
+            address="1 rue Test",
+            siret=None,
+            tva_number=None,
+            iban=None,
+            bic=None,
+            logo_url=None,
+            default_payment_terms=None,
+            prefix_override=None,
+            created_by=admin_user_id,
+            created_at=now,
+            updated_at=now,
+        )
+        SqlAlchemyCompanyRepository(db.session).save(company)
+
+        access = UserCompanyAccess(
+            user_id=admin_user_id,
+            company_id=company_id,
+            is_primary=True,
+            attached_at=now,
+        )
+        SqlAlchemyUserCompanyAccessRepository(db.session).save(access)
+        db.session.commit()
+
     resp = rl_client.post(
         "/api/v1/billing-documents",
         json={
             "kind": "devis",
+            "company_id": str(company_id),
             "recipient_name": "RL Client",
             "items": [{"description": "X", "quantity": "1", "unit_price": "100", "vat_rate": "20"}],
         },
         headers=_auth(rl_token),
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 201, resp.get_data(as_text=True)
     return resp.get_json()
 
 

@@ -9,6 +9,10 @@ see row=None and both try to INSERT).
 On SQLite (unit/integration tests): falls back to the legacy SELECT FOR UPDATE path.
 SQLite does not support row-level locking so concurrent tests are meaningless anyway,
 and the simple path keeps test fakes working without dialect-specific SQL.
+
+Schema change (phase 03 — companies module):
+  Old PK key: (user_id, kind, year)   → user_id arg passed to next_value()
+  New PK key: (company_id, kind, year) → company_id arg passed to next_value()
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ class SqlAlchemyBillingNumberCounterRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def next_value(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+    def next_value(self, company_id: UUID, kind: BillingDocumentKind, year: int) -> int:
         """Return the next sequence value (1-based, monotonically increasing).
 
         Postgres path (atomic, race-free):
@@ -46,8 +50,6 @@ class SqlAlchemyBillingNumberCounterRepository:
         The session must be inside an active transaction at call time; the
         caller's commit finalises the lock release.
         """
-        # Detect dialect: session.bind may be None with scoped sessions; fall back
-        # to checking the engine via get_bind() which resolves scoped session engines.
         try:
             bind = self._session.get_bind()
             dialect = bind.dialect.name
@@ -55,18 +57,18 @@ class SqlAlchemyBillingNumberCounterRepository:
             dialect = "sqlite"  # safe fallback for test environments
 
         if dialect == "postgresql":
-            return self._next_value_postgres(user_id, kind, year)
-        return self._next_value_sqlite_fallback(user_id, kind, year)
+            return self._next_value_postgres(company_id, kind, year)
+        return self._next_value_sqlite_fallback(company_id, kind, year)
 
-    def _next_value_postgres(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
-        """Atomic Postgres upsert — eliminates first-insert race (H3+M1)."""
+    def _next_value_postgres(self, company_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+        """Atomic Postgres upsert — eliminates first-insert race."""
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
         stmt = (
             pg_insert(BillingNumberCounterModel)
-            .values(user_id=user_id, kind=kind.value, year=year, next_value=2)
+            .values(company_id=company_id, kind=kind.value, year=year, next_value=2)
             .on_conflict_do_update(
-                index_elements=["user_id", "kind", "year"],
+                index_elements=["company_id", "kind", "year"],
                 set_={"next_value": BillingNumberCounterModel.next_value + 1},
             )
             .returning(BillingNumberCounterModel.next_value)
@@ -75,12 +77,12 @@ class SqlAlchemyBillingNumberCounterRepository:
         # new_next is the value now stored; the value claimed is one less.
         return new_next - 1
 
-    def _next_value_sqlite_fallback(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+    def _next_value_sqlite_fallback(self, company_id: UUID, kind: BillingDocumentKind, year: int) -> int:
         """Legacy SELECT FOR UPDATE path — SQLite / test environments only."""
         stmt = (
             select(BillingNumberCounterModel)
             .where(
-                BillingNumberCounterModel.user_id == user_id,
+                BillingNumberCounterModel.company_id == company_id,
                 BillingNumberCounterModel.kind == kind.value,
                 BillingNumberCounterModel.year == year,
             )
@@ -91,7 +93,7 @@ class SqlAlchemyBillingNumberCounterRepository:
         if row is None:
             # First sequence number is 1; store 2 as the *next* value to return.
             row = BillingNumberCounterModel(
-                user_id=user_id,
+                company_id=company_id,
                 kind=kind.value,
                 year=year,
                 next_value=2,

@@ -1,4 +1,9 @@
-"""CreateBillingDocumentUseCase — create a new billing document from scratch."""
+"""CreateBillingDocumentUseCase — create a new billing document from scratch.
+
+Phase 05 tightening:
+  - company_id is now REQUIRED in CreateBillingDocumentInput.
+  - Legacy CompanyProfile / company_profile_routes retired in C2 cleanup.
+"""
 
 from __future__ import annotations
 
@@ -6,17 +11,20 @@ from datetime import datetime, timezone
 
 from app.application.billing._helpers import (
     _build_doc_from_inputs,
+    _effective_prefix_from_company,
     _items_from_inputs,
-    _snapshot_issuer,
+    _snapshot_issuer_from_company,
 )
 from app.application.billing.dtos import BillingDocumentResponse, CreateBillingDocumentInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
-    CompanyProfileRepositoryPort,
+    CompanyRepositoryPort,
     ProjectReadPort,
     TransactionalSessionPort,
+    UserCompanyAccessRepositoryPort,
     assert_project_read_access,
+    assert_user_company_access,
 )
 from app.domain.billing.exceptions import MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
@@ -26,7 +34,7 @@ class CreateBillingDocumentUseCase:
     """Create a new billing document.
 
     Pre-conditions:
-      - User must have a CompanyProfile (raises MissingCompanyProfileError otherwise).
+      - company_id is required; user must be attached to that company.
       - At least one line item required.
       - Number generated atomically via counter repo (SELECT FOR UPDATE).
 
@@ -37,13 +45,15 @@ class CreateBillingDocumentUseCase:
         self,
         doc_repo: BillingDocumentRepositoryPort,
         counter_repo: BillingNumberCounterRepositoryPort,
-        profile_repo: CompanyProfileRepositoryPort,
-        project_repo: ProjectReadPort = None,  # type: ignore[assignment]
+        project_repo: ProjectReadPort,
+        company_repo: CompanyRepositoryPort,
+        access_repo: UserCompanyAccessRepositoryPort,
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
-        self._profile_repo = profile_repo
         self._project_repo = project_repo
+        self._company_repo = company_repo
+        self._access_repo = access_repo
 
     def execute(
         self,
@@ -53,12 +63,19 @@ class CreateBillingDocumentUseCase:
         # 1. Verify project:read access if project_id supplied (H1 — auth boundary)
         assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
 
-        # 2. Require company profile — snapshot issuer info
-        profile = self._profile_repo.find_by_user_id(inp.user_id)
-        if profile is None:
+        # 2. company_id is required — validate attachment and snapshot from Company entity
+        if inp.company_id is None:
             raise MissingCompanyProfileError(inp.user_id)
 
-        issuer_snapshot = _snapshot_issuer(profile)
+        company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
+        if company is None:
+            # repos not wired (unlikely in prod) — surface as missing-profile error
+            raise MissingCompanyProfileError(inp.user_id)
+
+        issuer_snapshot = _snapshot_issuer_from_company(company)
+        effective_prefix = _effective_prefix_from_company(company) or ""
+        counter_key = inp.company_id
+        default_payment_terms = company.default_payment_terms
 
         # 3. Validate + convert items
         if not inp.items:
@@ -73,22 +90,23 @@ class CreateBillingDocumentUseCase:
         # 5. Atomically generate document number
         issue_date = inp.issue_date if inp.issue_date is not None else datetime.now(timezone.utc).date()
         year = issue_date.year
-        sequence = self._counter_repo.next_value(inp.user_id, inp.kind, year)
+        sequence = self._counter_repo.next_value(counter_key, inp.kind, year)
         document_number = next_document_number(
-            prefix_override=profile.effective_prefix,
+            prefix_override=effective_prefix,
             kind=inp.kind,
             year=year,
             sequence=sequence,
         )
 
-        # 6. Resolve payment_terms: use input value or fall back to profile default
+        # 6. Resolve payment_terms: use input value or fall back to company default
         payment_terms = inp.payment_terms
         if payment_terms is None and inp.kind.value == "facture":
-            payment_terms = profile.default_payment_terms
+            payment_terms = default_payment_terms
 
         # 7. Build and persist document
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
+            company_id=inp.company_id,
             kind=inp.kind,
             document_number=document_number,
             issuer_snapshot=issuer_snapshot,

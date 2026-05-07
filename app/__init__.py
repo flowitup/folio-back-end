@@ -114,7 +114,8 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.admin import admin_bp
     from app.api.v1.notes import notes_bp
     from app.api.v1.notifications import notifications_bp
-    from app.api.v1.billing import billing_documents_bp, billing_templates_bp, company_profile_bp
+    from app.api.v1.billing import billing_documents_bp, billing_templates_bp
+    from app.api.v1.companies import companies_bp, users_me_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -131,7 +132,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
-    app.register_blueprint(company_profile_bp, url_prefix="/api/v1")
+    # company_profile_bp retired — table dropped in migration 2d9c35848b9b (C2)
+    app.register_blueprint(companies_bp, url_prefix="/api/v1")
+    app.register_blueprint(users_me_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -274,6 +277,119 @@ def _configure_di_container() -> None:
     )
 
     # -----------------------------------------------------------------------
+    # Companies DI wiring (phase 03)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_company_repository import (
+        SqlAlchemyCompanyRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
+        SqlAlchemyUserCompanyAccessRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_company_invite_token_repository import (
+        SqlAlchemyCompanyInviteTokenRepository,
+    )
+    from app.infrastructure.security.argon2_hasher import Argon2Hasher
+    from app.infrastructure.security.secure_token_generator import SecureTokenGenerator
+    from app.application.companies import (
+        CreateCompanyUseCase as _CreateCompanyUseCase,
+        UpdateCompanyUseCase as _UpdateCompanyUseCase,
+        DeleteCompanyUseCase as _DeleteCompanyUseCase,
+        ListAllCompaniesUseCase as _ListAllCompaniesUseCase,
+        GenerateInviteTokenUseCase as _GenerateInviteTokenUseCase,
+        RevokeInviteTokenUseCase as _RevokeInviteTokenUseCase,
+        ListAttachedUsersUseCase as _ListAttachedUsersUseCase,
+        BootAttachedUserUseCase as _BootAttachedUserUseCase,
+        ListMyCompaniesUseCase as _ListMyCompaniesUseCase,
+        GetCompanyUseCase as _GetCompanyUseCase,
+        RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
+        SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
+        DetachCompanyUseCase as _DetachCompanyUseCase,
+    )
+    import datetime as _dt
+
+    class _UtcClock:
+        """Minimal ClockPort implementation returning UTC now."""
+
+        def now(self) -> _dt.datetime:
+            return _dt.datetime.now(_dt.timezone.utc)
+
+    _company_repo = SqlAlchemyCompanyRepository(db.session)
+    _access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
+    _token_repo = SqlAlchemyCompanyInviteTokenRepository(db.session)
+    _argon2_hasher = Argon2Hasher()
+    _token_generator = SecureTokenGenerator()
+    _clock = _UtcClock()
+    # Reuse authorization_service as RoleCheckerPort (structurally compatible)
+    _role_checker = _c.authorization_service
+
+    _c.company_repo = _company_repo
+    _c.user_company_access_repo = _access_repo
+    _c.company_invite_token_repo = _token_repo
+
+    # admin use-cases
+    _c.create_company_usecase = _CreateCompanyUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.update_company_usecase = _UpdateCompanyUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.delete_company_usecase = _DeleteCompanyUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.generate_invite_token_usecase = _GenerateInviteTokenUseCase(
+        company_repo=_company_repo,
+        token_repo=_token_repo,
+        hasher=_argon2_hasher,
+        token_generator=_token_generator,
+        clock=_clock,
+        role_checker=_role_checker,
+    )
+    _c.revoke_invite_token_usecase = _RevokeInviteTokenUseCase(
+        company_repo=_company_repo,
+        token_repo=_token_repo,
+        role_checker=_role_checker,
+    )
+    _c.list_attached_users_usecase = _ListAttachedUsersUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+    _c.boot_attached_user_usecase = _BootAttachedUserUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+    # user use-cases
+    _c.list_my_companies_usecase = _ListMyCompaniesUseCase(
+        company_repo=_company_repo,
+        role_checker=_role_checker,
+    )
+    _c.get_company_usecase = _GetCompanyUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+    _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
+        token_repo=_token_repo,
+        access_repo=_access_repo,
+        hasher=_argon2_hasher,
+        clock=_clock,
+    )
+    _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
+        access_repo=_access_repo,
+    )
+    _c.detach_company_usecase = _DetachCompanyUseCase(
+        access_repo=_access_repo,
+    )
+
+    # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)
     # -----------------------------------------------------------------------
     from app.infrastructure.database.repositories.sqlalchemy_billing_document_repository import (
@@ -281,9 +397,6 @@ def _configure_di_container() -> None:
     )
     from app.infrastructure.database.repositories.sqlalchemy_billing_template_repository import (
         SqlAlchemyBillingTemplateRepository,
-    )
-    from app.infrastructure.database.repositories.sqlalchemy_company_profile_repository import (
-        SqlAlchemyCompanyProfileRepository,
     )
     from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
         SqlAlchemyBillingNumberCounterRepository,
@@ -307,13 +420,10 @@ def _configure_di_container() -> None:
         GetTemplateUseCase,
         DeleteTemplateUseCase,
         ApplyTemplateToCreateDocumentUseCase,
-        GetCompanyProfileUseCase,
-        UpsertCompanyProfileUseCase,
     )
 
     _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
     _billing_tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
-    _company_profile_repo = SqlAlchemyCompanyProfileRepository(db.session)
     _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
     _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
     # project_repository is already wired via configure_container
@@ -321,7 +431,6 @@ def _configure_di_container() -> None:
 
     _c.billing_document_repo = _billing_doc_repo
     _c.billing_template_repo = _billing_tpl_repo
-    _c.company_profile_repo = _company_profile_repo
     _c.billing_counter_repo = _billing_counter_repo
     _c.billing_pdf_renderer = _billing_pdf_renderer
 
@@ -329,20 +438,23 @@ def _configure_di_container() -> None:
     _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,  # company_id path
+        access_repo=_access_repo,  # attachment validation
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )
     _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
         doc_repo=_billing_doc_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
@@ -386,14 +498,7 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         template_repo=_billing_tpl_repo,
         counter_repo=_billing_counter_repo,
-        profile_repo=_company_profile_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
-    )
-
-    # company-profile use-cases
-    _c.get_company_profile_usecase = GetCompanyProfileUseCase(
-        profile_repo=_company_profile_repo,
-    )
-    _c.upsert_company_profile_usecase = UpsertCompanyProfileUseCase(
-        profile_repo=_company_profile_repo,
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )

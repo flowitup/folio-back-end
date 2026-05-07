@@ -46,6 +46,7 @@ class ListBillingDocumentsUseCase:
         kind: BillingDocumentKind,
         status: Optional[BillingDocumentStatus] = None,
         project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> ListBillingDocumentsResult:
@@ -57,6 +58,7 @@ class ListBillingDocumentsUseCase:
             kind=kind,
             status=status,
             project_id=project_id,
+            company_id=company_id,
             limit=limit,
             offset=offset,
         )

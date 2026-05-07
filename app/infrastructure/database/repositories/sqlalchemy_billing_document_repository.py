@@ -52,12 +52,14 @@ class SqlAlchemyBillingDocumentRepository:
         kind: BillingDocumentKind,
         status: Optional[BillingDocumentStatus] = None,
         project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents for a user, with unfiltered total count.
 
         Returns (items, total_count).
+        Optional company_id filter restricts results to documents issued by that company.
         """
         base = select(BillingDocumentModel).where(
             BillingDocumentModel.user_id == user_id,
@@ -67,6 +69,8 @@ class SqlAlchemyBillingDocumentRepository:
             base = base.where(BillingDocumentModel.status == status.value)
         if project_id is not None:
             base = base.where(BillingDocumentModel.project_id == project_id)
+        if company_id is not None:
+            base = base.where(BillingDocumentModel.company_id == company_id)
 
         # Total count (no pagination)
         count_stmt = select(func.count()).select_from(base.subquery())

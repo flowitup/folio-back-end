@@ -71,6 +71,7 @@ def serialize_doc_to_orm(doc: BillingDocument, model: "BillingDocumentModel") ->
     """
     model.id = doc.id
     model.user_id = doc.user_id
+    model.company_id = doc.company_id
     model.project_id = doc.project_id
     model.kind = doc.kind.value
     model.document_number = doc.document_number
@@ -114,6 +115,7 @@ def deserialize_orm_to_doc(model: "BillingDocumentModel") -> BillingDocument:
     return BillingDocument(
         id=UUID(str(model.id)),
         user_id=UUID(str(model.user_id)),
+        company_id=UUID(str(model.company_id)) if model.company_id else None,
         project_id=UUID(str(model.project_id)) if model.project_id else None,
         kind=BillingDocumentKind(model.kind),
         document_number=model.document_number,

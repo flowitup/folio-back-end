@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import (
     JSON,
     CheckConstraint,
@@ -14,7 +15,6 @@ from sqlalchemy import (
     Index,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
@@ -92,6 +92,16 @@ class BillingDocumentModel(Base):
     issuer_bic = Column(String(32), nullable=True)
     issuer_logo_url = Column(Text, nullable=True)
 
+    # Company reference — populated at document create time.
+    # NULL for legacy documents created before the companies module migration.
+    # ON DELETE SET NULL: deleting a company preserves historical documents
+    # (issuer_* snapshot columns already capture the needed data for PDFs).
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     source_devis_id = Column(
         UUID(as_uuid=True),
         ForeignKey("billing_documents.id", ondelete="SET NULL"),
@@ -113,6 +123,7 @@ class BillingDocumentModel(Base):
     # Relationships
     user = relationship("UserModel", foreign_keys=[user_id])
     project = relationship("ProjectModel", foreign_keys=[project_id])
+    company = relationship("CompanyModel", foreign_keys=[company_id])
     source_devis = relationship(
         "BillingDocumentModel",
         foreign_keys=[source_devis_id],
@@ -120,11 +131,16 @@ class BillingDocumentModel(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "user_id",
+        # C1 fix: uniqueness scoped to company, not user.
+        # Partial index (WHERE company_id IS NOT NULL) declared in migration
+        # a3f7b8c9d0e1; SQLite tests use a non-partial unique as approximation.
+        Index(
+            "uix_billing_document_company_kind_number",
+            "company_id",
             "kind",
             "document_number",
-            name="uq_billing_document_user_kind_number",
+            unique=True,
+            postgresql_where=sa.text("company_id IS NOT NULL"),
         ),
         CheckConstraint(
             "kind = 'devis' OR validity_until IS NULL",
