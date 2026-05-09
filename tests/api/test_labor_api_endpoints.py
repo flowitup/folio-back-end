@@ -149,6 +149,10 @@ def _summary_url(project_id: str) -> str:
     return f"/api/v1/projects/{project_id}/labor-summary"
 
 
+def _monthly_summary_url(project_id: str) -> str:
+    return f"/api/v1/projects/{project_id}/labor-monthly-summary"
+
+
 # ---------------------------------------------------------------------------
 # Worker routes
 # ---------------------------------------------------------------------------
@@ -478,6 +482,64 @@ class TestLaborEntryRoutes:
         assert "total_banked_hours" in data
         assert "total_bonus_days" in data
         assert "total_bonus_cost" in data
+
+    def test_get_labor_monthly_summary_buckets_across_months(self, labor_client, admin_token, labor_app):
+        """Per-month rollup endpoint returns one row per (year, month) DESC."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Monthly API Worker")
+
+        for d in ("2026-01-15", "2026-02-10", "2026-02-11"):
+            create = labor_client.post(
+                _entries_url(pid),
+                json={"worker_id": worker_id, "date": d, "shift_type": "full"},
+                headers=_auth(admin_token),
+            )
+            assert create.status_code == 201, create.get_json()
+
+        resp = labor_client.get(_monthly_summary_url(pid), headers=_auth(admin_token))
+        assert resp.status_code == 200
+
+        rows = resp.get_json()["rows"]
+        # Filter to the (year, month) buckets touched by this worker so the
+        # test is not coupled to data seeded by other tests in the module.
+        touched = {(r["year"], r["month"]): r for r in rows}
+        assert (2026, 2) in touched
+        assert (2026, 1) in touched
+
+        feb = touched[(2026, 2)]
+        jan = touched[(2026, 1)]
+        # New worker contributes 2 priced days in Feb, 1 in Jan. Other tests
+        # in the module may have added entries for the same months under
+        # different workers, so assert "at least" rather than exact equality.
+        assert feb["total_days"] >= 2
+        assert jan["total_days"] >= 1
+
+        # DESC ordering: Feb before Jan within the response list.
+        ordered_keys = [(r["year"], r["month"]) for r in rows]
+        assert ordered_keys.index((2026, 2)) < ordered_keys.index((2026, 1))
+
+    def test_get_labor_monthly_summary_empty_project_returns_empty_rows(self, labor_client, admin_token, labor_app):
+        """Endpoint returns 200 with rows=[] for a project with no entries."""
+        # Create an isolated project on the fly via the app's session so
+        # the endpoint hits the real route + use case path. PG_UUID columns
+        # need UUID(...) objects on SQLite, not strings.
+        from uuid import UUID as _UUID
+
+        from app import db
+        from app.infrastructure.database.models import ProjectModel
+
+        with labor_app.app_context():
+            empty_project = ProjectModel(
+                name="Monthly Summary Empty Project",
+                owner_id=_UUID(labor_app._test_admin_user_id),
+            )
+            db.session.add(empty_project)
+            db.session.commit()
+            empty_pid = str(empty_project.id)
+
+        resp = labor_client.get(_monthly_summary_url(empty_pid), headers=_auth(admin_token))
+        assert resp.status_code == 200
+        assert resp.get_json() == {"rows": []}
 
     def test_list_entries_with_date_filter(self, labor_client, admin_token, labor_app):
         pid = labor_app._test_project_id

@@ -44,6 +44,7 @@ from app.application.labor import (
     DeleteAttendanceUseCase,
     ListLaborEntriesUseCase,
     GetLaborSummaryUseCase,
+    GetMonthlyLaborSummaryUseCase,
 )
 from app.application.labor.export_labor_usecase import ExportLaborUseCase
 from app.application.invoice.export_invoices_usecase import ExportInvoicesUseCase
@@ -313,6 +314,7 @@ class Container:
     delete_attendance_usecase: Optional[DeleteAttendanceUseCase] = None
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
+    get_monthly_labor_summary_usecase: Optional[GetMonthlyLaborSummaryUseCase] = None
     export_labor_usecase: Optional[ExportLaborUseCase] = None
 
 
@@ -476,6 +478,7 @@ def configure_container(
         container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository)
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
+        container.get_monthly_labor_summary_usecase = GetMonthlyLaborSummaryUseCase(labor_entry_repository)
 
     if worker_repository and labor_entry_repository and project_repository:
         container.export_labor_usecase = ExportLaborUseCase(

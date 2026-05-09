@@ -147,6 +147,21 @@ class LaborSummaryResponse(BaseModel):
     total_bonus_cost: float
 
 
+class MonthlySummaryRowResponse(BaseModel):
+    """One (year, month) bucket of project-wide labor totals."""
+
+    year: int
+    month: int
+    total_days: int
+    total_cost: float
+
+
+class LaborMonthlySummaryResponse(BaseModel):
+    """Per-month labor summary, ordered most-recent first."""
+
+    rows: List[MonthlySummaryRowResponse]
+
+
 class ExportLaborQuery(BaseModel):
     """Query-string schema for GET /projects/<id>/labor-export.
 

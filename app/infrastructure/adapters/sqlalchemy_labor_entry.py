@@ -9,7 +9,11 @@ from sqlalchemy import case as sa_case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.application.labor.ports import ILaborEntryRepository, LaborSummaryRow
+from app.application.labor.ports import (
+    ILaborEntryRepository,
+    LaborSummaryRow,
+    MonthlyLaborSummaryRow,
+)
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
 from app.infrastructure.database.models import LaborEntryModel, WorkerModel
@@ -144,6 +148,50 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 daily_rate=Decimal(str(row.daily_rate)) if row.daily_rate else Decimal("0"),
             )
             for row in rows
+        ]
+
+    def get_monthly_summary(self, project_id: UUID) -> List[MonthlyLaborSummaryRow]:
+        # Same effective_cost expression as get_summary, but rolled up per
+        # (year, month) across every worker on the project. Supplement-only
+        # rows contribute 0 to total_days and 0 to total_cost.
+        shift_multiplier = sa_case(
+            (LaborEntryModel.shift_type == "half", 0.5),
+            (LaborEntryModel.shift_type == "overtime", 1.5),
+            else_=1.0,
+        )
+        shift_cost = func.coalesce(
+            LaborEntryModel.amount_override,
+            WorkerModel.daily_rate * shift_multiplier,
+        )
+        effective_cost = sa_case(
+            (LaborEntryModel.shift_type.is_(None), 0),
+            else_=shift_cost,
+        )
+
+        year_expr = func.extract("year", LaborEntryModel.date)
+        month_expr = func.extract("month", LaborEntryModel.date)
+
+        query = (
+            self._session.query(
+                year_expr.label("year"),
+                month_expr.label("month"),
+                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("total_days"),
+                func.sum(effective_cost).label("total_cost"),
+            )
+            .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
+            .filter(WorkerModel.project_id == project_id)
+            .group_by(year_expr, month_expr)
+            .order_by(year_expr.desc(), month_expr.desc())
+        )
+
+        return [
+            MonthlyLaborSummaryRow(
+                year=int(row.year),
+                month=int(row.month),
+                total_days=int(row.total_days or 0),
+                total_cost=Decimal(str(row.total_cost)) if row.total_cost is not None else Decimal("0"),
+            )
+            for row in query.all()
         ]
 
     def list_by_project_in_range(
