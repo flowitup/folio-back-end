@@ -21,6 +21,8 @@ from app.api.v1.labor.schemas import (
     LaborEntryListResponse,
     LaborSummaryResponse,
     WorkerSummaryRow,
+    LaborMonthlySummaryResponse,
+    MonthlySummaryRowResponse,
 )
 from app.api.v1.projects.decorators import require_permission
 from app.application.labor import (
@@ -29,6 +31,7 @@ from app.application.labor import (
     DeleteAttendanceRequest,
     ListLaborEntriesRequest,
     GetLaborSummaryRequest,
+    GetMonthlyLaborSummaryRequest,
 )
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
@@ -259,5 +262,38 @@ def get_labor_summary(project_id: str):
             total_banked_hours=result.total_banked_hours,
             total_bonus_days=result.total_bonus_days,
             total_bonus_cost=result.total_bonus_cost,
+        ).model_dump()
+    )
+
+
+@labor_bp.route("/projects/<project_id>/labor-monthly-summary", methods=["GET"])
+@jwt_required()
+@require_permission("project:read")
+def get_labor_monthly_summary(project_id: str):
+    """Per-month rollup of labor totals across all workers on a project.
+
+    Powers the Summary tab's all-history view: a list of (year, month) rows
+    ordered most-recent first. The Summary tab uses this when no specific
+    month filter is active; picking a month falls back to the per-worker
+    /labor-summary endpoint.
+    """
+    try:
+        result = get_container().get_monthly_labor_summary_usecase.execute(
+            GetMonthlyLaborSummaryRequest(project_id=UUID(project_id))
+        )
+    except ValueError as e:
+        return _error_response("ValidationError", str(e), 400)
+
+    return jsonify(
+        LaborMonthlySummaryResponse(
+            rows=[
+                MonthlySummaryRowResponse(
+                    year=r.year,
+                    month=r.month,
+                    total_days=r.total_days,
+                    total_cost=r.total_cost,
+                )
+                for r in result.rows
+            ],
         ).model_dump()
     )

@@ -512,6 +512,69 @@ class TestSQLAlchemyLaborEntryRepository:
         assert capped[0].date == date(2026, 9, 5)
         assert capped[1].date == date(2026, 9, 4)
 
+    def test_get_monthly_summary_groups_by_year_and_month(self, entry_repo, worker_repo, sample_project):
+        """get_monthly_summary returns one row per (year, month) ordered DESC."""
+        from app.domain.entities.worker import Worker
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Monthly Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        # 3 entries in Mar 2026, 2 entries in Apr 2026, 1 entry in May 2025.
+        # Plus 1 supplement-only row in Apr 2026 — should NOT count toward
+        # total_days or total_cost (matches per-worker summary behavior).
+        entries_data = [
+            (date(2025, 5, 10), "full", 0),
+            (date(2026, 3, 1), "full", 0),
+            (date(2026, 3, 2), "full", 0),
+            (date(2026, 3, 3), "half", 0),
+            (date(2026, 4, 1), "full", 0),
+            (date(2026, 4, 2), "full", 0),
+            (date(2026, 4, 5), None, 4),  # supplement-only row
+        ]
+        for d, shift, sup in entries_data:
+            entry_repo.create(
+                LaborEntry(
+                    id=uuid4(),
+                    worker_id=worker.id,
+                    date=d,
+                    shift_type=shift,
+                    supplement_hours=sup,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+
+        rows = entry_repo.get_monthly_summary(sample_project.id)
+
+        # Three buckets, ordered most-recent first.
+        assert len(rows) == 3
+        assert (rows[0].year, rows[0].month) == (2026, 4)
+        assert (rows[1].year, rows[1].month) == (2026, 3)
+        assert (rows[2].year, rows[2].month) == (2025, 5)
+
+        # April: 2 priced (full + full), supplement-only row is excluded.
+        assert rows[0].total_days == 2
+        assert rows[0].total_cost == Decimal("200.00")  # 2 × 100 (full)
+
+        # March: 2 full + 1 half = 2.5 priced days. days_worked counts
+        # priced rows (=3); cost is 2×100 + 0.5×100 = 250.
+        assert rows[1].total_days == 3
+        assert rows[1].total_cost == Decimal("250.00")
+
+        # May 2025: single full day.
+        assert rows[2].total_days == 1
+        assert rows[2].total_cost == Decimal("100.00")
+
+    def test_get_monthly_summary_returns_empty_when_no_entries(self, entry_repo, sample_project):
+        """get_monthly_summary on a project without entries returns []."""
+        assert entry_repo.get_monthly_summary(sample_project.id) == []
+
     def test_list_by_project_no_limit_returns_all(self, entry_repo, worker_repo, sample_project):
         """list_by_project() without limit returns every matching row."""
         from app.domain.entities.worker import Worker

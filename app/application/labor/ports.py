@@ -23,6 +23,22 @@ class LaborSummaryRow:
     daily_rate: Decimal = Decimal("0")  # worker's base rate; used for bonus-cost computation
 
 
+@dataclass
+class MonthlyLaborSummaryRow:
+    """Aggregated labor cost per (year, month) across every worker on a project.
+
+    Used by the Summary tab to render a year-grouped monthly breakdown when
+    no specific month is selected. Bonus-day cost is intentionally NOT
+    included here — those are derived in the per-worker use case from
+    banked_hours, which doesn't roll up cleanly into monthly buckets.
+    """
+
+    year: int
+    month: int
+    total_days: int  # priced shifts (shift_type IS NOT NULL); supplement-only rows excluded
+    total_cost: Decimal
+
+
 class IWorkerRepository(ABC):
     """Port for worker persistence operations."""
 
@@ -115,5 +131,16 @@ class ILaborEntryRepository(ABC):
         """List all entries for a project within the inclusive date range.
 
         Ordered by date ASC, then worker_id ASC for deterministic export output.
+        """
+        ...
+
+    @abstractmethod
+    def get_monthly_summary(
+        self,
+        project_id: UUID,
+    ) -> List[MonthlyLaborSummaryRow]:
+        """Aggregate labor totals per (year, month) for the whole project.
+
+        Ordered (year DESC, month DESC) — most recent month first.
         """
         ...
