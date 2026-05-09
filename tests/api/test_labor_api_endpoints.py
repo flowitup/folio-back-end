@@ -453,6 +453,17 @@ class TestLaborEntryRoutes:
         resp = labor_client.delete(_entry_url(pid, entry_id), headers=_auth(admin_token))
         assert resp.status_code == 204
 
+        # Regression: a 204 alone is not proof of deletion — verify the row
+        # is actually gone via the list endpoint. The earlier version of
+        # delete() returned 204 in production but never committed.
+        list_resp = labor_client.get(
+            _entries_url(pid) + "?from=2026-04-01&to=2026-04-30",
+            headers=_auth(admin_token),
+        )
+        assert list_resp.status_code == 200
+        ids = [e["id"] for e in list_resp.get_json()["entries"]]
+        assert entry_id not in ids
+
     def test_delete_attendance_not_found(self, labor_client, admin_token, labor_app):
         pid = labor_app._test_project_id
         resp = labor_client.delete(_entry_url(pid, str(uuid4())), headers=_auth(admin_token))

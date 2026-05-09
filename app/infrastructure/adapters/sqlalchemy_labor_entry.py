@@ -74,8 +74,15 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         return entry
 
     def delete(self, entry_id: UUID) -> bool:
-        result = self._session.query(LaborEntryModel).filter_by(id=entry_id).delete()
-        return result > 0
+        # Load the entity then session.delete + commit. bulk-query .delete()
+        # without commit() leaves the unit-of-work open and the row survives
+        # request end (same bug class as PR #29 on project repo).
+        entry = self._session.query(LaborEntryModel).filter_by(id=entry_id).first()
+        if entry is None:
+            return False
+        self._session.delete(entry)
+        self._session.commit()
+        return True
 
     def get_summary(
         self,
