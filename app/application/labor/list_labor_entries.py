@@ -28,6 +28,10 @@ class ListLaborEntriesRequest:
     date_from: Optional[date] = None
     date_to: Optional[date] = None
     worker_id: Optional[UUID] = None
+    # Cap returned rows to the most recent N. The route enforces a default
+    # (500) and an upper bound (1000) — keep this Optional so callers that
+    # genuinely want everything (e.g. exports) can pass None.
+    limit: Optional[int] = None
 
 
 class ListLaborEntriesUseCase:
@@ -51,6 +55,7 @@ class ListLaborEntriesUseCase:
             date_from=request.date_from,
             date_to=request.date_to,
             worker_id=request.worker_id,
+            limit=request.limit,
         )
 
         result = []
