@@ -478,3 +478,64 @@ class TestSQLAlchemyLaborEntryRepository:
     def test_delete_returns_false_when_missing(self, entry_repo):
         """Repository.delete() returns False when no row matches."""
         assert entry_repo.delete(uuid4()) is False
+
+    def test_list_by_project_respects_limit(self, entry_repo, worker_repo, sample_project):
+        """list_by_project(limit=N) returns at most N rows, most recent first."""
+        from app.domain.entities.worker import Worker
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Limit Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        # Insert 5 entries on 5 distinct dates
+        for day in range(1, 6):
+            entry_repo.create(
+                LaborEntry(
+                    id=uuid4(),
+                    worker_id=worker.id,
+                    date=date(2026, 9, day),
+                    shift_type="full",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+
+        capped = entry_repo.list_by_project(sample_project.id, limit=2)
+
+        assert len(capped) == 2
+        # Order is date desc — most recent two are Sep 5 and Sep 4
+        assert capped[0].date == date(2026, 9, 5)
+        assert capped[1].date == date(2026, 9, 4)
+
+    def test_list_by_project_no_limit_returns_all(self, entry_repo, worker_repo, sample_project):
+        """list_by_project() without limit returns every matching row."""
+        from app.domain.entities.worker import Worker
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Unbounded Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        for day in range(1, 4):
+            entry_repo.create(
+                LaborEntry(
+                    id=uuid4(),
+                    worker_id=worker.id,
+                    date=date(2026, 10, day),
+                    shift_type="full",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+
+        all_rows = entry_repo.list_by_project(sample_project.id)
+        assert len(all_rows) == 3

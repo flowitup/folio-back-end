@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Optional
 from uuid import UUID
 
 from flask import jsonify, request
@@ -46,14 +47,40 @@ def _parse_date(date_str: str) -> date:
         raise ValueError(f"Invalid date format: {date_str}. Expected YYYY-MM-DD")
 
 
+# Default cap on the unbounded list endpoint. Anything larger should use the
+# month filter or the export endpoint. 500 keeps a year of daily entries for
+# ~1.5 workers in scope, which covers the typical attendance-table view.
+LABOR_ENTRIES_DEFAULT_LIMIT = 500
+LABOR_ENTRIES_MAX_LIMIT = 1000
+
+
+def _parse_list_limit(raw: Optional[str]) -> int:
+    """Parse the optional ?limit= query arg with sensible defaults + clamp."""
+    if raw is None or raw == "":
+        return LABOR_ENTRIES_DEFAULT_LIMIT
+    try:
+        n = int(raw)
+    except ValueError:
+        raise ValueError("limit must be a positive integer")
+    if n <= 0:
+        raise ValueError("limit must be a positive integer")
+    return min(n, LABOR_ENTRIES_MAX_LIMIT)
+
+
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
 def list_labor_entries(project_id: str):
-    """List labor entries for a project with optional filters."""
+    """List labor entries for a project with optional filters.
+
+    A default ``limit`` of 500 most-recent rows is applied so callers that
+    omit the date filters (the attendance table's "all history" view) stay
+    bounded. Pass ``?limit=N`` (1–1000) to override.
+    """
     date_from = request.args.get("from")
     date_to = request.args.get("to")
     worker_id = request.args.get("worker_id")
+    limit_raw = request.args.get("limit")
 
     try:
         entries = get_container().list_labor_entries_usecase.execute(
@@ -62,6 +89,7 @@ def list_labor_entries(project_id: str):
                 date_from=_parse_date(date_from) if date_from else None,
                 date_to=_parse_date(date_to) if date_to else None,
                 worker_id=UUID(worker_id) if worker_id else None,
+                limit=_parse_list_limit(limit_raw),
             )
         )
     except ValueError as e:

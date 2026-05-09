@@ -72,8 +72,13 @@ class ILaborEntryRepository(ABC):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
+        limit: Optional[int] = None,
     ) -> List[LaborEntry]:
-        """List entries for a project with optional filters."""
+        """List entries for a project with optional filters.
+
+        When ``limit`` is set, returns at most that many rows ordered by date
+        descending — i.e. the most recent ``limit`` entries.
+        """
         ...
 
     @abstractmethod

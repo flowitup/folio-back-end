@@ -495,6 +495,59 @@ class TestLaborEntryRoutes:
         )
         assert resp.status_code == 400
 
+    def test_list_entries_default_unbounded_returns_multi_month_history(self, labor_client, admin_token, labor_app):
+        """No from/to → returns rows across multiple months (the new attendance default)."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "All History Worker")
+
+        # Create one entry in two distinct months.
+        for d in ("2026-02-15", "2026-03-15"):
+            create = labor_client.post(
+                _entries_url(pid),
+                json={"worker_id": worker_id, "date": d, "shift_type": "full"},
+                headers=_auth(admin_token),
+            )
+            assert create.status_code == 201, create.get_json()
+
+        resp = labor_client.get(_entries_url(pid), headers=_auth(admin_token))
+
+        assert resp.status_code == 200
+        dates = {e["date"] for e in resp.get_json()["entries"] if e["worker_id"] == worker_id}
+        assert "2026-02-15" in dates
+        assert "2026-03-15" in dates
+
+    def test_list_entries_explicit_limit_caps_response(self, labor_client, admin_token, labor_app):
+        """?limit=N returns at most N rows (most recent)."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Limit Worker")
+
+        for d in ("2026-06-01", "2026-06-02", "2026-06-03"):
+            create = labor_client.post(
+                _entries_url(pid),
+                json={"worker_id": worker_id, "date": d, "shift_type": "full"},
+                headers=_auth(admin_token),
+            )
+            assert create.status_code == 201, create.get_json()
+
+        resp = labor_client.get(
+            _entries_url(pid) + f"?worker_id={worker_id}&limit=2",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        entries = resp.get_json()["entries"]
+        assert len(entries) == 2
+        # Order: date desc → 06-03, 06-02
+        assert entries[0]["date"] == "2026-06-03"
+        assert entries[1]["date"] == "2026-06-02"
+
+    def test_list_entries_invalid_limit(self, labor_client, admin_token, labor_app):
+        """?limit=0 / non-int → 400."""
+        pid = labor_app._test_project_id
+        resp = labor_client.get(_entries_url(pid) + "?limit=0", headers=_auth(admin_token))
+        assert resp.status_code == 400
+        resp = labor_client.get(_entries_url(pid) + "?limit=abc", headers=_auth(admin_token))
+        assert resp.status_code == 400
+
     def test_log_attendance_worker_not_found(self, labor_client, admin_token, labor_app):
         pid = labor_app._test_project_id
         resp = labor_client.post(

@@ -50,6 +50,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
+        limit: Optional[int] = None,
     ) -> List[LaborEntry]:
         query = self._session.query(LaborEntryModel).join(WorkerModel).filter(WorkerModel.project_id == project_id)
         if date_from:
@@ -59,7 +60,10 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         if worker_id:
             query = query.filter(LaborEntryModel.worker_id == worker_id)
 
-        models = query.order_by(LaborEntryModel.date.desc()).all()
+        query = query.order_by(LaborEntryModel.date.desc())
+        if limit is not None and limit > 0:
+            query = query.limit(limit)
+        models = query.all()
         return [self._to_entity(m) for m in models]
 
     def update(self, entry: LaborEntry) -> LaborEntry:
