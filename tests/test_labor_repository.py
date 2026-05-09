@@ -450,3 +450,31 @@ class TestSQLAlchemyLaborEntryRepository:
         assert result.supplement_hours == 6
         assert result.shift_type == "half"
         assert result.note == "original note"
+
+    def test_delete_persists_after_commit(self, entry_repo, worker_repo, sample_worker_entity, session):
+        """Regression: delete() must commit so the row is gone after request end.
+
+        Mirrors PR #29 on SQLAlchemyProjectRepository — bulk query.delete()
+        without session.commit() left the unit-of-work uncommitted, so the
+        DELETE endpoint returned 204 in production but the row survived.
+        """
+        worker_repo.create(sample_worker_entity)
+        entry = LaborEntry(
+            id=uuid4(),
+            worker_id=sample_worker_entity.id,
+            date=date(2026, 8, 1),
+            shift_type="full",
+            created_at=datetime.now(timezone.utc),
+        )
+        entry_repo.create(entry)
+
+        deleted = entry_repo.delete(entry.id)
+
+        assert deleted is True
+        # Bypass the SQLAlchemy identity map to confirm the row is gone in DB.
+        session.expire_all()
+        assert session.get(LaborEntryModel, entry.id) is None
+
+    def test_delete_returns_false_when_missing(self, entry_repo):
+        """Repository.delete() returns False when no row matches."""
+        assert entry_repo.delete(uuid4()) is False
