@@ -81,6 +81,65 @@ class InMemoryBillingDocumentRepository:
                 return doc
         return None
 
+    def aggregate_item_suggestions(self, user_id, category, q, limit):
+        """In-memory aggregation — delegates to the SQLite path of the real repo."""
+        from collections import defaultdict
+        from app.application.billing.dtos import (
+            ActivityCategoryDTO,
+            ActivitySuggestionDTO,
+            ActivitySuggestionsResponse,
+        )
+
+        docs = [d for d in self._store.values() if d.user_id == user_id]
+        groups: dict[tuple, list] = defaultdict(list)
+        all_cat_counts: dict[str, int] = defaultdict(int)
+
+        for doc in docs:
+            for item in doc.items:
+                item_cat = item.category
+                desc = item.description
+                if category is not None and item_cat != category:
+                    continue
+                if q and not desc.lower().startswith(q.lower()):
+                    continue
+                groups[(item_cat, desc)].append((doc.created_at, None, str(item.unit_price), str(item.vat_rate)))
+                if item_cat:
+                    all_cat_counts[item_cat] += 1
+
+        # Build suggestions
+        suggestion_list = []
+        for (item_cat, desc), entries in groups.items():
+            entries.sort(key=lambda e: e[0] or "", reverse=True)
+            last = entries[0]
+            suggestion_list.append(
+                ActivitySuggestionDTO(
+                    description=desc,
+                    category=item_cat,
+                    frequency=len(entries),
+                    last_unit=last[1],
+                    last_unit_price=last[2],
+                    last_vat_rate=last[3],
+                )
+            )
+        suggestion_list.sort(key=lambda s: (-s.frequency, s.description))
+
+        # Category counts (unfiltered)
+        all_cat_counts2: dict[str, int] = defaultdict(int)
+        for doc in docs:
+            for item in doc.items:
+                if item.category:
+                    all_cat_counts2[item.category] += 1
+
+        categories = sorted(
+            [ActivityCategoryDTO(name=k, frequency=v) for k, v in all_cat_counts2.items()],
+            key=lambda c: c.name,
+        )[:50]
+
+        return ActivitySuggestionsResponse(
+            categories=categories,
+            suggestions=suggestion_list[:limit],
+        )
+
 
 class InMemoryBillingTemplateRepository:
     """Dict-backed billing template store for unit tests."""

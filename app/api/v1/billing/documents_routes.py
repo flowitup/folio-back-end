@@ -32,6 +32,7 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.billing import billing_documents_bp
 from app.api.v1.billing.decorators import require_billing_document_owner
 from app.api.v1.billing.schemas import (
+    ActivitySuggestionsQuery,
     ApplyTemplateRequest,
     CloneRequest,
     ConvertRequest,
@@ -480,6 +481,49 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
     response.headers["Content-Disposition"] = content_disposition
     response.headers["Cache-Control"] = "no-store, must-revalidate"
     response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Activity suggestions (GET, polling-friendly)
+# ---------------------------------------------------------------------------
+
+
+@billing_documents_bp.route("/billing-documents/activity-suggestions", methods=["GET"])
+@jwt_required()
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def get_activity_suggestions():
+    """Return line-item suggestions aggregated from the requester's documents.
+
+    Query params: category (optional), q (optional prefix), limit (default 20, max 100).
+    Response headers include Cache-Control: no-cache, must-revalidate.
+    """
+    try:
+        params = ActivitySuggestionsQuery.model_validate(request.args.to_dict())
+    except ValidationError as exc:
+        return format_validation_error(exc)
+
+    user_id = UUID(get_jwt_identity())
+
+    try:
+        result = get_container().list_activity_suggestions_usecase.execute(
+            user_id=user_id,
+            category=params.category,
+            q=params.q,
+            limit=params.limit,
+        )
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
+
+    import dataclasses
+
+    response = jsonify(
+        {
+            "categories": [dataclasses.asdict(c) for c in result.categories],
+            "suggestions": [dataclasses.asdict(s) for s in result.suggestions],
+        }
+    )
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 

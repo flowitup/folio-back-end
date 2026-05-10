@@ -407,6 +407,7 @@ def _configure_di_container() -> None:
     from app.application.billing import (
         CreateBillingDocumentUseCase,
         ImportBillingDocumentUseCase,
+        ListActivitySuggestionsUseCase,
         CloneBillingDocumentUseCase,
         ConvertDevisToFactureUseCase,
         UpdateBillingDocumentUseCase,
@@ -448,6 +449,9 @@ def _configure_di_container() -> None:
         counter_repo=_billing_counter_repo,
         company_repo=_company_repo,
         access_repo=_access_repo,
+    )
+    _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
+        doc_repo=_billing_doc_repo,
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,

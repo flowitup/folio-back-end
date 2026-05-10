@@ -175,6 +175,19 @@ class UpdateTemplateRequest(_StrictBase):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Activity suggestions schemas (phase 04)
+# ---------------------------------------------------------------------------
+
+
+class ActivitySuggestionsQuery(_StrictBase):
+    """Query parameters for GET /billing-documents/activity-suggestions."""
+
+    category: Optional[str] = Field(None, max_length=120)
+    q: Optional[str] = Field(None, max_length=200)
+    limit: int = Field(20, ge=1, le=100)
+
+
 class UpsertCompanyProfileRequest(_StrictBase):
     """Request body for PUT /company-profile."""
 

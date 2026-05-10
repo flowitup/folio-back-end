@@ -342,3 +342,36 @@ class BillingTemplateResponse:
             terms=tpl.terms,
             default_vat_rate=tpl.default_vat_rate,
         )
+
+
+# ---------------------------------------------------------------------------
+# Activity suggestions DTOs (phase 04)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ActivityCategoryDTO:
+    """A distinct category used by the requester's billing documents."""
+
+    name: str
+    frequency: int
+
+
+@dataclass(frozen=True)
+class ActivitySuggestionDTO:
+    """Aggregated suggestion for a (category, description) pair."""
+
+    description: str
+    frequency: int
+    category: Optional[str] = None
+    last_unit: Optional[str] = None
+    last_unit_price: Optional[str] = None  # Decimal as string for precision
+    last_vat_rate: Optional[str] = None  # Decimal as string for precision
+
+
+@dataclass(frozen=True)
+class ActivitySuggestionsResponse:
+    """Response DTO for ListActivitySuggestionsUseCase."""
+
+    categories: list[ActivityCategoryDTO]
+    suggestions: list[ActivitySuggestionDTO]

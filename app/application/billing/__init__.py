@@ -28,6 +28,7 @@ from app.application.billing.list_templates_usecase import ListTemplatesUseCase
 from app.application.billing.get_template_usecase import GetTemplateUseCase
 from app.application.billing.delete_template_usecase import DeleteTemplateUseCase
 from app.application.billing.apply_template_to_create_document_usecase import ApplyTemplateToCreateDocumentUseCase
+from app.application.billing.list_activity_suggestions_usecase import ListActivitySuggestionsUseCase
 
 # --- DTOs ---
 from app.application.billing.dtos import (
@@ -35,6 +36,9 @@ from app.application.billing.dtos import (
     CreateBillingDocumentInput,
     ImportBillingDocumentInput,
     UpdateBillingDocumentInput,
+    ActivitySuggestionsResponse,
+    ActivitySuggestionDTO,
+    ActivityCategoryDTO,
     CloneBillingDocumentInput,
     ConvertDevisToFactureInput,
     UpdateStatusInput,
@@ -94,11 +98,15 @@ __all__ = [
     "GetTemplateUseCase",
     "DeleteTemplateUseCase",
     "ApplyTemplateToCreateDocumentUseCase",
+    "ListActivitySuggestionsUseCase",
     # DTOs
     "ItemInput",
     "CreateBillingDocumentInput",
     "ImportBillingDocumentInput",
     "UpdateBillingDocumentInput",
+    "ActivitySuggestionsResponse",
+    "ActivitySuggestionDTO",
+    "ActivityCategoryDTO",
     "CloneBillingDocumentInput",
     "ConvertDevisToFactureInput",
     "UpdateStatusInput",
