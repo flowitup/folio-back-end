@@ -246,6 +246,19 @@ class BillingDocumentPdfRendererPort(Protocol):
         ...
 
 
+class BillingDocumentXlsxRendererPort(Protocol):
+    """XLSX rendering contract for billing documents.
+
+    Mirrors the source-format spreadsheet (issuer header → doc number →
+    recipient block → project description → issue date → items table with
+    section dividers → totals → bank coordinates).
+    """
+
+    def render(self, doc: BillingDocument) -> bytes:
+        """Render a billing document to an XLSX byte string."""
+        ...
+
+
 class TransactionalSessionPort(Protocol):
     """Minimal session contract shared by all mutating billing use-cases.
 

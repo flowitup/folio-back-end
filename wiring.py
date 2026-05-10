@@ -115,6 +115,7 @@ from app.application.billing import (
     GetBillingDocumentUseCase,
     DeleteBillingDocumentUseCase,
     RenderBillingDocumentPdfUseCase,
+    RenderBillingDocumentXlsxUseCase,
     CreateTemplateUseCase,
     UpdateTemplateUseCase,
     ListTemplatesUseCase,
@@ -286,6 +287,7 @@ class Container:
     billing_template_repo: Optional[Any] = None  # SqlAlchemyBillingTemplateRepository
     billing_counter_repo: Optional[Any] = None  # SqlAlchemyBillingNumberCounterRepository
     billing_pdf_renderer: Optional[Any] = None  # ReportLabBillingDocumentPdfRenderer
+    billing_xlsx_renderer: Optional[Any] = None  # OpenpyxlBillingDocumentXlsxRenderer
 
     # billing-document use-cases
     create_billing_document_usecase: Optional[CreateBillingDocumentUseCase] = None
@@ -297,6 +299,7 @@ class Container:
     get_billing_document_usecase: Optional[GetBillingDocumentUseCase] = None
     delete_billing_document_usecase: Optional[DeleteBillingDocumentUseCase] = None
     render_billing_document_pdf_usecase: Optional[RenderBillingDocumentPdfUseCase] = None
+    render_billing_document_xlsx_usecase: Optional[RenderBillingDocumentXlsxUseCase] = None
 
     # billing-template use-cases
     create_billing_template_usecase: Optional[CreateTemplateUseCase] = None

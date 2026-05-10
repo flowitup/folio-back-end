@@ -404,6 +404,9 @@ def _configure_di_container() -> None:
     from app.infrastructure.pdf.billing_document_pdf_renderer import (
         ReportLabBillingDocumentPdfRenderer,
     )
+    from app.infrastructure.xlsx.billing_document_xlsx_renderer import (
+        OpenpyxlBillingDocumentXlsxRenderer,
+    )
     from app.application.billing import (
         CreateBillingDocumentUseCase,
         ImportBillingDocumentUseCase,
@@ -416,6 +419,7 @@ def _configure_di_container() -> None:
         GetBillingDocumentUseCase,
         DeleteBillingDocumentUseCase,
         RenderBillingDocumentPdfUseCase,
+        RenderBillingDocumentXlsxUseCase,
         CreateTemplateUseCase,
         UpdateTemplateUseCase,
         ListTemplatesUseCase,
@@ -428,6 +432,7 @@ def _configure_di_container() -> None:
     _billing_tpl_repo = SqlAlchemyBillingTemplateRepository(db.session)
     _billing_counter_repo = SqlAlchemyBillingNumberCounterRepository(db.session)
     _billing_pdf_renderer = ReportLabBillingDocumentPdfRenderer()
+    _billing_xlsx_renderer = OpenpyxlBillingDocumentXlsxRenderer()
     # project_repository is already wired via configure_container
     _project_repo = _c.project_repository
 
@@ -435,6 +440,7 @@ def _configure_di_container() -> None:
     _c.billing_template_repo = _billing_tpl_repo
     _c.billing_counter_repo = _billing_counter_repo
     _c.billing_pdf_renderer = _billing_pdf_renderer
+    _c.billing_xlsx_renderer = _billing_xlsx_renderer
 
     # billing-document use-cases
     _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
@@ -487,6 +493,10 @@ def _configure_di_container() -> None:
     _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
         doc_repo=_billing_doc_repo,
         pdf_renderer=_billing_pdf_renderer,
+    )
+    _c.render_billing_document_xlsx_usecase = RenderBillingDocumentXlsxUseCase(
+        doc_repo=_billing_doc_repo,
+        xlsx_renderer=_billing_xlsx_renderer,
     )
 
     # billing-template use-cases

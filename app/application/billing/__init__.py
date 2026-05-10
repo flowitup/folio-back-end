@@ -20,6 +20,10 @@ from app.application.billing.list_billing_documents_usecase import (
 from app.application.billing.get_billing_document_usecase import GetBillingDocumentUseCase
 from app.application.billing.delete_billing_document_usecase import DeleteBillingDocumentUseCase
 from app.application.billing.render_billing_document_pdf_usecase import RenderBillingDocumentPdfUseCase, RenderPdfResult
+from app.application.billing.render_billing_document_xlsx_usecase import (
+    RenderBillingDocumentXlsxUseCase,
+    RenderXlsxResult,
+)
 
 # --- Use-cases: templates ---
 from app.application.billing.create_template_usecase import CreateTemplateUseCase
@@ -91,6 +95,8 @@ __all__ = [
     "DeleteBillingDocumentUseCase",
     "RenderBillingDocumentPdfUseCase",
     "RenderPdfResult",
+    "RenderBillingDocumentXlsxUseCase",
+    "RenderXlsxResult",
     # use-cases: templates
     "CreateTemplateUseCase",
     "UpdateTemplateUseCase",
