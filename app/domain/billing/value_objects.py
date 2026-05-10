@@ -9,7 +9,7 @@ serialisation boundaries (never inside domain logic), to avoid premature roundin
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Mapping
+from typing import Mapping, Optional
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,12 +18,27 @@ class BillingDocumentItem:
 
     vat_rate is a percentage expressed as a Decimal, e.g. Decimal("20") for 20% VAT.
     All arithmetic is kept in full Decimal precision; callers quantize at the boundary.
+
+    category is an optional free-text section/trade label (max 120 chars, trimmed).
+    Empty string is coerced to None on construction via __post_init__.
     """
 
     description: str
     quantity: Decimal
     unit_price: Decimal
     vat_rate: Decimal  # percent, e.g. Decimal("20")
+    category: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.category is not None:
+            stripped = self.category.strip()
+            if not stripped:
+                # empty/whitespace-only → None (bypass frozen by using object.__setattr__)
+                object.__setattr__(self, "category", None)
+            elif len(stripped) > 120:
+                raise ValueError("category exceeds 120 characters")
+            else:
+                object.__setattr__(self, "category", stripped)
 
     @property
     def total_ht(self) -> Decimal:

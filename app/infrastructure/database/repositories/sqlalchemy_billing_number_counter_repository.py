@@ -107,3 +107,91 @@ class SqlAlchemyBillingNumberCounterRepository:
         row.next_value = current + 1
         self._session.flush()
         return current
+
+    # ------------------------------------------------------------------
+    # bump_to_at_least — import use-case
+    # ------------------------------------------------------------------
+
+    def bump_to_at_least(
+        self,
+        company_id: UUID,
+        kind: "BillingDocumentKind",
+        year: int,
+        value: int,
+    ) -> int:
+        """Ensure the counter's next_value is at least value+1.
+
+        Postgres: atomic INSERT … ON CONFLICT DO UPDATE SET next_value = GREATEST(…).
+        SQLite: SELECT + conditional UPDATE/INSERT inside begin_nested.
+        Returns the resulting next_value stored in the DB.
+        """
+        try:
+            bind = self._session.get_bind()
+            dialect = bind.dialect.name
+        except Exception:  # noqa: BLE001
+            dialect = "sqlite"
+
+        if dialect == "postgresql":
+            return self._bump_postgres(company_id, kind, year, value)
+        return self._bump_sqlite(company_id, kind, year, value)
+
+    def _bump_postgres(
+        self,
+        company_id: UUID,
+        kind: "BillingDocumentKind",
+        year: int,
+        value: int,
+    ) -> int:
+        """Atomic Postgres upsert: insert or bump next_value to max(existing, value+1)."""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from sqlalchemy import func as sa_func
+
+        desired_next = value + 1
+        stmt = (
+            pg_insert(BillingNumberCounterModel)
+            .values(company_id=company_id, kind=kind.value, year=year, next_value=desired_next)
+            .on_conflict_do_update(
+                index_elements=["company_id", "kind", "year"],
+                set_={
+                    "next_value": sa_func.greatest(
+                        BillingNumberCounterModel.next_value,
+                        desired_next,
+                    )
+                },
+            )
+            .returning(BillingNumberCounterModel.next_value)
+        )
+        result: int = self._session.execute(stmt).scalar_one()
+        return result
+
+    def _bump_sqlite(
+        self,
+        company_id: UUID,
+        kind: "BillingDocumentKind",
+        year: int,
+        value: int,
+    ) -> int:
+        """SQLite path: SELECT + conditional UPDATE or INSERT."""
+        desired_next = value + 1
+        stmt = select(BillingNumberCounterModel).where(
+            BillingNumberCounterModel.company_id == company_id,
+            BillingNumberCounterModel.kind == kind.value,
+            BillingNumberCounterModel.year == year,
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+
+        if row is None:
+            row = BillingNumberCounterModel(
+                company_id=company_id,
+                kind=kind.value,
+                year=year,
+                next_value=desired_next,
+            )
+            self._session.add(row)
+            self._session.flush()
+            return desired_next
+
+        if desired_next > row.next_value:
+            row.next_value = desired_next
+            self._session.flush()
+        return row.next_value

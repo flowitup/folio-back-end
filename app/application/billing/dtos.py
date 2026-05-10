@@ -32,6 +32,7 @@ class ItemInput:
     quantity: Decimal
     unit_price: Decimal
     vat_rate: Decimal  # percent, e.g. Decimal("20")
+    category: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,35 @@ class CreateBillingDocumentInput:
     payment_due_date: Optional[date] = None  # facture; defaults to issue_date+30
     payment_terms: Optional[str] = None  # facture; defaults to company profile
     issue_date: Optional[date] = None  # defaults to today
+
+
+@dataclass(frozen=True)
+class ImportBillingDocumentInput:
+    """Input for ImportBillingDocumentUseCase.
+
+    Mirrors CreateBillingDocumentInput but with a mandatory pre-supplied
+    document_number, explicit status, and optional created_at for historical import.
+    """
+
+    user_id: UUID
+    kind: BillingDocumentKind
+    recipient_name: str
+    items: list[ItemInput]
+    document_number: str  # verbatim, 1..32 chars
+    status: BillingDocumentStatus
+    company_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    recipient_address: Optional[str] = None
+    recipient_email: Optional[str] = None
+    recipient_siret: Optional[str] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+    signature_block_text: Optional[str] = None
+    validity_until: Optional[date] = None
+    payment_due_date: Optional[date] = None
+    payment_terms: Optional[str] = None
+    issue_date: Optional[date] = None
+    created_at: Optional[datetime] = None  # preserve historical timestamp
 
 
 @dataclass(frozen=True)
@@ -177,6 +207,7 @@ class ItemResponse:
     total_ht: Decimal
     total_tva: Decimal
     total_ttc: Decimal
+    category: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +259,7 @@ class BillingDocumentResponse:
                 total_ht=it.total_ht,
                 total_tva=it.total_tva,
                 total_ttc=it.total_ttc,
+                category=it.category,
             )
             for it in doc.items
         ]
@@ -294,6 +326,7 @@ class BillingTemplateResponse:
                 total_ht=it.total_ht,
                 total_tva=it.total_tva,
                 total_ttc=it.total_ttc,
+                category=it.category,
             )
             for it in tpl.items
         ]
@@ -309,3 +342,36 @@ class BillingTemplateResponse:
             terms=tpl.terms,
             default_vat_rate=tpl.default_vat_rate,
         )
+
+
+# ---------------------------------------------------------------------------
+# Activity suggestions DTOs (phase 04)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ActivityCategoryDTO:
+    """A distinct category used by the requester's billing documents."""
+
+    name: str
+    frequency: int
+
+
+@dataclass(frozen=True)
+class ActivitySuggestionDTO:
+    """Aggregated suggestion for a (category, description) pair."""
+
+    description: str
+    frequency: int
+    category: Optional[str] = None
+    last_unit: Optional[str] = None
+    last_unit_price: Optional[str] = None  # Decimal as string for precision
+    last_vat_rate: Optional[str] = None  # Decimal as string for precision
+
+
+@dataclass(frozen=True)
+class ActivitySuggestionsResponse:
+    """Response DTO for ListActivitySuggestionsUseCase."""
+
+    categories: list[ActivityCategoryDTO]
+    suggestions: list[ActivitySuggestionDTO]

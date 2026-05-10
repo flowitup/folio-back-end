@@ -245,3 +245,47 @@ class TestBillingDocumentRepositoryCRUD:
         assert (
             reloaded.issuer_address == original_address
         ), f"Expected snapshot to retain {original_address!r}, got {reloaded.issuer_address!r}"
+
+
+class TestCategorySerializerRoundTrip:
+    """Phase 02 — category round-trip through JSONB serializer."""
+
+    def test_category_round_trips(self, session):
+        """Write item with category → DB → read back → category preserved."""
+        user_id = _seed_user(session)
+        repo = SqlAlchemyBillingDocumentRepository(session)
+        item = BillingDocumentItem(
+            description="Dépose de la toiture existante",
+            quantity=Decimal("1"),
+            unit_price=Decimal("900"),
+            vat_rate=Decimal("10"),
+            category="Toiture",
+        )
+        doc = _make_doc(user_id, items=(item,))
+        saved = repo.save(doc)
+        found = repo.find_by_id(UUID(str(saved.id)))
+        assert found is not None
+        assert found.items[0].category == "Toiture"
+
+    def test_legacy_row_without_category_key_deserializes_to_none(self, session):
+        """Pre-existing row whose JSON lacks 'category' key → category=None."""
+        from app.infrastructure.database.serializers.billing_serializers import deserialize_item
+
+        legacy_dict = {
+            "description": "Old item",
+            "quantity": "2",
+            "unit_price": "100",
+            "vat_rate": "20",
+            # intentionally no 'category' key
+        }
+        item = deserialize_item(legacy_dict)
+        assert item.category is None
+
+    def test_category_none_in_db_round_trips(self, session):
+        """Item with category=None survives serialize→deserialize as None."""
+        user_id = _seed_user(session)
+        repo = SqlAlchemyBillingDocumentRepository(session)
+        doc = _make_doc(user_id)  # default item has no category
+        saved = repo.save(doc)
+        found = repo.find_by_id(UUID(str(saved.id)))
+        assert found.items[0].category is None

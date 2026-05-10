@@ -92,6 +92,7 @@ def _items_from_inputs(item_inputs: list[ItemInput]) -> tuple[BillingDocumentIte
                 quantity=qty,
                 unit_price=price,
                 vat_rate=vat,
+                category=raw.category if hasattr(raw, "category") else None,
             )
         )
     return tuple(result)

@@ -192,3 +192,58 @@ def test_atomic_numbering_concurrent_postgres():
     assert len(results) == N_THREADS, f"Expected {N_THREADS} results, got {len(results)}"
     assert len(set(results)) == N_THREADS, f"Duplicate document numbers detected! values={sorted(results)}"
     assert sorted(results) == list(range(1, N_THREADS + 1))
+
+
+# ---------------------------------------------------------------------------
+# bump_to_at_least — phase 02
+# ---------------------------------------------------------------------------
+
+
+class TestBumpToAtLeast:
+    """Phase 02 — bump_to_at_least semantics (SQLite path)."""
+
+    def _make_repo(self, session):
+        from app.infrastructure.database.repositories.sqlalchemy_billing_number_counter_repository import (
+            SqlAlchemyBillingNumberCounterRepository,
+        )
+
+        return SqlAlchemyBillingNumberCounterRepository(session)
+
+    def test_bump_inserts_absent_row(self, session):
+        """Absent counter row → insert with next_value = value + 1."""
+        repo = self._make_repo(session)
+        company_id = uuid4()
+        result = repo.bump_to_at_least(company_id, BillingDocumentKind.FACTURE, 2025, 7)
+        # next_value stored should be 8 (= value + 1)
+        assert result == 8
+        # next call to next_value should return 8
+        val = repo.next_value(company_id, BillingDocumentKind.FACTURE, 2025)
+        assert val == 8
+
+    def test_bump_higher_value_updates(self, session):
+        """Existing counter with next_value=3, bump to 7 → next_value becomes 8."""
+        repo = self._make_repo(session)
+        company_id = uuid4()
+        # seed counter to next_value=3 (claimed 1, 2; stored 3)
+        repo.next_value(company_id, BillingDocumentKind.DEVIS, 2025)  # → 1, next=2
+        repo.next_value(company_id, BillingDocumentKind.DEVIS, 2025)  # → 2, next=3
+        result = repo.bump_to_at_least(company_id, BillingDocumentKind.DEVIS, 2025, 7)
+        assert result == 8
+
+    def test_bump_lower_value_does_not_regress(self, session):
+        """bump_to_at_least(5) after counter is at 8 → counter stays at 8."""
+        repo = self._make_repo(session)
+        company_id = uuid4()
+        # seed counter to next_value=8
+        repo.bump_to_at_least(company_id, BillingDocumentKind.FACTURE, 2026, 7)
+        # try to bump down
+        result = repo.bump_to_at_least(company_id, BillingDocumentKind.FACTURE, 2026, 3)
+        assert result == 8  # unchanged
+
+    def test_bump_then_next_value_continues_from_bumped(self, session):
+        """After bump(5), next_value() returns 6 (not 1)."""
+        repo = self._make_repo(session)
+        company_id = uuid4()
+        repo.bump_to_at_least(company_id, BillingDocumentKind.FACTURE, 2025, 5)
+        val = repo.next_value(company_id, BillingDocumentKind.FACTURE, 2025)
+        assert val == 6

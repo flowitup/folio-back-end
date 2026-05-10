@@ -7,7 +7,7 @@ Infrastructure implementations live in app/infrastructure/billing/.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from typing import Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 from uuid import UUID
 
 from app.domain.billing.document import BillingDocument
@@ -16,6 +16,9 @@ from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.exceptions import CompanyNotAttachedError, ForbiddenProjectAccessError
 from app.domain.companies.company import Company
 from app.domain.companies.user_company_access import UserCompanyAccess
+
+if TYPE_CHECKING:
+    from app.application.billing.dtos import ActivitySuggestionsResponse
 
 
 class BillingDocumentRepositoryPort(Protocol):
@@ -67,6 +70,26 @@ class BillingDocumentRepositoryPort(Protocol):
         """
         ...
 
+    def aggregate_item_suggestions(
+        self,
+        user_id: UUID,
+        category: Optional[str],
+        q: Optional[str],
+        limit: int,
+    ) -> "ActivitySuggestionsResponse":
+        """Aggregate line-item suggestions across the user's billing documents.
+
+        Returns an ActivitySuggestionsResponse containing:
+          - categories: distinct non-null categories, sorted alphabetically, capped at 50.
+          - suggestions: grouped by (category, description), sorted by frequency DESC
+            then description ASC, with last_* hints from the most recent item.
+
+        category filter: exact match (case-sensitive) when provided.
+        q filter: case-insensitive prefix match on description when provided.
+        limit: max number of suggestions to return (1..100).
+        """
+        ...
+
 
 class BillingTemplateRepositoryPort(Protocol):
     """Persistence contract for BillingDocumentTemplate aggregates."""
@@ -100,11 +123,31 @@ class BillingNumberCounterRepositoryPort(Protocol):
     concurrent creates.
     """
 
-    def next_value(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+    def next_value(self, company_id: UUID, kind: BillingDocumentKind, year: int) -> int:
         """Return the next sequence value (1-based, monotonically increasing).
 
-        Atomically increments the counter for (user_id, kind, year).
+        Atomically increments the counter for (company_id, kind, year).
         Creates the counter row with value=1 if it does not yet exist.
+        """
+        ...
+
+    def bump_to_at_least(
+        self,
+        company_id: UUID,
+        kind: BillingDocumentKind,
+        year: int,
+        value: int,
+    ) -> int:
+        """Ensure the counter for (company_id, kind, year) is at least *value*.
+
+        Semantics: if the row does not exist, insert it with next_value=value+1
+        (so the next call to next_value() returns value+1). If the row exists
+        and its next_value is already greater, leave it unchanged.
+
+        Returns the resulting next_value stored in the DB.
+
+        Used by ImportBillingDocumentUseCase to keep the auto-number sequence
+        sane after importing historical documents with explicit numbers.
         """
         ...
 

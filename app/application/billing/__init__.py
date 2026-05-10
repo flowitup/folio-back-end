@@ -8,6 +8,7 @@ No Flask / SQLAlchemy / infrastructure imports here.
 
 # --- Use-cases: billing documents ---
 from app.application.billing.create_billing_document_usecase import CreateBillingDocumentUseCase
+from app.application.billing.import_billing_document_usecase import ImportBillingDocumentUseCase
 from app.application.billing.clone_billing_document_usecase import CloneBillingDocumentUseCase
 from app.application.billing.convert_devis_to_facture_usecase import ConvertDevisToFactureUseCase
 from app.application.billing.update_billing_document_usecase import UpdateBillingDocumentUseCase
@@ -27,12 +28,17 @@ from app.application.billing.list_templates_usecase import ListTemplatesUseCase
 from app.application.billing.get_template_usecase import GetTemplateUseCase
 from app.application.billing.delete_template_usecase import DeleteTemplateUseCase
 from app.application.billing.apply_template_to_create_document_usecase import ApplyTemplateToCreateDocumentUseCase
+from app.application.billing.list_activity_suggestions_usecase import ListActivitySuggestionsUseCase
 
 # --- DTOs ---
 from app.application.billing.dtos import (
     ItemInput,
     CreateBillingDocumentInput,
+    ImportBillingDocumentInput,
     UpdateBillingDocumentInput,
+    ActivitySuggestionsResponse,
+    ActivitySuggestionDTO,
+    ActivityCategoryDTO,
     CloneBillingDocumentInput,
     ConvertDevisToFactureInput,
     UpdateStatusInput,
@@ -61,6 +67,7 @@ from app.domain.billing.exceptions import (
     InvalidStatusTransitionError,
     MissingCompanyProfileError,
     BillingDocumentNotFoundError,
+    BillingDocumentAlreadyExistsError,
     BillingTemplateNotFoundError,
     BillingNumberCollisionError,
     DevisAlreadyConvertedError,
@@ -73,6 +80,7 @@ from app.domain.billing.exceptions import (
 __all__ = [
     # use-cases: documents
     "CreateBillingDocumentUseCase",
+    "ImportBillingDocumentUseCase",
     "CloneBillingDocumentUseCase",
     "ConvertDevisToFactureUseCase",
     "UpdateBillingDocumentUseCase",
@@ -90,10 +98,15 @@ __all__ = [
     "GetTemplateUseCase",
     "DeleteTemplateUseCase",
     "ApplyTemplateToCreateDocumentUseCase",
+    "ListActivitySuggestionsUseCase",
     # DTOs
     "ItemInput",
     "CreateBillingDocumentInput",
+    "ImportBillingDocumentInput",
     "UpdateBillingDocumentInput",
+    "ActivitySuggestionsResponse",
+    "ActivitySuggestionDTO",
+    "ActivityCategoryDTO",
     "CloneBillingDocumentInput",
     "ConvertDevisToFactureInput",
     "UpdateStatusInput",
@@ -116,6 +129,7 @@ __all__ = [
     "InvalidStatusTransitionError",
     "MissingCompanyProfileError",
     "BillingDocumentNotFoundError",
+    "BillingDocumentAlreadyExistsError",
     "BillingTemplateNotFoundError",
     "BillingNumberCollisionError",
     "DevisAlreadyConvertedError",

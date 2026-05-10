@@ -495,6 +495,8 @@ def invitation_app():
             GetTemplateUseCase,
             DeleteTemplateUseCase,
             ApplyTemplateToCreateDocumentUseCase,
+            ImportBillingDocumentUseCase,
+            ListActivitySuggestionsUseCase,
         )
 
         _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
@@ -569,6 +571,17 @@ def invitation_app():
             project_repo=None,
             company_repo=_company_repo,
             access_repo=_access_repo,
+        )
+
+        # Wire import + activity-suggestions use-cases (phase 08)
+        _c.import_billing_document_usecase = ImportBillingDocumentUseCase(
+            doc_repo=_billing_doc_repo,
+            counter_repo=_billing_counter_repo,
+            company_repo=_company_repo,
+            access_repo=_access_repo,
+        )
+        _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
+            doc_repo=_billing_doc_repo,
         )
 
         yield test_app

@@ -32,10 +32,12 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.billing import billing_documents_bp
 from app.api.v1.billing.decorators import require_billing_document_owner
 from app.api.v1.billing.schemas import (
+    ActivitySuggestionsQuery,
     ApplyTemplateRequest,
     CloneRequest,
     ConvertRequest,
     CreateBillingDocumentRequest,
+    ImportBillingDocumentRequest,
     UpdateBillingDocumentRequest,
     UpdateStatusRequest,
 )
@@ -56,6 +58,8 @@ from app.application.billing import (
     InvalidStatusTransitionError,
     MissingCompanyProfileError,
 )
+from app.application.billing.dtos import ImportBillingDocumentInput
+from app.domain.billing.exceptions import BillingDocumentAlreadyExistsError
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -77,6 +81,7 @@ def _items_from_schema(raw_items) -> list[ItemInput]:
             quantity=it.quantity,
             unit_price=it.unit_price,
             vat_rate=it.vat_rate,
+            category=getattr(it, "category", None),
         )
         for it in raw_items
     ]
@@ -477,6 +482,114 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
     response.headers["Cache-Control"] = "no-store, must-revalidate"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
+
+
+# ---------------------------------------------------------------------------
+# Activity suggestions (GET, polling-friendly)
+# ---------------------------------------------------------------------------
+
+
+@billing_documents_bp.route("/billing-documents/activity-suggestions", methods=["GET"])
+@jwt_required()
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def get_activity_suggestions():
+    """Return line-item suggestions aggregated from the requester's documents.
+
+    Query params: category (optional), q (optional prefix), limit (default 20, max 100).
+    Response headers include Cache-Control: no-cache, must-revalidate.
+    """
+    try:
+        params = ActivitySuggestionsQuery.model_validate(request.args.to_dict())
+    except ValidationError as exc:
+        return format_validation_error(exc)
+
+    user_id = UUID(get_jwt_identity())
+
+    try:
+        result = get_container().list_activity_suggestions_usecase.execute(
+            user_id=user_id,
+            category=params.category,
+            q=params.q,
+            limit=params.limit,
+        )
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
+
+    import dataclasses
+
+    response = jsonify(
+        {
+            "categories": [dataclasses.asdict(c) for c in result.categories],
+            "suggestions": [dataclasses.asdict(s) for s in result.suggestions],
+        }
+    )
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Import billing document (historical, verbatim document_number)
+# ---------------------------------------------------------------------------
+
+
+@billing_documents_bp.route("/billing-documents/import", methods=["POST"])
+@jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def import_billing_document():
+    """Import a historical billing document with a pre-supplied document number.
+
+    Error mapping:
+      400 — invalid input (ValueError, category/item validation)
+      403 — user not attached to company (CompanyNotAttachedError / PermissionDenied)
+      404 — company not found
+      409 — duplicate (company_id, kind, document_number) → BillingDocumentAlreadyExistsError
+      422 — Pydantic validation error (unknown fields, wrong types)
+    """
+    try:
+        body = ImportBillingDocumentRequest.model_validate(request.get_json(force=True) or {})
+    except ValidationError as exc:
+        return format_validation_error(exc)
+
+    user_id = UUID(get_jwt_identity())
+
+    from app.domain.billing.enums import BillingDocumentStatus
+
+    inp = ImportBillingDocumentInput(
+        user_id=user_id,
+        kind=BillingDocumentKind(body.kind),
+        recipient_name=body.recipient_name,
+        items=_items_from_schema(body.items),
+        company_id=body.company_id,
+        document_number=body.document_number,
+        status=BillingDocumentStatus(body.status),
+        project_id=body.project_id,
+        recipient_address=body.recipient_address,
+        recipient_email=str(body.recipient_email) if body.recipient_email else None,
+        recipient_siret=body.recipient_siret,
+        notes=body.notes,
+        terms=body.terms,
+        signature_block_text=body.signature_block_text,
+        validity_until=body.validity_until,
+        payment_due_date=body.payment_due_date,
+        payment_terms=body.payment_terms,
+        issue_date=body.issue_date,
+        created_at=body.created_at,
+    )
+
+    from app import db
+
+    try:
+        result = get_container().import_billing_document_usecase.execute(inp, db.session)
+    except MissingCompanyProfileError:
+        return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
+    except CompanyNotAttachedError:
+        return jsonify({"error": "Conflict", "reason": "company_no_longer_attached"}), 409
+    except BillingDocumentAlreadyExistsError as exc:
+        return jsonify({"error": "Conflict", "reason": "document_already_exists", "message": str(exc)}), 409
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
+
+    return jsonify(_doc_to_json(result)), 201
 
 
 # ---------------------------------------------------------------------------
