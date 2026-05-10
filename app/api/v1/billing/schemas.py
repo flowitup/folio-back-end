@@ -26,7 +26,7 @@ class _StrictBase(BaseModel):
 class ItemSchema(_StrictBase):
     """A single line item used in create / update / template schemas."""
 
-    description: str = Field(..., min_length=1, max_length=500)
+    description: str = Field(..., min_length=1, max_length=5000)
     quantity: Decimal = Field(..., gt=Decimal("0"), le=Decimal("9999999"))
     unit_price: Decimal = Field(..., ge=Decimal("0"), le=Decimal("999999999"))
     vat_rate: Decimal = Field(..., ge=Decimal("0"), le=Decimal("100"))

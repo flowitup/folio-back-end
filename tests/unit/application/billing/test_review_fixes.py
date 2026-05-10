@@ -430,15 +430,20 @@ class TestH5SchemaBounds:
         with pytest.raises(ValidationError):
             CreateBillingDocumentRequest.model_validate(body)
 
-    def test_description_500_chars_accepted(self):
-        """500-char description is at the boundary — must pass."""
-        body = self._base_create(items=[self._base_item(description="x" * 500)])
-        req = CreateBillingDocumentRequest.model_validate(body)
-        assert len(req.items[0].description) == 500
+    def test_description_5000_chars_accepted(self):
+        """5000-char description is at the boundary — must pass.
 
-    def test_description_501_chars_rejected(self):
-        """501-char description exceeds max_length=500 — must raise."""
-        body = self._base_create(items=[self._base_item(description="x" * 501)])
+        Limit raised from 500 to 5000 to accommodate multi-paragraph
+        construction-spec line items (DTU references, ferraillage details, etc.)
+        observed in real historical invoices.
+        """
+        body = self._base_create(items=[self._base_item(description="x" * 5000)])
+        req = CreateBillingDocumentRequest.model_validate(body)
+        assert len(req.items[0].description) == 5000
+
+    def test_description_5001_chars_rejected(self):
+        """5001-char description exceeds max_length=5000 — must raise."""
+        body = self._base_create(items=[self._base_item(description="x" * 5001)])
         with pytest.raises(ValidationError):
             CreateBillingDocumentRequest.model_validate(body)
 
