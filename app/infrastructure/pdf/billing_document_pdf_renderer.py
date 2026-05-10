@@ -224,10 +224,8 @@ def _build_issuer_header(doc: BillingDocument, styles: dict, usable_width: float
         info_lines.append(Paragraph(f"SIRET : {_xml_escape(doc.issuer_siret)}", styles["body_small"]))
     if doc.issuer_tva_number:
         info_lines.append(Paragraph(f"TVA : {_xml_escape(doc.issuer_tva_number)}", styles["body_small"]))
-    if doc.issuer_iban:
-        info_lines.append(Paragraph(f"IBAN : {_xml_escape(doc.issuer_iban)}", styles["body_small"]))
-    if doc.issuer_bic:
-        info_lines.append(Paragraph(f"BIC : {_xml_escape(doc.issuer_bic)}", styles["body_small"]))
+    # IBAN / BIC moved to a dedicated "Coordonnées bancaires" block at the
+    # bottom of the doc, matching the source-PDF layout for a familiar visual.
 
     if logo_buf:
         logo_max_h = 25 * mm
@@ -339,20 +337,34 @@ def _build_recipient_meta(doc: BillingDocument, styles: dict, usable_width: floa
 
 
 def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) -> list:
-    """Items table with zebra rows: Description / Qty / Unit HT / VAT% / Total HT."""
+    """Items table with section-header rows (grouped by `category`) + zebra rows.
+
+    Items are rendered in their original order. When `item.category` differs from
+    the previous item's category, a full-width header row is inserted so the
+    PDF mirrors the source-format layout (Toiture / Menuiserie / Plomberie / …).
+    """
     headers = [
-        Paragraph("Description", styles["label"]),
+        Paragraph("Libellé", styles["label"]),
         Paragraph("Qté", styles["label"]),
         Paragraph("P.U. HT", styles["label"]),
         Paragraph("TVA %", styles["label"]),
-        Paragraph("Total HT", styles["label"]),
+        Paragraph("Montant HT", styles["label"]),
     ]
     col_weights = [5, 1, 2, 1.5, 2]
     total_weight = sum(col_weights)
     col_widths = [usable_width * (w / total_weight) for w in col_weights]
 
-    table_data = [headers]
+    table_data: list = [headers]
+    section_row_idxs: list = []
+    last_category: Optional[str] = None
     for item in doc.items:
+        # Insert a section-header row when category changes (and is non-empty).
+        if item.category and item.category != last_category:
+            section_row_idxs.append(len(table_data))
+            table_data.append([Paragraph(_xml_escape(item.category), styles["section_title"]), "", "", "", ""])
+            last_category = item.category
+        elif not item.category:
+            last_category = None  # any subsequent categorised row re-opens a section
         qty_str = (
             str(int(item.quantity))
             if item.quantity == item.quantity.to_integral_value()
@@ -389,8 +401,23 @@ def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) 
         ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
         ("ALIGN", (1, 0), (-1, 0), "CENTER"),  # header centres
     ]
-    # Zebra rows
+    # Section-header rows: span all columns + soft background + bold.
+    for sidx in section_row_idxs:
+        style_cmds.extend(
+            [
+                ("SPAN", (0, sidx), (-1, sidx)),
+                ("BACKGROUND", (0, sidx), (-1, sidx), colors.HexColor("#F0F4FA")),
+                ("FONTNAME", (0, sidx), (-1, sidx), "DejaVu-Bold"),
+                ("FONTSIZE", (0, sidx), (-1, sidx), 9),
+                ("ALIGN", (0, sidx), (-1, sidx), "LEFT"),
+                ("TOPPADDING", (0, sidx), (-1, sidx), 4),
+                ("BOTTOMPADDING", (0, sidx), (-1, sidx), 4),
+            ]
+        )
+    # Zebra rows — skip section-header rows for visual consistency.
     for i in range(1, len(table_data)):
+        if i in section_row_idxs:
+            continue
         if i % 2 == 0:
             style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F7F9FC")))
 
@@ -477,6 +504,60 @@ def _build_text_section(title: str, content: str, styles: dict) -> list:
     for line in content.splitlines():
         elements.append(Paragraph(_xml_escape(line) or " ", styles["body"]))
     return elements
+
+
+def _build_bank_coords_block(doc: BillingDocument, styles: dict, usable_width: float) -> list:
+    """Render a 'Coordonnées bancaires' block when IBAN/BIC are present.
+
+    Mirrors the source-PDF layout: a labelled, lightly-bordered band at the
+    bottom of the doc with IBAN + BIC. Returns [] if no bank info is set.
+    """
+    if not doc.issuer_iban and not doc.issuer_bic:
+        return []
+    rows: list = [[Paragraph("COORDONNÉES BANCAIRES", styles["section_title"]), ""]]
+    if doc.issuer_iban:
+        rows.append(
+            [
+                Paragraph("IBAN", styles["label"]),
+                Paragraph(_xml_escape(doc.issuer_iban), styles["body_small"]),
+            ]
+        )
+    if doc.issuer_bic:
+        rows.append(
+            [
+                Paragraph("BIC", styles["label"]),
+                Paragraph(_xml_escape(doc.issuer_bic), styles["body_small"]),
+            ]
+        )
+    label_w = 25 * mm
+    t = Table(rows, colWidths=[label_w, usable_width - label_w])
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "DejaVu"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("SPAN", (0, 0), (-1, 0)),  # title row spans both columns
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F0F4FA")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+            ]
+        )
+    )
+    return [t]
+
+
+def _build_legal_footer_note(styles: dict) -> list:
+    """Standard French construction-invoice late-payment legal note."""
+    text = (
+        "Indemnité forfaitaire de retard de paiement : 40 € "
+        "(conformément à l'article 121-II de la loi n° 2012-387 du 22 Mars 2012 "
+        "et au décret n° 2012-1115 du 2 Oct. 2012)."
+    )
+    return [Paragraph(_xml_escape(text), styles["body_grey"])]
 
 
 def _build_signature_block(doc: BillingDocument, styles: dict, usable_width: float) -> list:
@@ -605,6 +686,17 @@ class ReportLabBillingDocumentPdfRenderer:
         # 8. Signature block
         story.append(Spacer(1, 4 * mm))
         story.extend(_build_signature_block(doc, s, usable_width))
+
+        # 9. Coordonnées bancaires (if IBAN/BIC present)
+        bank_block = _build_bank_coords_block(doc, s, usable_width)
+        if bank_block:
+            story.append(Spacer(1, 5 * mm))
+            story.extend(bank_block)
+
+        # 10. Late-payment legal note (factures only — devis don't trigger this)
+        if doc.kind == BillingDocumentKind.FACTURE:
+            story.append(Spacer(1, 3 * mm))
+            story.extend(_build_legal_footer_note(s))
 
         pdf_doc.build(story, onFirstPage=footer_cb, onLaterPages=footer_cb)
         return buf.getvalue()

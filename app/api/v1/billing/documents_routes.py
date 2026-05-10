@@ -10,6 +10,7 @@ Endpoints (10):
   POST   /billing-documents/<doc_id>/convert-to-facture → convert (jwt + owner, 10/min)
   PATCH  /billing-documents/<doc_id>/status          → status update (jwt + owner, 30/min)
   GET    /billing-documents/<doc_id>/pdf             → pdf download (jwt + owner, 5/min)
+  GET    /billing-documents/<doc_id>/xlsx            → xlsx download (jwt + owner, 5/min)
   POST   /billing-documents/from-template/<template_id> → apply template (jwt, 10/min)
 
 Decorator order: @jwt_required() BEFORE @limiter.limit(...).
@@ -477,6 +478,45 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
         mimetype="application/pdf",
         as_attachment=True,
         download_name=pdf_result.filename,
+    )
+    response.headers["Content-Disposition"] = content_disposition
+    response.headers["Cache-Control"] = "no-store, must-revalidate"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Render XLSX
+# ---------------------------------------------------------------------------
+
+
+@billing_documents_bp.route("/billing-documents/<doc_id>/xlsx", methods=["GET"])
+@jwt_required()
+@limiter.limit("5 per minute", key_func=jwt_user_key)
+@require_billing_document_owner
+def render_billing_document_xlsx(doc_id: str, billing_doc):
+    """Render billing document as XLSX (Open Office XML) and stream as attachment.
+
+    Same auth + rate as the PDF route. Filename mirrors the PDF naming
+    (`{document_number}.xlsx`) with RFC-5987 percent-encoding for non-ASCII.
+    """
+    user_id = UUID(get_jwt_identity())
+    try:
+        xlsx_result = get_container().render_billing_document_xlsx_usecase.execute(billing_doc.id, user_id)
+    except BillingDocumentNotFoundError:
+        return _err("NotFound", f"Billing document {doc_id} not found", 404)
+    except ForbiddenBillingDocumentError:
+        return _err("NotFound", f"Billing document {doc_id} not found", 404)
+
+    ascii_name = xlsx_result.filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    encoded_name = quote(xlsx_result.filename, safe="")
+    content_disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
+
+    response = send_file(
+        BytesIO(xlsx_result.content),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=xlsx_result.filename,
     )
     response.headers["Content-Disposition"] = content_disposition
     response.headers["Cache-Control"] = "no-store, must-revalidate"
