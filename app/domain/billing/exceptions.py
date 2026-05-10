@@ -81,6 +81,18 @@ class BillingTemplateNameConflictError(BillingDomainError):
         super().__init__(f"A template named {name!r} already exists for this kind")
 
 
+class BillingDocumentAlreadyExistsError(BillingDomainError):
+    """Raised when importing a document with a (company_id, kind, document_number) that already exists."""
+
+    def __init__(self, company_id: UUID, kind: str, document_number: str) -> None:
+        self.company_id = company_id
+        self.kind = kind
+        self.document_number = document_number
+        super().__init__(
+            f"Billing document {document_number!r} of kind {kind!r} already exists " f"for company {company_id}"
+        )
+
+
 class CompanyNotAttachedError(BillingDomainError):
     """Raised when a user submits a billing document for a company they are no longer attached to.
 

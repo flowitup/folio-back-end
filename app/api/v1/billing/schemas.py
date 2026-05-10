@@ -6,7 +6,7 @@ Decimal is used for all monetary / rate values to avoid float precision issues.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 from uuid import UUID
@@ -30,6 +30,7 @@ class ItemSchema(_StrictBase):
     quantity: Decimal = Field(..., gt=Decimal("0"), le=Decimal("9999999"))
     unit_price: Decimal = Field(..., ge=Decimal("0"), le=Decimal("999999999"))
     vat_rate: Decimal = Field(..., ge=Decimal("0"), le=Decimal("100"))
+    category: Optional[str] = Field(None, max_length=120)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,33 @@ class ApplyTemplateRequest(_StrictBase):
     recipient_siret: Optional[str] = None
     project_id: Optional[UUID] = None
     issue_date: Optional[date] = None
+
+
+class ImportBillingDocumentRequest(_StrictBase):
+    """Request body for POST /billing-documents/import.
+
+    Strict mode (extra='forbid'). All fields same as CreateBillingDocumentRequest
+    plus mandatory document_number + status, and optional created_at.
+    """
+
+    kind: Literal["devis", "facture"]
+    recipient_name: str = Field(..., min_length=1, max_length=255)
+    items: list[ItemSchema] = Field(..., min_length=1, max_length=200)
+    company_id: UUID  # required
+    document_number: str = Field(..., min_length=1, max_length=32)
+    status: Literal["draft", "sent", "paid", "cancelled"]
+    project_id: Optional[UUID] = None
+    recipient_address: Optional[str] = Field(None, max_length=500)
+    recipient_email: Optional[EmailStr] = None
+    recipient_siret: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=2000)
+    terms: Optional[str] = Field(None, max_length=2000)
+    signature_block_text: Optional[str] = Field(None, max_length=500)
+    validity_until: Optional[date] = None
+    payment_due_date: Optional[date] = None
+    payment_terms: Optional[str] = Field(None, max_length=500)
+    issue_date: Optional[date] = None
+    created_at: Optional[datetime] = None  # preserve historical timestamp
 
 
 # ---------------------------------------------------------------------------

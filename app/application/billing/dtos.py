@@ -63,6 +63,35 @@ class CreateBillingDocumentInput:
 
 
 @dataclass(frozen=True)
+class ImportBillingDocumentInput:
+    """Input for ImportBillingDocumentUseCase.
+
+    Mirrors CreateBillingDocumentInput but with a mandatory pre-supplied
+    document_number, explicit status, and optional created_at for historical import.
+    """
+
+    user_id: UUID
+    kind: BillingDocumentKind
+    recipient_name: str
+    items: list[ItemInput]
+    document_number: str  # verbatim, 1..32 chars
+    status: BillingDocumentStatus
+    company_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    recipient_address: Optional[str] = None
+    recipient_email: Optional[str] = None
+    recipient_siret: Optional[str] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+    signature_block_text: Optional[str] = None
+    validity_until: Optional[date] = None
+    payment_due_date: Optional[date] = None
+    payment_terms: Optional[str] = None
+    issue_date: Optional[date] = None
+    created_at: Optional[datetime] = None  # preserve historical timestamp
+
+
+@dataclass(frozen=True)
 class UpdateBillingDocumentInput:
     """Input for UpdateBillingDocumentUseCase — all fields optional except id."""
 

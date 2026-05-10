@@ -406,6 +406,7 @@ def _configure_di_container() -> None:
     )
     from app.application.billing import (
         CreateBillingDocumentUseCase,
+        ImportBillingDocumentUseCase,
         CloneBillingDocumentUseCase,
         ConvertDevisToFactureUseCase,
         UpdateBillingDocumentUseCase,
@@ -441,6 +442,12 @@ def _configure_di_container() -> None:
         project_repo=_project_repo,  # H1 — project:read authorization
         company_repo=_company_repo,  # company_id path
         access_repo=_access_repo,  # attachment validation
+    )
+    _c.import_billing_document_usecase = ImportBillingDocumentUseCase(
+        doc_repo=_billing_doc_repo,
+        counter_repo=_billing_counter_repo,
+        company_repo=_company_repo,
+        access_repo=_access_repo,
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,

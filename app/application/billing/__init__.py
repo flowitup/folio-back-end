@@ -8,6 +8,7 @@ No Flask / SQLAlchemy / infrastructure imports here.
 
 # --- Use-cases: billing documents ---
 from app.application.billing.create_billing_document_usecase import CreateBillingDocumentUseCase
+from app.application.billing.import_billing_document_usecase import ImportBillingDocumentUseCase
 from app.application.billing.clone_billing_document_usecase import CloneBillingDocumentUseCase
 from app.application.billing.convert_devis_to_facture_usecase import ConvertDevisToFactureUseCase
 from app.application.billing.update_billing_document_usecase import UpdateBillingDocumentUseCase
@@ -32,6 +33,7 @@ from app.application.billing.apply_template_to_create_document_usecase import Ap
 from app.application.billing.dtos import (
     ItemInput,
     CreateBillingDocumentInput,
+    ImportBillingDocumentInput,
     UpdateBillingDocumentInput,
     CloneBillingDocumentInput,
     ConvertDevisToFactureInput,
@@ -61,6 +63,7 @@ from app.domain.billing.exceptions import (
     InvalidStatusTransitionError,
     MissingCompanyProfileError,
     BillingDocumentNotFoundError,
+    BillingDocumentAlreadyExistsError,
     BillingTemplateNotFoundError,
     BillingNumberCollisionError,
     DevisAlreadyConvertedError,
@@ -73,6 +76,7 @@ from app.domain.billing.exceptions import (
 __all__ = [
     # use-cases: documents
     "CreateBillingDocumentUseCase",
+    "ImportBillingDocumentUseCase",
     "CloneBillingDocumentUseCase",
     "ConvertDevisToFactureUseCase",
     "UpdateBillingDocumentUseCase",
@@ -93,6 +97,7 @@ __all__ = [
     # DTOs
     "ItemInput",
     "CreateBillingDocumentInput",
+    "ImportBillingDocumentInput",
     "UpdateBillingDocumentInput",
     "CloneBillingDocumentInput",
     "ConvertDevisToFactureInput",
@@ -116,6 +121,7 @@ __all__ = [
     "InvalidStatusTransitionError",
     "MissingCompanyProfileError",
     "BillingDocumentNotFoundError",
+    "BillingDocumentAlreadyExistsError",
     "BillingTemplateNotFoundError",
     "BillingNumberCollisionError",
     "DevisAlreadyConvertedError",
