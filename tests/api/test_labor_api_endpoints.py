@@ -518,6 +518,13 @@ class TestLaborEntryRoutes:
         ordered_keys = [(r["year"], r["month"]) for r in rows]
         assert ordered_keys.index((2026, 2)) < ordered_keys.index((2026, 1))
 
+        # Each month row carries a `workers` array with the per-worker
+        # breakdown — at minimum the worker we just created appears.
+        feb_row = touched[(2026, 2)]
+        assert "workers" in feb_row
+        feb_names = [w["worker_name"] for w in feb_row["workers"]]
+        assert "Monthly API Worker" in feb_names
+
     def test_get_labor_monthly_summary_empty_project_returns_empty_rows(self, labor_client, admin_token, labor_app):
         """Endpoint returns 200 with rows=[] for a project with no entries."""
         # Create an isolated project on the fly via the app's session so

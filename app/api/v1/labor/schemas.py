@@ -147,13 +147,27 @@ class LaborSummaryResponse(BaseModel):
     total_bonus_cost: float
 
 
+class MonthlyWorkerSubRowResponse(BaseModel):
+    """One worker's contribution within a (year, month) bucket."""
+
+    worker_id: str
+    worker_name: str
+    days_worked: int
+    total_cost: float
+
+
 class MonthlySummaryRowResponse(BaseModel):
-    """One (year, month) bucket of project-wide labor totals."""
+    """One (year, month) bucket of project-wide labor totals.
+
+    Carries the per-worker sub-rows inline so the FE can render them
+    under each month header without a follow-up request.
+    """
 
     year: int
     month: int
     total_days: int
     total_cost: float
+    workers: List[MonthlyWorkerSubRowResponse]
 
 
 class LaborMonthlySummaryResponse(BaseModel):

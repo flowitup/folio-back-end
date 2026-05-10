@@ -13,6 +13,7 @@ from app.application.labor.ports import (
     ILaborEntryRepository,
     LaborSummaryRow,
     MonthlyLaborSummaryRow,
+    MonthlyWorkerSubRow,
 )
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
@@ -152,8 +153,9 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
 
     def get_monthly_summary(self, project_id: UUID) -> List[MonthlyLaborSummaryRow]:
         # Same effective_cost expression as get_summary, but rolled up per
-        # (year, month) across every worker on the project. Supplement-only
-        # rows contribute 0 to total_days and 0 to total_cost.
+        # (year, month, worker) so the response can carry the per-worker
+        # breakdown inline alongside the month totals. Supplement-only rows
+        # contribute 0 to days_worked and 0 to cost.
         shift_multiplier = sa_case(
             (LaborEntryModel.shift_type == "half", 0.5),
             (LaborEntryModel.shift_type == "overtime", 1.5),
@@ -175,24 +177,52 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             self._session.query(
                 year_expr.label("year"),
                 month_expr.label("month"),
-                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("total_days"),
+                WorkerModel.id.label("worker_id"),
+                WorkerModel.name.label("worker_name"),
+                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
             .filter(WorkerModel.project_id == project_id)
-            .group_by(year_expr, month_expr)
-            .order_by(year_expr.desc(), month_expr.desc())
+            .group_by(year_expr, month_expr, WorkerModel.id, WorkerModel.name)
+            .order_by(year_expr.desc(), month_expr.desc(), WorkerModel.name.asc())
         )
 
-        return [
-            MonthlyLaborSummaryRow(
-                year=int(row.year),
-                month=int(row.month),
-                total_days=int(row.total_days or 0),
-                total_cost=Decimal(str(row.total_cost)) if row.total_cost is not None else Decimal("0"),
+        # Bucket the (year, month, worker) granularity rows back into per-month
+        # rows with their `workers` list. The DB sort guarantees that within a
+        # (year, month) block the worker sub-rows arrive together, alphabetically
+        # by name. Workers who only contributed supplement-only rows (days==0
+        # AND cost==0) are skipped — they would otherwise add an empty row.
+        buckets: dict[tuple[int, int], MonthlyLaborSummaryRow] = {}
+        order: List[tuple[int, int]] = []
+        for row in query.all():
+            key = (int(row.year), int(row.month))
+            cost = Decimal(str(row.total_cost)) if row.total_cost is not None else Decimal("0")
+            days = int(row.days_worked or 0)
+            if days == 0 and cost == 0:
+                continue
+            sub = MonthlyWorkerSubRow(
+                worker_id=row.worker_id,
+                worker_name=row.worker_name,
+                days_worked=days,
+                total_cost=cost,
             )
-            for row in query.all()
-        ]
+            bucket = buckets.get(key)
+            if bucket is None:
+                bucket = MonthlyLaborSummaryRow(
+                    year=key[0],
+                    month=key[1],
+                    total_days=0,
+                    total_cost=Decimal("0"),
+                    workers=[],
+                )
+                buckets[key] = bucket
+                order.append(key)
+            bucket.workers.append(sub)
+            bucket.total_days += days
+            bucket.total_cost += cost
+
+        return [buckets[k] for k in order]
 
     def list_by_project_in_range(
         self,

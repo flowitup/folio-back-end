@@ -5,6 +5,7 @@ from app.application.labor.ports import (
     ILaborEntryRepository,
     LaborSummaryRow,
     MonthlyLaborSummaryRow,
+    MonthlyWorkerSubRow,
 )
 from app.application.labor.create_worker import (
     CreateWorkerUseCase,
@@ -55,6 +56,7 @@ from app.application.labor.get_monthly_labor_summary import (
     GetMonthlyLaborSummaryRequest,
     LaborMonthlySummaryResponse,
     MonthlySummaryRow,
+    MonthlyWorkerSubRow as MonthlyWorkerSubRowDTO,
 )
 
 __all__ = [
@@ -63,6 +65,7 @@ __all__ = [
     "ILaborEntryRepository",
     "LaborSummaryRow",
     "MonthlyLaborSummaryRow",
+    "MonthlyWorkerSubRow",
     # Worker use cases
     "CreateWorkerUseCase",
     "CreateWorkerRequest",
@@ -96,4 +99,5 @@ __all__ = [
     "GetMonthlyLaborSummaryRequest",
     "LaborMonthlySummaryResponse",
     "MonthlySummaryRow",
+    "MonthlyWorkerSubRowDTO",
 ]

@@ -24,19 +24,34 @@ class LaborSummaryRow:
 
 
 @dataclass
+class MonthlyWorkerSubRow:
+    """Per-worker breakdown within a single (year, month) bucket."""
+
+    worker_id: UUID
+    worker_name: str
+    days_worked: int  # priced shifts only
+    total_cost: Decimal
+
+
+@dataclass
 class MonthlyLaborSummaryRow:
     """Aggregated labor cost per (year, month) across every worker on a project.
 
     Used by the Summary tab to render a year-grouped monthly breakdown when
-    no specific month is selected. Bonus-day cost is intentionally NOT
-    included here — those are derived in the per-worker use case from
-    banked_hours, which doesn't roll up cleanly into monthly buckets.
+    no specific month is selected. Each row also carries the per-worker
+    sub-rows so the FE can render them inline under the month header
+    without an extra round trip.
+
+    Bonus-day cost is intentionally NOT included here — those are derived
+    in the per-worker use case from banked_hours, which doesn't roll up
+    cleanly into monthly buckets.
     """
 
     year: int
     month: int
     total_days: int  # priced shifts (shift_type IS NOT NULL); supplement-only rows excluded
     total_cost: Decimal
+    workers: List[MonthlyWorkerSubRow]
 
 
 class IWorkerRepository(ABC):

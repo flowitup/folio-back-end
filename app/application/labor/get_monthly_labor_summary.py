@@ -1,8 +1,8 @@
 """Get monthly labor summary use case.
 
 Aggregates total_days + total_cost per (year, month) across every worker on
-a project. Used by the Summary tab to render a year-grouped breakdown when
-no specific month is selected.
+a project, with the per-worker breakdown nested inline. Used by the Summary
+tab to render a year-grouped breakdown when no specific month is selected.
 """
 
 from dataclasses import dataclass
@@ -13,11 +13,22 @@ from app.application.labor.ports import ILaborEntryRepository
 
 
 @dataclass
+class MonthlyWorkerSubRow:
+    """One worker's contribution within a (year, month) bucket."""
+
+    worker_id: str
+    worker_name: str
+    days_worked: int
+    total_cost: float
+
+
+@dataclass
 class MonthlySummaryRow:
     year: int
     month: int
     total_days: int
     total_cost: float
+    workers: List[MonthlyWorkerSubRow]
 
 
 @dataclass
@@ -45,6 +56,15 @@ class GetMonthlyLaborSummaryUseCase:
                     month=r.month,
                     total_days=r.total_days,
                     total_cost=float(r.total_cost),
+                    workers=[
+                        MonthlyWorkerSubRow(
+                            worker_id=str(w.worker_id),
+                            worker_name=w.worker_name,
+                            days_worked=w.days_worked,
+                            total_cost=float(w.total_cost),
+                        )
+                        for w in r.workers
+                    ],
                 )
                 for r in rows
             ],
