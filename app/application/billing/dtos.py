@@ -32,6 +32,7 @@ class ItemInput:
     quantity: Decimal
     unit_price: Decimal
     vat_rate: Decimal  # percent, e.g. Decimal("20")
+    category: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +178,7 @@ class ItemResponse:
     total_ht: Decimal
     total_tva: Decimal
     total_ttc: Decimal
+    category: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,7 @@ class BillingDocumentResponse:
                 total_ht=it.total_ht,
                 total_tva=it.total_tva,
                 total_ttc=it.total_ttc,
+                category=it.category,
             )
             for it in doc.items
         ]
@@ -294,6 +297,7 @@ class BillingTemplateResponse:
                 total_ht=it.total_ht,
                 total_tva=it.total_tva,
                 total_ttc=it.total_ttc,
+                category=it.category,
             )
             for it in tpl.items
         ]

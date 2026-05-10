@@ -57,6 +57,69 @@ class TestBillingDocumentItem:
         assert item.total_ht == Decimal("1.5") * Decimal("66.66")
 
 
+class TestBillingDocumentItemCategory:
+    """Phase 01 — category field backward-compat semantics."""
+
+    def test_category_trimmed(self):
+        item = BillingDocumentItem(
+            description="Dépose toiture",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100"),
+            vat_rate=Decimal("10"),
+            category=" Toiture  ",
+        )
+        assert item.category == "Toiture"
+
+    def test_category_empty_coerced_to_none(self):
+        item = BillingDocumentItem(
+            description="Service",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100"),
+            vat_rate=Decimal("20"),
+            category="",
+        )
+        assert item.category is None
+
+    def test_category_whitespace_coerced_to_none(self):
+        item = BillingDocumentItem(
+            description="Service",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100"),
+            vat_rate=Decimal("20"),
+            category="   ",
+        )
+        assert item.category is None
+
+    def test_category_over_120_raises(self):
+        with pytest.raises(ValueError, match="category exceeds 120 characters"):
+            BillingDocumentItem(
+                description="Service",
+                quantity=Decimal("1"),
+                unit_price=Decimal("100"),
+                vat_rate=Decimal("20"),
+                category="x" * 121,
+            )
+
+    def test_category_none_default(self):
+        item = BillingDocumentItem(
+            description="Service",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100"),
+            vat_rate=Decimal("20"),
+        )
+        assert item.category is None
+
+    def test_category_exactly_120_ok(self):
+        item = BillingDocumentItem(
+            description="Service",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100"),
+            vat_rate=Decimal("20"),
+            category="x" * 120,
+        )
+        assert item.category == "x" * 120
+
+
 class TestDocumentTotals:
     def test_frozen(self):
         totals = DocumentTotals(
