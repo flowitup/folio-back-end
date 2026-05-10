@@ -43,9 +43,10 @@ from app.domain.billing.exceptions import (
 
 
 # Regex to detect document numbers that encode year + sequence.
-# Matches e.g. FAC2025001, FAC2025-001, DEV2026-00003.
+# Matches e.g. FAC2025001, FAC-2025-001, DEV-2026-00003, FLW-FACTURE-2026-007.
+# Skips truly irregular numbers like FAC0026-ANN-2025-11/08 (extra trailing tokens).
 # Groups: year (4 digits), seq (trailing digits after optional dash).
-_DOC_NUMBER_PATTERN = re.compile(r"^[A-Za-z]+(?P<year>\d{4})-?(?P<seq>\d+)$")
+_DOC_NUMBER_PATTERN = re.compile(r"^(?:[A-Za-z]+-?)+(?P<year>\d{4})-?(?P<seq>\d+)$")
 
 # Unique constraint name for the (company_id, kind, document_number) partial index.
 _UNIQUE_CONSTRAINT = "uix_billing_document_company_kind_number"
