@@ -100,11 +100,31 @@ class BillingNumberCounterRepositoryPort(Protocol):
     concurrent creates.
     """
 
-    def next_value(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+    def next_value(self, company_id: UUID, kind: BillingDocumentKind, year: int) -> int:
         """Return the next sequence value (1-based, monotonically increasing).
 
-        Atomically increments the counter for (user_id, kind, year).
+        Atomically increments the counter for (company_id, kind, year).
         Creates the counter row with value=1 if it does not yet exist.
+        """
+        ...
+
+    def bump_to_at_least(
+        self,
+        company_id: UUID,
+        kind: BillingDocumentKind,
+        year: int,
+        value: int,
+    ) -> int:
+        """Ensure the counter for (company_id, kind, year) is at least *value*.
+
+        Semantics: if the row does not exist, insert it with next_value=value+1
+        (so the next call to next_value() returns value+1). If the row exists
+        and its next_value is already greater, leave it unchanged.
+
+        Returns the resulting next_value stored in the DB.
+
+        Used by ImportBillingDocumentUseCase to keep the auto-number sequence
+        sane after importing historical documents with explicit numbers.
         """
         ...
 

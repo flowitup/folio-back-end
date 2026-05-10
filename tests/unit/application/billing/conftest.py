@@ -126,18 +126,35 @@ class InMemoryCompanyProfileRepository:
 class InMemoryBillingNumberCounterRepository:
     """Dict-backed counter repo for unit tests.
 
-    Keyed by (user_id, kind_value, year) — mimics the DB composite key.
+    Keyed by (company_id, kind_value, year) — mimics the DB composite key.
+    _counters stores next_value (the value that will be returned on next call),
+    starting from 1. bump_to_at_least stores desired_next = value + 1.
     """
 
     def __init__(self):
-        self._counters: dict[tuple, int] = {}
+        # stores next_value to return; absent key → first call returns 1
+        self._next: dict[tuple, int] = {}
 
-    def next_value(self, user_id: UUID, kind: BillingDocumentKind, year: int) -> int:
-        key = (user_id, kind.value, year)
-        current = self._counters.get(key, 0)
-        next_val = current + 1
-        self._counters[key] = next_val
-        return next_val
+    def next_value(self, company_id: UUID, kind: BillingDocumentKind, year: int) -> int:
+        key = (company_id, kind.value, year)
+        val = self._next.get(key, 1)
+        self._next[key] = val + 1
+        return val
+
+    def bump_to_at_least(
+        self,
+        company_id: UUID,
+        kind: BillingDocumentKind,
+        year: int,
+        value: int,
+    ) -> int:
+        """Ensure next_value >= value + 1. Returns resulting next_value."""
+        key = (company_id, kind.value, year)
+        desired_next = value + 1
+        current = self._next.get(key, 1)
+        new_next = max(current, desired_next)
+        self._next[key] = new_next
+        return new_next
 
 
 class FakePdfRenderer:

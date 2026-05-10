@@ -42,3 +42,25 @@ class TestInMemoryCounter:
         """No duplicate sequence numbers produced."""
         vals = [counter_repo.next_value(user_id, BillingDocumentKind.FACTURE, 2026) for _ in range(20)]
         assert len(vals) == len(set(vals))
+
+
+class TestInMemoryBumpToAtLeast:
+    """Phase 02 — bump_to_at_least on in-memory repo."""
+
+    def test_bump_absent_row(self, counter_repo, user_id):
+        result = counter_repo.bump_to_at_least(user_id, BillingDocumentKind.FACTURE, 2025, 5)
+        assert result == 6
+        # next call should return 6
+        assert counter_repo.next_value(user_id, BillingDocumentKind.FACTURE, 2025) == 6
+
+    def test_bump_higher_than_existing(self, counter_repo, user_id):
+        counter_repo.next_value(user_id, BillingDocumentKind.DEVIS, 2025)  # consumes 1
+        counter_repo.next_value(user_id, BillingDocumentKind.DEVIS, 2025)  # consumes 2
+        # next_value is now 3; bump to at least 7
+        result = counter_repo.bump_to_at_least(user_id, BillingDocumentKind.DEVIS, 2025, 7)
+        assert result == 8
+
+    def test_bump_lower_does_not_regress(self, counter_repo, user_id):
+        counter_repo.bump_to_at_least(user_id, BillingDocumentKind.DEVIS, 2025, 7)
+        result = counter_repo.bump_to_at_least(user_id, BillingDocumentKind.DEVIS, 2025, 3)
+        assert result == 8

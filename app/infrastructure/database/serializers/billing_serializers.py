@@ -36,12 +36,14 @@ def serialize_item(item: BillingDocumentItem) -> dict:
 
     Decimal values are stored as strings to preserve full precision across
     the JSONB round-trip (avoiding float representation errors).
+    category is stored as-is (None → null in JSON).
     """
     return {
         "description": item.description,
         "quantity": str(item.quantity),
         "unit_price": str(item.unit_price),
         "vat_rate": str(item.vat_rate),
+        "category": item.category,
     }
 
 
@@ -49,13 +51,15 @@ def deserialize_item(d: dict) -> BillingDocumentItem:
     """Reconstruct a BillingDocumentItem from a stored dict.
 
     Decimal fields are parsed from their string representation to restore
-    exact precision.
+    exact precision. category is read with .get() so legacy rows without
+    the key deserialize to category=None (backward-compatible).
     """
     return BillingDocumentItem(
         description=d["description"],
         quantity=Decimal(d["quantity"]),
         unit_price=Decimal(d["unit_price"]),
         vat_rate=Decimal(d["vat_rate"]),
+        category=d.get("category"),
     )
 
 
