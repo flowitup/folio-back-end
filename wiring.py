@@ -104,7 +104,7 @@ from app.application.companies import (
     DetachCompanyUseCase,
 )
 
-# Billing use-cases (phase 04)
+# Billing use-cases (phase 04 + 08)
 from app.application.billing import (
     CreateBillingDocumentUseCase,
     CloneBillingDocumentUseCase,
@@ -121,6 +121,8 @@ from app.application.billing import (
     GetTemplateUseCase,
     DeleteTemplateUseCase,
     ApplyTemplateToCreateDocumentUseCase,
+    ImportBillingDocumentUseCase,
+    ListActivitySuggestionsUseCase,
 )
 
 # =============================================================================
@@ -303,6 +305,10 @@ class Container:
     get_billing_template_usecase: Optional[GetTemplateUseCase] = None
     delete_billing_template_usecase: Optional[DeleteTemplateUseCase] = None
     apply_template_usecase: Optional[ApplyTemplateToCreateDocumentUseCase] = None
+
+    # billing-import + activity-suggestions use-cases (phase 08)
+    import_billing_document_usecase: Optional[ImportBillingDocumentUseCase] = None
+    list_activity_suggestions_usecase: Optional[ListActivitySuggestionsUseCase] = None
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
