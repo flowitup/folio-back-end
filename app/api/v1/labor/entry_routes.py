@@ -23,6 +23,7 @@ from app.api.v1.labor.schemas import (
     WorkerSummaryRow,
     LaborMonthlySummaryResponse,
     MonthlySummaryRowResponse,
+    MonthlyWorkerSubRowResponse,
 )
 from app.api.v1.projects.decorators import require_permission
 from app.application.labor import (
@@ -292,6 +293,15 @@ def get_labor_monthly_summary(project_id: str):
                     month=r.month,
                     total_days=r.total_days,
                     total_cost=r.total_cost,
+                    workers=[
+                        MonthlyWorkerSubRowResponse(
+                            worker_id=w.worker_id,
+                            worker_name=w.worker_name,
+                            days_worked=w.days_worked,
+                            total_cost=w.total_cost,
+                        )
+                        for w in r.workers
+                    ],
                 )
                 for r in result.rows
             ],

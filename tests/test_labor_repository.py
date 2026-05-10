@@ -571,9 +571,113 @@ class TestSQLAlchemyLaborEntryRepository:
         assert rows[2].total_days == 1
         assert rows[2].total_cost == Decimal("100.00")
 
+        # Workers list is populated for each month (single worker here).
+        for month_row in rows:
+            assert len(month_row.workers) == 1
+            assert month_row.workers[0].worker_name == "Monthly Worker"
+            assert month_row.workers[0].days_worked == month_row.total_days
+            assert month_row.workers[0].total_cost == month_row.total_cost
+
     def test_get_monthly_summary_returns_empty_when_no_entries(self, entry_repo, sample_project):
         """get_monthly_summary on a project without entries returns []."""
         assert entry_repo.get_monthly_summary(sample_project.id) == []
+
+    def test_get_monthly_summary_nests_per_worker_breakdown(self, entry_repo, worker_repo, sample_project):
+        """Month rows carry a per-worker breakdown sorted by name ASC."""
+        from app.domain.entities.worker import Worker
+
+        alice = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Alice",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        bob = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Bob",
+            daily_rate=Decimal("150.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(alice)
+        worker_repo.create(bob)
+
+        # April 2026: Alice 2 full days, Bob 1 full day. Plus a Bob
+        # supplement-only row that should be skipped (not added as a
+        # zero sub-row).
+        for d in (date(2026, 4, 1), date(2026, 4, 2)):
+            entry_repo.create(
+                LaborEntry(
+                    id=uuid4(),
+                    worker_id=alice.id,
+                    date=d,
+                    shift_type="full",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        entry_repo.create(
+            LaborEntry(
+                id=uuid4(),
+                worker_id=bob.id,
+                date=date(2026, 4, 3),
+                shift_type="full",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        # Bob supplement-only row in April — should NOT add a Bob sub-row
+        # for April (his existing one absorbs days/cost; this row adds 0).
+        entry_repo.create(
+            LaborEntry(
+                id=uuid4(),
+                worker_id=bob.id,
+                date=date(2026, 4, 5),
+                shift_type=None,
+                supplement_hours=4,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        # March 2026: Alice only.
+        entry_repo.create(
+            LaborEntry(
+                id=uuid4(),
+                worker_id=alice.id,
+                date=date(2026, 3, 10),
+                shift_type="half",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+        rows = entry_repo.get_monthly_summary(sample_project.id)
+
+        assert len(rows) == 2
+        april = rows[0]
+        assert (april.year, april.month) == (2026, 4)
+        # Two worker sub-rows, sorted by name ASC.
+        names = [w.worker_name for w in april.workers]
+        assert names == ["Alice", "Bob"]
+        # Alice: 2 days @ €100 = €200. Bob: 1 day @ €150 = €150.
+        alice_sub = april.workers[0]
+        bob_sub = april.workers[1]
+        assert alice_sub.days_worked == 2
+        assert alice_sub.total_cost == Decimal("200.00")
+        assert bob_sub.days_worked == 1
+        assert bob_sub.total_cost == Decimal("150.00")
+        # Top-level totals reconcile with the sum of sub-rows.
+        assert april.total_days == 3
+        assert april.total_cost == Decimal("350.00")
+
+        march = rows[1]
+        assert (march.year, march.month) == (2026, 3)
+        assert len(march.workers) == 1
+        assert march.workers[0].worker_name == "Alice"
+        assert march.workers[0].days_worked == 1
+        # half day @ €100 = €50.
+        assert march.workers[0].total_cost == Decimal("50.00")
+        assert march.total_days == 1
+        assert march.total_cost == Decimal("50.00")
 
     def test_list_by_project_no_limit_returns_all(self, entry_repo, worker_repo, sample_project):
         """list_by_project() without limit returns every matching row."""
