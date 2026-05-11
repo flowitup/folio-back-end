@@ -55,6 +55,16 @@ from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.labor.export.format import format_eur_fr
 
+
+def _fmt_pct(d) -> str:
+    """Format a Decimal percentage without scientific notation: 10 → "10", 5.5 → "5.5"."""
+    s = format(d, "f")
+    # Strip trailing zeros after decimal point + dangling dot.
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
+
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -104,6 +114,15 @@ _register_fonts_once()
 
 def _styles() -> dict:
     title = ParagraphStyle("title", fontName="DejaVu-Bold", fontSize=20, leading=24)
+    # Issuer-name title: cyan blue matching the source ANN ECO CONSTRUCTION header.
+    issuer_title = ParagraphStyle(
+        "issuer_title",
+        fontName="DejaVu-Bold",
+        fontSize=14,
+        leading=18,
+        alignment=1,
+        textColor=colors.HexColor("#00A0DF"),
+    )
     h2 = ParagraphStyle("h2", fontName="DejaVu-Bold", fontSize=11, leading=14, spaceAfter=2)
     h3 = ParagraphStyle("h3", fontName="DejaVu-Bold", fontSize=9, leading=12, spaceAfter=1)
     body = ParagraphStyle("body", fontName="DejaVu", fontSize=9, leading=12)
@@ -113,9 +132,19 @@ def _styles() -> dict:
     right_bold = ParagraphStyle("right_bold", fontName="DejaVu-Bold", fontSize=10, leading=13, alignment=2)
     footer_style = ParagraphStyle("footer", fontName="DejaVu", fontSize=8, leading=10, alignment=1)
     label = ParagraphStyle("label", fontName="DejaVu-Bold", fontSize=8, leading=10, textColor=colors.grey)
+    # Items header on orange background needs black text (not grey) for contrast.
+    label_white = ParagraphStyle(
+        "label_white",
+        fontName="DejaVu-Bold",
+        fontSize=9,
+        leading=11,
+        textColor=colors.black,
+        alignment=1,
+    )
     section_title = ParagraphStyle("section_title", fontName="DejaVu-Bold", fontSize=9, leading=12, spaceAfter=2)
     return {
         "title": title,
+        "issuer_title": issuer_title,
         "h2": h2,
         "h3": h3,
         "body": body,
@@ -125,6 +154,7 @@ def _styles() -> dict:
         "right_bold": right_bold,
         "footer": footer_style,
         "label": label,
+        "label_white": label_white,
         "section_title": section_title,
     }
 
@@ -216,7 +246,8 @@ def _build_issuer_header(doc: BillingDocument, styles: dict, usable_width: float
 
     logo_buf = _fetch_logo(doc.issuer_logo_url)
 
-    info_lines = [Paragraph(_xml_escape(doc.issuer_legal_name), styles["h2"])]
+    # Issuer legal name in cyan, bold, sz14, centered — matches source FF00A0DF.
+    info_lines = [Paragraph(_xml_escape(doc.issuer_legal_name), styles["issuer_title"])]
     if doc.issuer_address:
         for line in doc.issuer_address.splitlines():
             info_lines.append(Paragraph(_xml_escape(line), styles["body_small"]))
@@ -337,34 +368,42 @@ def _build_recipient_meta(doc: BillingDocument, styles: dict, usable_width: floa
 
 
 def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) -> list:
-    """Items table with section-header rows (grouped by `category`) + zebra rows.
+    """Items table mirroring the source ANN ECO CONSTRUCTION layout exactly.
 
-    Items are rendered in their original order. When `item.category` differs from
-    the previous item's category, a full-width header row is inserted so the
-    PDF mirrors the source-format layout (Toiture / Menuiserie / Plomberie / …).
+    7 visible columns: Libelle / U / Qte / PU (HT) en EUR / Avancement / Montant (HT) en EUR / TVA.
+    Header row uses ORANGE background (#F18728), bold, centered with thin black grid.
+    A "project repeat row" (bold dark grey) is inserted right after the header.
+    Section header rows (centered bold) interleave with line-item rows.
     """
     headers = [
-        Paragraph("Libellé", styles["label"]),
-        Paragraph("Qté", styles["label"]),
-        Paragraph("P.U. HT", styles["label"]),
-        Paragraph("TVA %", styles["label"]),
-        Paragraph("Montant HT", styles["label"]),
+        Paragraph("Libellé", styles["label_white"]),
+        Paragraph("U", styles["label_white"]),
+        Paragraph("Qté", styles["label_white"]),
+        Paragraph("PU<br/>(HT) en €", styles["label_white"]),
+        Paragraph("Avancement", styles["label_white"]),
+        Paragraph("Montant<br/>(HT) en €", styles["label_white"]),
+        Paragraph("TVA", styles["label_white"]),
     ]
-    col_weights = [5, 1, 2, 1.5, 2]
+    col_weights = [6.5, 0.6, 0.7, 1.0, 1.0, 1.2, 0.6]
     total_weight = sum(col_weights)
     col_widths = [usable_width * (w / total_weight) for w in col_weights]
 
     table_data: list = [headers]
     section_row_idxs: list = []
+
+    project_label = doc.notes.splitlines()[0].strip() if doc.notes else doc.recipient_name
+    project_row_idx = len(table_data)
+    table_data.append([Paragraph(_xml_escape(project_label), styles["body"]), "", "", "", "", "", ""])
+
     last_category: Optional[str] = None
     for item in doc.items:
-        # Insert a section-header row when category changes (and is non-empty).
         if item.category and item.category != last_category:
             section_row_idxs.append(len(table_data))
-            table_data.append([Paragraph(_xml_escape(item.category), styles["section_title"]), "", "", "", ""])
+            table_data.append([Paragraph(_xml_escape(item.category), styles["section_title"]), "", "", "", "", "", ""])
             last_category = item.category
         elif not item.category:
-            last_category = None  # any subsequent categorised row re-opens a section
+            last_category = None
+
         qty_str = (
             str(int(item.quantity))
             if item.quantity == item.quantity.to_integral_value()
@@ -373,53 +412,54 @@ def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) 
         table_data.append(
             [
                 Paragraph(_xml_escape(item.description), styles["body_small"]),
+                Paragraph("", styles["body_small"]),
                 Paragraph(qty_str, styles["body_small"]),
                 Paragraph(format_eur_fr(item.unit_price), styles["body_small"]),
-                Paragraph(f"{item.vat_rate.normalize()} %", styles["body_small"]),
+                Paragraph("100%", styles["body_small"]),
                 Paragraph(format_eur_fr(item.total_ht), styles["body_small"]),
+                Paragraph(f"{_fmt_pct(item.vat_rate)}%", styles["body_small"]),
             ]
         )
 
-    style_cmds = [
-        # Header band
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EDF5")),
+    style_cmds: list = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F18728")),
         ("FONTNAME", (0, 0), (-1, 0), "DejaVu-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 8),
-        # Body font
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
         ("FONTNAME", (0, 1), (-1, -1), "DejaVu"),
         ("FONTSIZE", (0, 1), (-1, -1), 8),
-        # Borders
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDDDD")),
-        # Padding
+        ("VALIGN", (0, 1), (-1, -1), "MIDDLE"),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#888888")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        # Alignment: description left, numeric right
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-        ("ALIGN", (1, 0), (-1, 0), "CENTER"),  # header centres
+        ("ALIGN", (0, 1), (0, -1), "LEFT"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
     ]
-    # Section-header rows: span all columns + soft background + bold.
+    style_cmds.extend(
+        [
+            ("SPAN", (0, project_row_idx), (-1, project_row_idx)),
+            ("FONTNAME", (0, project_row_idx), (-1, project_row_idx), "DejaVu-Bold"),
+            ("FONTSIZE", (0, project_row_idx), (-1, project_row_idx), 9),
+            ("ALIGN", (0, project_row_idx), (-1, project_row_idx), "LEFT"),
+            ("TEXTCOLOR", (0, project_row_idx), (-1, project_row_idx), colors.HexColor("#222222")),
+        ]
+    )
     for sidx in section_row_idxs:
         style_cmds.extend(
             [
                 ("SPAN", (0, sidx), (-1, sidx)),
-                ("BACKGROUND", (0, sidx), (-1, sidx), colors.HexColor("#F0F4FA")),
                 ("FONTNAME", (0, sidx), (-1, sidx), "DejaVu-Bold"),
                 ("FONTSIZE", (0, sidx), (-1, sidx), 9),
-                ("ALIGN", (0, sidx), (-1, sidx), "LEFT"),
+                ("ALIGN", (0, sidx), (-1, sidx), "CENTER"),
                 ("TOPPADDING", (0, sidx), (-1, sidx), 4),
                 ("BOTTOMPADDING", (0, sidx), (-1, sidx), 4),
             ]
         )
-    # Zebra rows — skip section-header rows for visual consistency.
-    for i in range(1, len(table_data)):
-        if i in section_row_idxs:
-            continue
-        if i % 2 == 0:
-            style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F7F9FC")))
 
     t = Table(table_data, colWidths=col_widths, repeatRows=1)
     t.setStyle(TableStyle(style_cmds))
@@ -443,7 +483,7 @@ def _build_totals_block(doc: BillingDocument, styles: dict, usable_width: float)
 
     # VAT per rate (sorted descending by rate)
     for rate, base_ht, tva_amt in doc.vat_breakdown:
-        label = f"TVA {rate.normalize()} %"
+        label = f"TVA {_fmt_pct(rate)} %"
         rows.append(
             [
                 Paragraph(label, styles["body_small"]),
@@ -538,7 +578,11 @@ def _build_bank_coords_block(doc: BillingDocument, styles: dict, usable_width: f
                 ("FONTSIZE", (0, 0), (-1, -1), 8),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("SPAN", (0, 0), (-1, 0)),  # title row spans both columns
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F0F4FA")),
+                # Orange band (FFF18728) matching the source COORDONNÉES BANCAIRES header.
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F18728")),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "DejaVu-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 9),
                 ("LEFTPADDING", (0, 0), (-1, -1), 4),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                 ("TOPPADDING", (0, 0), (-1, -1), 3),
@@ -558,6 +602,36 @@ def _build_legal_footer_note(styles: dict) -> list:
         "et au décret n° 2012-1115 du 2 Oct. 2012)."
     )
     return [Paragraph(_xml_escape(text), styles["body_grey"])]
+
+
+def _build_greeting_block(doc: BillingDocument, styles: dict) -> list:
+    """Render the standard French opening: 'Madame, Monsieur,' + 2 short paragraphs.
+
+    Mirrors the source layout (rows 19-21 in the xlsx).
+    """
+    intro_subject = "facture" if doc.kind == BillingDocumentKind.FACTURE else "devis"
+    return [
+        Paragraph("Madame, Monsieur,", styles["body"]),
+        Spacer(1, 1 * mm),
+        Paragraph(
+            f"Veuillez trouver ci-après le {intro_subject} relatif à la mission citée en objet.",
+            styles["body"],
+        ),
+        Paragraph(
+            "Je reste à votre disposition pour toute précision ou complément d'information.",
+            styles["body"],
+        ),
+    ]
+
+
+def _build_closing_greeting(styles: dict) -> list:
+    """Standard closing line above the bank coords (mirrors B71 in source xlsx)."""
+    return [
+        Paragraph(
+            "Veuillez agréer, Madame, Monsieur, l'expression de nos salutations distinguées.",
+            styles["body"],
+        )
+    ]
 
 
 def _build_signature_block(doc: BillingDocument, styles: dict, usable_width: float) -> list:
@@ -660,7 +734,11 @@ class ReportLabBillingDocumentPdfRenderer:
 
         # 3. Recipient + meta
         story.extend(_build_recipient_meta(doc, s, usable_width))
-        story.append(Spacer(1, 6 * mm))
+        story.append(Spacer(1, 5 * mm))
+
+        # 3b. Greeting block — "Madame, Monsieur," + 2 short paragraphs
+        story.extend(_build_greeting_block(doc, s))
+        story.append(Spacer(1, 4 * mm))
 
         # 4. Items table
         if doc.items:
@@ -673,24 +751,22 @@ class ReportLabBillingDocumentPdfRenderer:
         story.extend(_build_totals_block(doc, s, usable_width))
         story.append(Spacer(1, 6 * mm))
 
-        # 6. Notes
-        if doc.notes and doc.notes.strip():
-            story.extend(_build_text_section("Notes", doc.notes, s))
-            story.append(Spacer(1, 4 * mm))
+        # 6. Notes (only if explicitly used as extra notes, not project description)
+        # Skip rendering — project description is now displayed in the items table
+        # project repeat row, so notes-as-project-description would duplicate.
 
         # 7. Terms / conditions générales
         if doc.terms and doc.terms.strip():
             story.extend(_build_text_section("Conditions générales", doc.terms, s))
             story.append(Spacer(1, 4 * mm))
 
-        # 8. Signature block
+        # 8. Closing greeting (mirrors B71 in source xlsx)
+        story.extend(_build_closing_greeting(s))
         story.append(Spacer(1, 4 * mm))
-        story.extend(_build_signature_block(doc, s, usable_width))
 
-        # 9. Coordonnées bancaires (if IBAN/BIC present)
+        # 9. Coordonnées bancaires (if IBAN/BIC present) — orange band
         bank_block = _build_bank_coords_block(doc, s, usable_width)
         if bank_block:
-            story.append(Spacer(1, 5 * mm))
             story.extend(bank_block)
 
         # 10. Late-payment legal note (factures only — devis don't trigger this)
