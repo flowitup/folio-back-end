@@ -387,7 +387,11 @@ class _DirectEmailQueue:
 
     def enqueue(self, task_name: str, payload: Dict[str, Any]) -> str:
         """Execute the email send inline instead of queuing."""
+        import logging
+
+        log = logging.getLogger(__name__)
         if self._email_port is None:
+            log.error("email_port=None — task %s skipped (check EMAIL_PROVIDER / RESEND_API_KEY / FROM_EMAIL)", task_name)
             return "noop"
         if task_name == "tasks.send_email":
             ep = payload.get("payload")
@@ -395,9 +399,10 @@ class _DirectEmailQueue:
                 try:
                     self._email_port.send(ep)
                 except Exception:
-                    import logging
-
-                    logging.getLogger(__name__).warning("Inline email send failed for task %s", task_name)
+                    # exc_info=True surfaces the real cause (bad API key, unverified
+                    # sending domain, rate limit, etc.) in journald — previously the
+                    # bare `except` swallowed the reason and emails failed silently.
+                    log.exception("Inline email send failed for %s to=%s", task_name, getattr(ep, "to", "?"))
         return "inline"
 
 
@@ -579,6 +584,7 @@ def configure_container(
         container.revoke_invitation_usecase = RevokeInvitationUseCase(
             invitation_repo=invitation_repo,
             user_repo=user_repository,
+            db_session=_db.session,
         )
         container.list_invitations_usecase = ListInvitationsUseCase(
             invitation_repo=invitation_repo,
