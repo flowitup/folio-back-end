@@ -64,6 +64,43 @@ class LogAttendanceRequest(BaseModel):
         return self
 
 
+class BulkLogAttendanceEntry(BaseModel):
+    """One row inside a bulk-log request body."""
+
+    worker_id: str = Field(...)
+    amount_override: Optional[float] = Field(None, ge=0)
+    note: Optional[str] = Field(None, max_length=500)
+    shift_type: Optional[ShiftTypeLiteral] = None
+    supplement_hours: int = Field(default=0, ge=0, le=12)
+
+    @model_validator(mode="after")
+    def _validate_non_empty_and_override_consistency(self) -> "BulkLogAttendanceEntry":
+        if self.shift_type is None and self.supplement_hours == 0:
+            raise ValueError("Empty entry: must set shift_type or supplement_hours > 0")
+        if self.shift_type is None and self.amount_override is not None:
+            raise ValueError("amount_override requires a shift_type")
+        return self
+
+
+class BulkLogAttendanceRequest(BaseModel):
+    """Request body for the bulk-log endpoint.
+
+    Single date + N entries, atomic. Cook 3a of phase-03. Cap at 50
+    entries per request to keep the worst-case worker-validation
+    O(N) loop bounded and to discourage abuse from a compromised JWT.
+    """
+
+    date: str = Field(...)  # ISO date YYYY-MM-DD
+    entries: list[BulkLogAttendanceEntry] = Field(..., min_length=1, max_length=50)
+
+
+class BulkLogAttendanceResponse(BaseModel):
+    """Response body for the bulk-log endpoint."""
+
+    created: list[str]
+    skipped_worker_ids: list[str]
+
+
 class UpdateAttendanceRequest(BaseModel):
     """Request body for updating attendance.
 

@@ -16,6 +16,8 @@ from app.api.v1.labor._labor_validation_error_helper import (
 )
 from app.api.v1.labor.schemas import (
     LogAttendanceRequest,
+    BulkLogAttendanceRequest,
+    BulkLogAttendanceResponse,
     UpdateAttendanceRequest,
     LaborEntryResponse,
     LaborEntryListResponse,
@@ -28,6 +30,8 @@ from app.api.v1.labor.schemas import (
 from app.api.v1.projects.decorators import require_permission
 from app.application.labor import (
     LogAttendanceRequest as LogAttendanceDTO,
+    BulkLogAttendanceRequest as BulkLogAttendanceDTO,
+    BulkLogAttendanceEntry as BulkLogAttendanceEntryDTO,
     UpdateAttendanceRequest as UpdateAttendanceDTO,
     DeleteAttendanceRequest,
     ListLaborEntriesRequest,
@@ -163,6 +167,60 @@ def log_attendance(project_id: str):
                 "note": result.note,
                 "created_at": result.created_at,
             }
+        ),
+        201,
+    )
+
+
+@labor_bp.route("/projects/<project_id>/labor-entries/bulk", methods=["POST"])
+@jwt_required()
+@limiter.limit("10 per minute")
+@require_permission("project:manage_labor")
+def bulk_log_attendance(project_id: str):
+    """Bulk-log attendance for N workers on a single date (cook 3a).
+
+    Atomic: all rows persisted in the same SQLAlchemy session; existing
+    (worker, date) entries are silently skipped and returned in
+    `skipped_worker_ids` so the FE can render a "3 logged, 1 skipped"
+    toast. Cross-project conflict warn is Phase 4.
+    """
+    try:
+        data = BulkLogAttendanceRequest(**(request.get_json() or {}))
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    try:
+        result = get_container().bulk_log_attendance_usecase.execute(
+            BulkLogAttendanceDTO(
+                project_id=UUID(project_id),
+                date=_parse_date(data.date),
+                entries=[
+                    BulkLogAttendanceEntryDTO(
+                        worker_id=UUID(e.worker_id),
+                        shift_type=e.shift_type,
+                        supplement_hours=e.supplement_hours,
+                        amount_override=(
+                            Decimal(str(e.amount_override))
+                            if e.amount_override is not None
+                            else None
+                        ),
+                        note=e.note,
+                    )
+                    for e in data.entries
+                ],
+            )
+        )
+    except ValueError as e:
+        return _error_response("ValidationError", str(e), 400)
+    except WorkerNotFoundError as e:
+        return _error_response("NotFound", str(e), 404)
+
+    return (
+        jsonify(
+            BulkLogAttendanceResponse(
+                created=result.created,
+                skipped_worker_ids=result.skipped_worker_ids,
+            ).model_dump()
         ),
         201,
     )

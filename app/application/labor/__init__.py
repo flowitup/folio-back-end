@@ -31,6 +31,12 @@ from app.application.labor.log_attendance import (
     LogAttendanceRequest,
     LogAttendanceResponse,
 )
+from app.application.labor.bulk_log_attendance import (
+    BulkLogAttendanceUseCase,
+    BulkLogAttendanceRequest,
+    BulkLogAttendanceResponse,
+    BulkLogAttendanceEntry,
+)
 from app.application.labor.update_attendance import (
     UpdateAttendanceUseCase,
     UpdateAttendanceRequest,
@@ -80,6 +86,10 @@ __all__ = [
     "WorkerSummary",
     # Attendance use cases
     "LogAttendanceUseCase",
+    "BulkLogAttendanceUseCase",
+    "BulkLogAttendanceRequest",
+    "BulkLogAttendanceResponse",
+    "BulkLogAttendanceEntry",
     "LogAttendanceRequest",
     "LogAttendanceResponse",
     "UpdateAttendanceUseCase",
