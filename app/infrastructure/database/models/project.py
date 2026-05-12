@@ -20,6 +20,17 @@ class ProjectModel(Base):
     name = Column(String(255), nullable=False)
     address = Column(String(500), nullable=True)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    # Company FK is nullable during the Phase 1 rollout: migration
+    # b1c2d3e4f5a6 backfills it from the owner's primary company access
+    # row. A follow-up migration tightens it to NOT NULL once orphans
+    # are resolved. ondelete=SET NULL mirrors billing_documents — a
+    # company deletion orphans the project for admin re-assignment.
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,
@@ -29,6 +40,7 @@ class ProjectModel(Base):
 
     # Relationships
     owner = relationship("UserModel", foreign_keys=[owner_id])
+    company = relationship("CompanyModel", foreign_keys=[company_id])
     # primaryjoin/secondaryjoin required because user_projects now has two FKs
     # to users (user_id + invited_by_user_id); we must pin to user_id only.
     users = relationship(
