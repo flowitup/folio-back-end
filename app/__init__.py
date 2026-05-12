@@ -412,6 +412,20 @@ def _configure_di_container() -> None:
         db_session=db.session,
     )
 
+    # Re-wire CreateWorkerUseCase with person_repo now that the latter
+    # exists. configure_container() in wiring.py wires it with the worker
+    # repo only — cook 1d-ii-b adds the inline-Person-create branch which
+    # needs the Person repo too. The existing-Person-link branch works
+    # without it, so this rewire is strictly additive.
+    if _c.worker_repository and _c.create_worker_usecase is not None:
+        from app.application.labor.create_worker import (
+            CreateWorkerUseCase as _CreateWorkerUseCase,
+        )
+        _c.create_worker_usecase = _CreateWorkerUseCase(
+            worker_repo=_c.worker_repository,
+            person_repo=_person_repo,
+        )
+
     # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)
     # -----------------------------------------------------------------------

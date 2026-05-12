@@ -21,6 +21,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
         model = WorkerModel(
             id=worker.id,
             project_id=worker.project_id,
+            person_id=worker.person_id,
             name=worker.name,
             phone=worker.phone,
             daily_rate=worker.daily_rate,

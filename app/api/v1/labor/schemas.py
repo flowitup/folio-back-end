@@ -13,11 +13,19 @@ ShiftTypeLiteral = Literal["full", "half", "overtime"]
 
 
 class CreateWorkerRequest(BaseModel):
-    """Request body for creating a worker."""
+    """Request body for creating a worker.
+
+    ``person_id`` (cook 1d-ii-b) lets the caller link this Worker to an
+    existing Person picked via the PersonTypeahead. When omitted, the
+    legacy flow runs: name + phone create a fresh Person via the
+    CreateWorkerUseCase before linking. Either path produces a Worker
+    with a non-null person_id once Phase 1c backfill has completed.
+    """
 
     name: str = Field(..., min_length=1, max_length=255)
     daily_rate: float = Field(..., gt=0)
     phone: Optional[str] = Field(None, max_length=50)
+    person_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
 
 class UpdateWorkerRequest(BaseModel):
