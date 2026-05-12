@@ -391,7 +391,9 @@ class _DirectEmailQueue:
 
         log = logging.getLogger(__name__)
         if self._email_port is None:
-            log.error("email_port=None — task %s skipped (check EMAIL_PROVIDER / RESEND_API_KEY / FROM_EMAIL)", task_name)
+            log.error(
+                "email_port=None — task %s skipped (check EMAIL_PROVIDER / RESEND_API_KEY / FROM_EMAIL)", task_name
+            )
             return "noop"
         if task_name == "tasks.send_email":
             ep = payload.get("payload")
