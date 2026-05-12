@@ -400,12 +400,17 @@ def _configure_di_container() -> None:
     from app.application.persons import (
         CreatePersonUseCase as _CreatePersonUseCase,
         SearchPersonsUseCase as _SearchPersonsUseCase,
+        MergePersonsUseCase as _MergePersonsUseCase,
     )
 
     _person_repo = SqlAlchemyPersonRepository(db.session)
     _c.person_repo = _person_repo
     _c.create_person_usecase = _CreatePersonUseCase(person_repo=_person_repo)
     _c.search_persons_usecase = _SearchPersonsUseCase(person_repo=_person_repo)
+    _c.merge_persons_usecase = _MergePersonsUseCase(
+        person_repo=_person_repo,
+        db_session=db.session,
+    )
 
     # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)

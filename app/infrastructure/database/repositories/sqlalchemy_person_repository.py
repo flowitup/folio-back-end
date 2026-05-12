@@ -67,6 +67,16 @@ class SqlAlchemyPersonRepository(IPersonRepository):
         )
         return self._to_entity(model) if model else None
 
+    def delete(self, person_id: UUID) -> bool:
+        model = self._session.query(PersonModel).filter_by(id=person_id).first()
+        if model is None:
+            return False
+        self._session.delete(model)
+        # The caller (MergePersonsUseCase) owns the transaction boundary
+        # and commits both the worker reassignment + this delete together.
+        self._session.flush()
+        return True
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

@@ -17,6 +17,13 @@ from app.application.persons.search_persons import (
     SearchPersonsResponse,
     PersonSummary,
 )
+from app.application.persons.merge_persons import (
+    MergePersonsUseCase,
+    MergePersonsRequest,
+    MergePersonsResponse,
+    PersonNotFoundError,
+    InvalidMergeError,
+)
 
 __all__ = [
     "IPersonRepository",
@@ -27,4 +34,9 @@ __all__ = [
     "SearchPersonsRequest",
     "SearchPersonsResponse",
     "PersonSummary",
+    "MergePersonsUseCase",
+    "MergePersonsRequest",
+    "MergePersonsResponse",
+    "PersonNotFoundError",
+    "InvalidMergeError",
 ]

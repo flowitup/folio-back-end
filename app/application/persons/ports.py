@@ -43,3 +43,14 @@ class IPersonRepository(ABC):
         per-project Worker rows.
         """
         ...
+
+    @abstractmethod
+    def delete(self, person_id: UUID) -> bool:
+        """Hard-delete a Person row. Returns True if a row was deleted.
+
+        The caller is responsible for ensuring no Worker rows reference
+        this Person — the DB FK is ON DELETE RESTRICT and will raise an
+        IntegrityError otherwise. The merge use case reassigns workers
+        first, then calls this.
+        """
+        ...

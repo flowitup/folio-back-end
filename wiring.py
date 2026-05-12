@@ -313,10 +313,11 @@ class Container:
     import_billing_document_usecase: Optional[ImportBillingDocumentUseCase] = None
     list_activity_suggestions_usecase: Optional[ListActivitySuggestionsUseCase] = None
 
-    # Persons repo + use cases (Phase 1b-ii of labor-calendar-and-bulk-log plan)
+    # Persons repo + use cases (Phase 1b-ii / 1c of labor-calendar-and-bulk-log plan)
     person_repo: Optional[Any] = None  # SqlAlchemyPersonRepository
     create_person_usecase: Optional[Any] = None  # CreatePersonUseCase
     search_persons_usecase: Optional[Any] = None  # SearchPersonsUseCase
+    merge_persons_usecase: Optional[Any] = None  # MergePersonsUseCase
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None

@@ -22,6 +22,10 @@ from app.api.v1.persons import persons_bp
 from app.application.persons import (
     CreatePersonRequest,
     CreatePersonUseCase,
+    InvalidMergeError,
+    MergePersonsRequest,
+    MergePersonsUseCase,
+    PersonNotFoundError,
     SearchPersonsRequest,
     SearchPersonsUseCase,
 )
@@ -59,6 +63,17 @@ class SearchPersonsResponseSchema(BaseModel):
     total: int
 
 
+class MergePersonsRequestSchema(BaseModel):
+    """POST /persons/<source_id>/merge body."""
+
+    target_person_id: str = Field(min_length=36, max_length=36)
+
+
+class MergePersonsResponseSchema(BaseModel):
+    target_person_id: str
+    workers_reassigned: int
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -92,6 +107,10 @@ def _get_create_usecase() -> CreatePersonUseCase:
 
 def _get_search_usecase() -> SearchPersonsUseCase:
     return get_container().search_persons_usecase
+
+
+def _get_merge_usecase() -> MergePersonsUseCase:
+    return get_container().merge_persons_usecase
 
 
 # ---------------------------------------------------------------------------
@@ -160,3 +179,48 @@ def create_person():
             created_at=created.created_at,
         ).model_dump()
     ), 201
+
+
+@persons_bp.route("/persons/<source_person_id>/merge", methods=["POST"])
+@jwt_required()
+@limiter.limit("10 per minute")
+def merge_persons(source_person_id: str):
+    """Merge source Person into target Person.
+
+    Reassigns all of source's Worker rows to target, then deletes source.
+    Single DB transaction.
+
+    Phase 1c surface — gated behind any authenticated caller for now.
+    A role check (`admin` only) will be layered when the FE merge tool
+    ships in Phase 1d.
+    """
+    try:
+        body = MergePersonsRequestSchema(**(request.get_json() or {}))
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    try:
+        source_uuid = UUID(source_person_id)
+        target_uuid = UUID(body.target_person_id)
+    except ValueError:
+        return _error("ValidationError", "Invalid UUID", 400)
+
+    try:
+        result = _get_merge_usecase().execute(
+            MergePersonsRequest(
+                source_person_id=source_uuid,
+                target_person_id=target_uuid,
+            )
+        )
+    except InvalidMergeError as e:
+        return _error("ValidationError", str(e), 400)
+    except PersonNotFoundError as e:
+        return _error("NotFound", str(e), 404)
+
+    return jsonify(
+        MergePersonsResponseSchema(
+            target_person_id=result.target_person_id,
+            workers_reassigned=result.workers_reassigned,
+        ).model_dump()
+    )
+
