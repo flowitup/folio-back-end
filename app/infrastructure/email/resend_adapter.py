@@ -45,12 +45,17 @@ class ResendEmailAdapter:
         data = json.dumps(body).encode("utf-8")
         # Local name `req` to avoid confusion with the imported `urllib.request`
         # module — a previous reviewer flagged the shadowing as N2.
+        # Cloudflare (which fronts api.resend.com) returns 403 / error code 1010
+        # for stdlib urllib's default "Python-urllib/3.x" User-Agent. Set an
+        # explicit non-default UA to get past the WAF bot signature.
         req = urllib.request.Request(
             _RESEND_API_URL,
             data=data,
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": "folio-backend/1.0 (+resend)",
+                "Accept": "application/json",
             },
             method="POST",
         )
