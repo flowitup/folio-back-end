@@ -28,6 +28,11 @@ class CreateWorkerResponse:
     daily_rate: float
     is_active: bool
     created_at: str
+    # Joined Person identity (cook 1d-ii-a). Populated when the freshly
+    # created Worker has a person_id (Phase 1c+); None otherwise.
+    person_id: Optional[str] = None
+    person_name: Optional[str] = None
+    person_phone: Optional[str] = None
 
 
 class CreateWorkerUseCase:
@@ -59,6 +64,9 @@ class CreateWorkerUseCase:
         return CreateWorkerResponse(
             id=str(saved.id),
             project_id=str(saved.project_id),
+            person_id=str(saved.person_id) if saved.person_id else None,
+            person_name=saved.person_name,
+            person_phone=saved.person_phone,
             name=saved.name,
             phone=saved.phone,
             daily_rate=float(saved.daily_rate),

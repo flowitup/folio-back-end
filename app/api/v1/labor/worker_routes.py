@@ -34,7 +34,11 @@ from wiring import get_container
 
 
 def _worker_response(w) -> WorkerResponse:
-    """Convert worker entity to response schema."""
+    """Convert worker entity to response schema.
+
+    person_id / person_name / person_phone surface the joined identity from
+    cook 1d-ii-a. They are None for workers not yet linked (pre-backfill).
+    """
     return WorkerResponse(
         id=w.id,
         project_id=w.project_id,
@@ -43,6 +47,9 @@ def _worker_response(w) -> WorkerResponse:
         daily_rate=w.daily_rate,
         is_active=w.is_active,
         created_at=w.created_at,
+        person_id=str(w.person_id) if w.person_id else None,
+        person_name=w.person_name,
+        person_phone=w.person_phone,
     )
 
 

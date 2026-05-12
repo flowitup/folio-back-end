@@ -83,7 +83,15 @@ class UpdateAttendanceRequest(BaseModel):
 
 
 class WorkerResponse(BaseModel):
-    """Single worker response."""
+    """Single worker response.
+
+    person_id / person_name / person_phone surface the joined Person identity
+    introduced by plan 260512-2341-labor-calendar-and-bulk-log (cook 1d-ii-a).
+    They are additive — the legacy ``name`` and ``phone`` fields remain
+    populated from the workers table for back-compat with FE callers that
+    haven't migrated yet. A follow-up release tightens the contract to
+    require person_id and ultimately drops the inline name/phone columns.
+    """
 
     id: str
     project_id: str
@@ -92,6 +100,13 @@ class WorkerResponse(BaseModel):
     daily_rate: float
     is_active: bool
     created_at: str
+
+    # Joined Person identity. Nullable during the Phase 1c backfill rollout
+    # — once 100% of workers have person_id populated, a follow-up release
+    # makes these non-optional.
+    person_id: Optional[str] = None
+    person_name: Optional[str] = None
+    person_phone: Optional[str] = None
 
 
 class WorkerListResponse(BaseModel):

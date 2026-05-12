@@ -63,6 +63,10 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
         return False
 
     def _to_entity(self, model: WorkerModel) -> Worker:
+        # Person FK is nullable during the Phase 1c backfill rollout — guard
+        # against unlinked rows. Accessing model.person triggers the lazy
+        # join, so we only pay for it once per worker per session.
+        person = model.person if model.person_id else None
         return Worker(
             id=model.id,
             project_id=model.project_id,
@@ -72,4 +76,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             is_active=model.is_active,
             created_at=model.created_at,
             updated_at=model.updated_at,
+            person_id=model.person_id,
+            person_name=person.name if person else None,
+            person_phone=person.phone if person else None,
         )

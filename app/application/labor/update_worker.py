@@ -30,6 +30,10 @@ class UpdateWorkerResponse:
     daily_rate: float
     is_active: bool
     created_at: str
+    # Joined Person identity (cook 1d-ii-a).
+    person_id: Optional[str] = None
+    person_name: Optional[str] = None
+    person_phone: Optional[str] = None
 
 
 class UpdateWorkerUseCase:
@@ -69,4 +73,7 @@ class UpdateWorkerUseCase:
             daily_rate=float(saved.daily_rate),
             is_active=saved.is_active,
             created_at=saved.created_at.isoformat(),
+            person_id=str(saved.person_id) if saved.person_id else None,
+            person_name=saved.person_name,
+            person_phone=saved.person_phone,
         )
