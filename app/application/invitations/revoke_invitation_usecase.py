@@ -7,6 +7,7 @@ from uuid import UUID
 from app.application.invitations.exceptions import PermissionDeniedError
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
+    TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
 from app.domain.entities.invitation import InvitationStatus
@@ -20,9 +21,11 @@ class RevokeInvitationUseCase:
         self,
         invitation_repo: InvitationRepositoryPort,
         user_repo: UserWriteRepositoryPort,
+        db_session: TransactionalSessionPort,
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
+        self._db = db_session
 
     # ------------------------------------------------------------------
 
@@ -50,6 +53,10 @@ class RevokeInvitationUseCase:
 
         revoked = inv.revoke()
         self._inv_repo.save(revoked)
+        # Repository.save() only flushes — the request-scoped Flask-SQLAlchemy
+        # session rolls back on teardown without an explicit commit, so revoke
+        # would silently no-op.
+        self._db.commit()
 
     # ------------------------------------------------------------------
 

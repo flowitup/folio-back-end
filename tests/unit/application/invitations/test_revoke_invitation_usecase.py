@@ -66,10 +66,11 @@ def _make_plain_user() -> User:
     )
 
 
-def _make_uc(inv_repo=None, user_repo=None) -> RevokeInvitationUseCase:
+def _make_uc(inv_repo=None, user_repo=None, db_session=None) -> RevokeInvitationUseCase:
     return RevokeInvitationUseCase(
         invitation_repo=inv_repo or MagicMock(),
         user_repo=user_repo or MagicMock(),
+        db_session=db_session or MagicMock(),
     )
 
 
@@ -87,13 +88,16 @@ class TestRevokeInvitation:
         inv_repo.find_by_id.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_id.return_value = actor
+        db = MagicMock()
 
-        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo)
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, db_session=db)
         uc.execute(inviter_id=actor.id, invitation_id=inv.id)
 
         inv_repo.save.assert_called_once()
         saved = inv_repo.save.call_args[0][0]
         assert saved.status == InvitationStatus.REVOKED
+        # Commit must follow save — without it Flask-SQLAlchemy rolls back on teardown.
+        db.commit.assert_called_once()
 
     def test_already_revoked_is_idempotent_no_exception(self):
         actor = _make_user_with_invite_perm()
