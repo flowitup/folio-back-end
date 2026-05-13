@@ -313,12 +313,20 @@ class Container:
     import_billing_document_usecase: Optional[ImportBillingDocumentUseCase] = None
     list_activity_suggestions_usecase: Optional[ListActivitySuggestionsUseCase] = None
 
+    # Persons repo + use cases (Phase 1b-ii / 1c of labor-calendar-and-bulk-log plan)
+    person_repo: Optional[Any] = None  # SqlAlchemyPersonRepository
+    create_person_usecase: Optional[Any] = None  # CreatePersonUseCase
+    search_persons_usecase: Optional[Any] = None  # SearchPersonsUseCase
+    merge_persons_usecase: Optional[Any] = None  # MergePersonsUseCase
+
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
     update_worker_usecase: Optional[UpdateWorkerUseCase] = None
     delete_worker_usecase: Optional[DeleteWorkerUseCase] = None
     list_workers_usecase: Optional[ListWorkersUseCase] = None
     log_attendance_usecase: Optional[LogAttendanceUseCase] = None
+    bulk_log_attendance_usecase: Optional[Any] = None  # BulkLogAttendanceUseCase (cook 3a)
+    find_cross_project_conflicts_usecase: Optional[Any] = None  # Phase 4 (cook 4a)
     update_attendance_usecase: Optional[UpdateAttendanceUseCase] = None
     delete_attendance_usecase: Optional[DeleteAttendanceUseCase] = None
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
@@ -489,12 +497,30 @@ def configure_container(
     if worker_repository and labor_entry_repository:
         container.log_attendance_usecase = LogAttendanceUseCase(worker_repository, labor_entry_repository)
         container.list_labor_entries_usecase = ListLaborEntriesUseCase(worker_repository, labor_entry_repository)
+        # Bulk-log: shares the SQLAlchemy session with the other labor
+        # write paths so the atomic-batch contract holds end-to-end.
+        from app.application.labor.bulk_log_attendance import (
+            BulkLogAttendanceUseCase as _BulkLog,
+        )
+        from app import db as _db_for_bulk_log
+        container.bulk_log_attendance_usecase = _BulkLog(
+            worker_repo=worker_repository,
+            entry_repo=labor_entry_repository,
+            db_session=_db_for_bulk_log.session,
+        )
 
     if labor_entry_repository:
         container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository)
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
         container.get_monthly_labor_summary_usecase = GetMonthlyLaborSummaryUseCase(labor_entry_repository)
+        # Cross-project conflict warn (Phase 4 — cook 4a).
+        from app.application.labor.find_cross_project_conflicts import (
+            FindCrossProjectConflictsUseCase as _FindConflicts,
+        )
+        container.find_cross_project_conflicts_usecase = _FindConflicts(
+            entry_repo=labor_entry_repository,
+        )
 
     if worker_repository and labor_entry_repository and project_repository:
         container.export_labor_usecase = ExportLaborUseCase(

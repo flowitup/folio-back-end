@@ -116,6 +116,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
     from app.api.v1.companies import companies_bp, users_me_bp
+    from app.api.v1.persons import persons_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -135,6 +136,7 @@ def create_app(config_class: type = Config) -> Flask:
     # company_profile_bp retired — table dropped in migration 2d9c35848b9b (C2)
     app.register_blueprint(companies_bp, url_prefix="/api/v1")
     app.register_blueprint(users_me_bp, url_prefix="/api/v1")
+    app.register_blueprint(persons_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -388,6 +390,41 @@ def _configure_di_container() -> None:
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
     )
+
+    # -----------------------------------------------------------------------
+    # Persons DI wiring (Phase 1b-ii of labor-calendar-and-bulk-log plan)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_person_repository import (
+        SqlAlchemyPersonRepository,
+    )
+    from app.application.persons import (
+        CreatePersonUseCase as _CreatePersonUseCase,
+        SearchPersonsUseCase as _SearchPersonsUseCase,
+        MergePersonsUseCase as _MergePersonsUseCase,
+    )
+
+    _person_repo = SqlAlchemyPersonRepository(db.session)
+    _c.person_repo = _person_repo
+    _c.create_person_usecase = _CreatePersonUseCase(person_repo=_person_repo)
+    _c.search_persons_usecase = _SearchPersonsUseCase(person_repo=_person_repo)
+    _c.merge_persons_usecase = _MergePersonsUseCase(
+        person_repo=_person_repo,
+        db_session=db.session,
+    )
+
+    # Re-wire CreateWorkerUseCase with person_repo now that the latter
+    # exists. configure_container() in wiring.py wires it with the worker
+    # repo only — cook 1d-ii-b adds the inline-Person-create branch which
+    # needs the Person repo too. The existing-Person-link branch works
+    # without it, so this rewire is strictly additive.
+    if _c.worker_repository and _c.create_worker_usecase is not None:
+        from app.application.labor.create_worker import (
+            CreateWorkerUseCase as _CreateWorkerUseCase,
+        )
+        _c.create_worker_usecase = _CreateWorkerUseCase(
+            worker_repo=_c.worker_repository,
+            person_repo=_person_repo,
+        )
 
     # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)

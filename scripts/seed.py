@@ -63,6 +63,7 @@ from scripts.seed_users import seed_test_users
 from scripts.seed_memberships import seed_memberships
 from scripts.seed_invitations import seed_invitations
 from scripts.seed_labor import seed_labor
+from scripts.seed_persons import seed_persons
 from scripts.seed_invoices import seed_invoices
 from scripts.seed_notes import seed_notes
 
@@ -145,6 +146,12 @@ def main() -> None:
         if all_flag or _flag("--with-labor"):
             print("\n9. Creating sample labor data...")
             seed_labor()
+
+        # Persons (global identity entities) — Phase 1b-ii. Independent of
+        # workers; backfill linking workers→persons lands in Phase 1c.
+        if all_flag or _flag("--with-persons"):
+            print("\n9b. Creating sample persons...")
+            seed_persons()
 
         if all_flag or _flag("--with-invoices"):
             print("\n10. Creating sample invoices...")

@@ -4,7 +4,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from flask import jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api.v1.labor import labor_bp
@@ -34,7 +34,11 @@ from wiring import get_container
 
 
 def _worker_response(w) -> WorkerResponse:
-    """Convert worker entity to response schema."""
+    """Convert worker entity to response schema.
+
+    person_id / person_name / person_phone surface the joined identity from
+    cook 1d-ii-a. They are None for workers not yet linked (pre-backfill).
+    """
     return WorkerResponse(
         id=w.id,
         project_id=w.project_id,
@@ -43,6 +47,9 @@ def _worker_response(w) -> WorkerResponse:
         daily_rate=w.daily_rate,
         is_active=w.is_active,
         created_at=w.created_at,
+        person_id=str(w.person_id) if w.person_id else None,
+        person_name=w.person_name,
+        person_phone=w.person_phone,
     )
 
 
@@ -71,12 +78,22 @@ def create_worker(project_id: str):
         return _validation_error_response(e)
 
     try:
+        # JWT subject identifies the caller — required when the use case
+        # has to create a Person inline (no person_id supplied). The
+        # use case ignores it when person_id is set.
+        creator_id = UUID(str(get_jwt_identity()))
+    except (TypeError, ValueError):
+        return _error_response("ValidationError", "Invalid JWT identity", 401)
+
+    try:
         result = get_container().create_worker_usecase.execute(
             CreateWorkerDTO(
                 project_id=UUID(project_id),
                 name=data.name,
                 daily_rate=Decimal(str(data.daily_rate)),
                 phone=data.phone,
+                person_id=UUID(data.person_id) if data.person_id else None,
+                created_by_user_id=creator_id,
             )
         )
     except (ValueError, InvalidWorkerDataError) as e:

@@ -25,6 +25,14 @@ class Worker:
     is_active: bool = True
     updated_at: Optional[datetime] = None
 
+    # Joined Person identity — populated by the repository when the FK is
+    # set (post Phase 1c backfill). None for unlinked workers; the API
+    # layer surfaces this via WorkerResponse.person_*. See plan
+    # 260512-2341-labor-calendar-and-bulk-log → phase-01 (cook 1d-ii-a).
+    person_id: Optional[UUID] = None
+    person_name: Optional[str] = None
+    person_phone: Optional[str] = None
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Worker):
             return NotImplemented

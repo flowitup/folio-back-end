@@ -6,6 +6,13 @@ from app.application.labor.ports import (
     LaborSummaryRow,
     MonthlyLaborSummaryRow,
     MonthlyWorkerSubRow,
+    CrossProjectConflict,
+    CrossProjectConflictEntry,
+)
+from app.application.labor.find_cross_project_conflicts import (
+    FindCrossProjectConflictsUseCase,
+    FindCrossProjectConflictsRequest,
+    FindCrossProjectConflictsResponse,
 )
 from app.application.labor.create_worker import (
     CreateWorkerUseCase,
@@ -30,6 +37,13 @@ from app.application.labor.log_attendance import (
     LogAttendanceUseCase,
     LogAttendanceRequest,
     LogAttendanceResponse,
+)
+from app.application.labor.bulk_log_attendance import (
+    BulkLogAttendanceUseCase,
+    BulkLogAttendanceRequest,
+    BulkLogAttendanceResponse,
+    BulkLogAttendanceEntry,
+    ConflictsNotAcknowledgedError,
 )
 from app.application.labor.update_attendance import (
     UpdateAttendanceUseCase,
@@ -80,6 +94,11 @@ __all__ = [
     "WorkerSummary",
     # Attendance use cases
     "LogAttendanceUseCase",
+    "BulkLogAttendanceUseCase",
+    "BulkLogAttendanceRequest",
+    "BulkLogAttendanceResponse",
+    "BulkLogAttendanceEntry",
+    "ConflictsNotAcknowledgedError",
     "LogAttendanceRequest",
     "LogAttendanceResponse",
     "UpdateAttendanceUseCase",
@@ -100,4 +119,9 @@ __all__ = [
     "LaborMonthlySummaryResponse",
     "MonthlySummaryRow",
     "MonthlyWorkerSubRowDTO",
+    "CrossProjectConflict",
+    "CrossProjectConflictEntry",
+    "FindCrossProjectConflictsUseCase",
+    "FindCrossProjectConflictsRequest",
+    "FindCrossProjectConflictsResponse",
 ]

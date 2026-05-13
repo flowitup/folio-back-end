@@ -13,11 +13,19 @@ ShiftTypeLiteral = Literal["full", "half", "overtime"]
 
 
 class CreateWorkerRequest(BaseModel):
-    """Request body for creating a worker."""
+    """Request body for creating a worker.
+
+    ``person_id`` (cook 1d-ii-b) lets the caller link this Worker to an
+    existing Person picked via the PersonTypeahead. When omitted, the
+    legacy flow runs: name + phone create a fresh Person via the
+    CreateWorkerUseCase before linking. Either path produces a Worker
+    with a non-null person_id once Phase 1c backfill has completed.
+    """
 
     name: str = Field(..., min_length=1, max_length=255)
     daily_rate: float = Field(..., gt=0)
     phone: Optional[str] = Field(None, max_length=50)
+    person_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
 
 class UpdateWorkerRequest(BaseModel):
@@ -56,6 +64,77 @@ class LogAttendanceRequest(BaseModel):
         return self
 
 
+class BulkLogAttendanceEntry(BaseModel):
+    """One row inside a bulk-log request body."""
+
+    worker_id: str = Field(...)
+    amount_override: Optional[float] = Field(None, ge=0)
+    note: Optional[str] = Field(None, max_length=500)
+    shift_type: Optional[ShiftTypeLiteral] = None
+    supplement_hours: int = Field(default=0, ge=0, le=12)
+
+    @model_validator(mode="after")
+    def _validate_non_empty_and_override_consistency(self) -> "BulkLogAttendanceEntry":
+        if self.shift_type is None and self.supplement_hours == 0:
+            raise ValueError("Empty entry: must set shift_type or supplement_hours > 0")
+        if self.shift_type is None and self.amount_override is not None:
+            raise ValueError("amount_override requires a shift_type")
+        return self
+
+
+class BulkLogAttendanceRequest(BaseModel):
+    """Request body for the bulk-log endpoint.
+
+    Single date + N entries, atomic. Cook 3a of phase-03. Cap at 50
+    entries per request to keep the worst-case worker-validation
+    O(N) loop bounded and to discourage abuse from a compromised JWT.
+    """
+
+    date: str = Field(...)  # ISO date YYYY-MM-DD
+    entries: list[BulkLogAttendanceEntry] = Field(..., min_length=1, max_length=50)
+    # Phase 4 — when True, the caller has seen the cross-project
+    # conflict modal and chooses to proceed anyway. The server still
+    # re-runs the check inside the transaction; if the flag is absent
+    # and conflicts exist, the endpoint returns 409 with the conflict
+    # payload so the FE can render its modal.
+    acknowledge_conflicts: bool = False
+
+
+class BulkLogAttendanceResponse(BaseModel):
+    """Response body for the bulk-log endpoint."""
+
+    created: list[str]
+    skipped_worker_ids: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — cross-project conflict warn
+# ---------------------------------------------------------------------------
+
+
+class CrossProjectConflictEntryResponse(BaseModel):
+    """One other-project entry inside a conflict group."""
+
+    project_id: str
+    project_name: str
+    shift_type: Optional[ShiftTypeLiteral] = None
+    supplement_hours: int
+
+
+class CrossProjectConflictResponse(BaseModel):
+    """Conflict group: one Person who is logged in another project."""
+
+    person_id: str
+    person_name: str
+    entries: list[CrossProjectConflictEntryResponse]
+
+
+class CrossProjectConflictsResponse(BaseModel):
+    """Wrapper response for GET /labor-entries/conflicts."""
+
+    conflicts: list[CrossProjectConflictResponse]
+
+
 class UpdateAttendanceRequest(BaseModel):
     """Request body for updating attendance.
 
@@ -83,7 +162,15 @@ class UpdateAttendanceRequest(BaseModel):
 
 
 class WorkerResponse(BaseModel):
-    """Single worker response."""
+    """Single worker response.
+
+    person_id / person_name / person_phone surface the joined Person identity
+    introduced by plan 260512-2341-labor-calendar-and-bulk-log (cook 1d-ii-a).
+    They are additive — the legacy ``name`` and ``phone`` fields remain
+    populated from the workers table for back-compat with FE callers that
+    haven't migrated yet. A follow-up release tightens the contract to
+    require person_id and ultimately drops the inline name/phone columns.
+    """
 
     id: str
     project_id: str
@@ -92,6 +179,13 @@ class WorkerResponse(BaseModel):
     daily_rate: float
     is_active: bool
     created_at: str
+
+    # Joined Person identity. Nullable during the Phase 1c backfill rollout
+    # — once 100% of workers have person_id populated, a follow-up release
+    # makes these non-optional.
+    person_id: Optional[str] = None
+    person_name: Optional[str] = None
+    person_phone: Optional[str] = None
 
 
 class WorkerListResponse(BaseModel):

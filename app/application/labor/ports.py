@@ -34,6 +34,31 @@ class MonthlyWorkerSubRow:
 
 
 @dataclass
+class CrossProjectConflictEntry:
+    """One other-project entry that conflicts with the target project's
+    proposed log on a given date (Phase 4).
+
+    Returned as a sub-row inside CrossProjectConflict.entries — a single
+    Person can be active in multiple other projects, so we group by
+    Person and list each conflicting entry separately.
+    """
+
+    project_id: UUID
+    project_name: str
+    shift_type: Optional[str]
+    supplement_hours: int
+
+
+@dataclass
+class CrossProjectConflict:
+    """Grouped conflict description for one Person (Phase 4)."""
+
+    person_id: UUID
+    person_name: str
+    entries: List["CrossProjectConflictEntry"]
+
+
+@dataclass
 class MonthlyLaborSummaryRow:
     """Aggregated labor cost per (year, month) across every worker on a project.
 
@@ -157,5 +182,25 @@ class ILaborEntryRepository(ABC):
         """Aggregate labor totals per (year, month) for the whole project.
 
         Ordered (year DESC, month DESC) — most recent month first.
+        """
+        ...
+
+    @abstractmethod
+    def find_cross_project_conflicts(
+        self,
+        project_id: UUID,
+        date: date,
+        person_ids: Optional[List[UUID]] = None,
+    ) -> List[CrossProjectConflict]:
+        """Find labor entries on ``date`` for Persons that are also active
+        on the target ``project_id``, but logged inside *other* projects
+        within the same company (Phase 4).
+
+        When ``person_ids`` is provided, results are limited to those
+        Persons; otherwise every active worker on the target project is
+        considered.
+
+        Ordered by ``person_name`` ASC then ``project_name`` ASC for
+        deterministic output. Returns an empty list when no conflicts.
         """
         ...
