@@ -41,9 +41,7 @@ class FindCrossProjectConflictsUseCase:
     def __init__(self, entry_repo: ILaborEntryRepository):
         self._entry_repo = entry_repo
 
-    def execute(
-        self, request: FindCrossProjectConflictsRequest
-    ) -> FindCrossProjectConflictsResponse:
+    def execute(self, request: FindCrossProjectConflictsRequest) -> FindCrossProjectConflictsResponse:
         conflicts = self._entry_repo.find_cross_project_conflicts(
             project_id=request.project_id,
             date=request.date,

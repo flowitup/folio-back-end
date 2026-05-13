@@ -55,18 +55,10 @@ def _arg_value(flag: str) -> Optional[str]:
 def _resolve_owner(worker: WorkerModel) -> Optional[UserModel]:
     """Project owner of the worker — used as Person.created_by_user_id when
     we have to create a new Person for this worker."""
-    project = (
-        db.session.query(ProjectModel)
-        .filter(ProjectModel.id == worker.project_id)
-        .first()
-    )
+    project = db.session.query(ProjectModel).filter(ProjectModel.id == worker.project_id).first()
     if not project:
         return None
-    return (
-        db.session.query(UserModel)
-        .filter(UserModel.id == project.owner_id)
-        .first()
-    )
+    return db.session.query(UserModel).filter(UserModel.id == project.owner_id).first()
 
 
 def _find_match(worker: WorkerModel) -> tuple[Optional[PersonModel], str]:
@@ -78,11 +70,7 @@ def _find_match(worker: WorkerModel) -> tuple[Optional[PersonModel], str]:
 
     # Rule 1: phone match
     if worker.phone:
-        rows = (
-            db.session.query(PersonModel)
-            .filter(PersonModel.phone == worker.phone)
-            .all()
-        )
+        rows = db.session.query(PersonModel).filter(PersonModel.phone == worker.phone).all()
         if len(rows) == 1:
             return rows[0], "phone"
         if len(rows) > 1:
@@ -113,11 +101,7 @@ def backfill() -> Dict[str, int]:
     counters = defaultdict(int)
     ambiguous: List[dict] = []
 
-    workers = (
-        db.session.query(WorkerModel)
-        .filter(WorkerModel.person_id.is_(None))
-        .all()
-    )
+    workers = db.session.query(WorkerModel).filter(WorkerModel.person_id.is_(None)).all()
     counters["workers_scanned"] = len(workers)
 
     now = datetime.now(timezone.utc)
@@ -175,9 +159,7 @@ def backfill() -> Dict[str, int]:
     csv_path = _arg_value("--csv")
     if csv_path and ambiguous:
         with open(csv_path, "w", newline="") as fh:
-            writer = csv.DictWriter(
-                fh, fieldnames=["worker_id", "worker_name", "worker_phone", "reason"]
-            )
+            writer = csv.DictWriter(fh, fieldnames=["worker_id", "worker_name", "worker_phone", "reason"])
             writer.writeheader()
             writer.writerows(ambiguous)
         counters["ambiguous_rows_written_to_csv"] = len(ambiguous)
