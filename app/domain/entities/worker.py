@@ -22,6 +22,7 @@ class Worker:
     daily_rate: Decimal
     created_at: datetime
     phone: Optional[str] = None
+    avatar_url: Optional[str] = None
     is_active: bool = True
     updated_at: Optional[datetime] = None
 

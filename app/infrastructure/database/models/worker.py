@@ -32,6 +32,7 @@ class WorkerModel(Base):
     name = Column(String(255), nullable=False)
     phone = Column(String(50), nullable=True)
     daily_rate = Column(Numeric(10, 2), nullable=False)
+    avatar_url = Column(String(500), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(

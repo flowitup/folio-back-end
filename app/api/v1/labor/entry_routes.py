@@ -115,6 +115,7 @@ def list_labor_entries(project_id: str):
                     id=e.id,
                     worker_id=e.worker_id,
                     worker_name=e.worker_name,
+                    worker_avatar_url=getattr(e, "worker_avatar_url", None),
                     date=e.date,
                     amount_override=e.amount_override,
                     effective_cost=e.effective_cost,
@@ -263,11 +264,7 @@ def bulk_log_attendance(project_id: str):
                         worker_id=UUID(e.worker_id),
                         shift_type=e.shift_type,
                         supplement_hours=e.supplement_hours,
-                        amount_override=(
-                            Decimal(str(e.amount_override))
-                            if e.amount_override is not None
-                            else None
-                        ),
+                        amount_override=(Decimal(str(e.amount_override)) if e.amount_override is not None else None),
                         note=e.note,
                     )
                     for e in data.entries
@@ -285,8 +282,7 @@ def bulk_log_attendance(project_id: str):
                 {
                     "error": "Conflict",
                     "message": (
-                        "Cross-project conflicts exist; resend with "
-                        "acknowledge_conflicts=true to override."
+                        "Cross-project conflicts exist; resend with " "acknowledge_conflicts=true to override."
                     ),
                     "conflicts": [
                         CrossProjectConflictResponse(

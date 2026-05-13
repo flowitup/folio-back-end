@@ -45,6 +45,7 @@ def _worker_response(w) -> WorkerResponse:
         name=w.name,
         phone=w.phone,
         daily_rate=w.daily_rate,
+        avatar_url=getattr(w, "avatar_url", None),
         is_active=w.is_active,
         created_at=w.created_at,
         person_id=str(w.person_id) if w.person_id else None,
@@ -94,6 +95,7 @@ def create_worker(project_id: str):
                 phone=data.phone,
                 person_id=UUID(data.person_id) if data.person_id else None,
                 created_by_user_id=creator_id,
+                avatar_url=data.avatar_url,
             )
         )
     except (ValueError, InvalidWorkerDataError) as e:
@@ -114,14 +116,17 @@ def update_worker(project_id: str, worker_id: str):
         return _validation_error_response(e)
 
     try:
-        result = get_container().update_worker_usecase.execute(
-            UpdateWorkerDTO(
-                worker_id=UUID(worker_id),
-                name=data.name,
-                phone=data.phone,
-                daily_rate=Decimal(str(data.daily_rate)) if data.daily_rate else None,
-            )
+        # Only forward avatar_url when the client explicitly sent the key
+        # — distinguishes "clear" (sent: null) from "leave unchanged" (omitted).
+        update_kwargs = dict(
+            worker_id=UUID(worker_id),
+            name=data.name,
+            phone=data.phone,
+            daily_rate=Decimal(str(data.daily_rate)) if data.daily_rate else None,
         )
+        if "avatar_url" in data.model_fields_set:
+            update_kwargs["avatar_url"] = data.avatar_url
+        result = get_container().update_worker_usecase.execute(UpdateWorkerDTO(**update_kwargs))
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError:
