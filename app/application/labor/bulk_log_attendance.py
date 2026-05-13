@@ -12,6 +12,7 @@ The cross-project conflict warn flow lands in Phase 4; this use case
 intentionally does not check other-project entries.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -20,9 +21,30 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from app.application.labor.ports import ILaborEntryRepository, IWorkerRepository
+logger = logging.getLogger(__name__)
+
+from app.application.labor.ports import (
+    CrossProjectConflict,
+    ILaborEntryRepository,
+    IWorkerRepository,
+)
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+
+
+class ConflictsNotAcknowledgedError(Exception):
+    """Raised by BulkLogAttendanceUseCase when cross-project conflicts
+    are present and the caller did not opt-in with
+    ``acknowledge_conflicts=True`` (Phase 4 — cook 4b).
+
+    The route layer surfaces this as a 409 carrying the same payload
+    shape as ``GET /labor-entries/conflicts`` so the FE can re-render
+    its summary modal without a second round-trip.
+    """
+
+    def __init__(self, conflicts: List[CrossProjectConflict]):
+        super().__init__(f"Unacknowledged cross-project conflicts: {len(conflicts)}")
+        self.conflicts = conflicts
 
 
 @dataclass
@@ -41,6 +63,11 @@ class BulkLogAttendanceRequest:
     project_id: UUID
     date: date
     entries: List[BulkLogAttendanceEntry] = field(default_factory=list)
+    # Phase 4: when False (default), the use case rejects with
+    # ConflictsNotAcknowledgedError if any worker being inserted has a
+    # same-day entry in another project of the same company. When True,
+    # the caller has seen the conflict modal and explicitly opted in.
+    acknowledge_conflicts: bool = False
 
 
 @dataclass
@@ -100,6 +127,47 @@ class BulkLogAttendanceUseCase:
             date_to=request.date,
         )
         already_logged: set[UUID] = {e.worker_id for e in existing}
+
+        # 2b. Cross-project conflict check (Phase 4 — cook 4b).
+        # Only run when conflicts haven't been acknowledged — once the
+        # user has confirmed the modal, the server still proceeds but
+        # the audit-log emission (future) tags the entries.
+        if not request.acknowledge_conflicts:
+            # Build the person_id list of workers being NEWLY inserted
+            # (skip the already-logged ones — they're not at risk of
+            # creating a fresh duplicate). Workers without a Person are
+            # skipped from the conflict check; legacy rows that haven't
+            # been backfilled yet trade conflict warn for backwards-
+            # compat.
+            insert_worker_ids = [
+                e.worker_id for e in request.entries
+                if e.worker_id not in already_logged
+            ]
+            if insert_worker_ids:
+                person_ids: List[UUID] = []
+                for wid in insert_worker_ids:
+                    w = self._worker_repo.find_by_id(wid)
+                    if w is not None and w.person_id is not None:
+                        person_ids.append(w.person_id)
+                if person_ids:
+                    conflicts = self._entry_repo.find_cross_project_conflicts(
+                        project_id=request.project_id,
+                        date=request.date,
+                        person_ids=person_ids,
+                    )
+                    if conflicts:
+                        raise ConflictsNotAcknowledgedError(conflicts)
+        elif request.entries:
+            # Audit trail surrogate: until a dedicated audit-log table
+            # exists, capture acknowledged-conflict events in the
+            # application log so they're at least findable in prod.
+            logger.info(
+                "bulk_log_attendance.conflicts_acknowledged "
+                "project_id=%s date=%s entry_count=%d",
+                request.project_id,
+                request.date,
+                len(request.entries),
+            )
 
         # 3. Stage new entries — skip duplicates silently.
         created_ids: List[str] = []

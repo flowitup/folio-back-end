@@ -7,9 +7,11 @@ from uuid import UUID
 
 from sqlalchemy import case as sa_case, func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.application.labor.ports import (
+    CrossProjectConflict,
+    CrossProjectConflictEntry,
     ILaborEntryRepository,
     LaborSummaryRow,
     MonthlyLaborSummaryRow,
@@ -17,7 +19,12 @@ from app.application.labor.ports import (
 )
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
-from app.infrastructure.database.models import LaborEntryModel, WorkerModel
+from app.infrastructure.database.models import (
+    LaborEntryModel,
+    PersonModel,
+    ProjectModel,
+    WorkerModel,
+)
 
 
 class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
@@ -246,6 +253,78 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             .all()
         )
         return [self._to_entity(m) for m in models]
+
+    def find_cross_project_conflicts(
+        self,
+        project_id: UUID,
+        date: date,
+        person_ids: Optional[List[UUID]] = None,
+    ) -> List[CrossProjectConflict]:
+        """Find same-day entries from other projects in the same company
+        (Phase 4 cross-project conflict warn).
+
+        Single-query join: Person → target Worker (this project) → other
+        Worker (different project) → LaborEntry (on date) → other Project
+        (same company). Active workers only on both sides; company scope
+        prevents leakage between orgs.
+        """
+        TargetWorker = aliased(WorkerModel)
+        OtherWorker = aliased(WorkerModel)
+        TargetProject = aliased(ProjectModel)
+        OtherProject = aliased(ProjectModel)
+
+        query = (
+            self._session.query(
+                PersonModel.id.label("person_id"),
+                PersonModel.name.label("person_name"),
+                OtherProject.id.label("other_project_id"),
+                OtherProject.name.label("other_project_name"),
+                LaborEntryModel.shift_type.label("shift_type"),
+                LaborEntryModel.supplement_hours.label("supplement_hours"),
+            )
+            .join(TargetWorker, TargetWorker.person_id == PersonModel.id)
+            .join(TargetProject, TargetProject.id == TargetWorker.project_id)
+            .join(OtherWorker, OtherWorker.person_id == PersonModel.id)
+            .join(OtherProject, OtherProject.id == OtherWorker.project_id)
+            .join(LaborEntryModel, LaborEntryModel.worker_id == OtherWorker.id)
+            .filter(
+                TargetWorker.project_id == project_id,
+                TargetWorker.is_active == True,  # noqa: E712
+                OtherWorker.project_id != project_id,
+                OtherWorker.is_active == True,  # noqa: E712
+                # Same company. Both NULL means orphaned projects — we
+                # treat them as separate orgs so NULL never equals NULL.
+                OtherProject.company_id == TargetProject.company_id,
+                TargetProject.company_id.isnot(None),
+                LaborEntryModel.date == date,
+            )
+            .order_by(PersonModel.name.asc(), OtherProject.name.asc())
+        )
+        if person_ids:
+            query = query.filter(PersonModel.id.in_(person_ids))
+
+        buckets: dict[UUID, CrossProjectConflict] = {}
+        order: List[UUID] = []
+        for row in query.all():
+            person_id = row.person_id
+            bucket = buckets.get(person_id)
+            if bucket is None:
+                bucket = CrossProjectConflict(
+                    person_id=person_id,
+                    person_name=row.person_name,
+                    entries=[],
+                )
+                buckets[person_id] = bucket
+                order.append(person_id)
+            bucket.entries.append(
+                CrossProjectConflictEntry(
+                    project_id=row.other_project_id,
+                    project_name=row.other_project_name,
+                    shift_type=row.shift_type,
+                    supplement_hours=row.supplement_hours or 0,
+                )
+            )
+        return [buckets[k] for k in order]
 
     def _to_entity(self, model: LaborEntryModel) -> LaborEntry:
         return LaborEntry(

@@ -92,6 +92,12 @@ class BulkLogAttendanceRequest(BaseModel):
 
     date: str = Field(...)  # ISO date YYYY-MM-DD
     entries: list[BulkLogAttendanceEntry] = Field(..., min_length=1, max_length=50)
+    # Phase 4 — when True, the caller has seen the cross-project
+    # conflict modal and chooses to proceed anyway. The server still
+    # re-runs the check inside the transaction; if the flag is absent
+    # and conflicts exist, the endpoint returns 409 with the conflict
+    # payload so the FE can render its modal.
+    acknowledge_conflicts: bool = False
 
 
 class BulkLogAttendanceResponse(BaseModel):
@@ -99,6 +105,34 @@ class BulkLogAttendanceResponse(BaseModel):
 
     created: list[str]
     skipped_worker_ids: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — cross-project conflict warn
+# ---------------------------------------------------------------------------
+
+
+class CrossProjectConflictEntryResponse(BaseModel):
+    """One other-project entry inside a conflict group."""
+
+    project_id: str
+    project_name: str
+    shift_type: Optional[ShiftTypeLiteral] = None
+    supplement_hours: int
+
+
+class CrossProjectConflictResponse(BaseModel):
+    """Conflict group: one Person who is logged in another project."""
+
+    person_id: str
+    person_name: str
+    entries: list[CrossProjectConflictEntryResponse]
+
+
+class CrossProjectConflictsResponse(BaseModel):
+    """Wrapper response for GET /labor-entries/conflicts."""
+
+    conflicts: list[CrossProjectConflictResponse]
 
 
 class UpdateAttendanceRequest(BaseModel):

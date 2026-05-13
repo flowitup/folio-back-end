@@ -26,14 +26,19 @@ from app.api.v1.labor.schemas import (
     LaborMonthlySummaryResponse,
     MonthlySummaryRowResponse,
     MonthlyWorkerSubRowResponse,
+    CrossProjectConflictsResponse,
+    CrossProjectConflictResponse,
+    CrossProjectConflictEntryResponse,
 )
 from app.api.v1.projects.decorators import require_permission
 from app.application.labor import (
     LogAttendanceRequest as LogAttendanceDTO,
     BulkLogAttendanceRequest as BulkLogAttendanceDTO,
     BulkLogAttendanceEntry as BulkLogAttendanceEntryDTO,
+    ConflictsNotAcknowledgedError,
     UpdateAttendanceRequest as UpdateAttendanceDTO,
     DeleteAttendanceRequest,
+    FindCrossProjectConflictsRequest,
     ListLaborEntriesRequest,
     GetLaborSummaryRequest,
     GetMonthlyLaborSummaryRequest,
@@ -172,6 +177,65 @@ def log_attendance(project_id: str):
     )
 
 
+@labor_bp.route("/projects/<project_id>/labor-entries/conflicts", methods=["GET"])
+@jwt_required()
+@require_permission("project:read")
+def get_cross_project_conflicts(project_id: str):
+    """Return cross-project labor conflicts on a given date (Phase 4).
+
+    A conflict surfaces when a Person who has an active Worker on this
+    project also has an active Worker on another project in the same
+    company, with a labor_entry on the requested ``?date=`` query arg.
+
+    Optional ``?person_ids=uuid1,uuid2`` narrows the scan to specific
+    Persons. The endpoint *informs* — it never blocks; saving through
+    /labor-entries/bulk handles the warn/acknowledge flow.
+    """
+    date_str = request.args.get("date")
+    if not date_str:
+        return _error_response("ValidationError", "Missing ?date=YYYY-MM-DD", 400)
+
+    person_ids_raw = request.args.get("person_ids")
+    person_ids: Optional[list[UUID]] = None
+    if person_ids_raw:
+        try:
+            person_ids = [UUID(s) for s in person_ids_raw.split(",") if s]
+        except ValueError:
+            return _error_response("ValidationError", "person_ids must be a comma list of UUIDs", 400)
+
+    try:
+        result = get_container().find_cross_project_conflicts_usecase.execute(
+            FindCrossProjectConflictsRequest(
+                project_id=UUID(project_id),
+                date=_parse_date(date_str),
+                person_ids=person_ids,
+            )
+        )
+    except ValueError as e:
+        return _error_response("ValidationError", str(e), 400)
+
+    return jsonify(
+        CrossProjectConflictsResponse(
+            conflicts=[
+                CrossProjectConflictResponse(
+                    person_id=str(c.person_id),
+                    person_name=c.person_name,
+                    entries=[
+                        CrossProjectConflictEntryResponse(
+                            project_id=str(e.project_id),
+                            project_name=e.project_name,
+                            shift_type=e.shift_type,
+                            supplement_hours=e.supplement_hours,
+                        )
+                        for e in c.entries
+                    ],
+                )
+                for c in result.conflicts
+            ],
+        ).model_dump()
+    )
+
+
 @labor_bp.route("/projects/<project_id>/labor-entries/bulk", methods=["POST"])
 @jwt_required()
 @limiter.limit("10 per minute")
@@ -208,12 +272,42 @@ def bulk_log_attendance(project_id: str):
                     )
                     for e in data.entries
                 ],
+                acknowledge_conflicts=data.acknowledge_conflicts,
             )
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
+    except ConflictsNotAcknowledgedError as e:
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": (
+                        "Cross-project conflicts exist; resend with "
+                        "acknowledge_conflicts=true to override."
+                    ),
+                    "conflicts": [
+                        CrossProjectConflictResponse(
+                            person_id=str(c.person_id),
+                            person_name=c.person_name,
+                            entries=[
+                                CrossProjectConflictEntryResponse(
+                                    project_id=str(ent.project_id),
+                                    project_name=ent.project_name,
+                                    shift_type=ent.shift_type,
+                                    supplement_hours=ent.supplement_hours,
+                                )
+                                for ent in c.entries
+                            ],
+                        ).model_dump()
+                        for c in e.conflicts
+                    ],
+                }
+            ),
+            409,
+        )
 
     return (
         jsonify(

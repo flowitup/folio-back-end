@@ -326,6 +326,7 @@ class Container:
     list_workers_usecase: Optional[ListWorkersUseCase] = None
     log_attendance_usecase: Optional[LogAttendanceUseCase] = None
     bulk_log_attendance_usecase: Optional[Any] = None  # BulkLogAttendanceUseCase (cook 3a)
+    find_cross_project_conflicts_usecase: Optional[Any] = None  # Phase 4 (cook 4a)
     update_attendance_usecase: Optional[UpdateAttendanceUseCase] = None
     delete_attendance_usecase: Optional[DeleteAttendanceUseCase] = None
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
@@ -513,6 +514,13 @@ def configure_container(
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
         container.get_monthly_labor_summary_usecase = GetMonthlyLaborSummaryUseCase(labor_entry_repository)
+        # Cross-project conflict warn (Phase 4 — cook 4a).
+        from app.application.labor.find_cross_project_conflicts import (
+            FindCrossProjectConflictsUseCase as _FindConflicts,
+        )
+        container.find_cross_project_conflicts_usecase = _FindConflicts(
+            entry_repo=labor_entry_repository,
+        )
 
     if worker_repository and labor_entry_repository and project_repository:
         container.export_labor_usecase = ExportLaborUseCase(
