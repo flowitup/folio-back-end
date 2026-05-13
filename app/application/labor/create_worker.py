@@ -36,6 +36,7 @@ class CreateWorkerRequest:
     phone: Optional[str] = None
     person_id: Optional[UUID] = None
     created_by_user_id: Optional[UUID] = None
+    avatar_url: Optional[str] = None
 
 
 @dataclass
@@ -47,6 +48,7 @@ class CreateWorkerResponse:
     daily_rate: float
     is_active: bool
     created_at: str
+    avatar_url: Optional[str] = None
     # Joined Person identity (cook 1d-ii-a).
     person_id: Optional[str] = None
     person_name: Optional[str] = None
@@ -119,6 +121,7 @@ class CreateWorkerUseCase:
             name=name,
             daily_rate=request.daily_rate,
             phone=request.phone.strip() if request.phone else None,
+            avatar_url=request.avatar_url.strip() if request.avatar_url else None,
             created_at=datetime.now(timezone.utc),
             person_id=person_id,
         )
@@ -134,6 +137,7 @@ class CreateWorkerUseCase:
             name=saved.name,
             phone=saved.phone,
             daily_rate=float(saved.daily_rate),
+            avatar_url=saved.avatar_url,
             is_active=saved.is_active,
             created_at=saved.created_at.isoformat(),
         )

@@ -47,9 +47,6 @@ class SearchPersonsUseCase:
         rows = self._repo.search(query=query, limit=limit)
 
         return SearchPersonsResponse(
-            persons=[
-                PersonSummary(id=str(p.id), name=p.name, phone=p.phone)
-                for p in rows
-            ],
+            persons=[PersonSummary(id=str(p.id), name=p.name, phone=p.phone) for p in rows],
             total=len(rows),
         )

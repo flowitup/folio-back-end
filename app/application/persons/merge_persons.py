@@ -59,15 +59,11 @@ class MergePersonsUseCase:
 
         source = self._repo.find_by_id(request.source_person_id)
         if source is None:
-            raise PersonNotFoundError(
-                f"source person {request.source_person_id} not found"
-            )
+            raise PersonNotFoundError(f"source person {request.source_person_id} not found")
 
         target = self._repo.find_by_id(request.target_person_id)
         if target is None:
-            raise PersonNotFoundError(
-                f"target person {request.target_person_id} not found"
-            )
+            raise PersonNotFoundError(f"target person {request.target_person_id} not found")
 
         # Reassign all Worker rows in one UPDATE — much cheaper than
         # loading entities and rewriting them one at a time.

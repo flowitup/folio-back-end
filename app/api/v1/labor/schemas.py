@@ -26,6 +26,7 @@ class CreateWorkerRequest(BaseModel):
     daily_rate: float = Field(..., gt=0)
     phone: Optional[str] = Field(None, max_length=50)
     person_id: Optional[str] = Field(None, min_length=36, max_length=36)
+    avatar_url: Optional[str] = Field(None, max_length=500)
 
 
 class UpdateWorkerRequest(BaseModel):
@@ -34,6 +35,9 @@ class UpdateWorkerRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     daily_rate: Optional[float] = Field(None, gt=0)
     phone: Optional[str] = Field(None, max_length=50)
+    # Pydantic v2: distinguishing "unset" from "explicit None" needs model_fields_set.
+    # The route layer reads model_fields_set to decide whether to forward avatar_url.
+    avatar_url: Optional[str] = Field(None, max_length=500)
 
 
 class LogAttendanceRequest(BaseModel):
@@ -177,6 +181,7 @@ class WorkerResponse(BaseModel):
     name: str
     phone: Optional[str]
     daily_rate: float
+    avatar_url: Optional[str] = None
     is_active: bool
     created_at: str
 
@@ -201,6 +206,7 @@ class LaborEntryResponse(BaseModel):
     id: str
     worker_id: str
     worker_name: str
+    worker_avatar_url: Optional[str] = None
     date: str
     amount_override: Optional[float]
     effective_cost: float

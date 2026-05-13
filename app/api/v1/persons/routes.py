@@ -85,15 +85,17 @@ def _error(code: str, message: str, status: int):
 
 
 def _validation_error_response(e: ValidationError):
-    return jsonify(
-        {
-            "error": "ValidationError",
-            "details": [
-                {"field": ".".join(str(p) for p in err["loc"]), "message": err["msg"]}
-                for err in e.errors()
-            ],
-        }
-    ), 400
+    return (
+        jsonify(
+            {
+                "error": "ValidationError",
+                "details": [
+                    {"field": ".".join(str(p) for p in err["loc"]), "message": err["msg"]} for err in e.errors()
+                ],
+            }
+        ),
+        400,
+    )
 
 
 def _current_user_uuid() -> UUID:
@@ -133,16 +135,11 @@ def search_persons():
     except (TypeError, ValueError):
         return _error("ValidationError", "limit must be an integer", 400)
 
-    result = _get_search_usecase().execute(
-        SearchPersonsRequest(query=query, limit=limit)
-    )
+    result = _get_search_usecase().execute(SearchPersonsRequest(query=query, limit=limit))
 
     return jsonify(
         SearchPersonsResponseSchema(
-            persons=[
-                PersonSummarySchema(id=p.id, name=p.name, phone=p.phone)
-                for p in result.persons
-            ],
+            persons=[PersonSummarySchema(id=p.id, name=p.name, phone=p.phone) for p in result.persons],
             total=result.total,
         ).model_dump()
     )
@@ -169,16 +166,19 @@ def create_person():
     except InvalidPersonDataError as e:
         return _error("ValidationError", str(e), 400)
 
-    return jsonify(
-        PersonResponseSchema(
-            id=created.id,
-            name=created.name,
-            phone=created.phone,
-            normalized_name=created.normalized_name,
-            created_by_user_id=created.created_by_user_id,
-            created_at=created.created_at,
-        ).model_dump()
-    ), 201
+    return (
+        jsonify(
+            PersonResponseSchema(
+                id=created.id,
+                name=created.name,
+                phone=created.phone,
+                normalized_name=created.normalized_name,
+                created_by_user_id=created.created_by_user_id,
+                created_at=created.created_at,
+            ).model_dump()
+        ),
+        201,
+    )
 
 
 @persons_bp.route("/persons/<source_person_id>/merge", methods=["POST"])
@@ -223,4 +223,3 @@ def merge_persons(source_person_id: str):
             workers_reassigned=result.workers_reassigned,
         ).model_dump()
     )
-

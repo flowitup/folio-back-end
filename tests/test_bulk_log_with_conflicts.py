@@ -135,11 +135,7 @@ class TestBulkLogWithConflicts:
                 BulkLogAttendanceRequest(
                     project_id=a.id,
                     date=date(2026, 5, 13),
-                    entries=[
-                        BulkLogAttendanceEntry(
-                            worker_id=w_a.id, shift_type="full"
-                        )
-                    ],
+                    entries=[BulkLogAttendanceEntry(worker_id=w_a.id, shift_type="full")],
                 )
             )
         assert len(ei.value.conflicts) == 1
@@ -161,9 +157,7 @@ class TestBulkLogWithConflicts:
             BulkLogAttendanceRequest(
                 project_id=a.id,
                 date=date(2026, 5, 13),
-                entries=[
-                    BulkLogAttendanceEntry(worker_id=w_a.id, shift_type="half")
-                ],
+                entries=[BulkLogAttendanceEntry(worker_id=w_a.id, shift_type="half")],
                 acknowledge_conflicts=True,
             )
         )
@@ -183,9 +177,7 @@ class TestBulkLogWithConflicts:
             BulkLogAttendanceRequest(
                 project_id=a.id,
                 date=date(2026, 5, 13),
-                entries=[
-                    BulkLogAttendanceEntry(worker_id=w_a.id, shift_type="full")
-                ],
+                entries=[BulkLogAttendanceEntry(worker_id=w_a.id, shift_type="full")],
             )
         )
         assert len(result.created) == 1

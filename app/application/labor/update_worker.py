@@ -13,12 +13,18 @@ from app.domain.exceptions.labor_exceptions import (
 )
 
 
+_AVATAR_SENTINEL = object()
+
+
 @dataclass
 class UpdateWorkerRequest:
     worker_id: UUID
     name: Optional[str] = None
     phone: Optional[str] = None
     daily_rate: Optional[Decimal] = None
+    # Use a sentinel so callers can explicitly clear the avatar
+    # (avatar_url=None means "clear"; omit the field to leave unchanged).
+    avatar_url: object = _AVATAR_SENTINEL
 
 
 @dataclass
@@ -30,6 +36,7 @@ class UpdateWorkerResponse:
     daily_rate: float
     is_active: bool
     created_at: str
+    avatar_url: Optional[str] = None
     # Joined Person identity (cook 1d-ii-a).
     person_id: Optional[str] = None
     person_name: Optional[str] = None
@@ -62,6 +69,14 @@ class UpdateWorkerUseCase:
                 raise InvalidWorkerDataError("Daily rate must be greater than 0")
             worker.daily_rate = request.daily_rate
 
+        if request.avatar_url is not _AVATAR_SENTINEL:
+            value = request.avatar_url
+            if isinstance(value, str):
+                value = value.strip() or None
+                if value and len(value) > 500:
+                    raise InvalidWorkerDataError("avatar_url exceeds 500 characters")
+            worker.avatar_url = value  # type: ignore[assignment]
+
         worker.updated_at = datetime.now(timezone.utc)
         saved = self._repo.update(worker)
 
@@ -71,6 +86,7 @@ class UpdateWorkerUseCase:
             name=saved.name,
             phone=saved.phone,
             daily_rate=float(saved.daily_rate),
+            avatar_url=saved.avatar_url,
             is_active=saved.is_active,
             created_at=saved.created_at.isoformat(),
             person_id=str(saved.person_id) if saved.person_id else None,

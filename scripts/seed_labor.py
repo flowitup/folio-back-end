@@ -69,6 +69,18 @@ def seed_labor_entries(workers: list[WorkerModel]) -> None:
             if days_ago in [3, 7]:
                 amount_override = worker.daily_rate * Decimal("1.5")
 
+            # Mix shift types so the seed exercises the constraint variants.
+            # Required: shift_type IS NOT NULL OR supplement_hours > 0.
+            if days_ago in [2, 10]:
+                shift_type = "half"
+                supplement_hours = 0
+            elif days_ago in [5, 12]:
+                shift_type = "full"
+                supplement_hours = 2  # full day + 2h overtime supplement
+            else:
+                shift_type = "full"
+                supplement_hours = 0
+
             note = notes[days_ago % len(notes)]
 
             entry = LaborEntryModel(
@@ -77,6 +89,8 @@ def seed_labor_entries(workers: list[WorkerModel]) -> None:
                 date=entry_date,
                 amount_override=amount_override,
                 note=note,
+                shift_type=shift_type,
+                supplement_hours=supplement_hours,
             )
             db.session.add(entry)
 

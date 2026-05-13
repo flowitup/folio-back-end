@@ -25,6 +25,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             name=worker.name,
             phone=worker.phone,
             daily_rate=worker.daily_rate,
+            avatar_url=worker.avatar_url,
             is_active=worker.is_active,
             created_at=worker.created_at,
         )
@@ -49,6 +50,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             model.name = worker.name
             model.phone = worker.phone
             model.daily_rate = worker.daily_rate
+            model.avatar_url = worker.avatar_url
             model.is_active = worker.is_active
             model.updated_at = worker.updated_at
             self._session.commit()
@@ -74,6 +76,7 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             name=model.name,
             phone=model.phone,
             daily_rate=Decimal(str(model.daily_rate)),
+            avatar_url=model.avatar_url,
             is_active=model.is_active,
             created_at=model.created_at,
             updated_at=model.updated_at,

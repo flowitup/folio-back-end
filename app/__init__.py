@@ -421,6 +421,7 @@ def _configure_di_container() -> None:
         from app.application.labor.create_worker import (
             CreateWorkerUseCase as _CreateWorkerUseCase,
         )
+
         _c.create_worker_usecase = _CreateWorkerUseCase(
             worker_repo=_c.worker_repository,
             person_repo=_person_repo,

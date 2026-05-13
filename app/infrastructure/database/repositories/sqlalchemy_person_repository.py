@@ -60,11 +60,7 @@ class SqlAlchemyPersonRepository(IPersonRepository):
     def find_by_phone(self, phone: str) -> Optional[Person]:
         if not phone:
             return None
-        model = (
-            self._session.query(PersonModel)
-            .filter(PersonModel.phone == phone)
-            .first()
-        )
+        model = self._session.query(PersonModel).filter(PersonModel.phone == phone).first()
         return self._to_entity(model) if model else None
 
     def delete(self, person_id: UUID) -> bool:

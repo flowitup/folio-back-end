@@ -16,6 +16,10 @@ class WorkerSummary:
     daily_rate: float
     is_active: bool
     created_at: str
+    # Optional with a default so existing test fixtures and any legacy
+    # callsite that constructed WorkerSummary before avatars existed
+    # continue to work unchanged.
+    avatar_url: Optional[str] = None
     # Joined Person identity (cook 1d-ii-a). Optional during the Phase 1c
     # backfill rollout. Mirrors WorkerResponse so the API serializer can
     # accept either a Worker entity or a WorkerSummary uniformly.
@@ -45,6 +49,7 @@ class ListWorkersUseCase:
                 name=w.name,
                 phone=w.phone,
                 daily_rate=float(w.daily_rate),
+                avatar_url=w.avatar_url,
                 is_active=w.is_active,
                 created_at=w.created_at.isoformat(),
                 person_id=str(w.person_id) if w.person_id else None,

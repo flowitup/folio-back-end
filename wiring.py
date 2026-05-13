@@ -503,6 +503,7 @@ def configure_container(
             BulkLogAttendanceUseCase as _BulkLog,
         )
         from app import db as _db_for_bulk_log
+
         container.bulk_log_attendance_usecase = _BulkLog(
             worker_repo=worker_repository,
             entry_repo=labor_entry_repository,
@@ -518,6 +519,7 @@ def configure_container(
         from app.application.labor.find_cross_project_conflicts import (
             FindCrossProjectConflictsUseCase as _FindConflicts,
         )
+
         container.find_cross_project_conflicts_usecase = _FindConflicts(
             entry_repo=labor_entry_repository,
         )

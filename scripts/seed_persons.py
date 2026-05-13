@@ -33,9 +33,7 @@ DEFAULT_PERSONS = [
 
 def seed_persons() -> None:
     """Seed Person rows. Owned by the first admin user found."""
-    creator = (
-        db.session.query(UserModel).order_by(UserModel.created_at.asc()).first()
-    )
+    creator = db.session.query(UserModel).order_by(UserModel.created_at.asc()).first()
     if not creator:
         print("  No users found. Run with --with-admin first.")
         return

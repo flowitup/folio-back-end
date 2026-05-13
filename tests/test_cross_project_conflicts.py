@@ -132,9 +132,7 @@ class TestCrossProjectConflicts:
         hugo = _make_person(session, owner, "Hugo")
         _make_worker(worker_repo, project_a, hugo)
 
-        result = entry_repo.find_cross_project_conflicts(
-            project_id=project_a.id, date=date(2026, 5, 13)
-        )
+        result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
         assert result == []
 
     def test_detects_single_cross_project_conflict(self, session, owner, company):
@@ -148,9 +146,7 @@ class TestCrossProjectConflicts:
         worker_b = _make_worker(worker_repo, project_b, hugo)
         _log(entry_repo, worker_b.id, date(2026, 5, 13), shift_type="half")
 
-        result = entry_repo.find_cross_project_conflicts(
-            project_id=project_a.id, date=date(2026, 5, 13)
-        )
+        result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
         assert len(result) == 1
         assert result[0].person_id == hugo.id
         assert result[0].person_name == "Hugo Martin"
@@ -169,14 +165,10 @@ class TestCrossProjectConflicts:
         worker_b = _make_worker(worker_repo, project_b, leo, active=False)
         _log(entry_repo, worker_b.id, date(2026, 5, 13))
 
-        result = entry_repo.find_cross_project_conflicts(
-            project_id=project_a.id, date=date(2026, 5, 13)
-        )
+        result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
         assert result == []
 
-    def test_isolates_across_companies(
-        self, session, owner, company, other_company
-    ):
+    def test_isolates_across_companies(self, session, owner, company, other_company):
         worker_repo = SQLAlchemyWorkerRepository(session)
         entry_repo = SQLAlchemyLaborEntryRepository(session)
 
@@ -188,9 +180,7 @@ class TestCrossProjectConflicts:
         _log(entry_repo, worker_other.id, date(2026, 5, 13))
 
         # No conflict — the other project lives in a different company.
-        result = entry_repo.find_cross_project_conflicts(
-            project_id=project_a.id, date=date(2026, 5, 13)
-        )
+        result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
         assert result == []
 
     def test_filters_by_person_ids(self, session, owner, company):

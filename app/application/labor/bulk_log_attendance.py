@@ -21,8 +21,6 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
 from app.application.labor.ports import (
     CrossProjectConflict,
     ILaborEntryRepository,
@@ -30,6 +28,8 @@ from app.application.labor.ports import (
 )
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class ConflictsNotAcknowledgedError(Exception):
@@ -104,9 +104,7 @@ class BulkLogAttendanceUseCase:
         self._entry_repo = entry_repo
         self._db = db_session
 
-    def execute(
-        self, request: BulkLogAttendanceRequest
-    ) -> BulkLogAttendanceResponse:
+    def execute(self, request: BulkLogAttendanceRequest) -> BulkLogAttendanceResponse:
         if not request.entries:
             return BulkLogAttendanceResponse(created=[], skipped_worker_ids=[])
 
@@ -139,10 +137,7 @@ class BulkLogAttendanceUseCase:
             # skipped from the conflict check; legacy rows that haven't
             # been backfilled yet trade conflict warn for backwards-
             # compat.
-            insert_worker_ids = [
-                e.worker_id for e in request.entries
-                if e.worker_id not in already_logged
-            ]
+            insert_worker_ids = [e.worker_id for e in request.entries if e.worker_id not in already_logged]
             if insert_worker_ids:
                 person_ids: List[UUID] = []
                 for wid in insert_worker_ids:
@@ -162,8 +157,7 @@ class BulkLogAttendanceUseCase:
             # exists, capture acknowledged-conflict events in the
             # application log so they're at least findable in prod.
             logger.info(
-                "bulk_log_attendance.conflicts_acknowledged "
-                "project_id=%s date=%s entry_count=%d",
+                "bulk_log_attendance.conflicts_acknowledged " "project_id=%s date=%s entry_count=%d",
                 request.project_id,
                 request.date,
                 len(request.entries),
