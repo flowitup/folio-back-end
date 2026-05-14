@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
 from app.application.companies._helpers import (
@@ -19,7 +21,13 @@ from app.application.companies.ports import (
 )
 from app.domain.companies.company import Company
 
+if TYPE_CHECKING:
+    from app.application.payment_methods.seed_payment_methods_for_company_usecase import (
+        SeedPaymentMethodsForCompanyUseCase,
+    )
+
 _ADMIN_PERMISSION = "*:*"
+_log = logging.getLogger(__name__)
 
 
 class CreateCompanyUseCase:
@@ -29,15 +37,23 @@ class CreateCompanyUseCase:
       - Caller must hold *:* permission (admin).
       - legal_name and address are required non-blank strings.
       - prefix_override, when supplied, must match ^[A-Z0-9]{1,8}$.
+
+    Post-commit:
+      - If ``seed_payment_methods`` is provided, the use-case seeds the
+        builtin payment methods (Cash + legal_name) for the new company.
+        Seed failure is logged and swallowed — it must NOT roll back the
+        company creation.
     """
 
     def __init__(
         self,
         company_repo: CompanyRepositoryPort,
         role_checker: RoleCheckerPort,
+        seed_payment_methods: Optional["SeedPaymentMethodsForCompanyUseCase"] = None,
     ) -> None:
         self._company_repo = company_repo
         self._role_checker = role_checker
+        self._seed_payment_methods = seed_payment_methods
 
     def execute(
         self,
@@ -73,4 +89,21 @@ class CreateCompanyUseCase:
         )
         saved = self._company_repo.save(company)
         db_session.commit()
+
+        # 4. Post-commit: seed builtin payment methods.
+        # Must NOT raise — failure is non-fatal and must not roll back the company.
+        if self._seed_payment_methods is not None:
+            try:
+                self._seed_payment_methods.execute(
+                    company_id=saved.id,
+                    legal_name=saved.legal_name,
+                    created_by=inp.caller_id,
+                    db_session=db_session,
+                )
+            except Exception:
+                _log.exception(
+                    "Payment method seed failed for company %s — company was created successfully",
+                    saved.id,
+                )
+
         return CompanyResponse.from_entity(saved)
