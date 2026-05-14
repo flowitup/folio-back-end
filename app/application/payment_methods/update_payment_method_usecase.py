@@ -11,6 +11,7 @@ from app.application.payment_methods.ports import (
     TransactionalSessionPort,
 )
 from app.domain.payment_methods.exceptions import (
+    BuiltinPaymentMethodDeletionError,
     PaymentMethodAlreadyExistsError,
     PaymentMethodNotFoundError,
 )
@@ -77,6 +78,10 @@ class UpdatePaymentMethodUseCase:
                 existing = self._repo.find_by_label_ci(method.company_id, new_label, only_active=True)
                 if existing is not None and existing.id != method.id:
                     raise PaymentMethodAlreadyExistsError(method.company_id, new_label)
+
+        # 3b. Builtin guard — cannot deactivate builtin methods (rename is still allowed)
+        if inp.is_active is False and method.is_builtin:
+            raise BuiltinPaymentMethodDeletionError(method.id)
 
         # 4. Apply updates
         updated = method.with_updates(
