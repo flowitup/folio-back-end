@@ -30,6 +30,7 @@ from app.infrastructure.database.models.billing_number_counter import BillingNum
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from app.infrastructure.database.models.company_invite_token import CompanyInviteTokenModel
+from app.infrastructure.database.models.payment_method import PaymentMethodModel
 
 __all__ = [
     "Base",
@@ -55,4 +56,5 @@ __all__ = [
     "CompanyModel",
     "UserCompanyAccessModel",
     "CompanyInviteTokenModel",
+    "PaymentMethodModel",
 ]
