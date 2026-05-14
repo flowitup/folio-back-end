@@ -166,20 +166,30 @@ jobs:
             echo "pyproject.toml already has version $NEW_VERSION"
           fi
 
-  # Job 2: Lint and test (only on PR - already passed before merge)
+  # Job 2: Lint and test (runs on every PR AND every master push).
+  #
+  # Running on master push surfaces drift the moment it lands instead of
+  # letting it accumulate silently until the next PR pays the bill — that
+  # exact accident produced 3 pre-existing E402 + 11 black-drift files we
+  # had to clean up inside an unrelated feature branch in #42. `always()`
+  # lets this job run even when `version-bump` is skipped (push events
+  # skip it via its own `if`). Mirrors the FE workflow's pattern.
   lint-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [version-bump]
-    if: github.event_name == 'pull_request' && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
+    if: always() && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          # Use the PR head ref on pull_request, otherwise the pushed sha
+          # (default).
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
           fetch-depth: 1
 
       - name: Pull latest changes
+        if: github.event_name == 'pull_request'
         run: git pull origin ${{ github.head_ref }} || true
 
       - name: Set up Python 3.12
@@ -197,6 +207,16 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 3
         run: uv sync --frozen --extra dev
+
+      # Fail fast on multiple Alembic heads. This is what bit prod when
+      # b8e2d1c47a90 and b1c2d3e4f5a6 both pointed at a3f7b8c9d0e1 —
+      # deploy ran `flask db upgrade head` and Alembic refused with
+      # "Multiple head revisions are present for given argument 'head'".
+      # Pure-Python scan, no Flask/Alembic context required.
+      - name: Check for multiple Alembic heads
+        id: migration-heads
+        timeout-minutes: 1
+        run: python3 scripts/check_migration_heads.py
 
       - name: Run ruff
         id: ruff
@@ -225,6 +245,7 @@ jobs:
           echo "## Lint & Test Results" >> $GITHUB_STEP_SUMMARY
           echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| migration-heads | ${{ steps.migration-heads.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ruff | ${{ steps.ruff.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| black | ${{ steps.black.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| mypy | ${{ steps.mypy.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
