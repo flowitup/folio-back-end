@@ -114,6 +114,13 @@ def get_project(project_id: str):
     if not can_read_project(project, user_id):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
+    # Resolve company_id from the DB model (not exposed on the domain entity).
+    from app import db
+    from app.infrastructure.database.models.project import ProjectModel
+
+    db_row = db.session.get(ProjectModel, project.id)
+    company_id_str = str(db_row.company_id) if db_row and db_row.company_id else None
+
     return jsonify(
         ProjectResponse(
             id=str(project.id),
@@ -122,6 +129,7 @@ def get_project(project_id: str):
             owner_id=str(project.owner_id),
             user_count=len(project.user_ids),
             created_at=project.created_at.isoformat(),
+            company_id=company_id_str,
         ).model_dump()
     )
 
