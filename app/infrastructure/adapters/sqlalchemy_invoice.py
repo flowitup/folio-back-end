@@ -61,6 +61,8 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         created_by=m.created_by,
         created_at=m.created_at,
         updated_at=m.updated_at,
+        payment_method_id=m.payment_method_id,
+        payment_method_label=m.payment_method_label,
     )
 
 
@@ -84,6 +86,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             created_by=invoice.created_by,
             created_at=invoice.created_at,
             updated_at=invoice.updated_at,
+            payment_method_id=invoice.payment_method_id,
+            payment_method_label=invoice.payment_method_label,
         )
         self._session.add(model)
         try:
@@ -118,6 +122,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.notes = invoice.notes
         model.items = _items_to_jsonb(invoice.items)
         model.updated_at = datetime.now(timezone.utc)
+        model.payment_method_id = invoice.payment_method_id
+        model.payment_method_label = invoice.payment_method_label
         self._session.commit()
         return _model_to_entity(model)
 

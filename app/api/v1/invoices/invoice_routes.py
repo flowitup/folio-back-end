@@ -21,12 +21,14 @@ from app.application.invoice import (
     ListInvoicesRequest,
     UpdateInvoiceRequest,
 )
+from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.entities.invoice import InvoiceType
 from app.domain.exceptions.invoice_exceptions import (
     InvalidInvoiceDataError,
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
 )
+from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -48,6 +50,24 @@ def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
         f"Invalid input: {', '.join(str(f) for f in error_fields)}",
         400,
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_project_company_id(project_id: UUID) -> "UUID | None":
+    """Return the company_id for a project, or None if not found / no company.
+
+    Queries the ProjectModel directly so we can access company_id without
+    extending the domain Project entity or IProjectRepository.
+    """
+    from app import db
+    from app.infrastructure.database.models.project import ProjectModel
+
+    row = db.session.get(ProjectModel, project_id)
+    return row.company_id if row is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +125,13 @@ def create_invoice(project_id: str):
     # JWT subject holds the authenticated user's UUID
     created_by = UUID(jwt_claims["sub"])
 
+    project_uuid = UUID(project_id)
+    company_id = _get_project_company_id(project_uuid)
+
     try:
         result = get_container().create_invoice_usecase.execute(
             CreateInvoiceRequest(
-                project_id=UUID(project_id),
+                project_id=project_uuid,
                 created_by=created_by,
                 type=InvoiceType(data.type),
                 issue_date=data.issue_date,  # already a date object from Pydantic
@@ -116,10 +139,18 @@ def create_invoice(project_id: str):
                 recipient_address=data.recipient_address,
                 notes=data.notes,
                 items=[item.model_dump() for item in data.items],
+                payment_method_id=data.payment_method_id,
+                company_id=company_id,
             )
         )
     except InvoiceNumberConflictError:
         return _error_response("Conflict", "Invoice number conflict, please retry", 409)
+    except PaymentMethodNotFoundError:
+        return _error_response("NotFound", "Payment method not found", 404)
+    except PaymentMethodNotActiveError:
+        return _error_response("Conflict", "Payment method is inactive and cannot be used", 409)
+    except ForbiddenCompanyError:
+        return _error_response("Forbidden", "Payment method belongs to a different company", 403)
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except InvalidInvoiceDataError as e:
@@ -160,9 +191,12 @@ def update_invoice(project_id: str, invoice_id: str):
     except ValidationError as e:
         return _validation_error_response(e)
 
-    # Build kwargs — only pass fields the caller provided
-    # issue_date is already a date object from Pydantic (no manual conversion needed)
-    update_kwargs = data.model_dump(exclude_none=True)
+    # Build kwargs — only pass fields the caller provided.
+    # issue_date is already a date object from Pydantic (no manual conversion needed).
+    # payment_method_id is handled separately: use exclude_unset so we can
+    # distinguish "not provided" (absent) from "explicitly null".
+    provided_fields = data.model_dump(exclude_unset=True)
+    update_kwargs = {k: v for k, v in provided_fields.items() if k != "payment_method_id" and v is not None}
 
     # Verify invoice belongs to the requested project before updating
     try:
@@ -173,12 +207,38 @@ def update_invoice(project_id: str, invoice_id: str):
     if existing.project_id != project_id:
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
 
-    try:
-        result = get_container().update_invoice_usecase.execute(
-            UpdateInvoiceRequest(invoice_id=UUID(invoice_id), **update_kwargs)
+    invoice_uuid = UUID(invoice_id)
+    project_uuid = UUID(project_id)
+
+    # Determine payment_method sentinel: _UNSET if not in request body, else the value.
+    from app.application.invoice.update_invoice import _UNSET
+
+    if "payment_method_id" in provided_fields:
+        pm_id = provided_fields["payment_method_id"]  # UUID or None
+        company_id = _get_project_company_id(project_uuid)
+        update_req = UpdateInvoiceRequest(
+            invoice_id=invoice_uuid,
+            payment_method_id=pm_id,
+            company_id=company_id,
+            **update_kwargs,
         )
+    else:
+        update_req = UpdateInvoiceRequest(
+            invoice_id=invoice_uuid,
+            payment_method_id=_UNSET,
+            **update_kwargs,
+        )
+
+    try:
+        result = get_container().update_invoice_usecase.execute(update_req)
     except InvoiceNotFoundError:
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
+    except PaymentMethodNotFoundError:
+        return _error_response("NotFound", "Payment method not found", 404)
+    except PaymentMethodNotActiveError:
+        return _error_response("Conflict", "Payment method is inactive and cannot be used", 409)
+    except ForbiddenCompanyError:
+        return _error_response("Forbidden", "Payment method belongs to a different company", 403)
     except (ValueError, InvalidInvoiceDataError) as e:
         return _error_response("ValidationError", str(e), 400)
 

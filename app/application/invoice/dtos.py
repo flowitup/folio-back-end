@@ -29,6 +29,8 @@ class InvoiceResponse:
     created_by: str
     created_at: str
     updated_at: str
+    payment_method_id: Optional[str] = None
+    payment_method_label: Optional[str] = None
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -54,4 +56,6 @@ class InvoiceResponse:
             created_by=str(inv.created_by),
             created_at=inv.created_at.isoformat(),
             updated_at=inv.updated_at.isoformat(),
+            payment_method_id=str(inv.payment_method_id) if inv.payment_method_id is not None else None,
+            payment_method_label=inv.payment_method_label,
         )

@@ -3,6 +3,7 @@
 import re
 from datetime import date
 from typing import Literal, List, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -30,16 +31,24 @@ class CreateInvoiceSchema(BaseModel):
     recipient_address: Optional[str] = None
     notes: Optional[str] = None
     items: List[InvoiceItemSchema] = Field(..., min_length=1)
+    payment_method_id: Optional[UUID] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
-    """Request body for partially updating an invoice (type is immutable)."""
+    """Request body for partially updating an invoice (type is immutable).
+
+    payment_method_id uses exclude_unset semantics to distinguish:
+      - field absent  → do not touch payment method
+      - field = null  → clear payment method
+      - field = UUID  → set payment method
+    """
 
     issue_date: Optional[date] = None  # Pydantic parses ISO date string automatically
     recipient_name: Optional[str] = Field(None, min_length=1, max_length=255)
     recipient_address: Optional[str] = None
     notes: Optional[str] = None
     items: Optional[List[InvoiceItemSchema]] = None
+    payment_method_id: Optional[UUID] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
