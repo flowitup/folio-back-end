@@ -63,7 +63,9 @@ def list_payment_methods(company_id: str):
             company_id=company_uuid,
             include_inactive=include_inactive,
         )
-    except ForbiddenCompanyError:
+    except ForbiddenCompanyError:  # pragma: no cover
+        # NOTE: ListPaymentMethodsUseCase never raises ForbiddenCompanyError; this
+        # branch is a defensive catch kept for future permission-gate changes.
         return _err("permission_denied", "You do not have permission to view payment methods", 403)
 
     items = [dataclasses.asdict(r) for r in results]

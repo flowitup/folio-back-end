@@ -25,7 +25,7 @@ class CreatePaymentMethodRequest(BaseModel):
     def strip_label(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip()
-        return v
+        return v  # pragma: no cover — strict=True rejects non-strings before this branch
 
 
 class UpdatePaymentMethodRequest(BaseModel):
@@ -44,7 +44,7 @@ class UpdatePaymentMethodRequest(BaseModel):
     def strip_label(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip()
-        return v
+        return v  # pragma: no cover — strict=True rejects non-strings before this branch
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> "UpdatePaymentMethodRequest":
