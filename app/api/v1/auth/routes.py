@@ -113,18 +113,37 @@ def login():
 @auth_bp.route("/logout", methods=["POST"])
 @jwt_required(optional=True)
 def logout():
-    """Logout user - clear cookies and optionally revoke token."""
+    """Logout user - clear cookies and revoke both access and refresh tokens."""
     response = make_response(jsonify(LogoutResponse().model_dump()))
     unset_jwt_cookies(response)
 
-    # Revoke token if present
+    container = get_container()
+    token_issuer = container.token_issuer if container else None
+
+    # Revoke the presented access token (if any).
     jwt_data = get_jwt()
-    if jwt_data:
+    if jwt_data and token_issuer:
         jti = jwt_data.get("jti")
         if jti:
-            container = get_container()
-            if container.token_issuer:
-                container.token_issuer.revoke_token(jti)
+            token_issuer.revoke_token(jti, token_type="access")
+
+    # Also revoke the refresh-token JTI carried in the refresh cookie so a
+    # captured refresh token cannot be replayed after the user logs out.
+    # The refresh cookie is decoded with verify=False because flask-jwt-extended
+    # only treats one token kind per request and we don't want to fail logout
+    # when the refresh cookie is missing or already expired.
+    if token_issuer:
+        refresh_cookie = request.cookies.get("refresh_token_cookie")
+        if refresh_cookie:
+            try:
+                from flask_jwt_extended import decode_token
+
+                refresh_claims = decode_token(refresh_cookie, allow_expired=True)
+                refresh_jti = refresh_claims.get("jti") if refresh_claims else None
+                if refresh_jti:
+                    token_issuer.revoke_token(refresh_jti, token_type="refresh")
+            except Exception:  # pragma: no cover - defensive; logout must not 500
+                logger.info("auth.logout: refresh-token decode failed; access JTI still revoked")
 
     return response
 
