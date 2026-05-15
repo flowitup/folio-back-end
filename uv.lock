@@ -312,7 +312,7 @@ wheels = [
 
 [[package]]
 name = "construction-backend"
-version = "0.2.32"
+version = "0.2.36"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
