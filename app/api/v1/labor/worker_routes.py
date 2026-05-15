@@ -18,7 +18,7 @@ from app.api.v1.labor.schemas import (
     WorkerResponse,
     WorkerListResponse,
 )
-from app.api.v1.projects.decorators import require_permission
+from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.labor import (
     CreateWorkerRequest as CreateWorkerDTO,
     UpdateWorkerRequest as UpdateWorkerDTO,
@@ -57,6 +57,7 @@ def _worker_response(w) -> WorkerResponse:
 @labor_bp.route("/projects/<project_id>/workers", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_project_access(write=False)
 def list_workers(project_id: str):
     """List workers for a project."""
     try:
@@ -71,6 +72,7 @@ def list_workers(project_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def create_worker(project_id: str):
     """Create a new worker for a project."""
     try:
@@ -108,6 +110,7 @@ def create_worker(project_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def update_worker(project_id: str, worker_id: str):
     """Update an existing worker."""
     try:
@@ -139,6 +142,7 @@ def update_worker(project_id: str, worker_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def delete_worker(project_id: str, worker_id: str):
     """Soft delete a worker (deactivate)."""
     try:
