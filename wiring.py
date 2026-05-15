@@ -78,6 +78,16 @@ from app.application.invitations import (
     ListInvitationsUseCase,
 )
 from app.application.admin import BulkAddExistingUserUseCase
+
+# Payment methods use-cases (invoice-payment-method feature)
+from app.application.payment_methods.list_payment_methods_usecase import ListPaymentMethodsUseCase
+from app.application.payment_methods.create_payment_method_usecase import CreatePaymentMethodUseCase
+from app.application.payment_methods.update_payment_method_usecase import UpdatePaymentMethodUseCase
+from app.application.payment_methods.delete_payment_method_usecase import DeletePaymentMethodUseCase
+from app.application.payment_methods.seed_payment_methods_for_company_usecase import (
+    SeedPaymentMethodsForCompanyUseCase,
+)
+from app.application.payment_methods.ports import IPaymentMethodRepository
 from app.application.notes.create_note_usecase import CreateNoteUseCase
 from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
 from app.application.notes.update_note_usecase import UpdateNoteUseCase
@@ -279,6 +289,16 @@ class Container:
     redeem_invite_token_usecase: Optional[RedeemInviteTokenUseCase] = None
     set_primary_company_usecase: Optional[SetPrimaryCompanyUseCase] = None
     detach_company_usecase: Optional[DetachCompanyUseCase] = None
+
+    # -----------------------------------------------------------------------
+    # Payment methods repo + use-cases (invoice-payment-method feature)
+    # -----------------------------------------------------------------------
+    payment_method_repo: Optional[IPaymentMethodRepository] = None
+    list_payment_methods_usecase: Optional[ListPaymentMethodsUseCase] = None
+    create_payment_method_usecase: Optional[CreatePaymentMethodUseCase] = None
+    update_payment_method_usecase: Optional[UpdatePaymentMethodUseCase] = None
+    delete_payment_method_usecase: Optional[DeletePaymentMethodUseCase] = None
+    seed_payment_methods_usecase: Optional[SeedPaymentMethodsForCompanyUseCase] = None
 
     # -----------------------------------------------------------------------
     # Billing repos + use-cases (phase 04)

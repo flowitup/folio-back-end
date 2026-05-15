@@ -594,6 +594,84 @@ def invitation_app():
             doc_repo=_billing_doc_repo,
         )
 
+        # ------------------------------------------------------------------
+        # Wire payment_methods use-cases (invoice-payment-method feature)
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_payment_method_repository import (
+            SqlAlchemyPaymentMethodRepository,
+        )
+        from app.application.payment_methods.list_payment_methods_usecase import (
+            ListPaymentMethodsUseCase as _ListPMUseCase,
+        )
+        from app.application.payment_methods.create_payment_method_usecase import (
+            CreatePaymentMethodUseCase as _CreatePMUseCase,
+        )
+        from app.application.payment_methods.update_payment_method_usecase import (
+            UpdatePaymentMethodUseCase as _UpdatePMUseCase,
+        )
+        from app.application.payment_methods.delete_payment_method_usecase import (
+            DeletePaymentMethodUseCase as _DeletePMUseCase,
+        )
+        from app.application.payment_methods.seed_payment_methods_for_company_usecase import (
+            SeedPaymentMethodsForCompanyUseCase as _SeedPMUseCase,
+        )
+
+        _pm_repo = SqlAlchemyPaymentMethodRepository(db.session)
+        _c.payment_method_repo = _pm_repo
+
+        _c.list_payment_methods_usecase = _ListPMUseCase(
+            payment_method_repo=_pm_repo,
+            role_checker=_role_checker,
+            access_repo=_access_repo,
+            company_repo=_company_repo,
+        )
+        _c.create_payment_method_usecase = _CreatePMUseCase(
+            payment_method_repo=_pm_repo,
+            role_checker=_role_checker,
+        )
+        _c.update_payment_method_usecase = _UpdatePMUseCase(
+            payment_method_repo=_pm_repo,
+            role_checker=_role_checker,
+        )
+        _c.delete_payment_method_usecase = _DeletePMUseCase(
+            payment_method_repo=_pm_repo,
+            role_checker=_role_checker,
+        )
+        _c.seed_payment_methods_usecase = _SeedPMUseCase(
+            payment_method_repo=_pm_repo,
+        )
+
+        # Re-wire invoice use-cases with payment_method_repo injected
+        from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvoiceUC
+        from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvoiceUC
+
+        if _c.invoice_repository is None:
+            from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository as _InvRepo
+
+            _inv_repo = _InvRepo(db.session)
+            _c.invoice_repository = _inv_repo
+        _c.create_invoice_usecase = _CreateInvoiceUC(
+            invoice_repo=_c.invoice_repository,
+            payment_method_repo=_pm_repo,
+        )
+        _c.update_invoice_usecase = _UpdateInvoiceUC(
+            invoice_repo=_c.invoice_repository,
+            payment_method_repo=_pm_repo,
+        )
+
+        # Re-wire create_company_usecase with seeder
+        from app.application.companies.create_company_usecase import (
+            CreateCompanyUseCase as _CreateCompanyUCv2,
+        )
+
+        _c.create_company_usecase = _CreateCompanyUCv2(
+            company_repo=_company_repo,
+            role_checker=_role_checker,
+            seed_payment_methods=_c.seed_payment_methods_usecase,
+        )
+
         yield test_app
 
         db.session.remove()

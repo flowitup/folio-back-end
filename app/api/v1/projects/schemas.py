@@ -33,6 +33,7 @@ class ProjectResponse(BaseModel):
     owner_id: str
     user_count: int
     created_at: str
+    company_id: Optional[str] = None
 
 
 class ProjectListResponse(BaseModel):

@@ -48,8 +48,21 @@ class InvoiceModel(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Payment method — optional; NULL for invoices created before the feature
+    # was introduced or when no method is recorded.
+    # payment_method_label is a snapshot of the label at write-time so that
+    # historical invoices still show the correct label even if the method is
+    # later renamed or soft-deleted.
+    payment_method_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_methods.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    payment_method_label = Column(String(120), nullable=True)
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
+    payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
 
     __table_args__ = (UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),)
 
