@@ -167,11 +167,12 @@ def upgrade() -> None:
                 INSERT INTO payment_methods
                     (id, company_id, label, is_builtin, is_active, created_by, created_at, updated_at)
                 SELECT
-                    gen_random_uuid(), c.id, c.legal_name, true, true,
+                    gen_random_uuid(), c.id, trim(c.legal_name), true, true,
                     c.created_by, now(), now()
                 FROM companies c
                 WHERE c.legal_name IS NOT NULL
-                  AND lower(c.legal_name) <> 'cash'
+                  AND length(trim(c.legal_name)) > 0
+                  AND lower(trim(c.legal_name)) <> 'cash'
                 ON CONFLICT DO NOTHING;
                 """
             )
