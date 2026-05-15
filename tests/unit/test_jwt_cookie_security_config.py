@@ -87,7 +87,9 @@ class TestBootGuardRejectsTrap:
         with pytest.raises(RuntimeError, match="FLASK_DEV_INSECURE=1 is not permitted"):
             create_app(TestingConfig)
 
-    def test_dev_insecure_with_https_cors_origin_refuses_to_boot(self, monkeypatch):
+    def test_dev_insecure_outside_development_refuses_to_boot(self, monkeypatch):
+        """Staging/UAT must not honor the legacy insecure-cookie opt-in even
+        if CORS_ORIGINS is plain http — only FLASK_ENV=development qualifies."""
         from app import create_app
         from config import TestingConfig
 
@@ -95,5 +97,5 @@ class TestBootGuardRejectsTrap:
         monkeypatch.setenv("FLASK_DEV_INSECURE", "1")
         monkeypatch.setenv("CORS_ORIGINS", "https://staging.example.com")
 
-        with pytest.raises(RuntimeError, match="incompatible with https://"):
+        with pytest.raises(RuntimeError, match="only permitted when FLASK_ENV=development"):
             create_app(TestingConfig)

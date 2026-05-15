@@ -97,6 +97,10 @@ class Config:
     S3_BUCKET: str = get_env("S3_BUCKET", default="construction-attachments")
     S3_REGION: str = get_env("S3_REGION", default="us-east-1")
 
+    # Swagger / OpenAPI docs surface. Default off in production to reduce
+    # post-credential-leak recon; set EXPOSE_DOCS=1 to force-enable.
+    EXPOSE_DOCS: bool = get_env("EXPOSE_DOCS", default="0") == "1"
+
     def __post_init__(self):
         if self.JWT_TOKEN_LOCATION is None:
             self.JWT_TOKEN_LOCATION = ["headers", "cookies"]
