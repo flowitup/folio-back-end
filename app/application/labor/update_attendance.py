@@ -5,13 +5,16 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from app.application.labor.ports import ILaborEntryRepository
+from app.application.labor.ports import ILaborEntryRepository, IWorkerRepository
 from app.domain.exceptions.labor_exceptions import LaborEntryNotFoundError
 
 
 @dataclass
 class UpdateAttendanceRequest:
     entry_id: UUID
+    # project_id from the URL path scopes the lookup so callers cannot
+    # mutate an entry whose worker belongs to a different project.
+    project_id: UUID
     amount_override: Optional[Decimal] = None
     note: Optional[str] = None
     shift_type: Optional[str] = None
@@ -33,12 +36,20 @@ class UpdateAttendanceResponse:
 class UpdateAttendanceUseCase:
     """Update an existing attendance entry."""
 
-    def __init__(self, entry_repo: ILaborEntryRepository):
+    def __init__(self, entry_repo: ILaborEntryRepository, worker_repo: IWorkerRepository):
         self._repo = entry_repo
+        self._workers = worker_repo
 
     def execute(self, request: UpdateAttendanceRequest) -> UpdateAttendanceResponse:
         entry = self._repo.find_by_id(request.entry_id)
         if not entry:
+            raise LaborEntryNotFoundError(str(request.entry_id))
+
+        # Cross-project IDOR guard: the entry's worker must belong to the
+        # project supplied via the URL path. Mismatch is reported as
+        # NotFound to avoid leaking entry existence across tenants.
+        worker = self._workers.find_by_id(entry.worker_id)
+        if worker is None or worker.project_id != request.project_id:
             raise LaborEntryNotFoundError(str(request.entry_id))
 
         # All four fields use PATCH semantics: None means "do not touch".
