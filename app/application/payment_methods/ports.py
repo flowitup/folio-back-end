@@ -10,7 +10,7 @@ No Flask, SQLAlchemy, or any infrastructure imports are permitted in this file.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 from uuid import UUID
 
 from app.domain.payment_methods.payment_method import PaymentMethod
@@ -65,6 +65,28 @@ class IPaymentMethodRepository(Protocol):
         Used to populate ``usage_count`` on ``PaymentMethodResponse`` so the
         delete-confirm UX can warn the user about historical references.
         """
+        ...
+
+    def find_all_by_company_with_usage_count(
+        self, company_id: UUID, *, include_inactive: bool = False
+    ) -> list[tuple["PaymentMethod", int]]:
+        """Return (PaymentMethod, usage_count) pairs for a company in a single query.
+
+        Replaces the N+1 pattern of calling ``find_all_by_company`` then
+        ``count_invoices_referencing`` per method.
+        """
+        ...
+
+
+class IUserCompanyAccessRepository(Protocol):
+    """Minimal port to check whether a user has access to a company.
+
+    Mirrors the subset of ``UserCompanyAccessRepositoryPort`` used by
+    the payment_methods layer to avoid importing the full companies ports.
+    """
+
+    def find(self, user_id: UUID, company_id: UUID) -> Optional[object]:
+        """Return the access row for (user_id, company_id), or None."""
         ...
 
 

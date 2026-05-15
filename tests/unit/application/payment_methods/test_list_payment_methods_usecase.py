@@ -9,8 +9,13 @@ from .conftest import make_payment_method
 
 
 @pytest.fixture
-def usecase(pm_repo, role_service):
-    return ListPaymentMethodsUseCase(payment_method_repo=pm_repo, role_checker=role_service)
+def usecase(pm_repo, role_service, access_repo, company_repo):
+    return ListPaymentMethodsUseCase(
+        payment_method_repo=pm_repo,
+        role_checker=role_service,
+        access_repo=access_repo,
+        company_repo=company_repo,
+    )
 
 
 class TestListPaymentMethodsHappyPath:

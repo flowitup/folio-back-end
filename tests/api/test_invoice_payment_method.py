@@ -147,7 +147,10 @@ def inv_pm_app():
         _c.user_company_access_repo = _access_repo
 
         _c.list_payment_methods_usecase = ListPaymentMethodsUseCase(
-            payment_method_repo=_pm_repo, role_checker=_role_checker
+            payment_method_repo=_pm_repo,
+            role_checker=_role_checker,
+            access_repo=_access_repo,
+            company_repo=_company_repo,
         )
         _c.create_payment_method_usecase = CreatePaymentMethodUseCase(
             payment_method_repo=_pm_repo, role_checker=_role_checker

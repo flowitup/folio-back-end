@@ -64,6 +64,12 @@ class InMemoryPaymentMethodRepository:
     def count_invoices_referencing(self, payment_method_id: UUID) -> int:
         return self._invoice_counts.get(payment_method_id, 0)
 
+    def find_all_by_company_with_usage_count(
+        self, company_id: UUID, *, include_inactive: bool = False
+    ) -> list[tuple["PaymentMethod", int]]:
+        methods = self.find_all_by_company(company_id, include_inactive=include_inactive)
+        return [(m, self._invoice_counts.get(m.id, 0)) for m in methods]
+
     # test helper
     def set_invoice_count(self, payment_method_id: UUID, count: int) -> None:
         self._invoice_counts[payment_method_id] = count
@@ -85,6 +91,36 @@ class FakeRoleService:
         if permission == "*:*":
             return user_id in self._admin_ids
         return False
+
+
+class FakeUserCompanyAccessRepository:
+    """Controls per-(user, company) access for unit tests."""
+
+    def __init__(self, allow_all: bool = True):
+        # allow_all=True means every user has access (default for pre-C1 tests)
+        self._allowed: set[tuple[UUID, UUID]] = set()
+        self._allow_all = allow_all
+
+    def grant(self, user_id: UUID, company_id: UUID) -> None:
+        self._allowed.add((user_id, company_id))
+
+    def find(self, user_id: UUID, company_id: UUID) -> object | None:
+        if self._allow_all:
+            return object()  # truthy — access granted
+        return self._allowed.get((user_id, company_id), None) if (user_id, company_id) in self._allowed else None
+
+
+class FakeCompanyRepository:
+    """Controls which company IDs exist for unit tests."""
+
+    def __init__(self, existing_ids: set[UUID] | None = None):
+        # None = all IDs exist (default for backwards compat)
+        self._existing: set[UUID] | None = existing_ids
+
+    def find_by_id(self, company_id: UUID) -> object | None:
+        if self._existing is None:
+            return object()  # truthy — company exists
+        return object() if company_id in self._existing else None
 
 
 class _FakeSession:
@@ -178,3 +214,15 @@ def role_service(admin_id):
 @pytest.fixture
 def fake_session():
     return _FakeSession()
+
+
+@pytest.fixture
+def access_repo():
+    """Default: all users have access to all companies."""
+    return FakeUserCompanyAccessRepository(allow_all=True)
+
+
+@pytest.fixture
+def company_repo():
+    """Default: all company IDs are valid (existing)."""
+    return FakeCompanyRepository(existing_ids=None)

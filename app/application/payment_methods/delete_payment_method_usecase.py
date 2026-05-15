@@ -48,6 +48,8 @@ class DeletePaymentMethodUseCase:
         requester_id: UUID,
         payment_method_id: UUID,
         db_session: TransactionalSessionPort,
+        *,
+        company_id: UUID,
     ) -> None:
         from app.domain.companies.exceptions import ForbiddenCompanyError
 
@@ -59,6 +61,11 @@ class DeletePaymentMethodUseCase:
         # 2. Load with lock to serialise concurrent soft-delete attempts
         method = self._repo.find_by_id_for_update(payment_method_id)
         if method is None:
+            raise PaymentMethodNotFoundError(payment_method_id)
+
+        # 2b. Cross-tenant guard: URL company_id must match method's company_id.
+        # Return 404 (not 403) to avoid leaking that the method exists in another company.
+        if method.company_id != company_id:
             raise PaymentMethodNotFoundError(payment_method_id)
 
         # 3. Builtin guard — Cash + company-name cannot be removed

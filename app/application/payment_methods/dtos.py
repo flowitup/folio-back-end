@@ -35,6 +35,7 @@ class UpdatePaymentMethodInput:
     """Input for UpdatePaymentMethodUseCase — all mutation fields optional."""
 
     requester_id: UUID
+    company_id: UUID
     payment_method_id: UUID
     label: Optional[str] = None
     is_active: Optional[bool] = None

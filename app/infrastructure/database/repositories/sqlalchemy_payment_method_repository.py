@@ -124,6 +124,29 @@ class SqlAlchemyPaymentMethodRepository:
         result: int = self._session.execute(stmt).scalar_one()
         return result
 
+    def find_all_by_company_with_usage_count(
+        self, company_id: UUID, *, include_inactive: bool = False
+    ) -> list[tuple[PaymentMethod, int]]:
+        """Return (PaymentMethod, usage_count) pairs for a company in a single query.
+
+        Uses LEFT JOIN + GROUP BY to avoid the N+1 pattern of calling
+        ``count_invoices_referencing`` per method.
+        """
+        pm = PaymentMethodModel
+        inv = InvoiceModel
+
+        stmt = (
+            select(pm, func.count(inv.id).label("usage_count"))
+            .outerjoin(inv, inv.payment_method_id == pm.id)
+            .where(pm.company_id == company_id)
+        )
+        if not include_inactive:
+            stmt = stmt.where(pm.is_active.is_(True))
+        stmt = stmt.group_by(pm.id).order_by(pm.label)
+
+        rows = self._session.execute(stmt).all()
+        return [(_to_entity(row[0]), int(row[1])) for row in rows]
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------

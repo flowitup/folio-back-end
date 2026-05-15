@@ -48,6 +48,9 @@ def list_payment_methods(company_id: str):
 
     Active methods only by default. Admin may pass ?include_inactive=true.
     Returns Cache-Control: no-cache, must-revalidate.
+
+    Access: any company member (read). Non-member and non-admin get 404 (no
+    info leak). Even global admins get 404 for non-existent companies.
     """
     try:
         company_uuid = UUID(company_id)
@@ -63,10 +66,8 @@ def list_payment_methods(company_id: str):
             company_id=company_uuid,
             include_inactive=include_inactive,
         )
-    except ForbiddenCompanyError:  # pragma: no cover
-        # NOTE: ListPaymentMethodsUseCase never raises ForbiddenCompanyError; this
-        # branch is a defensive catch kept for future permission-gate changes.
-        return _err("permission_denied", "You do not have permission to view payment methods", 403)
+    except PaymentMethodNotFoundError:
+        return _err("not_found", "Company not found or access denied", 404)
 
     items = [dataclasses.asdict(r) for r in results]
     resp = jsonify({"items": items})
@@ -108,7 +109,16 @@ def create_payment_method(company_id: str):
     except ForbiddenCompanyError:
         return _err("permission_denied", "Admin permission required", 403)
     except PaymentMethodAlreadyExistsError:
-        return _err("duplicate_label", "A payment method with that label already exists", 409)
+        return (
+            jsonify(
+                {
+                    "error": "duplicate_label",
+                    "message": "A payment method with that label already exists",
+                    "reason": "duplicate",
+                }
+            ),
+            409,
+        )
 
     return jsonify(dataclasses.asdict(result)), 201
 
@@ -128,9 +138,10 @@ def update_payment_method(company_id: str, payment_method_id: str):
     """Partially update a payment method (admin only).
 
     Label rename is allowed on builtins. Deactivating a builtin returns 409.
+    Cross-company access returns 404 (no info leak).
     """
     try:
-        company_uuid = UUID(company_id)  # noqa: F841 — validated for consistency
+        company_uuid = UUID(company_id)
         method_uuid = UUID(payment_method_id)
     except ValueError:
         return _err("not_found", "Payment method not found", 404)
@@ -146,6 +157,7 @@ def update_payment_method(company_id: str, payment_method_id: str):
     # inside the use-case — caught below with reason="deactivate".
     inp = UpdatePaymentMethodInput(
         requester_id=requester_id,
+        company_id=company_uuid,
         payment_method_id=method_uuid,
         label=body.label,
         is_active=body.is_active,
@@ -160,7 +172,16 @@ def update_payment_method(company_id: str, payment_method_id: str):
     except PaymentMethodNotFoundError:
         return _err("not_found", "Payment method not found", 404)
     except PaymentMethodAlreadyExistsError:
-        return _err("duplicate_label", "A payment method with that label already exists", 409)
+        return (
+            jsonify(
+                {
+                    "error": "duplicate_label",
+                    "message": "A payment method with that label already exists",
+                    "reason": "duplicate",
+                }
+            ),
+            409,
+        )
     except BuiltinPaymentMethodDeletionError:
         return (
             jsonify(
@@ -188,9 +209,12 @@ def update_payment_method(company_id: str, payment_method_id: str):
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_payment_method(company_id: str, payment_method_id: str):
-    """Soft-delete a payment method (admin only). Returns 204."""
+    """Soft-delete a payment method (admin only). Returns 204.
+
+    Cross-company access returns 404 (no info leak).
+    """
     try:
-        _company_uuid = UUID(company_id)  # noqa: F841 — validated for consistency
+        company_uuid = UUID(company_id)
         method_uuid = UUID(payment_method_id)
     except ValueError:
         return _err("not_found", "Payment method not found", 404)
@@ -204,6 +228,7 @@ def delete_payment_method(company_id: str, payment_method_id: str):
             requester_id=requester_id,
             payment_method_id=method_uuid,
             db_session=db.session,
+            company_id=company_uuid,
         )
     except ForbiddenCompanyError:
         return _err("permission_denied", "Admin permission required", 403)

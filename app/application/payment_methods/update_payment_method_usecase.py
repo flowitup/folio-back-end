@@ -69,6 +69,11 @@ class UpdatePaymentMethodUseCase:
         if method is None:
             raise PaymentMethodNotFoundError(inp.payment_method_id)
 
+        # 2b. Cross-tenant guard: URL company_id must match method's company_id.
+        # Return 404 (not 403) to avoid leaking that the method exists in another company.
+        if method.company_id != inp.company_id:
+            raise PaymentMethodNotFoundError(inp.payment_method_id)
+
         # 3. Validate + deduplicate label if supplied
         new_label = None
         if inp.label is not None:

@@ -29,6 +29,7 @@ class TestDeletePaymentMethodHappyPath:
             requester_id=admin_id,
             payment_method_id=pm.id,
             db_session=fake_session,
+            company_id=company_id,
         )
 
         stored = pm_repo.find_by_id(pm.id)
@@ -43,6 +44,7 @@ class TestDeletePaymentMethodHappyPath:
             requester_id=admin_id,
             payment_method_id=pm.id,
             db_session=fake_session,
+            company_id=company_id,
         )
 
         assert result is None
@@ -57,6 +59,7 @@ class TestDeletePaymentMethodHappyPath:
             requester_id=admin_id,
             payment_method_id=pm.id,
             db_session=fake_session,
+            company_id=company_id,
         )
 
         stored = pm_repo.find_by_id(pm.id)
@@ -73,14 +76,16 @@ class TestDeletePaymentMethodGuards:
                 requester_id=user_id,
                 payment_method_id=pm.id,
                 db_session=fake_session,
+                company_id=company_id,
             )
 
-    def test_not_found_raises(self, usecase, admin_id, fake_session):
+    def test_not_found_raises(self, usecase, admin_id, company_id, fake_session):
         with pytest.raises(PaymentMethodNotFoundError):
             usecase.execute(
                 requester_id=admin_id,
                 payment_method_id=uuid4(),
                 db_session=fake_session,
+                company_id=company_id,
             )
 
     def test_builtin_raises_409(self, usecase, pm_repo, admin_id, company_id, fake_session):
@@ -92,6 +97,7 @@ class TestDeletePaymentMethodGuards:
                 requester_id=admin_id,
                 payment_method_id=pm.id,
                 db_session=fake_session,
+                company_id=company_id,
             )
 
     def test_builtin_checked_before_active_status(self, usecase, pm_repo, admin_id, company_id, fake_session):
@@ -104,4 +110,5 @@ class TestDeletePaymentMethodGuards:
                 requester_id=admin_id,
                 payment_method_id=pm.id,
                 db_session=fake_session,
+                company_id=company_id,
             )

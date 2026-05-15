@@ -18,6 +18,7 @@ import pytest
 from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +108,16 @@ def pm_app():
             updated_at=now,
         )
         db.session.add(company)
+        db.session.flush()
+
+        # Grant member_user access to the company (C1 fix: membership check requires this row)
+        member_access = UserCompanyAccessModel(
+            user_id=member_user.id,
+            company_id=company.id,
+            is_primary=True,
+            attached_at=now,
+        )
+        db.session.add(member_access)
         db.session.commit()
 
         user_repo = SQLAlchemyUserRepository(db.session)
@@ -135,6 +146,8 @@ def pm_app():
         _c.list_payment_methods_usecase = ListPaymentMethodsUseCase(
             payment_method_repo=_pm_repo,
             role_checker=_role_checker,
+            access_repo=_access_repo,
+            company_repo=_company_repo,
         )
         _c.create_payment_method_usecase = CreatePaymentMethodUseCase(
             payment_method_repo=_pm_repo,
@@ -155,6 +168,7 @@ def pm_app():
         test_app._test_member_password = "Member1234!"
         test_app._test_company_id = str(company.id)
         test_app._test_admin_user_id = str(admin_user.id)
+        test_app._test_member_user_id = str(member_user.id)
 
         yield test_app
 
@@ -233,8 +247,8 @@ def test_list_200_admin(pm_client, pm_app, admin_token):
     assert "items" in resp.get_json()
 
 
-def test_list_200_member_active_only(pm_client, pm_app, member_token):
-    """Members can list active methods (no permission restriction on read)."""
+def test_list_200_member_of_company(pm_client, pm_app, member_token):
+    """Members attached to the company can list active payment methods."""
     resp = pm_client.get(_list_url(pm_app._test_company_id), headers=_auth(member_token))
     assert resp.status_code == 200
 
@@ -285,6 +299,140 @@ def test_list_contains_usage_count(pm_client, pm_app, admin_token):
     data = resp.get_json()
     if data["items"]:
         assert "usage_count" in data["items"][0]
+
+
+# ---------------------------------------------------------------------------
+# C1 + C2 security tests — membership enforcement and cross-tenant path validation
+# ---------------------------------------------------------------------------
+
+
+def test_list_404_non_member(pm_client, pm_app, admin_token):
+    """A logged-in user with no access to the company gets 404 (not 200).
+
+    We create a second company that the admin user has no membership row for,
+    then try to list its methods as the *member* user (who also has no access row
+    for that second company).
+    """
+    from datetime import datetime, timezone
+    from app import db
+
+    with pm_app.app_context():
+        # Create a second company; member_user has no access row for it
+        now = datetime.now(timezone.utc)
+        second_company = CompanyModel(
+            id=uuid4(),
+            legal_name="Other Corp",
+            address="2 rue de la Paix",
+            created_by=uuid4(),  # irrelevant owner
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(second_company)
+        db.session.commit()
+        second_company_id = str(second_company.id)
+
+    # member_token user has no UserCompanyAccessModel row for second_company
+    resp = pm_client.get(_list_url(second_company_id), headers=_auth(admin_token))
+    # admin_token has *:* so they DO get 200 for a valid company
+    assert resp.status_code == 200
+
+    # Now test with member_token (non-admin, no access row for second_company)
+    member_token_val = _login(pm_client, pm_app._test_member_email, pm_app._test_member_password)
+    resp2 = pm_client.get(_list_url(second_company_id), headers=_auth(member_token_val))
+    assert resp2.status_code == 404
+
+
+def test_list_404_unknown_company(pm_client, pm_app, member_token):
+    """Any user (incl. member) gets 404 for a random non-existent company UUID."""
+    resp = pm_client.get(_list_url(str(uuid4())), headers=_auth(member_token))
+    assert resp.status_code == 404
+
+
+def test_list_404_for_admin_unknown_company(pm_client, admin_token):
+    """Even global *:* admin gets 404 for a non-existent company (no info leak)."""
+    resp = pm_client.get(_list_url(str(uuid4())), headers=_auth(admin_token))
+    assert resp.status_code == 404
+
+
+def test_patch_404_cross_company_method(pm_client, pm_app, admin_token):
+    """PATCH /companies/<A>/payment-methods/<id-from-B> returns 404 (C2)."""
+    from datetime import datetime, timezone
+    from app import db
+    from uuid import UUID
+
+    # Create a second company and a method belonging to it
+    with pm_app.app_context():
+        now = datetime.now(timezone.utc)
+        other_company = CompanyModel(
+            id=uuid4(),
+            legal_name="Cross Corp",
+            address="3 rue",
+            created_by=UUID(pm_app._test_admin_user_id),
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(other_company)
+        db.session.flush()
+        other_pm = PaymentMethodModel(
+            id=uuid4(),
+            company_id=other_company.id,
+            label="Other Company Method",
+            is_builtin=False,
+            is_active=True,
+            created_by=UUID(pm_app._test_admin_user_id),
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(other_pm)
+        db.session.commit()
+        other_pm_id = str(other_pm.id)
+
+    # PATCH the other company's method via THIS company's URL → 404
+    resp = pm_client.patch(
+        _detail_url(pm_app._test_company_id, other_pm_id),
+        json={"label": "Attempted Cross-Company Rename"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 404
+
+
+def test_delete_404_cross_company_method(pm_client, pm_app, admin_token):
+    """DELETE /companies/<A>/payment-methods/<id-from-B> returns 404 (C2)."""
+    from datetime import datetime, timezone
+    from app import db
+    from uuid import UUID
+
+    with pm_app.app_context():
+        now = datetime.now(timezone.utc)
+        other_company = CompanyModel(
+            id=uuid4(),
+            legal_name="Delete Cross Corp",
+            address="4 rue",
+            created_by=UUID(pm_app._test_admin_user_id),
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(other_company)
+        db.session.flush()
+        other_pm = PaymentMethodModel(
+            id=uuid4(),
+            company_id=other_company.id,
+            label="Other Delete Method",
+            is_builtin=False,
+            is_active=True,
+            created_by=UUID(pm_app._test_admin_user_id),
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(other_pm)
+        db.session.commit()
+        other_pm_id = str(other_pm.id)
+
+    resp = pm_client.delete(
+        _detail_url(pm_app._test_company_id, other_pm_id),
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -532,3 +680,75 @@ def test_create_response_has_ratelimit_header(pm_client, pm_app, admin_token):
     )
     # Route must not crash — 201 on success, 409 if already exists
     assert resp.status_code in (201, 409)
+
+
+# ---------------------------------------------------------------------------
+# H1 — duplicate_label 409 must carry reason='duplicate'
+# ---------------------------------------------------------------------------
+
+
+def test_create_409_duplicate_label_has_reason(pm_client, pm_app, admin_token):
+    """POST duplicate label returns 409 with both error=duplicate_label and reason=duplicate."""
+    label = "H1 Reason Test Label"
+    pm_client.post(_list_url(pm_app._test_company_id), json={"label": label}, headers=_auth(admin_token))
+    resp = pm_client.post(_list_url(pm_app._test_company_id), json={"label": label}, headers=_auth(admin_token))
+    assert resp.status_code == 409
+    data = resp.get_json()
+    assert data["error"] == "duplicate_label"
+    assert data["reason"] == "duplicate"
+
+
+def test_patch_409_duplicate_label_has_reason(pm_client, pm_app, admin_token):
+    """PATCH rename to existing label returns 409 with error=duplicate_label and reason=duplicate."""
+    pm_client.post(_list_url(pm_app._test_company_id), json={"label": "H1 Source"}, headers=_auth(admin_token))
+    resp_target = pm_client.post(
+        _list_url(pm_app._test_company_id), json={"label": "H1 Target"}, headers=_auth(admin_token)
+    )
+    assert resp_target.status_code == 201
+    target_id = resp_target.get_json()["id"]
+
+    resp = pm_client.patch(
+        _detail_url(pm_app._test_company_id, target_id),
+        json={"label": "H1 Source"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 409
+    data = resp.get_json()
+    assert data["error"] == "duplicate_label"
+    assert data["reason"] == "duplicate"
+
+
+# ---------------------------------------------------------------------------
+# H4 — extra='forbid' rejects unknown fields on POST and PATCH
+# ---------------------------------------------------------------------------
+
+
+def test_post_extra_field_is_builtin_returns_422(pm_client, pm_app, admin_token):
+    """POST with is_builtin=true (extra forbidden field) → 422."""
+    resp = pm_client.post(
+        _list_url(pm_app._test_company_id),
+        json={"label": "X", "is_builtin": True},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 422
+
+
+def test_post_extra_field_id_returns_422(pm_client, pm_app, admin_token):
+    """POST with id= (extra forbidden field) → 422."""
+    resp = pm_client.post(
+        _list_url(pm_app._test_company_id),
+        json={"label": "X", "id": str(uuid4())},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_extra_field_is_builtin_returns_422(pm_client, pm_app, admin_token):
+    """PATCH with is_builtin=false (extra forbidden field) → 422."""
+    pm_id = _make_pm_row(pm_app, label="H4 Patch Target")
+    resp = pm_client.patch(
+        _detail_url(pm_app._test_company_id, pm_id),
+        json={"label": "X", "is_builtin": False},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 422
