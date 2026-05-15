@@ -15,6 +15,7 @@ Typically invoked via the main `scripts/seed.py` orchestrator with `--with-users
 
 from __future__ import annotations
 
+import os
 from uuid import uuid4
 
 from argon2 import PasswordHasher
@@ -51,6 +52,9 @@ def seed_test_users(role_map: dict[str, RoleModel]) -> dict[str, UserModel]:
     Args:
         role_map: dict from seed_auth.seed_roles() — name → RoleModel.
     """
+    # Hardcoded TEST_PASSWORD must never reach production.
+    if os.environ.get("FLASK_ENV") == "production":
+        raise RuntimeError("REFUSING to seed test users with hardcoded password in FLASK_ENV=production.")
     ph = PasswordHasher()
     password_hash = ph.hash(TEST_PASSWORD)
     created_count = 0
