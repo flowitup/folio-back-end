@@ -229,14 +229,16 @@ class TestLogAttendanceUseCase:
 class TestUpdateAttendanceUseCase:
     """Tests for UpdateAttendanceUseCase."""
 
-    def test_update_attendance_success(self, mock_entry_repo, sample_entry):
+    def test_update_attendance_success(self, mock_entry_repo, mock_worker_repo, sample_entry, sample_worker):
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = sample_entry
-        usecase = UpdateAttendanceUseCase(mock_entry_repo)
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
 
         result = usecase.execute(
             UpdateAttendanceRequest(
                 entry_id=sample_entry.id,
+                project_id=sample_worker.project_id,
                 note="Updated note",
             )
         )
@@ -244,21 +246,42 @@ class TestUpdateAttendanceUseCase:
         assert result is not None
         mock_entry_repo.update.assert_called_once()
 
-    def test_update_attendance_not_found_raises_error(self, mock_entry_repo):
+    def test_update_attendance_not_found_raises_error(self, mock_entry_repo, mock_worker_repo):
         mock_entry_repo.find_by_id.return_value = None
-        usecase = UpdateAttendanceUseCase(mock_entry_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
 
         with pytest.raises(LaborEntryNotFoundError):
             usecase.execute(
                 UpdateAttendanceRequest(
                     entry_id=uuid4(),
+                    project_id=uuid4(),
                     note="New note",
                 )
             )
 
-    def test_update_attendance_patch_preserves_untouched_fields(self, mock_entry_repo):
+    def test_update_attendance_cross_project_returns_not_found(
+        self, mock_entry_repo, mock_worker_repo, sample_entry, sample_worker
+    ):
+        """Caller passing the wrong project_id sees a NotFound, mirroring the
+        normal not-found path so entry existence is not leaked across tenants."""
+        mock_entry_repo.find_by_id.return_value = sample_entry
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+
+        with pytest.raises(LaborEntryNotFoundError):
+            usecase.execute(
+                UpdateAttendanceRequest(
+                    entry_id=sample_entry.id,
+                    project_id=uuid4(),  # different project from worker's
+                    note="x",
+                )
+            )
+        mock_entry_repo.update.assert_not_called()
+
+    def test_update_attendance_patch_preserves_untouched_fields(self, mock_entry_repo, mock_worker_repo):
         """PATCH with only supplement_hours must not wipe amount_override, note, or shift_type."""
         worker_id = uuid4()
+        project_id = uuid4()
         entry = LaborEntry(
             id=uuid4(),
             worker_id=worker_id,
@@ -269,14 +292,25 @@ class TestUpdateAttendanceUseCase:
             supplement_hours=2,
             created_at=datetime.now(timezone.utc),
         )
+        worker = Worker(
+            id=worker_id,
+            project_id=project_id,
+            name="W",
+            daily_rate=Decimal("100"),
+            phone=None,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
         # Repo returns the live entry; update saves and returns it too
         mock_entry_repo.find_by_id.return_value = entry
         mock_entry_repo.update.side_effect = lambda e: e
+        mock_worker_repo.find_by_id.return_value = worker
 
-        usecase = UpdateAttendanceUseCase(mock_entry_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
         result = usecase.execute(
             UpdateAttendanceRequest(
                 entry_id=entry.id,
+                project_id=project_id,
                 supplement_hours=5,
                 # amount_override, note, shift_type all omitted (None) → must not be touched
             )
@@ -291,21 +325,33 @@ class TestUpdateAttendanceUseCase:
 class TestDeleteAttendanceUseCase:
     """Tests for DeleteAttendanceUseCase."""
 
-    def test_delete_attendance_success(self, mock_entry_repo, sample_entry):
+    def test_delete_attendance_success(self, mock_entry_repo, mock_worker_repo, sample_entry, sample_worker):
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.delete.return_value = True
-        usecase = DeleteAttendanceUseCase(mock_entry_repo)
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = DeleteAttendanceUseCase(mock_entry_repo, mock_worker_repo)
 
-        usecase.execute(DeleteAttendanceRequest(entry_id=sample_entry.id))
+        usecase.execute(DeleteAttendanceRequest(entry_id=sample_entry.id, project_id=sample_worker.project_id))
 
         mock_entry_repo.delete.assert_called_once_with(sample_entry.id)
 
-    def test_delete_attendance_not_found_raises_error(self, mock_entry_repo):
+    def test_delete_attendance_not_found_raises_error(self, mock_entry_repo, mock_worker_repo):
         mock_entry_repo.find_by_id.return_value = None
-        usecase = DeleteAttendanceUseCase(mock_entry_repo)
+        usecase = DeleteAttendanceUseCase(mock_entry_repo, mock_worker_repo)
 
         with pytest.raises(LaborEntryNotFoundError):
-            usecase.execute(DeleteAttendanceRequest(entry_id=uuid4()))
+            usecase.execute(DeleteAttendanceRequest(entry_id=uuid4(), project_id=uuid4()))
+
+    def test_delete_attendance_cross_project_returns_not_found(
+        self, mock_entry_repo, mock_worker_repo, sample_entry, sample_worker
+    ):
+        mock_entry_repo.find_by_id.return_value = sample_entry
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = DeleteAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+
+        with pytest.raises(LaborEntryNotFoundError):
+            usecase.execute(DeleteAttendanceRequest(entry_id=sample_entry.id, project_id=uuid4()))
+        mock_entry_repo.delete.assert_not_called()
 
 
 class TestListWorkersUseCase:
@@ -565,7 +611,7 @@ class TestLogAttendanceUseCaseSupplementHours:
 class TestUpdateAttendanceUseCaseSupplementHours:
     """Regression tests: PATCH only supplement_hours must persist without dropping other fields."""
 
-    def test_patch_supplement_hours_only(self, mock_entry_repo, sample_entry):
+    def test_patch_supplement_hours_only(self, mock_entry_repo, mock_worker_repo, sample_entry, sample_worker):
         """Patching only supplement_hours leaves shift_type and note untouched."""
         updated_entry = LaborEntry(
             id=sample_entry.id,
@@ -578,11 +624,13 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         )
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = updated_entry
-        usecase = UpdateAttendanceUseCase(mock_entry_repo)
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
 
         result = usecase.execute(
             UpdateAttendanceRequest(
                 entry_id=sample_entry.id,
+                project_id=sample_worker.project_id,
                 supplement_hours=6,
             )
         )
@@ -594,15 +642,19 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         # shift_type was NOT in the request → must be unchanged (still "full")
         assert patched.shift_type == "full"
 
-    def test_patch_preserves_shift_type_when_not_in_request(self, mock_entry_repo, sample_entry):
+    def test_patch_preserves_shift_type_when_not_in_request(
+        self, mock_entry_repo, mock_worker_repo, sample_entry, sample_worker
+    ):
         """When supplement_hours is None (not in PATCH body), existing value is kept."""
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = sample_entry
-        usecase = UpdateAttendanceUseCase(mock_entry_repo)
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
 
         usecase.execute(
             UpdateAttendanceRequest(
                 entry_id=sample_entry.id,
+                project_id=sample_worker.project_id,
                 note="just updating the note",
             )
         )

@@ -19,6 +19,6 @@ class TokenIssuerPort(Protocol):
         """Verify and decode token. Returns claims or None if invalid."""
         ...
 
-    def revoke_token(self, jti: str) -> None:
-        """Add token to blacklist by JTI."""
+    def revoke_token(self, jti: str, token_type: str = "access") -> None:
+        """Add token to blacklist by JTI. token_type selects the TTL ("access" or "refresh")."""
         ...
