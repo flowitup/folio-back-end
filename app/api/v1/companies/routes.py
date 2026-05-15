@@ -551,7 +551,7 @@ def list_attached_users(company_id: str):
     """List users attached to a company (admin only).
 
     Supports pagination via ?limit (default 50, max 200) and ?offset (default 0).
-    Returns { users: [...], total: int }.
+    Returns { items: [...], total: int }.
     """
     try:
         company_uuid = UUID(company_id)
@@ -574,7 +574,7 @@ def list_attached_users(company_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
-    return jsonify({"users": [dataclasses.asdict(r) for r in result.items], "total": result.total})
+    return jsonify({"items": [dataclasses.asdict(r) for r in result.items], "total": result.total})
 
 
 # ---------------------------------------------------------------------------
