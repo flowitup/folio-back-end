@@ -37,7 +37,10 @@ def create_app(config_class: type = Config) -> Flask:
     app.config.from_object(config_class)
 
     # Production security check — fail fast rather than run with insecure defaults
-    if os.environ.get("FLASK_ENV") == "production":
+    _flask_env = os.environ.get("FLASK_ENV", "development")
+    _is_production = _flask_env == "production"
+    _is_development = _flask_env == "development"
+    if _is_production:
         # Cheapest env-only check first: FLASK_DEV_INSECURE only relaxes cookie flags in
         # non-prod and must never be honored in production.
         if os.environ.get("FLASK_DEV_INSECURE") == "1":
@@ -48,17 +51,24 @@ def create_app(config_class: type = Config) -> Flask:
         secret_key = getattr(config_class, "SECRET_KEY", "")
         if not secret_key or "dev-" in secret_key.lower():
             raise RuntimeError("CRITICAL: SECRET_KEY must be set in production.")
+        # Default MinIO credentials and a localhost S3 endpoint indicate the
+        # operator forgot to point at the real object store; refusing to boot
+        # is safer than silently writing tenant attachments to a local bucket.
+        s3_access = getattr(config_class, "S3_ACCESS_KEY", "")
+        s3_secret = getattr(config_class, "S3_SECRET_KEY", "")
+        s3_endpoint = getattr(config_class, "S3_ENDPOINT_URL", "") or ""
+        if s3_access == "minioadmin" or s3_secret == "minioadmin":
+            raise RuntimeError("CRITICAL: S3_ACCESS_KEY / S3_SECRET_KEY must not use the default minioadmin in production.")
+        if "localhost" in s3_endpoint or "127.0.0.1" in s3_endpoint:
+            raise RuntimeError("CRITICAL: S3_ENDPOINT_URL must not point at localhost in production.")
 
-    # Catch the dev-trap: a non-production environment behind a public https origin
-    # would issue cookies without Secure / CSRF (in legacy FLASK_DEV_INSECURE mode).
-    if (
-        os.environ.get("FLASK_ENV") != "production"
-        and os.environ.get("FLASK_DEV_INSECURE") == "1"
-        and "https://" in os.environ.get("CORS_ORIGINS", "")
-    ):
+    # FLASK_DEV_INSECURE relaxes cookie flags (Secure=False, SameSite=None, CSRF=False)
+    # and must only ever be honored in a true local-development context. Allowing it
+    # in staging/UAT would let any cross-origin request mount a CSRF.
+    if os.environ.get("FLASK_DEV_INSECURE") == "1" and not _is_development:
         raise RuntimeError(
-            "CRITICAL: FLASK_DEV_INSECURE=1 is incompatible with https:// CORS origins. "
-            "Either drop FLASK_DEV_INSECURE or use http://localhost-style origins for dev."
+            "CRITICAL: FLASK_DEV_INSECURE=1 is only permitted when FLASK_ENV=development. "
+            "Use proper TLS + Secure cookies for staging/UAT."
         )
 
     # Configure SQLAlchemy
@@ -147,10 +157,14 @@ def create_app(config_class: type = Config) -> Flask:
 
         app.register_blueprint(test_only_bp, url_prefix="/api/v1/__test__")
 
-    # Initialize Swagger API documentation
-    from app.api.swagger import init_swagger
+    # Initialize Swagger API documentation. The doc surface is recon-rich
+    # (full schema map + endpoint catalogue) so it is disabled in
+    # production unless EXPOSE_DOCS=1 forces it on.
+    _is_production = os.environ.get("FLASK_ENV") == "production"
+    if (not _is_production) or app.config.get("EXPOSE_DOCS"):
+        from app.api.swagger import init_swagger
 
-    init_swagger(app)
+        init_swagger(app)
 
     return app
 
