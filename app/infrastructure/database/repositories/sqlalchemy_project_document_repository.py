@@ -112,8 +112,10 @@ class SqlAlchemyProjectDocumentRepository:
                     from sqlalchemy import not_
 
                     other_clause = not_(or_(*known_not_clauses))
-                else:
-                    # No known extensions at all — everything qualifies as "other"
+                else:  # pragma: no cover
+                    # NOTE: _ALL_KNOWN_EXTENSIONS is hardcoded non-empty; this branch
+                    # is a defensive guard for future schema changes and cannot be
+                    # reached with the current extension registry.
                     from sqlalchemy import true
 
                     other_clause = true()
