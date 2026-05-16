@@ -479,14 +479,161 @@ class TestUploadDocumentErrorCases:
 
 
 class TestUploadRateLimit:
-    def test_rate_limit_429_after_30_requests(self):
-        """31st upload in <60s should return 429. Uses a dedicated rate-limit-enabled app."""
-        pytest.skip(
-            "Rate-limit test requires RATELIMIT_ENABLED=True. "
-            "The global test fixture uses RATELIMIT_ENABLED=False to prevent "
-            "cross-test interference. Run manually with a dedicated fixture if needed."
-            # NOTE: A dedicated rate-limit fixture IS implemented in
-            # tests/test_auth_endpoints.py::TestRateLimiting as a reference pattern.
+    """Verifies the 30/min/user rate-limit decorator on POST /documents.
+
+    Uses a dedicated app fixture with RATELIMIT_ENABLED=True (same pattern as
+    tests/test_auth_endpoints.py::TestRateLimiting) so rate-limit state does
+    not bleed into other test classes which run with RATELIMIT_ENABLED=False.
+    """
+
+    @pytest.fixture
+    def rate_limit_client(self):
+        """App fixture with rate limiting enabled + a seeded owner user and project."""
+        from app import create_app, db
+        from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+        from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+        from app.infrastructure.adapters.flask_session import FlaskSessionManager
+        from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+        from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
+        from app.infrastructure.database.repositories.sqlalchemy_invitation import SqlAlchemyInvitationRepository
+        from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
+            SqlAlchemyProjectMembershipRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
+        from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
+        from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
+            SqlAlchemyProjectDocumentRepository,
+        )
+        from app.application.project_documents import (
+            UploadProjectDocumentUseCase,
+            ListProjectDocumentsUseCase,
+            GetProjectDocumentUseCase,
+            DeleteProjectDocumentUseCase,
+        )
+        from config import TestingConfig
+        from wiring import configure_container, get_container
+        import wiring as _wiring
+        from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
+
+        class RateLimitConfig(TestingConfig):
+            JWT_TOKEN_LOCATION = ["headers", "cookies"]
+            RATELIMIT_ENABLED = True
+            RATELIMIT_STORAGE_URI = "memory://"
+            RATELIMIT_DEFAULT = "1000 per minute"  # High default; upload route has own 30/min
+
+        rl_app = create_app(RateLimitConfig)
+
+        with rl_app.app_context():
+            db.create_all()
+
+            if _wiring._inmemory_email_adapter is None:
+                _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
+
+            hasher = Argon2PasswordHasher()
+            user_repo = SQLAlchemyUserRepository(db.session)
+            project_repo = SQLAlchemyProjectRepository(db.session)
+            inv_repo = SqlAlchemyInvitationRepository(db.session)
+            membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
+            role_repo = SqlAlchemyRoleRepository(db.session)
+
+            configure_container(
+                user_repository=user_repo,
+                project_repository=project_repo,
+                password_hasher=hasher,
+                token_issuer=JWTTokenIssuer(),
+                session_manager=FlaskSessionManager(),
+                invitation_repo=inv_repo,
+                project_membership_repo=membership_repo,
+                role_repo=role_repo,
+            )
+
+            read_perm = PermissionModel(name="project:read", resource="project", action="read")
+            owner_role = RoleModel(name="rl_owner", description="Owner")
+            owner_role.permissions.append(read_perm)
+            db.session.add_all([read_perm, owner_role])
+            db.session.flush()
+
+            owner_user = UserModel(
+                email="rl_owner@test.com",
+                password_hash=hasher.hash("Owner1234!"),
+                is_active=True,
+            )
+            owner_user.roles.append(owner_role)
+            db.session.add(owner_user)
+            db.session.flush()
+
+            project = ProjectModel(name="RL Test Project", owner_id=owner_user.id)
+            db.session.add(project)
+            db.session.flush()
+            db.session.commit()
+
+            doc_storage = InMemoryDocumentStorage()
+            doc_repo = SqlAlchemyProjectDocumentRepository(db.session)
+
+            _c = get_container()
+            _c.project_document_repository = doc_repo
+            _c.document_storage = doc_storage
+            _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
+                repo=doc_repo, storage=doc_storage, db_session=db.session
+            )
+            _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=doc_repo)
+            _c.get_project_document_usecase = GetProjectDocumentUseCase(
+                repo=doc_repo, storage=doc_storage
+            )
+            _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
+                repo=doc_repo, db_session=db.session
+            )
+
+            client = rl_app.test_client()
+
+            # Login to get token
+            login_resp = client.post(
+                "/api/v1/auth/login",
+                json={"email": "rl_owner@test.com", "password": "Owner1234!"},
+            )
+            assert login_resp.status_code == 200, f"Login failed: {login_resp.get_data(as_text=True)}"
+            token = login_resp.get_json()["access_token"]
+
+            yield client, str(project.id), token
+
+            db.session.remove()
+            db.drop_all()
+
+    def test_rate_limit_429_after_30_requests(self, rate_limit_client):
+        """31st upload within the same minute window must return 429.
+
+        Verifies the @limiter.limit("30 per minute", key_func=jwt_user_key)
+        decorator is active and enforced. Without this test, silently removing
+        the decorator would go undetected.
+        """
+        client, project_id, token = rate_limit_client
+        url = _docs_url(project_id)
+        headers = _auth(token)
+
+        # First 30 requests must succeed (201)
+        for i in range(30):
+            resp = client.post(
+                url,
+                data={"file": (io.BytesIO(b"x"), f"file{i}.pdf", "application/pdf")},
+                content_type="multipart/form-data",
+                headers=headers,
+            )
+            assert resp.status_code == 201, (
+                f"Request {i + 1} expected 201 but got {resp.status_code}: "
+                f"{resp.get_data(as_text=True)}"
+            )
+
+        # 31st request must be rate-limited
+        resp31 = client.post(
+            url,
+            data={"file": (io.BytesIO(b"x"), "file30.pdf", "application/pdf")},
+            content_type="multipart/form-data",
+            headers=headers,
+        )
+        assert resp31.status_code == 429, (
+            f"Expected 429 on 31st request but got {resp31.status_code}: "
+            f"{resp31.get_data(as_text=True)}"
         )
 
 
