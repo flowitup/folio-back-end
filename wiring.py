@@ -88,6 +88,13 @@ from app.application.payment_methods.seed_payment_methods_for_company_usecase im
     SeedPaymentMethodsForCompanyUseCase,
 )
 from app.application.payment_methods.ports import IPaymentMethodRepository
+from app.application.project_documents import (
+    UploadProjectDocumentUseCase,
+    ListProjectDocumentsUseCase,
+    GetProjectDocumentUseCase,
+    DeleteProjectDocumentUseCase,
+)
+from app.application.project_documents.ports import IDocumentStorage, IProjectDocumentRepository
 from app.application.notes.create_note_usecase import CreateNoteUseCase
 from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
 from app.application.notes.update_note_usecase import UpdateNoteUseCase
@@ -332,6 +339,16 @@ class Container:
     # billing-import + activity-suggestions use-cases (phase 08)
     import_billing_document_usecase: Optional[ImportBillingDocumentUseCase] = None
     list_activity_suggestions_usecase: Optional[ListActivitySuggestionsUseCase] = None
+
+    # -----------------------------------------------------------------------
+    # Project documents repo + use-cases (phase 03)
+    # -----------------------------------------------------------------------
+    document_storage: Optional[IDocumentStorage] = None
+    project_document_repository: Optional[IProjectDocumentRepository] = None
+    upload_project_document_usecase: Optional[UploadProjectDocumentUseCase] = None
+    list_project_documents_usecase: Optional[ListProjectDocumentsUseCase] = None
+    get_project_document_usecase: Optional[GetProjectDocumentUseCase] = None
+    delete_project_document_usecase: Optional[DeleteProjectDocumentUseCase] = None
 
     # Persons repo + use cases (Phase 1b-ii / 1c of labor-calendar-and-bulk-log plan)
     person_repo: Optional[Any] = None  # SqlAlchemyPersonRepository
