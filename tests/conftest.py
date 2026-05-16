@@ -672,6 +672,39 @@ def invitation_app():
             seed_payment_methods=_c.seed_payment_methods_usecase,
         )
 
+        # ------------------------------------------------------------------
+        # Wire project documents use-cases (phase 03)
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
+            SqlAlchemyProjectDocumentRepository as _DocRepo,
+        )
+        from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.application.project_documents import (
+            UploadProjectDocumentUseCase as _UploadDocUC,
+            ListProjectDocumentsUseCase as _ListDocUC,
+            GetProjectDocumentUseCase as _GetDocUC,
+            DeleteProjectDocumentUseCase as _DeleteDocUC,
+        )
+
+        _doc_repo = _DocRepo(db.session)
+        _doc_storage = InMemoryDocumentStorage()
+        _c.project_document_repository = _doc_repo
+        _c.document_storage = _doc_storage
+
+        _c.upload_project_document_usecase = _UploadDocUC(
+            repo=_doc_repo,
+            storage=_doc_storage,
+            db_session=db.session,
+        )
+        _c.list_project_documents_usecase = _ListDocUC(repo=_doc_repo)
+        _c.get_project_document_usecase = _GetDocUC(repo=_doc_repo, storage=_doc_storage)
+        _c.delete_project_document_usecase = _DeleteDocUC(
+            repo=_doc_repo,
+            db_session=db.session,
+        )
+
         yield test_app
 
         db.session.remove()

@@ -65,8 +65,11 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Reject upload bodies > 10 MB at the WSGI layer (matches attachment use-case cap)
-    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+    # 26 MiB Flask cap above the 25 MB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
+    # so multipart envelope overhead doesn't false-positive a 413 before the use-case
+    # can return its richer error. Invoice attachments have their own 10 MB cap enforced
+    # in the use-case layer (upload_attachment.py), so this bump does not relax that limit.
+    app.config["MAX_CONTENT_LENGTH"] = 26 * 1024 * 1024
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
@@ -118,6 +121,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.companies import companies_bp, users_me_bp
     from app.api.v1.persons import persons_bp
     from app.api.v1.payment_methods import payment_methods_bp
+    from app.api.v1.project_documents import project_documents_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -139,6 +143,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(users_me_bp, url_prefix="/api/v1")
     app.register_blueprint(persons_bp, url_prefix="/api/v1")
     app.register_blueprint(payment_methods_bp, url_prefix="/api/v1")
+    app.register_blueprint(project_documents_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -634,4 +639,34 @@ def _configure_di_container() -> None:
         company_repo=_company_repo,
         role_checker=_role_checker,
         seed_payment_methods=_c.seed_payment_methods_usecase,
+    )
+
+    # -----------------------------------------------------------------------
+    # Project documents DI wiring (phase 03)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
+        SqlAlchemyProjectDocumentRepository,
+    )
+    from app.application.project_documents import (
+        UploadProjectDocumentUseCase,
+        ListProjectDocumentsUseCase,
+        GetProjectDocumentUseCase,
+        DeleteProjectDocumentUseCase,
+    )
+
+    _doc_repo = SqlAlchemyProjectDocumentRepository(db.session)
+    _c.project_document_repository = _doc_repo
+    # Reuse the same S3AttachmentStorage singleton — structurally satisfies IDocumentStorage
+    _c.document_storage = storage
+
+    _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
+        repo=_doc_repo,
+        storage=storage,
+        db_session=db.session,
+    )
+    _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=_doc_repo)
+    _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=_doc_repo, storage=storage)
+    _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
+        repo=_doc_repo,
+        db_session=db.session,
     )
