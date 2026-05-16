@@ -410,6 +410,22 @@ class TestUploadDocumentErrorCases:
         )
         assert resp.status_code == 400
 
+    def test_201_15mb_file_within_flask_cap(self, doc_client, owner_token, doc_app):
+        """15 MB file must reach the use-case and succeed.
+
+        Regression for C1: previously Flask's 10 MiB MAX_CONTENT_LENGTH would
+        return 413 before the route handler ran, breaking the advertised 25 MB cap.
+        This test proves the new 26 MiB Flask cap allows a 15 MB file through.
+        """
+        content_15mb = b"x" * (15 * 1024 * 1024)
+        resp = _upload(
+            doc_client,
+            doc_app._doc_project_id,
+            owner_token,
+            content=content_15mb,
+        )
+        assert resp.status_code == 201
+
     def test_413_oversize_file(self, doc_client, owner_token, doc_app):
         """File exceeding MAX_SIZE_BYTES should return 413."""
         from app.application.project_documents import MAX_SIZE_BYTES

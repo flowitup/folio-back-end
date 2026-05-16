@@ -65,8 +65,11 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Reject upload bodies > 10 MB at the WSGI layer (matches attachment use-case cap)
-    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+    # 26 MiB Flask cap above the 25 MB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
+    # so multipart envelope overhead doesn't false-positive a 413 before the use-case
+    # can return its richer error. Invoice attachments have their own 10 MB cap enforced
+    # in the use-case layer (upload_attachment.py), so this bump does not relax that limit.
+    app.config["MAX_CONTENT_LENGTH"] = 26 * 1024 * 1024
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
