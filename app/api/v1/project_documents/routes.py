@@ -135,12 +135,12 @@ def download_project_document(project_id: str, document_id: str):
 
     container = get_container()
     try:
-        doc, stream, length = container.get_project_document_usecase.execute(doc_uuid)
+        # Pass expected_project_id so the use-case enforces the cross-project
+        # invariant before opening the storage stream (H1: prevents S3 stream leak).
+        doc, stream, length = container.get_project_document_usecase.execute(
+            doc_uuid, UUID(project_id)
+        )
     except ProjectDocumentNotFoundError:
-        return _error_response("NOT_FOUND", "Document not found", 404)
-
-    # Cross-project guard: don't leak existence of docs from other projects
-    if doc.project_id != UUID(project_id):
         return _error_response("NOT_FOUND", "Document not found", 404)
 
     # Inline preview only for PDF + images; everything else forced to download.

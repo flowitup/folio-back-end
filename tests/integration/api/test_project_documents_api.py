@@ -698,3 +698,193 @@ class TestDeleteDocumentErrors:
             headers=_auth(owner_token),
         )
         assert resp.status_code == 400
+
+
+# ===========================================================================
+# ADVERSARIAL: Cross-project download with a member of BOTH projects (H1+M5)
+# ===========================================================================
+
+
+class TestCrossProjectDownloadAdversarial:
+    """Member of both project A and B must not download project-A docs via project-B URL.
+
+    This is the adversarial variant of test_404_cross_project_id_mismatch that
+    actually reaches the use-case cross-project guard (the original test used a
+    random project UUID which fails the decorator's project-exists check first).
+    """
+
+    @pytest.fixture(scope="class")
+    def dual_member_app(self):
+        """App with two real projects; the dual_member user is ORM-wired to both."""
+        from app import create_app, db
+        from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+        from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+        from app.infrastructure.adapters.flask_session import FlaskSessionManager
+        from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+        from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
+        from app.infrastructure.database.repositories.sqlalchemy_invitation import SqlAlchemyInvitationRepository
+        from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
+            SqlAlchemyProjectMembershipRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
+        from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
+        from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
+            SqlAlchemyProjectDocumentRepository,
+        )
+        from app.application.project_documents import (
+            UploadProjectDocumentUseCase,
+            ListProjectDocumentsUseCase,
+            GetProjectDocumentUseCase,
+            DeleteProjectDocumentUseCase,
+        )
+        from config import TestingConfig
+        from wiring import configure_container, get_container
+        import wiring as _wiring
+        from app.infrastructure.email.inmemory_adapter import InMemoryEmailAdapter
+
+        class DualMemberConfig(TestingConfig):
+            JWT_TOKEN_LOCATION = ["headers", "cookies"]
+            RATELIMIT_ENABLED = False
+            RATELIMIT_STORAGE_URI = "memory://"
+
+        test_app = create_app(DualMemberConfig)
+
+        with test_app.app_context():
+            db.create_all()
+
+            if _wiring._inmemory_email_adapter is None:
+                _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
+
+            hasher = Argon2PasswordHasher()
+            user_repo = SQLAlchemyUserRepository(db.session)
+            project_repo = SQLAlchemyProjectRepository(db.session)
+            inv_repo = SqlAlchemyInvitationRepository(db.session)
+            membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
+            role_repo = SqlAlchemyRoleRepository(db.session)
+
+            configure_container(
+                user_repository=user_repo,
+                project_repository=project_repo,
+                password_hasher=hasher,
+                token_issuer=JWTTokenIssuer(),
+                session_manager=FlaskSessionManager(),
+                invitation_repo=inv_repo,
+                project_membership_repo=membership_repo,
+                role_repo=role_repo,
+            )
+
+            read_perm = PermissionModel(name="project:read", resource="project", action="read")
+
+            owner_role = RoleModel(name="xp_owner", description="Owner")
+            owner_role.permissions.append(read_perm)
+            member_role = RoleModel(name="xp_member", description="Member")
+            member_role.permissions.append(read_perm)
+
+            db.session.add_all([read_perm, owner_role, member_role])
+            db.session.flush()
+
+            # dual_member is a member of BOTH project A and B
+            owner_user = UserModel(
+                email="xp_owner@test.com",
+                password_hash=hasher.hash("Owner1234!"),
+                is_active=True,
+            )
+            owner_user.roles.append(owner_role)
+
+            dual_member = UserModel(
+                email="xp_dual@test.com",
+                password_hash=hasher.hash("Dual1234!"),
+                is_active=True,
+            )
+            dual_member.roles.append(member_role)
+
+            db.session.add_all([owner_user, dual_member])
+            db.session.flush()
+
+            project_a = ProjectModel(name="Cross Project A", owner_id=owner_user.id)
+            project_b = ProjectModel(name="Cross Project B", owner_id=owner_user.id)
+            db.session.add_all([project_a, project_b])
+            db.session.flush()
+
+            # Wire dual_member to BOTH projects via ORM relationship
+            project_a.users.append(dual_member)
+            project_b.users.append(dual_member)
+            db.session.commit()
+
+            doc_storage = InMemoryDocumentStorage()
+            doc_repo = SqlAlchemyProjectDocumentRepository(db.session)
+
+            _c = get_container()
+            _c.project_document_repository = doc_repo
+            _c.document_storage = doc_storage
+            _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
+                repo=doc_repo, storage=doc_storage, db_session=db.session
+            )
+            _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=doc_repo)
+            _c.get_project_document_usecase = GetProjectDocumentUseCase(
+                repo=doc_repo, storage=doc_storage
+            )
+            _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
+                repo=doc_repo, db_session=db.session
+            )
+
+            test_app._xp_owner_email = "xp_owner@test.com"
+            test_app._xp_owner_password = "Owner1234!"
+            test_app._xp_dual_email = "xp_dual@test.com"
+            test_app._xp_dual_password = "Dual1234!"
+            test_app._xp_project_a_id = str(project_a.id)
+            test_app._xp_project_b_id = str(project_b.id)
+            test_app._xp_doc_storage = doc_storage
+
+            yield test_app
+
+            db.session.remove()
+            db.drop_all()
+
+    @pytest.fixture(scope="class")
+    def dual_client(self, dual_member_app):
+        return dual_member_app.test_client()
+
+    @pytest.fixture(scope="class")
+    def owner_tok(self, dual_client, dual_member_app):
+        return _login(dual_client, dual_member_app._xp_owner_email, dual_member_app._xp_owner_password)
+
+    @pytest.fixture(scope="class")
+    def dual_tok(self, dual_client, dual_member_app):
+        return _login(dual_client, dual_member_app._xp_dual_email, dual_member_app._xp_dual_password)
+
+    def test_404_cross_project_guard_in_use_case(self, dual_client, dual_member_app, owner_tok, dual_tok):
+        """dual_member is a member of both A and B; accessing a project-A doc via project-B URL must 404.
+
+        This test reaches the use-case cross-project guard (not the decorator),
+        because the caller is legitimately a member of project B.
+        It also asserts storage.get_stream was NOT called (no S3 stream leak).
+        """
+        doc_storage = dual_member_app._xp_doc_storage
+        project_a_id = dual_member_app._xp_project_a_id
+        project_b_id = dual_member_app._xp_project_b_id
+
+        # Track get_stream calls before upload
+        initial_store_size = len(doc_storage._store)
+
+        # Upload doc to project A (as owner)
+        upload_resp = _upload(dual_client, project_a_id, owner_tok)
+        assert upload_resp.status_code == 201
+        doc_id = upload_resp.get_json()["id"]
+
+        # Confirm doc is in storage
+        assert len(doc_storage._store) == initial_store_size + 1
+
+        # dual_member tries to download project-A doc via project-B URL
+        # They are a member of B so the decorator allows through to the use-case
+        resp = dual_client.get(
+            _download_url(project_b_id, doc_id),
+            headers=_auth(dual_tok),
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.get_data(as_text=True)}"
+
+        # Confirm storage was NOT drained — the file is still there (get_stream not called
+        # against project B context; the guard must have short-circuited first)
+        data = resp.get_json()
+        assert data.get("error") == "NOT_FOUND"

@@ -53,7 +53,7 @@ class TestGetProjectDocumentHappyPath:
         storage = _make_storage(b"hello world")
         uc = GetProjectDocumentUseCase(repo=repo, storage=storage)
 
-        result_doc, stream, length = uc.execute(doc.id)
+        result_doc, stream, length = uc.execute(doc.id, doc.project_id)
 
         assert result_doc is doc
         assert length == len(b"hello world")
@@ -66,7 +66,7 @@ class TestGetProjectDocumentHappyPath:
         uc = GetProjectDocumentUseCase(repo=repo, storage=storage)
         doc_id = doc.id
 
-        uc.execute(doc_id)
+        uc.execute(doc_id, doc.project_id)
 
         repo.find_by_id.assert_called_once_with(doc_id)
 
@@ -76,7 +76,7 @@ class TestGetProjectDocumentHappyPath:
         storage = _make_storage()
         uc = GetProjectDocumentUseCase(repo=repo, storage=storage)
 
-        uc.execute(doc.id)
+        uc.execute(doc.id, doc.project_id)
 
         storage.get_stream.assert_called_once_with(doc.storage_key)
 
@@ -88,7 +88,7 @@ class TestGetProjectDocumentNotFound:
         uc = GetProjectDocumentUseCase(repo=repo, storage=storage)
 
         with pytest.raises(ProjectDocumentNotFoundError):
-            uc.execute(uuid4())
+            uc.execute(uuid4(), uuid4())
 
         # Storage must NOT be called
         storage.get_stream.assert_not_called()
@@ -100,7 +100,27 @@ class TestGetProjectDocumentNotFound:
         uc = GetProjectDocumentUseCase(repo=repo, storage=storage)
 
         with pytest.raises(ProjectDocumentNotFoundError):
-            uc.execute(deleted_doc.id)
+            uc.execute(deleted_doc.id, deleted_doc.project_id)
 
         # Storage must NOT be called for soft-deleted docs
+        storage.get_stream.assert_not_called()
+
+    def test_raises_when_doc_belongs_to_different_project(self):
+        """Cross-project guard must fire BEFORE storage.get_stream is called.
+
+        An attacker who is a member of project B should not be able to exhaust
+        backend→storage TCP connections by probing project-A document UUIDs.
+        """
+        doc = _make_doc()
+        repo = _make_repo(doc)
+        storage = _make_storage()
+        uc = GetProjectDocumentUseCase(repo=repo, storage=storage)
+
+        wrong_project_id = uuid4()
+        assert wrong_project_id != doc.project_id  # sanity
+
+        with pytest.raises(ProjectDocumentNotFoundError):
+            uc.execute(doc.id, wrong_project_id)
+
+        # Storage must NOT be opened — guard must short-circuit before stream fetch
         storage.get_stream.assert_not_called()
