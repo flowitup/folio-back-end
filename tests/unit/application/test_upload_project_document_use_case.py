@@ -10,6 +10,7 @@ import pytest
 
 from app.application.project_documents.exceptions import (
     DocumentFileTooLargeError,
+    EmptyFileError,
     UnsupportedDocumentTypeError,
 )
 from app.application.project_documents.ports import IDocumentStorage, IProjectDocumentRepository
@@ -117,10 +118,11 @@ class TestUploadHappyPath:
 
 
 class TestUploadSizeValidation:
-    def test_empty_file_raises_too_large(self):
+    def test_empty_file_raises_empty_file_error(self):
+        """Zero-byte file raises EmptyFileError (→ 400), not FileTooLargeError (→ 413)."""
         uc, _, storage, _ = _make_use_case()
 
-        with pytest.raises(DocumentFileTooLargeError):
+        with pytest.raises(EmptyFileError):
             uc.execute(
                 project_id=uuid4(),
                 filename="empty.pdf",
@@ -132,10 +134,11 @@ class TestUploadSizeValidation:
 
         storage.put.assert_not_called()
 
-    def test_negative_size_raises_too_large(self):
+    def test_negative_size_raises_empty_file_error(self):
+        """Negative size also raises EmptyFileError (→ 400)."""
         uc, _, storage, _ = _make_use_case()
 
-        with pytest.raises(DocumentFileTooLargeError):
+        with pytest.raises(EmptyFileError):
             uc.execute(
                 project_id=uuid4(),
                 filename="file.pdf",

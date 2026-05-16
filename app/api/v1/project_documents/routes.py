@@ -18,6 +18,7 @@ from app.application.project_documents import (
     DeleteProjectDocumentUseCase,  # noqa: F401 — referenced via container
     DocumentFileTooLargeError,
     DocumentPermissionDeniedError,
+    EmptyFileError,
     ListFiltersDTO,
     ProjectDocumentNotFoundError,
     UnsupportedDocumentTypeError,
@@ -115,6 +116,9 @@ def upload_project_document(project_id: str):
             fileobj=file.stream,
             uploader_user_id=uploader_id,
         )
+    except EmptyFileError as exc:
+        # 400, not 413 — an empty file is a bad request, not an oversize file (M3)
+        return _error_response("EMPTY_FILE", str(exc), 400)
     except DocumentFileTooLargeError as exc:
         return _error_response("FILE_TOO_LARGE", str(exc), 413)
     except UnsupportedDocumentTypeError as exc:
@@ -137,9 +141,7 @@ def download_project_document(project_id: str, document_id: str):
     try:
         # Pass expected_project_id so the use-case enforces the cross-project
         # invariant before opening the storage stream (H1: prevents S3 stream leak).
-        doc, stream, length = container.get_project_document_usecase.execute(
-            doc_uuid, UUID(project_id)
-        )
+        doc, stream, length = container.get_project_document_usecase.execute(doc_uuid, UUID(project_id))
     except ProjectDocumentNotFoundError:
         return _error_response("NOT_FOUND", "Document not found", 404)
 

@@ -333,6 +333,14 @@ class TestListDocumentsValidation:
         )
         assert resp.status_code == 422
 
+    def test_422_page_exceeds_10000(self, doc_client, owner_token, doc_app):
+        """?page=10001 should be rejected with 422 to cap OFFSET DoS surface (M2)."""
+        resp = doc_client.get(
+            _docs_url(doc_app._doc_project_id) + "?page=10001",
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 422
+
     def test_200_valid_sort_name(self, doc_client, owner_token, doc_app):
         resp = doc_client.get(
             _docs_url(doc_app._doc_project_id) + "?sort=name",
@@ -467,6 +475,23 @@ class TestUploadDocumentErrorCases:
         }
         assert required_keys.issubset(data.keys())
 
+    def test_400_zero_byte_file_content(self, doc_client, owner_token, doc_app):
+        """Upload of a zero-byte file must return 400, not 413 (M3).
+
+        An empty file is a bad request (EMPTY_FILE), not an oversize error
+        (FILE_TOO_LARGE). The FE maps 413 → "oversize" toast which misleads
+        the user into thinking their file was too large.
+        """
+        resp = doc_client.post(
+            _docs_url(doc_app._doc_project_id),
+            data={"file": (io.BytesIO(b""), "empty.pdf", "application/pdf")},
+            content_type="multipart/form-data",
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert data.get("error") == "EMPTY_FILE"
+
     def test_415_empty_filename_after_sanitation(self, doc_client, owner_token, doc_app):
         """A file with no valid characters after sanitation should return 415."""
         resp = doc_client.post(
@@ -578,12 +603,8 @@ class TestUploadRateLimit:
                 repo=doc_repo, storage=doc_storage, db_session=db.session
             )
             _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=doc_repo)
-            _c.get_project_document_usecase = GetProjectDocumentUseCase(
-                repo=doc_repo, storage=doc_storage
-            )
-            _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
-                repo=doc_repo, db_session=db.session
-            )
+            _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=doc_repo, storage=doc_storage)
+            _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(repo=doc_repo, db_session=db.session)
 
             client = rl_app.test_client()
 
@@ -620,8 +641,7 @@ class TestUploadRateLimit:
                 headers=headers,
             )
             assert resp.status_code == 201, (
-                f"Request {i + 1} expected 201 but got {resp.status_code}: "
-                f"{resp.get_data(as_text=True)}"
+                f"Request {i + 1} expected 201 but got {resp.status_code}: " f"{resp.get_data(as_text=True)}"
             )
 
         # 31st request must be rate-limited
@@ -632,8 +652,7 @@ class TestUploadRateLimit:
             headers=headers,
         )
         assert resp31.status_code == 429, (
-            f"Expected 429 on 31st request but got {resp31.status_code}: "
-            f"{resp31.get_data(as_text=True)}"
+            f"Expected 429 on 31st request but got {resp31.status_code}: " f"{resp31.get_data(as_text=True)}"
         )
 
 
@@ -969,12 +988,8 @@ class TestCrossProjectDownloadAdversarial:
                 repo=doc_repo, storage=doc_storage, db_session=db.session
             )
             _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=doc_repo)
-            _c.get_project_document_usecase = GetProjectDocumentUseCase(
-                repo=doc_repo, storage=doc_storage
-            )
-            _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
-                repo=doc_repo, db_session=db.session
-            )
+            _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=doc_repo, storage=doc_storage)
+            _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(repo=doc_repo, db_session=db.session)
 
             test_app._xp_owner_email = "xp_owner@test.com"
             test_app._xp_owner_password = "Owner1234!"

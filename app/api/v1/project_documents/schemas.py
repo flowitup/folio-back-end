@@ -15,5 +15,5 @@ class ListQueryParams(BaseModel):
     uploader_id: Optional[UUID] = None
     sort: Literal["name", "size", "created_at", "uploader"] = "created_at"
     order: Literal["asc", "desc"] = "desc"
-    page: int = Field(default=1, ge=1)
+    page: int = Field(default=1, ge=1, le=10_000)  # cap OFFSET DoS surface (M2)
     per_page: int = Field(default=25, ge=1, le=100)

@@ -8,6 +8,7 @@ from app.application.project_documents.ports import (
 from app.application.project_documents.dtos import ListFiltersDTO, ListResultDTO
 from app.application.project_documents.exceptions import (
     DocumentFileTooLargeError,
+    EmptyFileError,
     UnsupportedDocumentTypeError,
     DocumentPermissionDeniedError,
 )
@@ -39,6 +40,7 @@ __all__ = [
     # Exceptions
     "ProjectDocumentNotFoundError",
     "DocumentFileTooLargeError",
+    "EmptyFileError",
     "UnsupportedDocumentTypeError",
     "DocumentPermissionDeniedError",
     # Upload constants / helpers (useful for Flask layer validation)

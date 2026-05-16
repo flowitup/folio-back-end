@@ -12,6 +12,7 @@ from werkzeug.utils import secure_filename
 
 from app.application.project_documents.exceptions import (
     DocumentFileTooLargeError,
+    EmptyFileError,
     UnsupportedDocumentTypeError,
 )
 from app.application.project_documents.ports import (
@@ -134,7 +135,8 @@ class UploadProjectDocumentUseCase:
         """
         # --- Size validation ---
         if size_bytes <= 0:
-            raise DocumentFileTooLargeError("File is empty")
+            # Empty file is a bad request, not an oversize error (M3).
+            raise EmptyFileError("Uploaded file has no content (size <= 0 bytes)")
         if size_bytes > MAX_SIZE_BYTES:
             raise DocumentFileTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
 
