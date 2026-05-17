@@ -220,6 +220,7 @@ class LaborEntryResponse(BaseModel):
     shift_type: Optional[ShiftTypeLiteral]
     supplement_hours: int
     created_at: str
+    role_color: Optional[str] = None
 
 
 class LaborEntryListResponse(BaseModel):

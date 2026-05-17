@@ -20,6 +20,7 @@ class LaborEntryDetail:
     shift_type: Optional[str]
     supplement_hours: int
     created_at: str
+    role_color: Optional[str] = None
 
 
 @dataclass
@@ -79,6 +80,7 @@ class ListLaborEntriesUseCase:
                     shift_type=entry.shift_type,
                     supplement_hours=entry.supplement_hours,
                     created_at=entry.created_at.isoformat(),
+                    role_color=worker.role_color,
                 )
             )
 

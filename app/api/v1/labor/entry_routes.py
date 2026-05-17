@@ -122,6 +122,7 @@ def list_labor_entries(project_id: str):
                     shift_type=e.shift_type,
                     supplement_hours=e.supplement_hours,
                     created_at=e.created_at,
+                    role_color=e.role_color,
                 )
                 for e in entries
             ],

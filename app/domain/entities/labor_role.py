@@ -25,5 +25,7 @@ class LaborRole:
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
             raise ValueError("Role name must not be empty")
+        if len(self.name) > 100:
+            raise ValueError("Role name must not exceed 100 characters")
         if not re.match(r"^#[0-9a-fA-F]{6}$", self.color):
             raise ValueError("Color must be a valid hex color (#RRGGBB)")

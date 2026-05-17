@@ -24,6 +24,7 @@ from app.domain.exceptions.labor_exceptions import (
     DuplicateLaborRoleError,
     LaborRoleNotFoundError,
 )
+from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 
@@ -51,6 +52,7 @@ def list_labor_roles():
 
 @labor_bp.route("/labor/roles", methods=["POST"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def create_labor_role():
     """Create a new labor role."""
     try:
@@ -73,6 +75,7 @@ def create_labor_role():
 
 @labor_bp.route("/labor/roles/<role_id>", methods=["PATCH"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def update_labor_role(role_id: str):
     """Update name and/or color of a labor role."""
     try:
@@ -98,6 +101,7 @@ def update_labor_role(role_id: str):
 
 @labor_bp.route("/labor/roles/<role_id>", methods=["DELETE"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def delete_labor_role(role_id: str):
     """Delete a labor role. Workers referencing it will have role cleared."""
     try:

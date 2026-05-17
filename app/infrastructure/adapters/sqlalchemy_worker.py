@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.application.labor.ports import IWorkerRepository
 from app.domain.entities.worker import Worker
@@ -38,7 +38,11 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
         return self._to_entity(model) if model else None
 
     def list_by_project(self, project_id: UUID, active_only: bool = True) -> List[Worker]:
-        query = self._session.query(WorkerModel).filter_by(project_id=project_id)
+        query = (
+            self._session.query(WorkerModel)
+            .options(joinedload(WorkerModel.role), joinedload(WorkerModel.person))
+            .filter_by(project_id=project_id)
+        )
         if active_only:
             query = query.filter_by(is_active=True)
         models = query.order_by(WorkerModel.name).all()

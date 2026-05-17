@@ -5,10 +5,15 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.labor.labor_role_ports import ILaborRoleRepository
 from app.domain.entities.labor_role import LaborRole
+from app.domain.exceptions.labor_exceptions import (
+    DuplicateLaborRoleError,
+    LaborRoleNotFoundError,
+)
 from app.infrastructure.database.models.labor_role import LaborRoleModel
 
 
@@ -30,18 +35,26 @@ class SQLAlchemyLaborRoleRepository(ILaborRoleRepository):
             created_at=role.created_at,
         )
         self._session.add(model)
-        self._session.flush()
+        try:
+            self._session.flush()
+        except IntegrityError:
+            self._session.rollback()
+            raise DuplicateLaborRoleError(role.name)
         return self._to_entity(model)
 
     def update(self, role: LaborRole) -> LaborRole:
         model = self._session.query(LaborRoleModel).filter_by(id=role.id).first()
-        if model:
-            model.name = role.name
-            model.color = role.color
-            model.updated_at = role.updated_at
+        if model is None:
+            raise LaborRoleNotFoundError(role.id)
+        model.name = role.name
+        model.color = role.color
+        model.updated_at = role.updated_at
+        try:
             self._session.flush()
-            return self._to_entity(model)
-        return role
+        except IntegrityError:
+            self._session.rollback()
+            raise DuplicateLaborRoleError(role.name)
+        return self._to_entity(model)
 
     def delete(self, role_id: UUID) -> bool:
         deleted = self._session.query(LaborRoleModel).filter_by(id=role_id).delete(synchronize_session=False)

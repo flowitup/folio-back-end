@@ -60,9 +60,7 @@ def role_app():
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
-        manage_labor_perm = PermissionModel(
-            name="project:manage_labor", resource="project", action="manage_labor"
-        )
+        manage_labor_perm = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
         read_perm = PermissionModel(name="project:read", resource="project", action="read")
         star_perm = PermissionModel(name="*:*", resource="*", action="*")
 
