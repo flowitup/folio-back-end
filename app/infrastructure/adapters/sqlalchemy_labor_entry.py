@@ -134,18 +134,20 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             else_=shift_multiplier,
         )
 
+        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
         query = (
             self._session.query(
                 WorkerModel.id.label("worker_id"),
-                WorkerModel.name.label("worker_name"),
+                display_name.label("worker_name"),
                 WorkerModel.daily_rate.label("daily_rate"),
                 func.sum(priced_days).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
                 func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
             )
             .join(LaborEntryModel, WorkerModel.id == LaborEntryModel.worker_id)
+            .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
             .filter(WorkerModel.project_id == project_id)
-            .group_by(WorkerModel.id, WorkerModel.name, WorkerModel.daily_rate)
+            .group_by(WorkerModel.id, display_name, WorkerModel.daily_rate)
         )
 
         if date_from:
@@ -155,7 +157,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         if worker_id:
             query = query.filter(WorkerModel.id == worker_id)
 
-        rows = query.order_by(WorkerModel.name).all()
+        rows = query.order_by(display_name).all()
 
         return [
             LaborSummaryRow(
@@ -198,20 +200,22 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
 
         year_expr = func.extract("year", LaborEntryModel.date)
         month_expr = func.extract("month", LaborEntryModel.date)
+        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
 
         query = (
             self._session.query(
                 year_expr.label("year"),
                 month_expr.label("month"),
                 WorkerModel.id.label("worker_id"),
-                WorkerModel.name.label("worker_name"),
+                display_name.label("worker_name"),
                 func.sum(priced_days).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
+            .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
             .filter(WorkerModel.project_id == project_id)
-            .group_by(year_expr, month_expr, WorkerModel.id, WorkerModel.name)
-            .order_by(year_expr.desc(), month_expr.desc(), WorkerModel.name.asc())
+            .group_by(year_expr, month_expr, WorkerModel.id, display_name)
+            .order_by(year_expr.desc(), month_expr.desc(), display_name.asc())
         )
 
         # Bucket the (year, month, worker) granularity rows back into per-month
