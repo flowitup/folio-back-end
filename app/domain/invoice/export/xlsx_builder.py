@@ -368,7 +368,7 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     grand total band.
 
     Sheets 2..k: one sheet per InvoiceType present in the bundle (skip empty types).
-    Sheet titles: "Client invoices" / "Labor invoices" / "Supplier invoices".
+    Sheet titles: "Released Funds invoices" / "Labor invoices" / "Materials & Services invoices".
 
     Empty range: only the Summary sheet, with an italic "No invoices in range" line
     replacing KPI/tables.
@@ -403,7 +403,7 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     _set_col_widths(ws_summary, _INVOICE_COL_WIDTHS)
 
     # Per-type sheets — one per type that has invoices (maintain canonical order)
-    for invoice_type in (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.SUPPLIER):
+    for invoice_type in (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.MATERIALS_SERVICES):
         type_invoices = [inv for inv in bundle.invoices if inv.type == invoice_type]
         if not type_invoices:
             continue

@@ -25,7 +25,7 @@ class InvoiceItemSchema(BaseModel):
 class CreateInvoiceSchema(BaseModel):
     """Request body for creating an invoice."""
 
-    type: Literal["released_funds", "labor", "supplier"]
+    type: Literal["released_funds", "labor", "materials_services"]
     issue_date: date  # Pydantic parses ISO date string (YYYY-MM-DD) automatically
     recipient_name: str = Field(..., min_length=1, max_length=255)
     recipient_address: Optional[str] = None
@@ -60,7 +60,7 @@ class ExportInvoicesQuery(BaseModel):
     from_month: str = Field(alias="from")
     to_month: str = Field(alias="to")
     format: Literal["xlsx", "pdf"]
-    type: Optional[Literal["released_funds", "labor", "supplier"]] = None
+    type: Optional[Literal["released_funds", "labor", "materials_services"]] = None
 
     model_config = {"populate_by_name": True}
 

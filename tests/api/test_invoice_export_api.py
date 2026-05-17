@@ -286,7 +286,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
     - 200, xlsx content-type, PK magic bytes
     - openpyxl opens successfully
     - Sheet names include Summary, Released Funds invoices, Labor invoices
-    - "Supplier invoices" sheet absent (no supplier invoices seeded)
+    - "Materials & Services invoices" sheet absent (no materials & services invoices seeded)
     - Summary sheet contains GRAND TOTAL label
 
     pdf assertions:
@@ -355,8 +355,8 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
     assert "Released Funds invoices" in sheet_names, f"Missing 'Released Funds invoices' sheet; got: {sheet_names}"
     assert "Labor invoices" in sheet_names, f"Missing 'Labor invoices' sheet; got: {sheet_names}"
     assert (
-        "Supplier invoices" not in sheet_names
-    ), f"Unexpected 'Supplier invoices' sheet (no supplier invoices seeded); got: {sheet_names}"
+        "Materials & Services invoices" not in sheet_names
+    ), f"Unexpected 'Materials & Services invoices' sheet (none seeded); got: {sheet_names}"
 
     # Summary sheet must contain GRAND TOTAL label somewhere
     ws_summary = wb["Summary"]

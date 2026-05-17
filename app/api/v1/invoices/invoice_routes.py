@@ -87,7 +87,7 @@ def list_invoices(project_id: str):
     except ValueError:
         return _error_response(
             "ValidationError",
-            f"Invalid type '{invoice_type_param}'. Must be one of: released_funds, labor, supplier",
+            f"Invalid type '{invoice_type_param}'. Must be one of: released_funds, labor, materials_services",
             400,
         )
 

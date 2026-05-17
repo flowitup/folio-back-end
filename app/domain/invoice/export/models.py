@@ -49,6 +49,6 @@ class InvoiceBundle:
     """The full data set passed to builders."""
 
     invoices: List[Invoice]  # sorted by (issue_date, type, invoice_number)
-    subtotals_by_type: List[TypeSubtotal]  # in the order CLIENT, LABOR, SUPPLIER (skip empty)
+    subtotals_by_type: List[TypeSubtotal]  # in the order RELEASED_FUNDS, LABOR, MATERIALS_SERVICES (skip empty)
     grand_total: Decimal
     invoice_count: int

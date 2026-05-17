@@ -99,16 +99,16 @@ class TestListInvoicesFiltering:
     def test_list_supplier_invoices(self):
         """Should filter and return supplier invoices."""
         repo = MagicMock(spec=IInvoiceRepository)
-        supplier_invoices = [make_invoice(InvoiceType.SUPPLIER)]
+        supplier_invoices = [make_invoice(InvoiceType.MATERIALS_SERVICES)]
         repo.list_by_project.return_value = supplier_invoices
 
         use_case = ListInvoicesUseCase(repo)
         project_id = uuid4()
-        request = ListInvoicesRequest(project_id=project_id, invoice_type=InvoiceType.SUPPLIER)
+        request = ListInvoicesRequest(project_id=project_id, invoice_type=InvoiceType.MATERIALS_SERVICES)
         result = use_case.execute(request)
 
         assert len(result) == 1
-        assert result[0].type == "supplier"
+        assert result[0].type == "materials_services"
 
 
 class TestListInvoicesResponseFormat:

@@ -225,8 +225,8 @@ class TestCreateInvoiceInvoiceType:
         """Should create supplier invoice type."""
         repo = make_mock_repo()
         use_case = CreateInvoiceUseCase(repo)
-        request = make_request(type=InvoiceType.SUPPLIER)
+        request = make_request(type=InvoiceType.MATERIALS_SERVICES)
 
         result = use_case.execute(request)
 
-        assert result.type == "supplier"
+        assert result.type == "materials_services"

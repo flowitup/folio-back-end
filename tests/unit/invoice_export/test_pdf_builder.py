@@ -79,7 +79,7 @@ def _make_invoice(
 
 def _make_bundle(invoices: list) -> InvoiceBundle:
     subtotals = []
-    for t in (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.SUPPLIER):
+    for t in (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.MATERIALS_SERVICES):
         scoped = [i for i in invoices if i.type == t]
         if scoped:
             subtotals.append(

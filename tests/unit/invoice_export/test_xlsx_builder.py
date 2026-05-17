@@ -81,7 +81,7 @@ def _make_bundle(invoices: list, subtotals: list | None = None, grand_total: Dec
         from app.domain.entities.invoice import InvoiceType as IT
 
         subtotals = []
-        for t in (IT.RELEASED_FUNDS, IT.LABOR, IT.SUPPLIER):
+        for t in (IT.RELEASED_FUNDS, IT.LABOR, IT.MATERIALS_SERVICES):
             scoped = [i for i in invoices if i.type == t]
             if scoped:
                 subtotals.append(
@@ -115,14 +115,14 @@ def test_summary_sheet_present():
 
 
 def test_one_sheet_per_type_skips_empty_types():
-    """Only labor invoices present → 'Labor invoices' sheet created, Released Funds/Supplier skipped."""
+    """Only labor invoices present → 'Labor invoices' sheet created, Released Funds/Materials skipped."""
     ctx = _make_context()
     labor_inv = _make_invoice(invoice_type=InvoiceType.LABOR, amount=Decimal("200.00"))
     bundle = _make_bundle([labor_inv])
     wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, bundle)))
     assert "Labor invoices" in wb.sheetnames
     assert "Released Funds invoices" not in wb.sheetnames
-    assert "Supplier invoices" not in wb.sheetnames
+    assert "Materials & Services invoices" not in wb.sheetnames
 
 
 def test_currency_cells_are_floats_with_eur_format():
