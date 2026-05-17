@@ -64,3 +64,19 @@ class InvalidLaborEntryError(LaborError):
 
     def __init__(self, message: str):
         super().__init__(message)
+
+
+class LaborRoleNotFoundError(LaborError):
+    """Raised when a labor role does not exist."""
+
+    def __init__(self, role_id: object) -> None:
+        self.role_id = role_id
+        super().__init__(f"Labor role {role_id} not found")
+
+
+class DuplicateLaborRoleError(LaborError):
+    """Raised when a labor role with the given name already exists."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"A labor role named '{name}' already exists")
