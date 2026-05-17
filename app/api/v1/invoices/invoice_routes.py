@@ -8,6 +8,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.validation_error import validation_error_response
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.invoices.schemas import CreateInvoiceSchema, UpdateInvoiceSchema
 from app.api.v1.projects.decorators import (
@@ -43,13 +44,12 @@ def _error_response(error: str, message: str, status_code: int) -> Tuple[Respons
 
 
 def _validation_error_response(e: ValidationError) -> Tuple[Response, int]:
-    """Convert a Pydantic ValidationError to a 400 error response."""
-    error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-    return _error_response(
-        "ValidationError",
-        f"Invalid input: {', '.join(str(f) for f in error_fields)}",
-        400,
-    )
+    """Convert a Pydantic ValidationError to a 400 error response.
+
+    Delegates to the shared helper which handles empty ``loc`` tuples
+    (e.g. from ``model_validator(mode='after')``).
+    """
+    return validation_error_response(e, status_code=400)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ def list_invoices(project_id: str):
     except ValueError:
         return _error_response(
             "ValidationError",
-            f"Invalid type '{invoice_type_param}'. Must be one of: released_funds, labor, materials_services",
+            f"Invalid type '{invoice_type_param}'. Must be one of: client, labor, supplier",
             400,
         )
 
