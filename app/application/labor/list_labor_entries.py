@@ -75,7 +75,7 @@ class ListLaborEntriesUseCase:
                 LaborEntryDetail(
                     id=str(entry.id),
                     worker_id=str(entry.worker_id),
-                    worker_name=worker.name,
+                    worker_name=worker.person_name or worker.name,
                     worker_avatar_url=worker.avatar_url,
                     date=entry.date.isoformat(),
                     amount_override=float(entry.amount_override) if entry.amount_override else None,
