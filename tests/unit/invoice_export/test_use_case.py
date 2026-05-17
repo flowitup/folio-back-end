@@ -54,7 +54,7 @@ def _make_project(name: str = "Test Project", project_id: Optional[UUID] = None)
 def _make_invoice(
     *,
     project_id: UUID,
-    invoice_type: InvoiceType = InvoiceType.CLIENT,
+    invoice_type: InvoiceType = InvoiceType.RELEASED_FUNDS,
     issue_date: date = date(2026, 1, 15),
     recipient: str = "ACME Corp",
     amount: Decimal = Decimal("100.00"),
@@ -129,16 +129,16 @@ def test_filters_by_type_filter():
     project_repo.find_by_id.return_value = project
 
     invoice_repo = MagicMock(spec=IInvoiceRepository)
-    client_inv = _make_invoice(project_id=project.id, invoice_type=InvoiceType.CLIENT)
+    client_inv = _make_invoice(project_id=project.id, invoice_type=InvoiceType.RELEASED_FUNDS)
     invoice_repo.find_by_project_in_range.return_value = [client_inv]
 
     uc = ExportInvoicesUseCase(invoice_repo=invoice_repo, project_repo=project_repo)
-    req = _base_request(project.id, type_filter=InvoiceType.CLIENT)
+    req = _base_request(project.id, type_filter=InvoiceType.RELEASED_FUNDS)
     result = uc.execute(req)
 
     # Verify the repo was called with the correct type_filter
     call_kwargs = invoice_repo.find_by_project_in_range.call_args[1]
-    assert call_kwargs["type_filter"] == InvoiceType.CLIENT
+    assert call_kwargs["type_filter"] == InvoiceType.RELEASED_FUNDS
     # Result is valid xlsx
     assert result.content[:4] == b"PK\x03\x04"
 
@@ -148,8 +148,12 @@ def test_subtotal_computation_per_type():
     project = _make_project("Subtotal Project")
     pid = project.id
     invoices = [
-        _make_invoice(project_id=pid, invoice_type=InvoiceType.CLIENT, amount=Decimal("200.00"), invoice_number="C1"),
-        _make_invoice(project_id=pid, invoice_type=InvoiceType.CLIENT, amount=Decimal("300.00"), invoice_number="C2"),
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("200.00"), invoice_number="C1"
+        ),
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("300.00"), invoice_number="C2"
+        ),
         _make_invoice(project_id=pid, invoice_type=InvoiceType.LABOR, amount=Decimal("100.00"), invoice_number="L1"),
     ]
 

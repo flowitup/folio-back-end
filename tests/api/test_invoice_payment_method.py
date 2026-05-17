@@ -225,7 +225,7 @@ def _make_pm_row(app, company_id: str, label="Wire Transfer", is_builtin=False, 
 
 def _base_invoice_body():
     return {
-        "type": "client",
+        "type": "released_funds",
         "issue_date": date.today().isoformat(),
         "recipient_name": "ACME Corp",
         "items": [{"description": "Work", "quantity": 1, "unit_price": 100}],

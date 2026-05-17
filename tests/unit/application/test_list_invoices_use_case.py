@@ -11,7 +11,7 @@ from app.domain.entities.invoice import Invoice, InvoiceType
 from app.domain.value_objects.invoice_item import InvoiceItem
 
 
-def make_invoice(type_=InvoiceType.CLIENT, invoice_number="INV-2026-0001"):
+def make_invoice(type_=InvoiceType.RELEASED_FUNDS, invoice_number="INV-2026-0001"):
     """Factory helper for test invoices."""
     return Invoice(
         id=uuid4(),
@@ -82,19 +82,19 @@ class TestListInvoicesFiltering:
         """Should filter and return client invoices."""
         repo = MagicMock(spec=IInvoiceRepository)
         client_invoices = [
-            make_invoice(InvoiceType.CLIENT, "INV-001"),
-            make_invoice(InvoiceType.CLIENT, "INV-002"),
+            make_invoice(InvoiceType.RELEASED_FUNDS, "INV-001"),
+            make_invoice(InvoiceType.RELEASED_FUNDS, "INV-002"),
         ]
         repo.list_by_project.return_value = client_invoices
 
         use_case = ListInvoicesUseCase(repo)
         project_id = uuid4()
-        request = ListInvoicesRequest(project_id=project_id, invoice_type=InvoiceType.CLIENT)
+        request = ListInvoicesRequest(project_id=project_id, invoice_type=InvoiceType.RELEASED_FUNDS)
         result = use_case.execute(request)
 
         assert len(result) == 2
         for inv in result:
-            assert inv.type == "client"
+            assert inv.type == "released_funds"
 
     def test_list_supplier_invoices(self):
         """Should filter and return supplier invoices."""
@@ -122,7 +122,7 @@ class TestListInvoicesResponseFormat:
             id=uuid4(),
             project_id=uuid4(),
             invoice_number="INV-2026-0001",
-            type=InvoiceType.CLIENT,
+            type=InvoiceType.RELEASED_FUNDS,
             issue_date=date.today(),
             recipient_name="Test Client",
             recipient_address="123 Main St",
@@ -140,7 +140,7 @@ class TestListInvoicesResponseFormat:
         assert len(result) == 1
         response = result[0]
         assert response.invoice_number == "INV-2026-0001"
-        assert response.type == "client"
+        assert response.type == "released_funds"
         assert response.recipient_name == "Test Client"
         assert response.recipient_address == "123 Main St"
         assert response.notes == "Test notes"

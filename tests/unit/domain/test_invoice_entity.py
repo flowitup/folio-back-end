@@ -14,7 +14,7 @@ def make_invoice(**kwargs):
         id=uuid4(),
         project_id=uuid4(),
         invoice_number="INV-2026-0001",
-        type=InvoiceType.CLIENT,
+        type=InvoiceType.RELEASED_FUNDS,
         issue_date=date.today(),
         recipient_name="ACME Corp",
         created_by=uuid4(),
@@ -96,7 +96,7 @@ class TestInvoiceEquality:
     def test_equality_ignores_other_fields(self):
         """Equality only compares id, ignores other fields."""
         id_ = uuid4()
-        inv1 = make_invoice(id=id_, recipient_name="A", invoice_number="INV-001", type=InvoiceType.CLIENT)
+        inv1 = make_invoice(id=id_, recipient_name="A", invoice_number="INV-001", type=InvoiceType.RELEASED_FUNDS)
         inv2 = make_invoice(id=id_, recipient_name="B", invoice_number="INV-002", type=InvoiceType.LABOR)
         assert inv1 == inv2  # Same id means equal
 
@@ -137,9 +137,9 @@ class TestInvoiceHash:
 class TestInvoiceType:
     """Tests for InvoiceType enum."""
 
-    def test_invoice_type_client_value(self):
-        """CLIENT type should have correct string value."""
-        assert InvoiceType.CLIENT.value == "client"
+    def test_invoice_type_released_funds_value(self):
+        """RELEASED_FUNDS type should have correct string value."""
+        assert InvoiceType.RELEASED_FUNDS.value == "released_funds"
 
     def test_invoice_type_labor_value(self):
         """LABOR type should have correct string value."""
@@ -151,7 +151,7 @@ class TestInvoiceType:
 
     def test_invoice_type_from_string(self):
         """Can construct InvoiceType from string value."""
-        assert InvoiceType("client") == InvoiceType.CLIENT
+        assert InvoiceType("released_funds") == InvoiceType.RELEASED_FUNDS
         assert InvoiceType("labor") == InvoiceType.LABOR
         assert InvoiceType("supplier") == InvoiceType.SUPPLIER
 
@@ -170,7 +170,7 @@ class TestInvoiceCreation:
             id=id_,
             project_id=project_id,
             invoice_number="INV-001",
-            type=InvoiceType.CLIENT,
+            type=InvoiceType.RELEASED_FUNDS,
             issue_date=date.today(),
             recipient_name="Client A",
             recipient_address="123 Main St",
@@ -184,7 +184,7 @@ class TestInvoiceCreation:
         assert invoice.id == id_
         assert invoice.project_id == project_id
         assert invoice.invoice_number == "INV-001"
-        assert invoice.type == InvoiceType.CLIENT
+        assert invoice.type == InvoiceType.RELEASED_FUNDS
         assert invoice.recipient_name == "Client A"
         assert invoice.recipient_address == "123 Main St"
         assert invoice.notes == "Test note"
