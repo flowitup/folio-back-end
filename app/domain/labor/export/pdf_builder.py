@@ -55,6 +55,19 @@ def _format_fr_float(v: float, decimals: int = 1) -> str:
     return f"{v:.{decimals}f}".replace(".", ",")
 
 
+def _format_days(v: float) -> str:
+    """Format a fractional day count compactly: ``5`` for 5.0, ``2,5`` for 2.5.
+
+    Drops trailing zeros after the comma so whole-day totals don't show
+    a redundant decimal. Uses fr-FR comma notation.
+    """
+    if float(v).is_integer():
+        return str(int(v))
+    # Strip trailing zeros from a 2-decimal render: 0.50 -> 0.5, 2.25 -> 2.25.
+    s = f"{v:.2f}".rstrip("0").rstrip(".")
+    return s.replace(".", ",")
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -202,7 +215,7 @@ def _make_styles() -> dict:
 class _AggRow:
     worker_id: str
     worker_name: str
-    days_worked: int
+    days_worked: float
     banked_hours: int
     bonus_full_days: int
     bonus_half_days: int
@@ -288,7 +301,7 @@ def _render_header(context: ExportContext, styles: dict) -> list:
 def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
     """Build a 1-row × 5-column KPI mini-table summarising all buckets."""
     total_cost = Decimal("0")
-    total_days = 0
+    total_days: float = 0.0
     total_bonus_cost = Decimal("0")
     total_bonus_days: float = 0.0
     total_banked_hours = 0
@@ -296,7 +309,7 @@ def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
     for bucket in buckets:
         s = bucket.summary
         total_cost += Decimal(str(s.total_cost))
-        total_days += s.total_days
+        total_days += float(s.total_days)
         total_bonus_cost += Decimal(str(s.total_bonus_cost))
         total_bonus_days += float(s.total_bonus_days)
         total_banked_hours += s.total_banked_hours
@@ -313,7 +326,7 @@ def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
         # Values row
         [
             Paragraph(format_eur_fr(total_cost), styles["kpi_value"]),
-            Paragraph(str(total_days), styles["kpi_value"]),
+            Paragraph(_format_days(total_days), styles["kpi_value"]),
             Paragraph(format_eur_fr(total_bonus_cost), styles["kpi_value"]),
             Paragraph(_format_fr_float(total_bonus_days), styles["kpi_value"]),
             Paragraph(str(total_banked_hours), styles["kpi_value"]),
@@ -353,7 +366,7 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
         table_data.append(
             [
                 agg.worker_name,
-                str(agg.days_worked),
+                _format_days(agg.days_worked),
                 str(agg.banked_hours),
                 str(agg.bonus_full_days),
                 str(agg.bonus_half_days),

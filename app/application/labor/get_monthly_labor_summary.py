@@ -18,7 +18,8 @@ class MonthlyWorkerSubRow:
 
     worker_id: str
     worker_name: str
-    days_worked: int
+    # Fractional priced days — see ports.MonthlyWorkerSubRow.
+    days_worked: float
     total_cost: float
 
 
@@ -26,7 +27,8 @@ class MonthlyWorkerSubRow:
 class MonthlySummaryRow:
     year: int
     month: int
-    total_days: int
+    # Fractional priced days (sum of per-worker days_worked).
+    total_days: float
     total_cost: float
     workers: List[MonthlyWorkerSubRow]
 
@@ -54,13 +56,13 @@ class GetMonthlyLaborSummaryUseCase:
                 MonthlySummaryRow(
                     year=r.year,
                     month=r.month,
-                    total_days=r.total_days,
+                    total_days=float(r.total_days),
                     total_cost=float(r.total_cost),
                     workers=[
                         MonthlyWorkerSubRow(
                             worker_id=str(w.worker_id),
                             worker_name=w.worker_name,
-                            days_worked=w.days_worked,
+                            days_worked=float(w.days_worked),
                             total_cost=float(w.total_cost),
                         )
                         for w in r.workers

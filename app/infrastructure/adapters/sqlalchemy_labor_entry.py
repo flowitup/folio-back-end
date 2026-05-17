@@ -123,12 +123,23 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             else_=shift_cost,
         )
 
+        # `days_worked` is the SUM of shift_multipliers — a full day is
+        # 1.0, a half day is 0.5, overtime is 1.5. This matches how cost
+        # is computed (cost / days_worked == daily_rate for non-override
+        # entries) and matches what users actually pay for. The previous
+        # implementation summed `1` per priced row, which over-counted
+        # mixed full + half months by treating a half-day as a full day.
+        priced_days = sa_case(
+            (LaborEntryModel.shift_type.is_(None), 0),
+            else_=shift_multiplier,
+        )
+
         query = (
             self._session.query(
                 WorkerModel.id.label("worker_id"),
                 WorkerModel.name.label("worker_name"),
                 WorkerModel.daily_rate.label("daily_rate"),
-                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("days_worked"),
+                func.sum(priced_days).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
                 func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
             )
@@ -150,7 +161,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             LaborSummaryRow(
                 worker_id=row.worker_id,
                 worker_name=row.worker_name,
-                days_worked=row.days_worked,
+                days_worked=Decimal(str(row.days_worked)) if row.days_worked is not None else Decimal("0"),
                 total_cost=Decimal(str(row.total_cost)) if row.total_cost else Decimal("0"),
                 banked_hours=int(row.banked_hours) if row.banked_hours else 0,
                 daily_rate=Decimal(str(row.daily_rate)) if row.daily_rate else Decimal("0"),
@@ -177,6 +188,14 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             else_=shift_cost,
         )
 
+        # `days_worked` = SUM of shift_multipliers, mirroring effective_cost.
+        # A full day adds 1.0, a half day 0.5, overtime 1.5. Keeps the
+        # invariant cost / days_worked == daily_rate for non-override rows.
+        priced_days = sa_case(
+            (LaborEntryModel.shift_type.is_(None), 0),
+            else_=shift_multiplier,
+        )
+
         year_expr = func.extract("year", LaborEntryModel.date)
         month_expr = func.extract("month", LaborEntryModel.date)
 
@@ -186,7 +205,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 month_expr.label("month"),
                 WorkerModel.id.label("worker_id"),
                 WorkerModel.name.label("worker_name"),
-                func.sum(sa_case((LaborEntryModel.shift_type.is_(None), 0), else_=1)).label("days_worked"),
+                func.sum(priced_days).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
@@ -205,7 +224,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         for row in query.all():
             key = (int(row.year), int(row.month))
             cost = Decimal(str(row.total_cost)) if row.total_cost is not None else Decimal("0")
-            days = int(row.days_worked or 0)
+            days = Decimal(str(row.days_worked)) if row.days_worked is not None else Decimal("0")
             if days == 0 and cost == 0:
                 continue
             sub = MonthlyWorkerSubRow(
@@ -219,7 +238,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 bucket = MonthlyLaborSummaryRow(
                     year=key[0],
                     month=key[1],
-                    total_days=0,
+                    total_days=Decimal("0"),
                     total_cost=Decimal("0"),
                     workers=[],
                 )

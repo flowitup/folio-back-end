@@ -13,7 +13,9 @@ from app.application.labor.ports import ILaborEntryRepository
 class WorkerCostSummary:
     worker_id: str
     worker_name: str
-    days_worked: int
+    # Fractional — see ports.LaborSummaryRow.days_worked. A mix of
+    # full + half shifts cleanly produces 2.5, not 3.
+    days_worked: float
     total_cost: float
     banked_hours: int
     bonus_full_days: int
@@ -24,7 +26,8 @@ class WorkerCostSummary:
 @dataclass
 class LaborSummaryResponse:
     rows: List[WorkerCostSummary]
-    total_days: int
+    # Sum of per-worker days_worked — also fractional.
+    total_days: float
     total_cost: float
     total_banked_hours: int
     total_bonus_days: float
@@ -74,7 +77,7 @@ class GetLaborSummaryUseCase:
                 WorkerCostSummary(
                     worker_id=str(row.worker_id),
                     worker_name=row.worker_name,
-                    days_worked=row.days_worked,
+                    days_worked=float(row.days_worked),
                     total_cost=float(total_cost_for_worker),
                     banked_hours=banked,
                     bonus_full_days=bonus_full,
@@ -87,7 +90,7 @@ class GetLaborSummaryUseCase:
             total_bonus_days += worker_bonus_days
             total_bonus_cost += bonus_cost
 
-        total_days = sum(r.days_worked for r in rows)
+        total_days = float(sum(r.days_worked for r in rows))
         total_cost = sum(r.total_cost for r in rows)
 
         return LaborSummaryResponse(

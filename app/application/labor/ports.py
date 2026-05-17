@@ -17,7 +17,10 @@ class LaborSummaryRow:
 
     worker_id: UUID
     worker_name: str
-    days_worked: int
+    # SUM of shift_multipliers — full=1.0, half=0.5, overtime=1.5.
+    # Decimal so a mix of full + half cleanly produces 2.5 (not 3) and
+    # cost / days_worked == daily_rate for non-override rows.
+    days_worked: Decimal
     total_cost: Decimal
     banked_hours: int = 0  # sum of supplement_hours for this worker over the period
     daily_rate: Decimal = Decimal("0")  # worker's base rate; used for bonus-cost computation
@@ -29,7 +32,8 @@ class MonthlyWorkerSubRow:
 
     worker_id: UUID
     worker_name: str
-    days_worked: int  # priced shifts only
+    # Same fractional semantics as LaborSummaryRow.days_worked above.
+    days_worked: Decimal
     total_cost: Decimal
 
 
@@ -74,7 +78,10 @@ class MonthlyLaborSummaryRow:
 
     year: int
     month: int
-    total_days: int  # priced shifts (shift_type IS NOT NULL); supplement-only rows excluded
+    # SUM of per-worker days_worked for the month — fractional, since
+    # individual rows may be half-days. See LaborSummaryRow.days_worked
+    # for the multiplier table. Supplement-only rows are excluded.
+    total_days: Decimal
     total_cost: Decimal
     workers: List[MonthlyWorkerSubRow]
 

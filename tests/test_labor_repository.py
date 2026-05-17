@@ -558,17 +558,18 @@ class TestSQLAlchemyLaborEntryRepository:
         assert (rows[1].year, rows[1].month) == (2026, 3)
         assert (rows[2].year, rows[2].month) == (2025, 5)
 
-        # April: 2 priced (full + full), supplement-only row is excluded.
-        assert rows[0].total_days == 2
+        # April: 2 priced full days (1.0 + 1.0); supplement-only row excluded.
+        assert rows[0].total_days == Decimal("2")
         assert rows[0].total_cost == Decimal("200.00")  # 2 × 100 (full)
 
-        # March: 2 full + 1 half = 2.5 priced days. days_worked counts
-        # priced rows (=3); cost is 2×100 + 0.5×100 = 250.
-        assert rows[1].total_days == 3
+        # March: 2 full + 1 half = 2.5 priced days. SUM of shift multipliers
+        # (1.0 + 1.0 + 0.5); cost is 2×100 + 0.5×100 = 250. Invariant:
+        # cost / days == daily_rate (250 / 2.5 == 100) for non-override rows.
+        assert rows[1].total_days == Decimal("2.5")
         assert rows[1].total_cost == Decimal("250.00")
 
         # May 2025: single full day.
-        assert rows[2].total_days == 1
+        assert rows[2].total_days == Decimal("1")
         assert rows[2].total_cost == Decimal("100.00")
 
         # Workers list is populated for each month (single worker here).
@@ -673,10 +674,11 @@ class TestSQLAlchemyLaborEntryRepository:
         assert (march.year, march.month) == (2026, 3)
         assert len(march.workers) == 1
         assert march.workers[0].worker_name == "Alice"
-        assert march.workers[0].days_worked == 1
+        # Half day: days_worked is the multiplier (0.5), not an entry count.
+        assert march.workers[0].days_worked == Decimal("0.5")
         # half day @ €100 = €50.
         assert march.workers[0].total_cost == Decimal("50.00")
-        assert march.total_days == 1
+        assert march.total_days == Decimal("0.5")
         assert march.total_cost == Decimal("50.00")
 
     def test_list_by_project_no_limit_returns_all(self, entry_repo, worker_repo, sample_project):
