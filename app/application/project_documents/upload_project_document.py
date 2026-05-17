@@ -8,8 +8,6 @@ from datetime import datetime, timezone
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
-from werkzeug.utils import secure_filename
-
 from app.application.project_documents.exceptions import (
     DocumentFileTooLargeError,
     EmptyFileError,
@@ -17,10 +15,11 @@ from app.application.project_documents.exceptions import (
 )
 from app.application.project_documents.ports import (
     IDocumentStorage,
+    IFilenameSanitizer,
     IProjectDocumentRepository,
     ITransactionalSession,
 )
-from app.domain.project_document import ProjectDocument
+from app.domain.project_document import ProjectDocument, kind_for_extension
 
 _log = logging.getLogger(__name__)
 
@@ -78,18 +77,8 @@ def validate_file_type(filename: str, mime_type: str) -> str:
     if mime_type not in ALLOWED_MIME_TYPES and mime_type != "application/octet-stream":
         raise UnsupportedDocumentTypeError(f"MIME type '{mime_type}' is not allowed for extension '{ext}'")
 
-    # Derive kind tag from extension.
-    _ext_kind: dict[str, str] = {
-        ".pdf": "pdf",
-        ".png": "image",
-        ".jpg": "image",
-        ".jpeg": "image",
-        ".webp": "image",
-        ".xlsx": "spreadsheet",
-        ".docx": "doc",
-        ".txt": "text",
-    }
-    return _ext_kind.get(ext, "other")
+    # Derive kind tag from extension (single source of truth: domain.EXT_TO_KIND).
+    return kind_for_extension(ext)
 
 
 class UploadProjectDocumentUseCase:
@@ -100,10 +89,12 @@ class UploadProjectDocumentUseCase:
         repo: IProjectDocumentRepository,
         storage: IDocumentStorage,
         db_session: ITransactionalSession,
+        filename_sanitizer: IFilenameSanitizer,
     ) -> None:
         self._repo = repo
         self._storage = storage
         self._db_session = db_session
+        self._filename_sanitizer = filename_sanitizer
 
     def execute(
         self,
@@ -140,8 +131,8 @@ class UploadProjectDocumentUseCase:
         if size_bytes > MAX_SIZE_BYTES:
             raise DocumentFileTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
 
-        # --- Filename sanitation (werkzeug strips path separators, null bytes, etc.) ---
-        sanitized = secure_filename(filename)
+        # --- Filename sanitation (strips path separators, null bytes, etc.) ---
+        sanitized = self._filename_sanitizer.sanitize(filename)
         if not sanitized:
             raise UnsupportedDocumentTypeError("Invalid filename after sanitation — no safe characters remain")
 

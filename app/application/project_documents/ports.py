@@ -51,6 +51,19 @@ class IProjectDocumentRepository(Protocol):
         """Mark the document as deleted by setting deleted_at = now."""
         ...
 
+    def find_soft_deleted_before(self, cutoff: datetime, limit: int = 1000) -> list[ProjectDocument]:
+        """Return soft-deleted documents whose `deleted_at < cutoff`.
+
+        Ordered by `deleted_at ASC` so the oldest are purged first. The `limit`
+        caps a single batch so the janitor can run incrementally on huge sets
+        without exhausting memory.
+        """
+        ...
+
+    def hard_delete(self, doc_id: UUID) -> None:
+        """Permanently remove the document row. Used by the retention janitor."""
+        ...
+
 
 @runtime_checkable
 class ITransactionalSession(Protocol):
@@ -58,4 +71,18 @@ class ITransactionalSession(Protocol):
 
     def commit(self) -> None:
         """Flush pending changes and commit the current transaction."""
+        ...
+
+
+@runtime_checkable
+class IFilenameSanitizer(Protocol):
+    """Port for sanitizing user-supplied filenames before they hit the filesystem.
+
+    Implementations strip path traversal, NUL bytes, control chars, etc.,
+    returning a safe ASCII filename. May return an empty string if no safe
+    characters remain — callers must check.
+    """
+
+    def sanitize(self, filename: str) -> str:
+        """Return a safe filename, or an empty string if nothing safe remains."""
         ...

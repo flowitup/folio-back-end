@@ -27,3 +27,26 @@ class ListResultDTO:
 
     items: list[ProjectDocument]
     total: int
+
+
+@dataclass(frozen=True)
+class PurgeFailureDTO:
+    """Single document that could not be fully purged."""
+
+    document_id: UUID
+    storage_key: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PurgeResultDTO:
+    """Summary of a PurgeSoftDeletedDocumentsUseCase run."""
+
+    candidates: int  # number of rows matching the cutoff
+    purged: int  # rows where BOTH storage delete AND DB delete succeeded
+    failed: list[PurgeFailureDTO]
+    dry_run: bool
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed

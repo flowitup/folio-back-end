@@ -8,8 +8,10 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-# Maps (extension, mime prefix) → kind tag used for FE filtering.
-_EXT_TO_KIND: dict[str, str] = {
+# Maps (extension → kind tag) used for FE filtering and content classification.
+# Public so the application layer can derive the kind from a filename without
+# re-declaring the mapping. Use `kind_for_extension(ext)` for the safe lookup.
+EXT_TO_KIND: dict[str, str] = {
     ".pdf": "pdf",
     ".png": "image",
     ".jpg": "image",
@@ -20,6 +22,18 @@ _EXT_TO_KIND: dict[str, str] = {
     ".dwg": "cad",
     ".txt": "text",
 }
+
+
+def kind_for_extension(extension: str) -> str:
+    """Return the kind tag for a file extension, defaulting to 'other'.
+
+    Args:
+        extension: file extension with leading dot, case-insensitive (e.g. ".PDF").
+
+    Returns:
+        One of: "pdf" | "image" | "spreadsheet" | "doc" | "cad" | "text" | "other".
+    """
+    return EXT_TO_KIND.get(extension.lower(), "other")
 
 
 @dataclass(frozen=True)
@@ -47,8 +61,8 @@ class ProjectDocument:
         Tags: "pdf" | "image" | "spreadsheet" | "doc" | "cad" | "text" | "other"
         """
         ext = os.path.splitext(self.filename)[1].lower()
-        if ext in _EXT_TO_KIND:
-            return _EXT_TO_KIND[ext]
+        if ext in EXT_TO_KIND:
+            return EXT_TO_KIND[ext]
         # Fallback: check MIME prefix for images not covered by extension map.
         if self.content_type.startswith("image/"):
             return "image"

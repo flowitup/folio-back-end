@@ -93,6 +93,7 @@ from app.application.project_documents import (
     ListProjectDocumentsUseCase,
     GetProjectDocumentUseCase,
     DeleteProjectDocumentUseCase,
+    PurgeSoftDeletedDocumentsUseCase,
 )
 from app.application.project_documents.ports import IDocumentStorage, IProjectDocumentRepository
 from app.application.notes.create_note_usecase import CreateNoteUseCase
@@ -349,6 +350,7 @@ class Container:
     list_project_documents_usecase: Optional[ListProjectDocumentsUseCase] = None
     get_project_document_usecase: Optional[GetProjectDocumentUseCase] = None
     delete_project_document_usecase: Optional[DeleteProjectDocumentUseCase] = None
+    purge_soft_deleted_documents_usecase: Optional[PurgeSoftDeletedDocumentsUseCase] = None
 
     # Persons repo + use cases (Phase 1b-ii / 1c of labor-calendar-and-bulk-log plan)
     person_repo: Optional[Any] = None  # SqlAlchemyPersonRepository
