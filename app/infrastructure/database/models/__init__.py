@@ -31,6 +31,7 @@ from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from app.infrastructure.database.models.company_invite_token import CompanyInviteTokenModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+from app.infrastructure.database.models.labor_role import LaborRoleModel
 from app.infrastructure.database.models.project_document import ProjectDocumentModel
 
 __all__ = [
@@ -59,4 +60,5 @@ __all__ = [
     "CompanyInviteTokenModel",
     "PaymentMethodModel",
     "ProjectDocumentModel",
+    "LaborRoleModel",
 ]

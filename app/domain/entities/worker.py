@@ -22,7 +22,6 @@ class Worker:
     daily_rate: Decimal
     created_at: datetime
     phone: Optional[str] = None
-    avatar_url: Optional[str] = None
     is_active: bool = True
     updated_at: Optional[datetime] = None
 
@@ -33,6 +32,12 @@ class Worker:
     person_id: Optional[UUID] = None
     person_name: Optional[str] = None
     person_phone: Optional[str] = None
+
+    # Joined LaborRole identity — populated by the repository when role_id is set.
+    # None for workers without a role assignment.
+    role_id: Optional[UUID] = None
+    role_name: Optional[str] = None
+    role_color: Optional[str] = None
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Worker):

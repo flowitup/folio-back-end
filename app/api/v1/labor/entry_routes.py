@@ -115,7 +115,6 @@ def list_labor_entries(project_id: str):
                     id=e.id,
                     worker_id=e.worker_id,
                     worker_name=e.worker_name,
-                    worker_avatar_url=getattr(e, "worker_avatar_url", None),
                     date=e.date,
                     amount_override=e.amount_override,
                     effective_cost=e.effective_cost,
@@ -123,6 +122,7 @@ def list_labor_entries(project_id: str):
                     shift_type=e.shift_type,
                     supplement_hours=e.supplement_hours,
                     created_at=e.created_at,
+                    role_color=e.role_color,
                 )
                 for e in entries
             ],

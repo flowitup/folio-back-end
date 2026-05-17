@@ -26,7 +26,7 @@ class CreateWorkerRequest(BaseModel):
     daily_rate: float = Field(..., gt=0)
     phone: Optional[str] = Field(None, max_length=50)
     person_id: Optional[str] = Field(None, min_length=36, max_length=36)
-    avatar_url: Optional[str] = Field(None, max_length=500)
+    role_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
 
 class UpdateWorkerRequest(BaseModel):
@@ -36,8 +36,8 @@ class UpdateWorkerRequest(BaseModel):
     daily_rate: Optional[float] = Field(None, gt=0)
     phone: Optional[str] = Field(None, max_length=50)
     # Pydantic v2: distinguishing "unset" from "explicit None" needs model_fields_set.
-    # The route layer reads model_fields_set to decide whether to forward avatar_url.
-    avatar_url: Optional[str] = Field(None, max_length=500)
+    # The route layer reads model_fields_set to decide whether to forward role_id.
+    role_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
 
 class LogAttendanceRequest(BaseModel):
@@ -174,6 +174,9 @@ class WorkerResponse(BaseModel):
     populated from the workers table for back-compat with FE callers that
     haven't migrated yet. A follow-up release tightens the contract to
     require person_id and ultimately drops the inline name/phone columns.
+
+    role_id / role_name / role_color surface the joined LaborRole identity.
+    Nullable for workers without a role assignment.
     """
 
     id: str
@@ -181,7 +184,6 @@ class WorkerResponse(BaseModel):
     name: str
     phone: Optional[str]
     daily_rate: float
-    avatar_url: Optional[str] = None
     is_active: bool
     created_at: str
 
@@ -191,6 +193,11 @@ class WorkerResponse(BaseModel):
     person_id: Optional[str] = None
     person_name: Optional[str] = None
     person_phone: Optional[str] = None
+
+    # Joined LaborRole identity. None for workers without a role assignment.
+    role_id: Optional[str] = None
+    role_name: Optional[str] = None
+    role_color: Optional[str] = None
 
 
 class WorkerListResponse(BaseModel):
@@ -206,7 +213,6 @@ class LaborEntryResponse(BaseModel):
     id: str
     worker_id: str
     worker_name: str
-    worker_avatar_url: Optional[str] = None
     date: str
     amount_override: Optional[float]
     effective_cost: float
@@ -214,6 +220,7 @@ class LaborEntryResponse(BaseModel):
     shift_type: Optional[ShiftTypeLiteral]
     supplement_hours: int
     created_at: str
+    role_color: Optional[str] = None
 
 
 class LaborEntryListResponse(BaseModel):

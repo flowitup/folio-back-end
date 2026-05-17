@@ -36,7 +36,7 @@ class CreateWorkerRequest:
     phone: Optional[str] = None
     person_id: Optional[UUID] = None
     created_by_user_id: Optional[UUID] = None
-    avatar_url: Optional[str] = None
+    role_id: Optional[UUID] = None
 
 
 @dataclass
@@ -48,11 +48,14 @@ class CreateWorkerResponse:
     daily_rate: float
     is_active: bool
     created_at: str
-    avatar_url: Optional[str] = None
     # Joined Person identity (cook 1d-ii-a).
     person_id: Optional[str] = None
     person_name: Optional[str] = None
     person_phone: Optional[str] = None
+    # Joined LaborRole identity.
+    role_id: Optional[str] = None
+    role_name: Optional[str] = None
+    role_color: Optional[str] = None
 
 
 class CreateWorkerUseCase:
@@ -121,9 +124,9 @@ class CreateWorkerUseCase:
             name=name,
             daily_rate=request.daily_rate,
             phone=request.phone.strip() if request.phone else None,
-            avatar_url=request.avatar_url.strip() if request.avatar_url else None,
             created_at=datetime.now(timezone.utc),
             person_id=person_id,
+            role_id=request.role_id,
         )
 
         saved = self._repo.create(worker)
@@ -137,7 +140,9 @@ class CreateWorkerUseCase:
             name=saved.name,
             phone=saved.phone,
             daily_rate=float(saved.daily_rate),
-            avatar_url=saved.avatar_url,
             is_active=saved.is_active,
             created_at=saved.created_at.isoformat(),
+            role_id=str(saved.role_id) if saved.role_id else None,
+            role_name=saved.role_name,
+            role_color=saved.role_color,
         )

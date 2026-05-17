@@ -32,7 +32,12 @@ class WorkerModel(Base):
     name = Column(String(255), nullable=False)
     phone = Column(String(50), nullable=True)
     daily_rate = Column(Numeric(10, 2), nullable=False)
-    avatar_url = Column(String(500), nullable=True)
+    role_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("labor_roles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
@@ -44,6 +49,7 @@ class WorkerModel(Base):
     # Relationships
     project = relationship("ProjectModel")
     person = relationship("PersonModel", back_populates="workers")
+    role = relationship("LaborRoleModel")
     labor_entries = relationship("LaborEntryModel", back_populates="worker", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
