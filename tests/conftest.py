@@ -673,6 +673,34 @@ def invitation_app():
         )
 
         # ------------------------------------------------------------------
+        # Wire labor role use-cases (feat/labor-roles)
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.adapters.sqlalchemy_labor_role import (
+            SQLAlchemyLaborRoleRepository as _LaborRoleRepo,
+        )
+        from app.application.labor.create_labor_role_usecase import (
+            CreateLaborRoleUseCase as _CreateLRUseCase,
+        )
+        from app.application.labor.update_labor_role_usecase import (
+            UpdateLaborRoleUseCase as _UpdateLRUseCase,
+        )
+        from app.application.labor.delete_labor_role_usecase import (
+            DeleteLaborRoleUseCase as _DeleteLRUseCase,
+        )
+        from app.application.labor.list_labor_roles_usecase import (
+            ListLaborRolesUseCase as _ListLRUseCase,
+        )
+
+        _labor_role_repo = _LaborRoleRepo(db.session)
+        _c.labor_role_repository = _labor_role_repo
+        _c.create_labor_role_usecase = _CreateLRUseCase(repo=_labor_role_repo, db_session=db.session)
+        _c.update_labor_role_usecase = _UpdateLRUseCase(repo=_labor_role_repo, db_session=db.session)
+        _c.delete_labor_role_usecase = _DeleteLRUseCase(repo=_labor_role_repo, db_session=db.session)
+        _c.list_labor_roles_usecase = _ListLRUseCase(repo=_labor_role_repo)
+
+        # ------------------------------------------------------------------
         # Wire project documents use-cases (phase 03)
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the invitation_app test fixture will drift from prod.

@@ -20,6 +20,7 @@ from app.infrastructure.database.models import (
     PermissionModel,
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
+from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
 
 
@@ -97,6 +98,23 @@ def labor_app():
             worker_repository=worker_repo,
             labor_entry_repository=entry_repo,
         )
+
+        # Wire labor role use-cases (added in feat/labor-roles phase 03).
+        # The configure_container() signature predates labor roles — wire
+        # them directly on the container after the initial wiring completes.
+        from wiring import get_container as _get_container
+        from app.application.labor.create_labor_role_usecase import CreateLaborRoleUseCase as _CreateLRUC
+        from app.application.labor.update_labor_role_usecase import UpdateLaborRoleUseCase as _UpdateLRUC
+        from app.application.labor.delete_labor_role_usecase import DeleteLaborRoleUseCase as _DeleteLRUC
+        from app.application.labor.list_labor_roles_usecase import ListLaborRolesUseCase as _ListLRUC
+
+        _c = _get_container()
+        _labor_role_repo = SQLAlchemyLaborRoleRepository(db.session)
+        _c.labor_role_repository = _labor_role_repo
+        _c.create_labor_role_usecase = _CreateLRUC(repo=_labor_role_repo, db_session=db.session)
+        _c.update_labor_role_usecase = _UpdateLRUC(repo=_labor_role_repo, db_session=db.session)
+        _c.delete_labor_role_usecase = _DeleteLRUC(repo=_labor_role_repo, db_session=db.session)
+        _c.list_labor_roles_usecase = _ListLRUC(repo=_labor_role_repo)
 
         test_app._test_admin_email = "laboradmin@test.com"
         test_app._test_admin_password = "Admin1234!"

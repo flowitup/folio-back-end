@@ -538,12 +538,8 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
     )
-    from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
-
-    _funds_release_adapter = FundsReleaseAdapter(invoice_repo=_c.invoice_repository)
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
-        funds_release=_funds_release_adapter if _c.invoice_repository else None,
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
