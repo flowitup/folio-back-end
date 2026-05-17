@@ -115,7 +115,6 @@ def list_labor_entries(project_id: str):
                     id=e.id,
                     worker_id=e.worker_id,
                     worker_name=e.worker_name,
-                    worker_avatar_url=getattr(e, "worker_avatar_url", None),
                     date=e.date,
                     amount_override=e.amount_override,
                     effective_cost=e.effective_cost,

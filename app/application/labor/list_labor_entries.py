@@ -20,10 +20,6 @@ class LaborEntryDetail:
     shift_type: Optional[str]
     supplement_hours: int
     created_at: str
-    # Optional with a default so existing test fixtures and any legacy
-    # callsite that constructed LaborEntryDetail before avatars existed
-    # continue to work unchanged.
-    worker_avatar_url: Optional[str] = None
 
 
 @dataclass
@@ -76,7 +72,6 @@ class ListLaborEntriesUseCase:
                     id=str(entry.id),
                     worker_id=str(entry.worker_id),
                     worker_name=worker.person_name or worker.name,
-                    worker_avatar_url=worker.avatar_url,
                     date=entry.date.isoformat(),
                     amount_override=float(entry.amount_override) if entry.amount_override else None,
                     effective_cost=effective_cost,

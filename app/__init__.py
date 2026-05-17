@@ -435,6 +435,22 @@ def _configure_di_container() -> None:
         )
 
     # -----------------------------------------------------------------------
+    # Labor roles DI wiring
+    # -----------------------------------------------------------------------
+    from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
+    from app.application.labor.create_labor_role_usecase import CreateLaborRoleUseCase as _CreateLaborRoleUseCase
+    from app.application.labor.update_labor_role_usecase import UpdateLaborRoleUseCase as _UpdateLaborRoleUseCase
+    from app.application.labor.delete_labor_role_usecase import DeleteLaborRoleUseCase as _DeleteLaborRoleUseCase
+    from app.application.labor.list_labor_roles_usecase import ListLaborRolesUseCase as _ListLaborRolesUseCase
+
+    _labor_role_repo = SQLAlchemyLaborRoleRepository(db.session)
+    _c.labor_role_repository = _labor_role_repo
+    _c.create_labor_role_usecase = _CreateLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
+    _c.update_labor_role_usecase = _UpdateLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
+    _c.delete_labor_role_usecase = _DeleteLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
+    _c.list_labor_roles_usecase = _ListLaborRolesUseCase(repo=_labor_role_repo)
+
+    # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)
     # -----------------------------------------------------------------------
     from app.infrastructure.database.repositories.sqlalchemy_billing_document_repository import (
@@ -522,8 +538,12 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
     )
+    from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
+
+    _funds_release_adapter = FundsReleaseAdapter(invoice_repo=_c.invoice_repository)
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
+        funds_release=_funds_release_adapter if _c.invoice_repository else None,
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,

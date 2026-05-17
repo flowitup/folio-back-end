@@ -38,6 +38,7 @@ def _worker_response(w) -> WorkerResponse:
 
     person_id / person_name / person_phone surface the joined identity from
     cook 1d-ii-a. They are None for workers not yet linked (pre-backfill).
+    role_id / role_name / role_color surface the joined LaborRole identity.
     """
     return WorkerResponse(
         id=w.id,
@@ -45,12 +46,14 @@ def _worker_response(w) -> WorkerResponse:
         name=w.name,
         phone=w.phone,
         daily_rate=w.daily_rate,
-        avatar_url=getattr(w, "avatar_url", None),
         is_active=w.is_active,
         created_at=w.created_at,
         person_id=str(w.person_id) if w.person_id else None,
         person_name=w.person_name,
         person_phone=w.person_phone,
+        role_id=str(w.role_id) if w.role_id else None,
+        role_name=w.role_name,
+        role_color=w.role_color,
     )
 
 
@@ -95,7 +98,7 @@ def create_worker(project_id: str):
                 phone=data.phone,
                 person_id=UUID(data.person_id) if data.person_id else None,
                 created_by_user_id=creator_id,
-                avatar_url=data.avatar_url,
+                role_id=UUID(data.role_id) if data.role_id else None,
             )
         )
     except (ValueError, InvalidWorkerDataError) as e:
@@ -116,7 +119,7 @@ def update_worker(project_id: str, worker_id: str):
         return _validation_error_response(e)
 
     try:
-        # Only forward avatar_url when the client explicitly sent the key
+        # Only forward role_id when the client explicitly sent the key
         # — distinguishes "clear" (sent: null) from "leave unchanged" (omitted).
         update_kwargs = dict(
             worker_id=UUID(worker_id),
@@ -124,8 +127,8 @@ def update_worker(project_id: str, worker_id: str):
             phone=data.phone,
             daily_rate=Decimal(str(data.daily_rate)) if data.daily_rate else None,
         )
-        if "avatar_url" in data.model_fields_set:
-            update_kwargs["avatar_url"] = data.avatar_url
+        if "role_id" in data.model_fields_set:
+            update_kwargs["role_id"] = UUID(data.role_id) if data.role_id else None
         result = get_container().update_worker_usecase.execute(UpdateWorkerDTO(**update_kwargs))
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)

@@ -1,6 +1,6 @@
 """Add labor_roles table, seed default roles, add role_id to workers, drop avatar_url.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: f2a3b4c5d6e7
 Revises: e8a2c4d6f1b3
 Create Date: 2026-05-18 00:00:00.000000
 
@@ -13,8 +13,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = "a1b2c3d4e5f6"
-down_revision = "e8a2c4d6f1b3"
+revision = "f2a3b4c5d6e7"
+down_revision = ("5a85f7474a41", "e8a2c4d6f1b3")
 branch_labels = None
 depends_on = None
 
