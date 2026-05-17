@@ -145,15 +145,15 @@ class TestInvoiceType:
         """LABOR type should have correct string value."""
         assert InvoiceType.LABOR.value == "labor"
 
-    def test_invoice_type_supplier_value(self):
-        """SUPPLIER type should have correct string value."""
-        assert InvoiceType.SUPPLIER.value == "supplier"
+    def test_invoice_type_materials_services_value(self):
+        """MATERIALS_SERVICES type should have correct string value."""
+        assert InvoiceType.MATERIALS_SERVICES.value == "materials_services"
 
     def test_invoice_type_from_string(self):
         """Can construct InvoiceType from string value."""
         assert InvoiceType("released_funds") == InvoiceType.RELEASED_FUNDS
         assert InvoiceType("labor") == InvoiceType.LABOR
-        assert InvoiceType("supplier") == InvoiceType.SUPPLIER
+        assert InvoiceType("materials_services") == InvoiceType.MATERIALS_SERVICES
 
 
 class TestInvoiceCreation:

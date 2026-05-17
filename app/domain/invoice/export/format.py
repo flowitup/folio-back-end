@@ -12,5 +12,5 @@ from app.domain.labor.export.format import format_eur_fr, slugify_project_name  
 TYPE_LABEL_EN = {
     "released_funds": "Released Funds",
     "labor": "Labor",
-    "supplier": "Supplier",
+    "materials_services": "Materials & Services",
 }

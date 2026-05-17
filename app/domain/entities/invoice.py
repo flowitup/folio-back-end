@@ -12,7 +12,7 @@ from uuid import UUID
 class InvoiceType(str, Enum):
     RELEASED_FUNDS = "released_funds"
     LABOR = "labor"
-    SUPPLIER = "supplier"
+    MATERIALS_SERVICES = "materials_services"
 
 
 @dataclass(slots=True)
