@@ -19,6 +19,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api._helpers.validation_error import safe_validation_fields
 from app.api.v1.notes import notes_bp
 from app.api.v1.notes.schemas import NoteCreateBody, NoteUpdateBody
 from app.application.notes.dtos import NoteDto
@@ -68,7 +69,7 @@ def create_note(project_id: UUID) -> Any:
     try:
         body = NoteCreateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        fields = [e.get("loc", ["unknown"])[-1] for e in exc.errors()]
+        fields = safe_validation_fields(exc)
         return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
 
     actor_id = UUID(get_jwt_identity())
@@ -88,8 +89,6 @@ def create_note(project_id: UUID) -> Any:
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
     except (InvalidLeadTimeError, ValueError) as exc:  # pragma: no cover
-        # Defense-in-depth: Pydantic schema (Literal[0,60,1440]) rejects invalid
-        # lead_time at the API boundary before the use-case is reached.
         return _err(400, "BadRequest", str(exc))  # pragma: no cover
     except Exception:
         logger.exception("create_note unexpected error project_id=%s", project_id)
@@ -141,7 +140,7 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
     try:
         body = NoteUpdateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        fields = [e.get("loc", ["unknown"])[-1] for e in exc.errors()]
+        fields = safe_validation_fields(exc)
         return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
 
     actor_id = UUID(get_jwt_identity())
@@ -153,13 +152,10 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
     if container.mark_note_open_usecase is None:
         raise RuntimeError("mark_note_open_usecase not wired in container")
 
-    # Pass description only when explicitly set in the request body so that
-    # omitting description from the PATCH payload leaves it unchanged.
     raw = request.get_json(silent=True) or {}
     description_arg = body.description if "description" in raw else _UNSET
 
     try:
-        # Apply field updates (title, description, due_date, lead_time_minutes).
         note_dto = container.update_note_usecase.execute(
             actor_id=actor_id,
             note_id=note_id,
@@ -169,7 +165,6 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
             lead_time_minutes=body.lead_time_minutes,
         )
 
-        # Apply status transition separately if requested.
         if body.status == "done":
             note_dto = container.mark_note_done_usecase.execute(
                 actor_id=actor_id,
@@ -186,8 +181,6 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
     except (InvalidLeadTimeError, ValueError) as exc:  # pragma: no cover
-        # Defense-in-depth: Pydantic schema rejects invalid lead_time/status at
-        # the API boundary. Reached only if use-case validation diverges from schema.
         return _err(400, "BadRequest", str(exc))  # pragma: no cover
     except Exception:
         logger.exception("update_note unexpected error note_id=%s", note_id)
