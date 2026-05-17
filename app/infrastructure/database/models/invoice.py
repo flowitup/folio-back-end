@@ -27,7 +27,7 @@ class InvoiceModel(Base):
     )
     invoice_number = Column(String(20), nullable=False)
     type = Column(
-        Enum("client", "labor", "supplier", name="invoicetype", create_type=False),
+        Enum("released_funds", "labor", "supplier", name="invoicetype", create_type=False),
         nullable=False,
         index=True,
     )

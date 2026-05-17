@@ -285,7 +285,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
     xlsx assertions:
     - 200, xlsx content-type, PK magic bytes
     - openpyxl opens successfully
-    - Sheet names include Summary, Client invoices, Labor invoices
+    - Sheet names include Summary, Released Funds invoices, Labor invoices
     - "Supplier invoices" sheet absent (no supplier invoices seeded)
     - Summary sheet contains GRAND TOTAL label
 
@@ -310,7 +310,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
             id=uuid4(),
             project_id=project_uuid,
             invoice_number="MULTI-C001",
-            type="client",
+            type="released_funds",
             issue_date=datetime.date(2026, 3, 1),
             recipient_name="Client Alpha",
             items=items_payload,
@@ -319,7 +319,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
             id=uuid4(),
             project_id=project_uuid,
             invoice_number="MULTI-C002",
-            type="client",
+            type="released_funds",
             issue_date=datetime.date(2026, 3, 15),
             recipient_name="Client Beta",
             items=items_payload,
@@ -352,7 +352,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
     sheet_names = wb.sheetnames
 
     assert "Summary" in sheet_names, f"Missing 'Summary' sheet; got: {sheet_names}"
-    assert "Client invoices" in sheet_names, f"Missing 'Client invoices' sheet; got: {sheet_names}"
+    assert "Released Funds invoices" in sheet_names, f"Missing 'Released Funds invoices' sheet; got: {sheet_names}"
     assert "Labor invoices" in sheet_names, f"Missing 'Labor invoices' sheet; got: {sheet_names}"
     assert (
         "Supplier invoices" not in sheet_names

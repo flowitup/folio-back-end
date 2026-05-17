@@ -10,7 +10,7 @@ from __future__ import annotations
 from app.domain.labor.export.format import format_eur_fr, slugify_project_name  # noqa: F401
 
 TYPE_LABEL_EN = {
-    "client": "Client",
+    "released_funds": "Released Funds",
     "labor": "Labor",
     "supplier": "Supplier",
 }

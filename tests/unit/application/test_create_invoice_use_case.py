@@ -24,7 +24,7 @@ def make_request(**kwargs):
     defaults = dict(
         project_id=uuid4(),
         created_by=uuid4(),
-        type=InvoiceType.CLIENT,
+        type=InvoiceType.RELEASED_FUNDS,
         issue_date=date.today(),
         recipient_name="ACME Corp",
         items=[{"description": "Work", "quantity": 10, "unit_price": 50}],
@@ -46,7 +46,7 @@ class TestCreateInvoiceSuccess:
 
         assert result.invoice_number == "INV-2026-0001"
         assert result.total_amount == 500.0
-        assert result.type == "client"
+        assert result.type == "released_funds"
         assert result.recipient_name == "ACME Corp"
         repo.create.assert_called_once()
 
@@ -205,11 +205,11 @@ class TestCreateInvoiceInvoiceType:
         """Should create client invoice type."""
         repo = make_mock_repo()
         use_case = CreateInvoiceUseCase(repo)
-        request = make_request(type=InvoiceType.CLIENT)
+        request = make_request(type=InvoiceType.RELEASED_FUNDS)
 
         result = use_case.execute(request)
 
-        assert result.type == "client"
+        assert result.type == "released_funds"
 
     def test_create_labor_invoice(self):
         """Should create labor invoice type."""

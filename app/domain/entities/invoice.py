@@ -10,7 +10,7 @@ from uuid import UUID
 
 
 class InvoiceType(str, Enum):
-    CLIENT = "client"
+    RELEASED_FUNDS = "released_funds"
     LABOR = "labor"
     SUPPLIER = "supplier"
 

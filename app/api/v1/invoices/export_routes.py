@@ -35,7 +35,7 @@ def export_invoices(project_id: str):
         from   (str, YYYY-MM) — start month, inclusive
         to     (str, YYYY-MM) — end month, inclusive
         format (str)          — "xlsx" or "pdf"
-        type   (str, optional) — "client", "labor", or "supplier"
+        type   (str, optional) — "released_funds", "labor", or "supplier"
 
     Returns:
         200: binary file stream with Content-Disposition: attachment

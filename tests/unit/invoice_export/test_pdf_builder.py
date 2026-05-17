@@ -53,7 +53,7 @@ def _make_context(project_name: str = "Grand Canal Tower") -> InvoiceExportConte
 def _make_invoice(
     *,
     project_id=None,
-    invoice_type: InvoiceType = InvoiceType.CLIENT,
+    invoice_type: InvoiceType = InvoiceType.RELEASED_FUNDS,
     amount: Decimal = Decimal("250.00"),
     recipient: str = "ACME Corp",
     issue_date: date = date(2026, 1, 15),
@@ -79,7 +79,7 @@ def _make_invoice(
 
 def _make_bundle(invoices: list) -> InvoiceBundle:
     subtotals = []
-    for t in (InvoiceType.CLIENT, InvoiceType.LABOR, InvoiceType.SUPPLIER):
+    for t in (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.SUPPLIER):
         scoped = [i for i in invoices if i.type == t]
         if scoped:
             subtotals.append(
