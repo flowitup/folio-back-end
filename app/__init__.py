@@ -647,26 +647,35 @@ def _configure_di_container() -> None:
     from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
         SqlAlchemyProjectDocumentRepository,
     )
+    from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
     from app.application.project_documents import (
         UploadProjectDocumentUseCase,
         ListProjectDocumentsUseCase,
         GetProjectDocumentUseCase,
         DeleteProjectDocumentUseCase,
+        PurgeSoftDeletedDocumentsUseCase,
     )
 
     _doc_repo = SqlAlchemyProjectDocumentRepository(db.session)
     _c.project_document_repository = _doc_repo
     # Reuse the same S3AttachmentStorage singleton — structurally satisfies IDocumentStorage
     _c.document_storage = storage
+    _filename_sanitizer = WerkzeugFilenameSanitizer()
 
     _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
         repo=_doc_repo,
         storage=storage,
         db_session=db.session,
+        filename_sanitizer=_filename_sanitizer,
     )
     _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=_doc_repo)
     _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=_doc_repo, storage=storage)
     _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
         repo=_doc_repo,
+        db_session=db.session,
+    )
+    _c.purge_soft_deleted_documents_usecase = PurgeSoftDeletedDocumentsUseCase(
+        repo=_doc_repo,
+        storage=storage,
         db_session=db.session,
     )

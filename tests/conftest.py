@@ -681,6 +681,9 @@ def invitation_app():
             SqlAlchemyProjectDocumentRepository as _DocRepo,
         )
         from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.adapters.werkzeug_filename_sanitizer import (
+            WerkzeugFilenameSanitizer as _Sanitizer,
+        )
         from app.application.project_documents import (
             UploadProjectDocumentUseCase as _UploadDocUC,
             ListProjectDocumentsUseCase as _ListDocUC,
@@ -697,6 +700,7 @@ def invitation_app():
             repo=_doc_repo,
             storage=_doc_storage,
             db_session=db.session,
+            filename_sanitizer=_Sanitizer(),
         )
         _c.list_project_documents_usecase = _ListDocUC(repo=_doc_repo)
         _c.get_project_document_usecase = _GetDocUC(repo=_doc_repo, storage=_doc_storage)

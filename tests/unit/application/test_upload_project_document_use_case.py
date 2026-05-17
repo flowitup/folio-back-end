@@ -19,6 +19,7 @@ from app.application.project_documents.upload_project_document import (
     UploadProjectDocumentUseCase,
 )
 from app.domain.project_document import ProjectDocument
+from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,7 +46,17 @@ def _make_use_case(repo=None, storage=None, session=None):
     repo = repo or _make_repo()
     storage = storage or _make_storage()
     session = session or _make_session()
-    return UploadProjectDocumentUseCase(repo=repo, storage=storage, db_session=session), repo, storage, session
+    return (
+        UploadProjectDocumentUseCase(
+            repo=repo,
+            storage=storage,
+            db_session=session,
+            filename_sanitizer=WerkzeugFilenameSanitizer(),
+        ),
+        repo,
+        storage,
+        session,
+    )
 
 
 def _fileobj(content: bytes = b"hello") -> BytesIO:
@@ -338,7 +349,9 @@ class TestUploadOrphanCleanup:
         session = _make_session()
         session.commit.side_effect = RuntimeError("DB is down")
 
-        uc = UploadProjectDocumentUseCase(repo=repo, storage=storage, db_session=session)
+        uc = UploadProjectDocumentUseCase(
+            repo=repo, storage=storage, db_session=session, filename_sanitizer=WerkzeugFilenameSanitizer()
+        )
 
         with pytest.raises(RuntimeError, match="DB is down"):
             uc.execute(
@@ -365,7 +378,9 @@ class TestUploadOrphanCleanup:
         storage = _make_storage()
         session = _make_session()
 
-        uc = UploadProjectDocumentUseCase(repo=repo, storage=storage, db_session=session)
+        uc = UploadProjectDocumentUseCase(
+            repo=repo, storage=storage, db_session=session, filename_sanitizer=WerkzeugFilenameSanitizer()
+        )
 
         with pytest.raises(Exception, match="constraint violation"):
             uc.execute(
@@ -387,7 +402,9 @@ class TestUploadOrphanCleanup:
         session = _make_session()
         session.commit.side_effect = ValueError("transaction aborted")
 
-        uc = UploadProjectDocumentUseCase(repo=repo, storage=storage, db_session=session)
+        uc = UploadProjectDocumentUseCase(
+            repo=repo, storage=storage, db_session=session, filename_sanitizer=WerkzeugFilenameSanitizer()
+        )
 
         with pytest.raises(ValueError, match="transaction aborted"):
             uc.execute(
@@ -411,7 +428,9 @@ class TestUploadOrphanCleanup:
         session = _make_session()
         session.commit.side_effect = RuntimeError("DB is down")
 
-        uc = UploadProjectDocumentUseCase(repo=repo, storage=storage, db_session=session)
+        uc = UploadProjectDocumentUseCase(
+            repo=repo, storage=storage, db_session=session, filename_sanitizer=WerkzeugFilenameSanitizer()
+        )
 
         # The original RuntimeError must propagate despite storage.delete also failing
         with pytest.raises(RuntimeError, match="DB is down"):

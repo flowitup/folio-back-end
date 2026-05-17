@@ -15,7 +15,6 @@ from app.api.v1.projects.decorators import has_permission, require_permission, r
 from app.api.v1.projects.schemas import ErrorResponse
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.application.project_documents import (
-    DeleteProjectDocumentUseCase,  # noqa: F401 — referenced via container
     DocumentFileTooLargeError,
     DocumentPermissionDeniedError,
     EmptyFileError,
@@ -32,6 +31,13 @@ def _error_response(error: str, message: str, status_code: int) -> Tuple[Respons
 
 
 def _serialize(doc) -> dict:
+    """Serialize a ProjectDocument to the API response shape.
+
+    `download_url` is a **relative** path (no scheme/host). Clients must prefix
+    it with the BE base URL (e.g. NEXT_PUBLIC_API_BASE_URL on the FE). This
+    avoids baking environment-specific hostnames into responses and keeps the
+    payload usable across docker compose, dev, staging, and prod.
+    """
     return {
         "id": str(doc.id),
         "project_id": str(doc.project_id),

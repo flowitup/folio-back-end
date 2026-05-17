@@ -113,6 +113,7 @@ def doc_app():
     from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
     from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+    from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
     from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
         SqlAlchemyProjectDocumentRepository,
     )
@@ -226,7 +227,10 @@ def doc_app():
         _c.project_document_repository = _doc_repo
         _c.document_storage = _doc_storage
         _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
-            repo=_doc_repo, storage=_doc_storage, db_session=db.session
+            repo=_doc_repo,
+            storage=_doc_storage,
+            db_session=db.session,
+            filename_sanitizer=WerkzeugFilenameSanitizer(),
         )
         _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=_doc_repo)
         _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=_doc_repo, storage=_doc_storage)
@@ -527,6 +531,7 @@ class TestUploadRateLimit:
         from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
         from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
         from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
         from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
             SqlAlchemyProjectDocumentRepository,
         )
@@ -600,7 +605,10 @@ class TestUploadRateLimit:
             _c.project_document_repository = doc_repo
             _c.document_storage = doc_storage
             _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
-                repo=doc_repo, storage=doc_storage, db_session=db.session
+                repo=doc_repo,
+                storage=doc_storage,
+                db_session=db.session,
+                filename_sanitizer=WerkzeugFilenameSanitizer(),
             )
             _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=doc_repo)
             _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=doc_repo, storage=doc_storage)
@@ -895,6 +903,7 @@ class TestCrossProjectDownloadAdversarial:
         from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
         from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
         from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
         from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
             SqlAlchemyProjectDocumentRepository,
         )
@@ -985,7 +994,10 @@ class TestCrossProjectDownloadAdversarial:
             _c.project_document_repository = doc_repo
             _c.document_storage = doc_storage
             _c.upload_project_document_usecase = UploadProjectDocumentUseCase(
-                repo=doc_repo, storage=doc_storage, db_session=db.session
+                repo=doc_repo,
+                storage=doc_storage,
+                db_session=db.session,
+                filename_sanitizer=WerkzeugFilenameSanitizer(),
             )
             _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=doc_repo)
             _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=doc_repo, storage=doc_storage)

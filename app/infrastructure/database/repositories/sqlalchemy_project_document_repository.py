@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.application.project_documents.dtos import ListFiltersDTO, ListResultDTO
@@ -104,22 +104,15 @@ class SqlAlchemyProjectDocumentRepository:
                     kind_clauses.append(func.lower(ProjectDocumentModel.filename).like(f"%{ext}"))
 
             if include_other:
-                # "other" = extension is not in any known list
-                known_not_clauses = [
+                # "other" = extension is not in any known list. _ALL_KNOWN_EXTENSIONS
+                # is built from _KIND_EXTENSIONS at module load and is always non-empty
+                # while at least one named kind exists.
+                from sqlalchemy import not_
+
+                known_clauses = [
                     func.lower(ProjectDocumentModel.filename).like(f"%{ext}") for ext in _ALL_KNOWN_EXTENSIONS
                 ]
-                if known_not_clauses:
-                    from sqlalchemy import not_
-
-                    other_clause = not_(or_(*known_not_clauses))
-                else:  # pragma: no cover
-                    # NOTE: _ALL_KNOWN_EXTENSIONS is hardcoded non-empty; this branch
-                    # is a defensive guard for future schema changes and cannot be
-                    # reached with the current extension registry.
-                    from sqlalchemy import true
-
-                    other_clause = true()
-                kind_clauses.append(other_clause)
+                kind_clauses.append(not_(or_(*known_clauses)))
 
             if kind_clauses:
                 base_where.append(or_(*kind_clauses))
@@ -134,7 +127,9 @@ class SqlAlchemyProjectDocumentRepository:
         # Sorting  (each sort key has an `id` tiebreaker for stable paging)
         # ------------------------------------------------------------------
         asc_order = filters.order == "asc"
-        order_fn = lambda col: col.asc() if asc_order else col.desc()  # noqa: E731
+
+        def order_fn(col):
+            return col.asc() if asc_order else col.desc()
 
         sort_key = filters.sort
         if sort_key == "name":
@@ -196,5 +191,32 @@ class SqlAlchemyProjectDocumentRepository:
             )
             .values(deleted_at=now)
         )
+        self._session.execute(stmt)
+        self._session.flush()
+
+    def find_soft_deleted_before(self, cutoff: datetime, limit: int = 1000) -> list[ProjectDocument]:
+        """Return soft-deleted documents with `deleted_at < cutoff`, ordered oldest-first."""
+        stmt = (
+            select(ProjectDocumentModel)
+            .where(
+                ProjectDocumentModel.deleted_at.is_not(None),
+                ProjectDocumentModel.deleted_at < cutoff,
+            )
+            .order_by(ProjectDocumentModel.deleted_at.asc(), ProjectDocumentModel.id.asc())
+            .limit(limit)
+        )
+        models = self._session.execute(stmt).scalars().all()
+        return [m.to_domain() for m in models]
+
+    def hard_delete(self, doc_id: UUID) -> None:
+        """Permanently delete the document row by id.
+
+        Used by `PurgeSoftDeletedDocumentsUseCase` AFTER the MinIO object has
+        been removed. No `deleted_at IS NOT NULL` guard here — the caller is
+        responsible for only invoking this on already-soft-deleted rows. We
+        flush so each row's delete is visible to subsequent queries within
+        the same transaction; commit is the caller's responsibility.
+        """
+        stmt = delete(ProjectDocumentModel).where(ProjectDocumentModel.id == doc_id)
         self._session.execute(stmt)
         self._session.flush()

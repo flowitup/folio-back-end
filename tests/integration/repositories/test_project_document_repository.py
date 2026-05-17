@@ -456,3 +456,107 @@ class TestKindFilterOther:
         assert pdf_doc.id in ids
         assert other_doc.id in ids
         assert img_doc.id not in ids
+
+
+# ---------------------------------------------------------------------------
+# Janitor: find_soft_deleted_before + hard_delete (PurgeSoftDeletedDocumentsUseCase)
+# ---------------------------------------------------------------------------
+
+
+class TestFindSoftDeletedBefore:
+    def test_returns_only_soft_deleted_older_than_cutoff(self, session):
+        from datetime import timedelta
+
+        pid, uid = _seed_project_and_user(session)
+        repo = SqlAlchemyProjectDocumentRepository(session)
+
+        now = datetime.now(timezone.utc)
+        # active (not deleted)
+        active = _make_doc(pid, uid, filename="active.pdf")
+        _save(repo, active)
+        # soft-deleted 100 days ago
+        old = _make_doc(pid, uid, filename="old.pdf")
+        _save(repo, old)
+        repo.soft_delete(old.id, now - timedelta(days=100))
+        # soft-deleted 10 days ago
+        recent = _make_doc(pid, uid, filename="recent.pdf")
+        _save(repo, recent)
+        repo.soft_delete(recent.id, now - timedelta(days=10))
+
+        cutoff = now - timedelta(days=30)
+        result = repo.find_soft_deleted_before(cutoff)
+
+        ids = [d.id for d in result]
+        assert old.id in ids
+        assert recent.id not in ids
+        assert active.id not in ids
+
+    def test_orders_oldest_first(self, session):
+        from datetime import timedelta
+
+        pid, uid = _seed_project_and_user(session)
+        repo = SqlAlchemyProjectDocumentRepository(session)
+
+        now = datetime.now(timezone.utc)
+        older = _make_doc(pid, uid, filename="older.pdf")
+        newer = _make_doc(pid, uid, filename="newer.pdf")
+        _save(repo, older)
+        _save(repo, newer)
+        repo.soft_delete(older.id, now - timedelta(days=200))
+        repo.soft_delete(newer.id, now - timedelta(days=100))
+
+        result = repo.find_soft_deleted_before(now - timedelta(days=30))
+
+        # Oldest deleted_at first (older was deleted 200 days ago).
+        assert [d.id for d in result] == [older.id, newer.id]
+
+    def test_respects_limit(self, session):
+        from datetime import timedelta
+
+        pid, uid = _seed_project_and_user(session)
+        repo = SqlAlchemyProjectDocumentRepository(session)
+
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            doc = _make_doc(pid, uid, filename=f"f{i}.pdf")
+            _save(repo, doc)
+            repo.soft_delete(doc.id, now - timedelta(days=100 + i))
+
+        result = repo.find_soft_deleted_before(now - timedelta(days=30), limit=2)
+        assert len(result) == 2
+
+
+class TestHardDelete:
+    def test_removes_row_completely(self, session):
+        pid, uid = _seed_project_and_user(session)
+        repo = SqlAlchemyProjectDocumentRepository(session)
+
+        doc = _make_doc(pid, uid)
+        _save(repo, doc)
+        assert repo.find_by_id(doc.id) is not None
+
+        repo.hard_delete(doc.id)
+
+        assert repo.find_by_id(doc.id) is None
+
+    def test_idempotent_on_missing(self, session):
+        pid, uid = _seed_project_and_user(session)
+        repo = SqlAlchemyProjectDocumentRepository(session)
+
+        # Hard-delete a non-existent id — must not raise.
+        repo.hard_delete(uuid4())
+
+    def test_after_purge_find_soft_deleted_excludes_row(self, session):
+        from datetime import timedelta
+
+        pid, uid = _seed_project_and_user(session)
+        repo = SqlAlchemyProjectDocumentRepository(session)
+
+        now = datetime.now(timezone.utc)
+        doc = _make_doc(pid, uid)
+        _save(repo, doc)
+        repo.soft_delete(doc.id, now - timedelta(days=100))
+
+        repo.hard_delete(doc.id)
+
+        assert doc.id not in [d.id for d in repo.find_soft_deleted_before(now)]
