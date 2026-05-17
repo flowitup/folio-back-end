@@ -87,7 +87,7 @@ _DETAIL_CURRENCY_COLS = {5}
 class _AggRow:
     worker_id: str
     worker_name: str
-    days_worked: int
+    days_worked: float
     banked_hours: int
     bonus_full_days: int
     bonus_half_days: int

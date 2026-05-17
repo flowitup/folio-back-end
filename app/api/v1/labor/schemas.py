@@ -228,7 +228,8 @@ class WorkerSummaryRow(BaseModel):
 
     worker_id: str
     worker_name: str
-    days_worked: int
+    # Fractional priced days — full=1.0, half=0.5, overtime=1.5.
+    days_worked: float
     total_cost: float
     banked_hours: int
     bonus_full_days: int
@@ -240,7 +241,7 @@ class LaborSummaryResponse(BaseModel):
     """Labor summary response."""
 
     rows: List[WorkerSummaryRow]
-    total_days: int
+    total_days: float
     total_cost: float
     total_banked_hours: int
     total_bonus_days: float
@@ -252,7 +253,7 @@ class MonthlyWorkerSubRowResponse(BaseModel):
 
     worker_id: str
     worker_name: str
-    days_worked: int
+    days_worked: float
     total_cost: float
 
 
@@ -265,7 +266,7 @@ class MonthlySummaryRowResponse(BaseModel):
 
     year: int
     month: int
-    total_days: int
+    total_days: float
     total_cost: float
     workers: List[MonthlyWorkerSubRowResponse]
 
