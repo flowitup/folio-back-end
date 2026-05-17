@@ -148,8 +148,12 @@ def test_subtotal_computation_per_type():
     project = _make_project("Subtotal Project")
     pid = project.id
     invoices = [
-        _make_invoice(project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("200.00"), invoice_number="C1"),
-        _make_invoice(project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("300.00"), invoice_number="C2"),
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("200.00"), invoice_number="C1"
+        ),
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("300.00"), invoice_number="C2"
+        ),
         _make_invoice(project_id=pid, invoice_type=InvoiceType.LABOR, amount=Decimal("100.00"), invoice_number="L1"),
     ]
 
