@@ -31,6 +31,8 @@ class InvoiceResponse:
     updated_at: str
     payment_method_id: Optional[str] = None
     payment_method_label: Optional[str] = None
+    source_billing_document_id: Optional[str] = None
+    is_auto_generated: bool = False
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -58,4 +60,8 @@ class InvoiceResponse:
             updated_at=inv.updated_at.isoformat(),
             payment_method_id=str(inv.payment_method_id) if inv.payment_method_id is not None else None,
             payment_method_label=inv.payment_method_label,
+            source_billing_document_id=(
+                str(inv.source_billing_document_id) if inv.source_billing_document_id is not None else None
+            ),
+            is_auto_generated=inv.is_auto_generated,
         )

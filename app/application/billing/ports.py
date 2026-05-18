@@ -7,6 +7,7 @@ Infrastructure implementations live in app/infrastructure/billing/.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+from datetime import date
 from typing import TYPE_CHECKING, Any, Optional, Protocol
 from uuid import UUID
 
@@ -277,3 +278,19 @@ class TransactionalSessionPort(Protocol):
     def flush(self) -> None:
         """Flush pending changes to the DB without committing."""
         ...
+
+
+class FundsReleasePort(Protocol):
+    """Cross-BC port: billing → invoice. Creates/deletes released_funds invoices."""
+
+    def create_funds_release(
+        self,
+        project_id: UUID,
+        source_doc_id: UUID,
+        amount_items: list,
+        recipient_name: str,
+        issue_date: date,
+        created_by: UUID,
+    ) -> None: ...
+
+    def delete_funds_release(self, source_doc_id: UUID) -> None: ...

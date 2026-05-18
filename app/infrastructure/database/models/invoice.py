@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Column, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -60,9 +60,18 @@ class InvoiceModel(Base):
     )
     payment_method_label = Column(String(120), nullable=True)
 
+    source_billing_document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    is_auto_generated = Column(Boolean, nullable=False, default=False, server_default="false")
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
+    source_billing_document = relationship("BillingDocumentModel", foreign_keys=[source_billing_document_id])
 
     __table_args__ = (UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),)
 

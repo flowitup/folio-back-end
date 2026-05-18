@@ -63,6 +63,8 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         updated_at=m.updated_at,
         payment_method_id=m.payment_method_id,
         payment_method_label=m.payment_method_label,
+        source_billing_document_id=m.source_billing_document_id,
+        is_auto_generated=m.is_auto_generated or False,
     )
 
 
@@ -88,6 +90,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             updated_at=invoice.updated_at,
             payment_method_id=invoice.payment_method_id,
             payment_method_label=invoice.payment_method_label,
+            source_billing_document_id=invoice.source_billing_document_id,
+            is_auto_generated=invoice.is_auto_generated,
         )
         self._session.add(model)
         try:
@@ -153,6 +157,55 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             q = q.filter(InvoiceModel.type == type_filter.value)
         rows = q.order_by(InvoiceModel.issue_date, InvoiceModel.invoice_number).all()
         return [_model_to_entity(r) for r in rows]
+
+    def next_funds_release_number(self, project_id: UUID) -> str:
+        """Generate next sequential funds-release number: FR-YYYY-NNNN."""
+        year = datetime.now(timezone.utc).year
+        prefix = f"FR-{year}-"
+        last = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.invoice_number.like(f"{prefix}%"),
+            )
+            .order_by(InvoiceModel.invoice_number.desc())
+            .first()
+        )
+        n = 1
+        if last:
+            try:
+                n = int(last.invoice_number.split("-")[-1]) + 1
+            except (ValueError, IndexError):
+                pass
+        return f"{prefix}{n:04d}"
+
+    def delete_by_source_billing_document_id(self, source_doc_id: UUID) -> bool:
+        result = (
+            self._session.query(InvoiceModel)
+            .filter(InvoiceModel.source_billing_document_id == source_doc_id)
+            .delete(synchronize_session=False)
+        )
+        self._session.commit()
+        return result > 0
+
+    def sum_funds_released(self, project_id: UUID) -> Decimal:
+        """Sum total_amount for all released_funds invoices in a project.
+
+        items is JSONB — we compute in Python to stay DB-agnostic.
+        """
+        rows = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.type == InvoiceType.RELEASED_FUNDS.value,
+            )
+            .all()
+        )
+        total = Decimal("0")
+        for m in rows:
+            for it in m.items or []:
+                total += Decimal(str(it.get("quantity", 0))) * Decimal(str(it.get("unit_price", 0)))
+        return total
 
     def next_invoice_number(self, project_id: UUID) -> str:
         """Generate next sequential invoice number: INV-YYYY-NNNN."""

@@ -36,6 +36,8 @@ class Invoice:
     # invoices keep the correct label even after the method is renamed or removed.
     payment_method_id: Optional[UUID] = None
     payment_method_label: Optional[str] = None
+    source_billing_document_id: Optional[UUID] = None
+    is_auto_generated: bool = False
 
     @property
     def total_amount(self) -> Decimal:
