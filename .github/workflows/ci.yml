@@ -15,6 +15,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: read
+  statuses: write
 
 jobs:
   # Job 1: Calculate and commit version bump (only on PR)
@@ -250,6 +251,48 @@ jobs:
           echo "| black | ${{ steps.black.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| mypy | ${{ steps.mypy.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| pytest | ${{ steps.pytest.outcome || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+
+      # ── Fix for issue #55 ──────────────────────────────────────────────
+      # When version-bump pushes via GITHUB_TOKEN, GitHub does NOT trigger
+      # new workflow runs on the resulting SHA. Branch protection requires
+      # checks on HEAD, so the merge button stays blocked.
+      #
+      # After lint-test passes we resolve the real HEAD of the PR branch
+      # (which may be the bot's bump commit) and post a commit status so
+      # branch protection sees a green check on the latest SHA.
+      - name: Forward check status to PR HEAD
+        if: >-
+          always()
+          && github.event_name == 'pull_request'
+          && needs.version-bump.outputs.version_bumped == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Resolve the actual HEAD SHA of the PR branch (post-bump).
+          HEAD_SHA=$(git rev-parse HEAD)
+          EVENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          if [ "$HEAD_SHA" = "$EVENT_SHA" ]; then
+            echo "HEAD unchanged after bump — nothing to forward."
+            exit 0
+          fi
+
+          # Map job outcome to GitHub commit-status state.
+          if [ "${{ job.status }}" = "success" ]; then
+            STATE="success"
+          else
+            STATE="failure"
+          fi
+
+          echo "Forwarding status '$STATE' to post-bump SHA $HEAD_SHA"
+          gh api \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/statuses/$HEAD_SHA" \
+            -f state="$STATE" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f description="lint-test (forwarded from ${EVENT_SHA:0:7})" \
+            -f context="lint-test"
 
   # Job 3: Create release (only on push to main - lint-test already passed in PR)
   release:
