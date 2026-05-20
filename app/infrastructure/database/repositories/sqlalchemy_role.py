@@ -21,6 +21,11 @@ class SqlAlchemyRoleRepository:
         model = self._session.query(RoleModel).filter_by(id=role_id).first()
         return self._to_entity(model) if model else None
 
+    def find_by_name(self, name: str) -> Optional[Role]:
+        """Look up a role by name. Returns None if not found."""
+        model = self._session.query(RoleModel).filter_by(name=name).first()
+        return self._to_entity(model) if model else None
+
     def list_all(self) -> List[Role]:
         """Return all roles."""
         models = self._session.query(RoleModel).order_by(RoleModel.name).all()

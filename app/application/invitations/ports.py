@@ -127,6 +127,10 @@ class RoleRepositoryPort(Protocol):
         """Look up a role by UUID. Returns None if not found."""
         ...
 
+    def find_by_name(self, name: str) -> Optional[Role]:
+        """Look up a role by name. Returns None if not found."""
+        ...
+
 
 class UserWriteRepositoryPort(Protocol):
     """Write contract for user persistence used during invitation acceptance."""
@@ -141,6 +145,10 @@ class UserWriteRepositoryPort(Protocol):
 
     def save(self, user: User) -> User:
         """Persist a user (insert or update). Returns the saved instance."""
+        ...
+
+    def assign_role(self, user_id: UUID, role_id: UUID) -> None:
+        """Assign a global role to a user via the user_roles association."""
         ...
 
     def search_by_email_or_name(self, query: str, limit: int = 20) -> list[User]:

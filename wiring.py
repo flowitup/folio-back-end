@@ -685,6 +685,7 @@ def configure_container(
                 password_hasher=password_hasher,
                 token_issuer=token_issuer,
                 db_session=_db.session,
+                role_repo=role_repo,
             )
 
     # Wire admin use cases (requires user, project, role, membership repos)

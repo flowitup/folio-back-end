@@ -104,6 +104,20 @@ class SQLAlchemyUserRepository:
         self._session.flush()
         return user
 
+    def assign_role(self, user_id: UUID, role_id: UUID) -> None:
+        """Assign a global role to a user via the user_roles association."""
+        from sqlalchemy import text
+
+        self._session.execute(
+            text(
+                "INSERT INTO user_roles (user_id, role_id) "
+                "VALUES (:user_id, :role_id) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"user_id": str(user_id), "role_id": str(role_id)},
+        )
+        self._session.flush()
+
     def _to_entity(self, model: UserModel) -> User:
         """Convert ORM model to domain entity."""
         roles = []

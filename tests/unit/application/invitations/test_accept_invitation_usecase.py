@@ -90,19 +90,24 @@ def _make_uc(
     password_hasher=None,
     token_issuer=None,
     db_session=None,
+    role_repo=None,
 ) -> AcceptInvitationUseCase:
     hasher = password_hasher or MagicMock()
     hasher.hash.return_value = "hashed_password"
     issuer = token_issuer or MagicMock()
     issuer.create_access_token.return_value = "access-jwt"
     issuer.create_refresh_token.return_value = "refresh-jwt"
+    ur = user_repo or MagicMock()
+    if isinstance(ur, MagicMock) and isinstance(ur.find_by_id.return_value, MagicMock):
+        ur.find_by_id.return_value = _make_user()
     return AcceptInvitationUseCase(
         invitation_repo=inv_repo or MagicMock(),
-        user_repo=user_repo or MagicMock(),
+        user_repo=ur,
         project_membership_repo=membership_repo or MagicMock(),
         password_hasher=hasher,
         token_issuer=issuer,
         db_session=db_session or _FakeSession(),
+        role_repo=role_repo or MagicMock(),
     )
 
 
@@ -176,7 +181,7 @@ class TestAcceptNewUser:
         saved_inv = inv_repo.save.call_args[0][0]
         assert saved_inv.status == InvitationStatus.ACCEPTED
 
-    def test_returns_auth_tokens(self):
+    def test_returns_auth_tokens_with_permissions(self):
         inv, raw = _make_pending_inv()
         new_user = _make_user(inv.email)
         inv_repo = MagicMock()
@@ -184,6 +189,7 @@ class TestAcceptNewUser:
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
         user_repo.save.return_value = new_user
+        user_repo.find_by_id.return_value = new_user
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
         issuer = MagicMock()
@@ -200,6 +206,9 @@ class TestAcceptNewUser:
 
         assert result.access_token == "access-jwt"
         assert result.refresh_token == "refresh-jwt"
+        issuer.create_access_token.assert_called_once_with(
+            new_user.id, {"permissions": []}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +224,7 @@ class TestExistingUserRace:
         inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = existing_user  # already exists
+        user_repo.find_by_id.return_value = existing_user
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
 
@@ -368,3 +378,84 @@ class TestTransactionAtomicity:
 
         inv_repo.find_by_token_hash_for_update.assert_called_once()
         inv_repo.find_by_token_hash.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Default global role assignment
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRoleAssignment:
+    def test_assigns_default_user_role_for_new_user(self):
+        """New users must receive the 'user' global role so their JWT has project:read."""
+        from app.domain.entities.role import Role
+        from app.domain.entities.permission import Permission
+
+        inv, raw = _make_pending_inv()
+        new_user = _make_user(inv.email)
+        user_role = Role(
+            id=uuid4(),
+            name="user",
+            description="Basic user access",
+            permissions=[
+                Permission(id=uuid4(), name="project:read", resource="project", action="read"),
+                Permission(id=uuid4(), name="user:read", resource="user", action="read"),
+            ],
+        )
+        user_with_role = _make_user(inv.email)
+        object.__setattr__(user_with_role, "roles", [user_role])
+
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = None
+        user_repo.save.return_value = new_user
+        user_repo.find_by_id.return_value = user_with_role
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        role_repo = MagicMock()
+        role_repo.find_by_name.return_value = user_role
+        issuer = MagicMock()
+        issuer.create_access_token.return_value = "access-jwt"
+        issuer.create_refresh_token.return_value = "refresh-jwt"
+
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            role_repo=role_repo,
+            token_issuer=issuer,
+        )
+        result = uc.execute(raw_token=raw, name="Alice", password="password123")
+
+        role_repo.find_by_name.assert_called_once_with("user")
+        user_repo.assign_role.assert_called_once_with(new_user.id, user_role.id)
+        call_args = issuer.create_access_token.call_args
+        permissions = call_args[0][1]["permissions"]
+        assert "project:read" in permissions
+        assert "user:read" in permissions
+        assert result.access_token == "access-jwt"
+
+    def test_does_not_assign_role_for_existing_user(self):
+        """Existing users already have their global roles — no reassignment."""
+        inv, raw = _make_pending_inv()
+        existing_user = _make_user(inv.email)
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = existing_user
+        user_repo.find_by_id.return_value = existing_user
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        role_repo = MagicMock()
+
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            role_repo=role_repo,
+        )
+        uc.execute(raw_token=raw, name="Alice", password="password123")
+
+        role_repo.find_by_name.assert_not_called()
+        user_repo.assign_role.assert_not_called()

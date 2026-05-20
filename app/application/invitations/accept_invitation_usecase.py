@@ -7,6 +7,7 @@ from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
     ProjectMembershipRepositoryPort,
+    RoleRepositoryPort,
     TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
@@ -25,6 +26,8 @@ _MAX_NAME_LEN = 100
 class AcceptInvitationUseCase:
     """Accept an invitation: create user + membership, return JWT pair."""
 
+    _DEFAULT_GLOBAL_ROLE = "user"
+
     def __init__(
         self,
         invitation_repo: InvitationRepositoryPort,
@@ -33,6 +36,7 @@ class AcceptInvitationUseCase:
         password_hasher: PasswordHasherPort,
         token_issuer: TokenIssuerPort,
         db_session: TransactionalSessionPort,
+        role_repo: RoleRepositoryPort,
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
@@ -40,6 +44,7 @@ class AcceptInvitationUseCase:
         self._hasher = password_hasher
         self._tokens = token_issuer
         self._db = db_session
+        self._role_repo = role_repo
 
     # ------------------------------------------------------------------
 
@@ -81,13 +86,18 @@ class AcceptInvitationUseCase:
             accepted_inv = inv.accept()  # raises if expired/revoked/accepted
 
             user = self._user_repo.find_by_email(inv.email)
-            if user is None:
+            is_new_user = user is None
+            if is_new_user:
                 user = User.create(
                     email=inv.email,
                     password_hash=password_hash,
                     display_name=name,
                 )
                 user = self._user_repo.save(user)
+
+                default_role = self._role_repo.find_by_name(self._DEFAULT_GLOBAL_ROLE)
+                if default_role is not None:
+                    self._user_repo.assign_role(user.id, default_role.id)
 
             if not self._membership_repo.exists(user.id, inv.project_id):
                 membership = ProjectMembership.create(
@@ -101,12 +111,22 @@ class AcceptInvitationUseCase:
             self._inv_repo.save(accepted_inv)
         self._db.commit()
 
-        # Issue tokens after commit (outside the transaction)
-        access_token = self._tokens.create_access_token(user.id)
+        # Re-read user after commit so role assignments are visible
+        fresh_user = self._user_repo.find_by_id(user.id)
+        permissions: list[str] = []
+        if fresh_user is not None:
+            for role in fresh_user.roles:
+                for perm in role.permissions:
+                    permissions.append(perm.name)
+            permissions = list(set(permissions))
+
+        access_token = self._tokens.create_access_token(
+            user.id, {"permissions": permissions}
+        )
         refresh_token = self._tokens.create_refresh_token(user.id)
 
         return AcceptInvitationResultDto(
-            user=user,
+            user=fresh_user or user,
             access_token=access_token,
             refresh_token=refresh_token,
         )
