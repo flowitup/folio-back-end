@@ -3,7 +3,7 @@
 import logging
 from uuid import UUID
 
-from flask import jsonify, request, make_response
+from flask import current_app, jsonify, request, make_response
 from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity,
@@ -133,7 +133,8 @@ def logout():
     # only treats one token kind per request and we don't want to fail logout
     # when the refresh cookie is missing or already expired.
     if token_issuer:
-        refresh_cookie = request.cookies.get("refresh_token_cookie")
+        _cookie_name = current_app.config.get("JWT_REFRESH_COOKIE_NAME", "refresh_token_cookie")
+        refresh_cookie = request.cookies.get(_cookie_name)
         if refresh_cookie:
             try:
                 from flask_jwt_extended import decode_token
