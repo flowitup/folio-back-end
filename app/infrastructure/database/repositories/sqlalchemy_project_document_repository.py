@@ -175,6 +175,23 @@ class SqlAlchemyProjectDocumentRepository:
             total=total,
         )
 
+    def update_filename(self, doc_id: UUID, new_filename: str) -> None:
+        """Update the display filename of a document.
+
+        Only updates active (non-deleted) documents. Uses a targeted UPDATE
+        to avoid a round-trip SELECT.
+        """
+        stmt = (
+            update(ProjectDocumentModel)
+            .where(
+                ProjectDocumentModel.id == doc_id,
+                ProjectDocumentModel.deleted_at.is_(None),
+            )
+            .values(filename=new_filename)
+        )
+        self._session.execute(stmt)
+        self._session.flush()
+
     def soft_delete(self, doc_id: UUID, now: datetime) -> None:
         """Mark the document as deleted by setting deleted_at = now.
 
