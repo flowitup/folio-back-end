@@ -58,7 +58,9 @@ def create_app(config_class: type = Config) -> Flask:
         s3_secret = getattr(config_class, "S3_SECRET_KEY", "")
         s3_endpoint = getattr(config_class, "S3_ENDPOINT_URL", "") or ""
         if s3_access == "minioadmin" or s3_secret == "minioadmin":
-            raise RuntimeError("CRITICAL: S3_ACCESS_KEY / S3_SECRET_KEY must not use the default minioadmin in production.")
+            raise RuntimeError(
+                "CRITICAL: S3_ACCESS_KEY / S3_SECRET_KEY must not use the default minioadmin in production."
+            )
         if "localhost" in s3_endpoint or "127.0.0.1" in s3_endpoint:
             raise RuntimeError("CRITICAL: S3_ENDPOINT_URL must not point at localhost in production.")
 

@@ -14,6 +14,7 @@ from app.domain.exceptions.labor_exceptions import LaborActivityNotFoundError
 # Request / Response DTOs
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CreateLaborActivityRequest:
     project_id: UUID
@@ -69,6 +70,7 @@ class DeleteLaborActivityRequest:
 # ---------------------------------------------------------------------------
 # Use cases
 # ---------------------------------------------------------------------------
+
 
 def _to_detail(a: LaborActivity) -> LaborActivityDetail:
     return LaborActivityDetail(

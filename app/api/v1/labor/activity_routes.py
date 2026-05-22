@@ -30,6 +30,7 @@ from wiring import get_container
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class CreateActivitySchema(BaseModel):
     date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     title: str = Field(..., min_length=1, max_length=255)
@@ -61,6 +62,7 @@ class ActivityListResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_date(date_str: str):
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -84,6 +86,7 @@ def _detail_to_response(d: LaborActivityDetail) -> ActivityResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @labor_bp.route("/projects/<project_id>/labor-activities", methods=["GET"])
 @jwt_required()
@@ -174,9 +177,7 @@ def update_labor_activity(project_id: str, activity_id: str):
 def delete_labor_activity(project_id: str, activity_id: str):
     """Delete a labor activity."""
     try:
-        get_container().delete_labor_activity_usecase.execute(
-            DeleteLaborActivityRequest(activity_id=UUID(activity_id))
-        )
+        get_container().delete_labor_activity_usecase.execute(DeleteLaborActivityRequest(activity_id=UUID(activity_id)))
     except LaborActivityNotFoundError:
         return _error_response("NotFound", f"Labor activity {activity_id} not found", 404)
 
