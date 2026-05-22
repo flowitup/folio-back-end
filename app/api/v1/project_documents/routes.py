@@ -168,6 +168,51 @@ def download_project_document(project_id: str, document_id: str):
     return response
 
 
+@project_documents_bp.route("/projects/<project_id>/documents/<document_id>/rename", methods=["PATCH"])
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+def rename_project_document(project_id: str, document_id: str):
+    try:
+        doc_uuid = UUID(document_id)
+    except ValueError:
+        return _error_response("INVALID_ID", "Invalid document id", 400)
+
+    body = request.get_json(silent=True)
+    if not body or "filename" not in body:
+        return _error_response("MISSING_FILENAME", "Request body must include 'filename'", 400)
+
+    new_filename = body["filename"]
+    if not isinstance(new_filename, str) or not new_filename.strip():
+        return _error_response("INVALID_FILENAME", "Filename must be a non-empty string", 400)
+
+    container = get_container()
+
+    project = container.project_repository.find_by_id(UUID(project_id))
+    if project is None:
+        return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
+
+    requester_user_id = UUID(get_jwt_identity())
+    is_admin = has_permission("*:*")
+
+    try:
+        doc = container.rename_project_document_usecase.execute(
+            doc_uuid,
+            new_filename.strip(),
+            requester_user_id,
+            project,
+            is_admin=is_admin,
+        )
+    except DocumentPermissionDeniedError:
+        return _error_response("FORBIDDEN", "You are not permitted to rename this document", 403)
+    except ProjectDocumentNotFoundError:
+        return _error_response("NOT_FOUND", "Document not found", 404)
+    except ValueError as exc:
+        return _error_response("INVALID_FILENAME", str(exc), 400)
+
+    return jsonify(_serialize(doc)), 200
+
+
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>", methods=["DELETE"])
 @jwt_required()
 @require_permission("project:read")

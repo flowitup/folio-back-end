@@ -705,6 +705,7 @@ def _configure_di_container() -> None:
         ListProjectDocumentsUseCase,
         GetProjectDocumentUseCase,
         DeleteProjectDocumentUseCase,
+        RenameProjectDocumentUseCase,
         PurgeSoftDeletedDocumentsUseCase,
     )
 
@@ -723,6 +724,10 @@ def _configure_di_container() -> None:
     _c.list_project_documents_usecase = ListProjectDocumentsUseCase(repo=_doc_repo)
     _c.get_project_document_usecase = GetProjectDocumentUseCase(repo=_doc_repo, storage=storage)
     _c.delete_project_document_usecase = DeleteProjectDocumentUseCase(
+        repo=_doc_repo,
+        db_session=db.session,
+    )
+    _c.rename_project_document_usecase = RenameProjectDocumentUseCase(
         repo=_doc_repo,
         db_session=db.session,
     )

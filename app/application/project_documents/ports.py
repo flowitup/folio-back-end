@@ -47,6 +47,10 @@ class IProjectDocumentRepository(Protocol):
         """Return a paginated, filtered list of documents for a project."""
         ...
 
+    def update_filename(self, doc_id: UUID, new_filename: str) -> None:
+        """Update the display filename of a document."""
+        ...
+
     def soft_delete(self, doc_id: UUID, now: datetime) -> None:
         """Mark the document as deleted by setting deleted_at = now."""
         ...

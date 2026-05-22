@@ -28,6 +28,7 @@ from app.application.project_documents.upload_project_document import (
 from app.application.project_documents.list_project_documents import ListProjectDocumentsUseCase
 from app.application.project_documents.get_project_document import GetProjectDocumentUseCase
 from app.application.project_documents.delete_project_document import DeleteProjectDocumentUseCase
+from app.application.project_documents.rename_project_document import RenameProjectDocumentUseCase
 from app.application.project_documents.purge_soft_deleted_documents import (
     PurgeSoftDeletedDocumentsUseCase,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "ListProjectDocumentsUseCase",
     "GetProjectDocumentUseCase",
     "DeleteProjectDocumentUseCase",
+    "RenameProjectDocumentUseCase",
     "PurgeSoftDeletedDocumentsUseCase",
     # Exceptions
     "ProjectDocumentNotFoundError",
