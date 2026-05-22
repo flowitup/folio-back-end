@@ -206,9 +206,7 @@ class TestAcceptNewUser:
 
         assert result.access_token == "access-jwt"
         assert result.refresh_token == "refresh-jwt"
-        issuer.create_access_token.assert_called_once_with(
-            new_user.id, {"permissions": []}
-        )
+        issuer.create_access_token.assert_called_once_with(new_user.id, {"permissions": []})
 
 
 # ---------------------------------------------------------------------------

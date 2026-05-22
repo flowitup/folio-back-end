@@ -120,9 +120,7 @@ class AcceptInvitationUseCase:
                     permissions.append(perm.name)
             permissions = list(set(permissions))
 
-        access_token = self._tokens.create_access_token(
-            user.id, {"permissions": permissions}
-        )
+        access_token = self._tokens.create_access_token(user.id, {"permissions": permissions})
         refresh_token = self._tokens.create_refresh_token(user.id)
 
         return AcceptInvitationResultDto(

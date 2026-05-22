@@ -109,11 +109,7 @@ class SQLAlchemyUserRepository:
         from sqlalchemy import text
 
         self._session.execute(
-            text(
-                "INSERT INTO user_roles (user_id, role_id) "
-                "VALUES (:user_id, :role_id) "
-                "ON CONFLICT DO NOTHING"
-            ),
+            text("INSERT INTO user_roles (user_id, role_id) " "VALUES (:user_id, :role_id) " "ON CONFLICT DO NOTHING"),
             {"user_id": str(user_id), "role_id": str(role_id)},
         )
         self._session.flush()
