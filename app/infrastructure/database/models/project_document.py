@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.domain.project_document import ProjectDocument
 from app.infrastructure.database.models.base import Base
 
+
 class ProjectDocumentTagRow(Base):
     __tablename__ = "project_document_tags"
 

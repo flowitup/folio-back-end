@@ -18,7 +18,12 @@ depends_on = None
 def upgrade():
     op.create_table(
         "project_document_tags",
-        sa.Column("document_id", sa.dialects.postgresql.UUID(as_uuid=True), sa.ForeignKey("project_documents.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "document_id",
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("project_documents.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("tag", sa.String(100), nullable=False),
         sa.PrimaryKeyConstraint("document_id", "tag"),
     )

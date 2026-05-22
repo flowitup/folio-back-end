@@ -256,9 +256,7 @@ class SqlAlchemyProjectDocumentRepository:
 
     def set_tags(self, doc_id: UUID, tags: list[str]) -> None:
         """Replace all tags on a document with the given set."""
-        self._session.execute(
-            delete(ProjectDocumentTagRow).where(ProjectDocumentTagRow.document_id == doc_id)
-        )
+        self._session.execute(delete(ProjectDocumentTagRow).where(ProjectDocumentTagRow.document_id == doc_id))
         for tag in tags:
             self._session.add(ProjectDocumentTagRow(document_id=doc_id, tag=tag))
         self._session.flush()

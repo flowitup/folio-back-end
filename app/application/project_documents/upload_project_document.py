@@ -23,8 +23,8 @@ from app.domain.project_document import ProjectDocument, kind_for_extension
 
 _log = logging.getLogger(__name__)
 
-# Default 25 MB; override via environment variable.
-MAX_SIZE_BYTES = int(os.environ.get("PROJECT_DOCUMENT_MAX_SIZE_BYTES", "26214400"))
+# Default 150 MiB; override via environment variable.
+MAX_SIZE_BYTES = int(os.environ.get("PROJECT_DOCUMENT_MAX_SIZE_BYTES", "157286400"))
 
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".xlsx", ".dwg", ".txt"}
