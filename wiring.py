@@ -560,10 +560,10 @@ def configure_container(
             entry_repo=labor_entry_repository,
             db_session=_db_for_bulk_log.session,
         )
+        container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository, worker_repository)
+        container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository, worker_repository)
 
     if labor_entry_repository:
-        container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository)
-        container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository)
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)
         container.get_monthly_labor_summary_usecase = GetMonthlyLaborSummaryUseCase(labor_entry_repository)
         # Cross-project conflict warn (Phase 4 — cook 4a).

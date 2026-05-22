@@ -29,6 +29,7 @@ class JWTTokenIssuer:
         self._access_expires = timedelta(minutes=access_expires_minutes)
         self._refresh_expires = timedelta(days=refresh_expires_days)
         self._access_expires_seconds = access_expires_minutes * 60
+        self._refresh_expires_seconds = refresh_expires_days * 24 * 60 * 60
         self._redis: Optional[redis.Redis] = None
 
         if redis_url:
@@ -73,11 +74,17 @@ class JWTTokenIssuer:
         except (PyJWTError, JWTDecodeError):
             return None
 
-    def revoke_token(self, jti: str) -> None:
-        """Add token to blacklist with TTL matching access token expiry."""
+    def revoke_token(self, jti: str, token_type: str = "access") -> None:
+        """Add token to blacklist with a TTL matching the token's expiry.
+
+        Refresh tokens live ~7 days while access tokens live ~30 minutes;
+        using the access TTL for a revoked refresh JTI would let a stolen
+        refresh token become usable again after 30 minutes.
+        """
         if self._redis:
+            ttl = self._refresh_expires_seconds if token_type == "refresh" else self._access_expires_seconds
             # Store in Redis with TTL (auto-expires when token would expire)
-            self._redis.setex(f"blacklist:{jti}", self._access_expires_seconds, "1")
+            self._redis.setex(f"blacklist:{jti}", ttl, "1")
         else:
             _token_blacklist.add(jti)
 

@@ -30,7 +30,7 @@ from app.api.v1.labor.schemas import (
     CrossProjectConflictResponse,
     CrossProjectConflictEntryResponse,
 )
-from app.api.v1.projects.decorators import require_permission
+from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.labor import (
     LogAttendanceRequest as LogAttendanceDTO,
     BulkLogAttendanceRequest as BulkLogAttendanceDTO,
@@ -83,6 +83,7 @@ def _parse_list_limit(raw: Optional[str]) -> int:
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_project_access(write=False)
 def list_labor_entries(project_id: str):
     """List labor entries for a project with optional filters.
 
@@ -135,6 +136,7 @@ def list_labor_entries(project_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def log_attendance(project_id: str):
     """Log daily attendance for a worker."""
     try:
@@ -181,6 +183,7 @@ def log_attendance(project_id: str):
 @labor_bp.route("/projects/<project_id>/labor-entries/conflicts", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_project_access(write=False)
 def get_cross_project_conflicts(project_id: str):
     """Return cross-project labor conflicts on a given date (Phase 4).
 
@@ -241,6 +244,7 @@ def get_cross_project_conflicts(project_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def bulk_log_attendance(project_id: str):
     """Bulk-log attendance for N workers on a single date (cook 3a).
 
@@ -320,6 +324,7 @@ def bulk_log_attendance(project_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def update_attendance(project_id: str, entry_id: str):
     """Update an existing labor entry."""
     try:
@@ -331,6 +336,7 @@ def update_attendance(project_id: str, entry_id: str):
         result = get_container().update_attendance_usecase.execute(
             UpdateAttendanceDTO(
                 entry_id=UUID(entry_id),
+                project_id=UUID(project_id),
                 amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
                 note=data.note,
                 shift_type=data.shift_type,
@@ -360,10 +366,13 @@ def update_attendance(project_id: str, entry_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
+@require_project_access(write=False)
 def delete_attendance(project_id: str, entry_id: str):
     """Delete a labor entry."""
     try:
-        get_container().delete_attendance_usecase.execute(DeleteAttendanceRequest(entry_id=UUID(entry_id)))
+        get_container().delete_attendance_usecase.execute(
+            DeleteAttendanceRequest(entry_id=UUID(entry_id), project_id=UUID(project_id))
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except LaborEntryNotFoundError:
@@ -375,6 +384,7 @@ def delete_attendance(project_id: str, entry_id: str):
 @labor_bp.route("/projects/<project_id>/labor-summary", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_project_access(write=False)
 def get_labor_summary(project_id: str):
     """Get aggregated labor summary for a project."""
     date_from = request.args.get("from")
@@ -418,6 +428,7 @@ def get_labor_summary(project_id: str):
 @labor_bp.route("/projects/<project_id>/labor-monthly-summary", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
+@require_project_access(write=False)
 def get_labor_monthly_summary(project_id: str):
     """Per-month rollup of labor totals across all workers on a project.
 

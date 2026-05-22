@@ -21,6 +21,33 @@ ALLOWED_MIME_TYPES = {
     "image/heif",
 }
 
+# Number of bytes sufficient to identify all magic-byte signatures below.
+# Read once from the stream and rewind — keeps the upload single-pass.
+_MAGIC_PEEK_BYTES = 16
+
+
+def _matches_magic(mime_type: str, head: bytes) -> bool:
+    """Validate that ``head`` (the first bytes of the file) matches the
+    signature expected for the claimed MIME.
+
+    Returning True for MIMEs we cannot cheaply detect (HEIC/HEIF) keeps
+    the existing whitelist behavior — the relevant attack surface is the
+    common formats a browser will render inline (PDF/PNG/JPEG/WEBP),
+    which we cover here.
+    """
+    if mime_type == "application/pdf":
+        return head.startswith(b"%PDF-")
+    if mime_type == "image/png":
+        return head.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return head.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/webp":
+        return len(head) >= 12 and head[0:4] == b"RIFF" and head[8:12] == b"WEBP"
+    # HEIC/HEIF use a variable "ftyp" box; trust the MIME for those.
+    if mime_type in ("image/heic", "image/heif"):
+        return True
+    return False
+
 
 class FileTooLargeError(ValueError):
     """Raised when uploaded file exceeds the size limit."""
@@ -62,6 +89,23 @@ class UploadAttachmentUseCase:
 
         if mime_type not in ALLOWED_MIME_TYPES:
             raise UnsupportedFileTypeError(f"MIME type '{mime_type}' is not allowed")
+
+        # Magic-byte check: client-supplied MIME is untrusted (a user can upload
+        # HTML/SVG declaring image/png). Reject any file whose first bytes do
+        # not match the claimed format so downstream consumers cannot be
+        # tricked into rendering attacker-controlled content.
+        try:
+            head = fileobj.read(_MAGIC_PEEK_BYTES)
+        finally:
+            try:
+                fileobj.seek(0)
+            except Exception:
+                # Non-seekable streams are not expected in this code path
+                # (Werkzeug's SpooledTemporaryFile supports seek); treat as
+                # invalid rather than silently accept.
+                raise UnsupportedFileTypeError("Upload stream is not seekable")
+        if not _matches_magic(mime_type, head):
+            raise UnsupportedFileTypeError(f"File contents do not match declared type '{mime_type}'")
 
         attachment_id = uuid4()
         # Sanitize filename for the storage key — keep only the basename, no path separators
