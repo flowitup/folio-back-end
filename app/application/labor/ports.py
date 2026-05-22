@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
+from app.domain.entities.labor_activity import LaborActivity
 
 
 @dataclass
@@ -210,4 +211,34 @@ class ILaborEntryRepository(ABC):
         Ordered by ``person_name`` ASC then ``project_name`` ASC for
         deterministic output. Returns an empty list when no conflicts.
         """
+        ...
+
+
+class ILaborActivityRepository(ABC):
+    """Port for labor activity persistence operations."""
+
+    @abstractmethod
+    def create(self, activity: LaborActivity) -> LaborActivity:
+        ...
+
+    @abstractmethod
+    def find_by_id(self, activity_id: UUID) -> Optional[LaborActivity]:
+        ...
+
+    @abstractmethod
+    def list_by_project(
+        self,
+        project_id: UUID,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> List[LaborActivity]:
+        """List activities for a project, ordered by date DESC then created_at DESC."""
+        ...
+
+    @abstractmethod
+    def update(self, activity: LaborActivity) -> LaborActivity:
+        ...
+
+    @abstractmethod
+    def delete(self, activity_id: UUID) -> bool:
         ...

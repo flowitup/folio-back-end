@@ -246,11 +246,27 @@ def _configure_di_container() -> None:
         role_repo=role_repo,
     )
 
-    # Wire notes use-cases — done post-configure_container so we can pass db.session
-    # directly without adding more params to configure_container's signature.
+    # Wire labor activity use-cases
+    from app.infrastructure.adapters.sqlalchemy_labor_activity import SQLAlchemyLaborActivityRepository
+    from app.application.labor.labor_activity_usecases import (
+        CreateLaborActivityUseCase,
+        ListLaborActivitiesUseCase,
+        UpdateLaborActivityUseCase,
+        DeleteLaborActivityUseCase,
+    )
     from wiring import get_container as _get_container
 
     _c = _get_container()
+
+    _activity_repo = SQLAlchemyLaborActivityRepository(db.session)
+    _c.labor_activity_repository = _activity_repo
+    _c.create_labor_activity_usecase = CreateLaborActivityUseCase(_activity_repo)
+    _c.list_labor_activities_usecase = ListLaborActivitiesUseCase(_activity_repo)
+    _c.update_labor_activity_usecase = UpdateLaborActivityUseCase(_activity_repo)
+    _c.delete_labor_activity_usecase = DeleteLaborActivityUseCase(_activity_repo)
+
+    # Wire notes use-cases — done post-configure_container so we can pass db.session
+    # directly without adding more params to configure_container's signature.
     _note_repo = SqlAlchemyNoteRepository(db.session)
     _dismissal_repo = SqlAlchemyNoteDismissalRepository(db.session)
     _membership_reader = SqlAlchemyProjectMembershipReader(db.session)

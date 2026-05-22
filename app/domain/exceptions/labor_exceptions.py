@@ -80,3 +80,11 @@ class DuplicateLaborRoleError(LaborError):
     def __init__(self, name: str) -> None:
         self.name = name
         super().__init__(f"A labor role named '{name}' already exists")
+
+
+class LaborActivityNotFoundError(LaborError):
+    """Raised when a labor activity does not exist."""
+
+    def __init__(self, activity_id: object) -> None:
+        self.activity_id = activity_id
+        super().__init__(f"Labor activity not found: {activity_id}")
