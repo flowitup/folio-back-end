@@ -1,7 +1,7 @@
 """add labor_activities table
 
 Revision ID: a1b2c3d4e5f7
-Revises: fe343de24e08
+Revises: b5c6d7e8f9a0
 Create Date: 2026-05-22 10:00:00.000000
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "a1b2c3d4e5f7"
-down_revision = "fe343de24e08"
+down_revision = "b5c6d7e8f9a0"
 branch_labels = None
 depends_on = None
 
