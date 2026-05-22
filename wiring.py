@@ -52,6 +52,13 @@ from app.application.labor.create_labor_role_usecase import CreateLaborRoleUseCa
 from app.application.labor.update_labor_role_usecase import UpdateLaborRoleUseCase
 from app.application.labor.delete_labor_role_usecase import DeleteLaborRoleUseCase
 from app.application.labor.list_labor_roles_usecase import ListLaborRolesUseCase
+from app.application.labor.ports import ILaborActivityRepository
+from app.application.labor.labor_activity_usecases import (
+    CreateLaborActivityUseCase,
+    ListLaborActivitiesUseCase,
+    UpdateLaborActivityUseCase,
+    DeleteLaborActivityUseCase,
+)
 from app.application.invoice.export_invoices_usecase import ExportInvoicesUseCase
 from app.application.invoice import (
     IInvoiceRepository,
@@ -207,6 +214,7 @@ class Container:
     worker_repository: Optional[IWorkerRepository] = None
     labor_entry_repository: Optional[ILaborEntryRepository] = None
     labor_role_repository: Optional[ILaborRoleRepository] = None
+    labor_activity_repository: Optional[ILaborActivityRepository] = None
 
     # Invoice ports and use cases
     invoice_repository: Optional[IInvoiceRepository] = None
@@ -384,6 +392,12 @@ class Container:
     update_labor_role_usecase: Optional[UpdateLaborRoleUseCase] = None
     delete_labor_role_usecase: Optional[DeleteLaborRoleUseCase] = None
     list_labor_roles_usecase: Optional[ListLaborRolesUseCase] = None
+
+    # Labor activity use cases
+    create_labor_activity_usecase: Optional[CreateLaborActivityUseCase] = None
+    list_labor_activities_usecase: Optional[ListLaborActivitiesUseCase] = None
+    update_labor_activity_usecase: Optional[UpdateLaborActivityUseCase] = None
+    delete_labor_activity_usecase: Optional[DeleteLaborActivityUseCase] = None
 
 
 # =============================================================================
