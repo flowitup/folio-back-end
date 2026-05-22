@@ -6,8 +6,6 @@ The canonical implementation now lives in ``app.api._helpers.validation_error``.
 from typing import Tuple
 
 from flask import Response, jsonify
-from pydantic import ValidationError
-
 from app.api._helpers.validation_error import validation_error_response  # noqa: F401 – re-export
 from app.api.v1.labor.schemas import ErrorResponse
 
