@@ -12,6 +12,7 @@ class ListQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     type: list[Literal["pdf", "image", "spreadsheet", "doc", "cad", "text", "other"]] = Field(default_factory=list)
+    tag: list[str] = Field(default_factory=list)
     uploader_id: Optional[UUID] = None
     sort: Literal["name", "size", "created_at", "uploader"] = "created_at"
     order: Literal["asc", "desc"] = "desc"
