@@ -288,6 +288,7 @@ def update_document_tags(project_id: str, document_id: str):
     container.project_document_repository.set_tags(doc_uuid, tags)
 
     from app import db as _db
+
     _db.session.commit()
 
     updated = container.project_document_repository.find_by_id(doc_uuid)
