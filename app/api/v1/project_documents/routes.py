@@ -48,6 +48,7 @@ def _serialize(doc) -> dict:
         "uploaded_at": doc.created_at.isoformat(),
         "uploader_id": str(doc.uploader_user_id),
         "download_url": f"/api/v1/projects/{doc.project_id}/documents/{doc.id}/download",
+        "tags": list(doc.tags),
     }
 
 
@@ -56,11 +57,14 @@ def _serialize(doc) -> dict:
 @require_permission("project:read")
 @require_project_access(write=False)
 def list_project_documents(project_id: str):
-    # Collect multi-valued ?type= params then flatten into a dict for Pydantic
+    # Collect multi-valued ?type= and ?tag= params then flatten into a dict for Pydantic
     type_values = request.args.getlist("type")
-    raw = {k: v for k, v in request.args.items() if k != "type"}
+    tag_values = request.args.getlist("tag")
+    raw = {k: v for k, v in request.args.items() if k not in ("type", "tag")}
     if type_values:
         raw["type"] = type_values  # type: ignore[assignment]
+    if tag_values:
+        raw["tag"] = tag_values  # type: ignore[assignment]
 
     try:
         params = ListQueryParams.model_validate(raw)
@@ -69,6 +73,7 @@ def list_project_documents(project_id: str):
 
     filters = ListFiltersDTO(
         kinds=tuple(params.type),
+        tags=tuple(params.tag),
         uploader_id=params.uploader_id,
         sort=params.sort,
         order=params.order,
@@ -246,3 +251,54 @@ def delete_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", "Document not found", 404)
 
     return "", 204
+
+
+@project_documents_bp.route("/projects/<project_id>/documents/<document_id>/tags", methods=["PUT"])
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+def update_document_tags(project_id: str, document_id: str):
+    try:
+        doc_uuid = UUID(document_id)
+    except ValueError:
+        return _error_response("INVALID_ID", "Invalid document id", 400)
+
+    body = request.get_json(silent=True)
+    if not body or "tags" not in body:
+        return _error_response("MISSING_TAGS", "Request body must include 'tags'", 400)
+
+    raw_tags = body["tags"]
+    if not isinstance(raw_tags, list) or not all(isinstance(t, str) for t in raw_tags):
+        return _error_response("INVALID_TAGS", "tags must be an array of strings", 400)
+
+    tags = [t.strip().lower() for t in raw_tags if t.strip()]
+    if len(tags) > 20:
+        return _error_response("TOO_MANY_TAGS", "Maximum 20 tags per document", 400)
+    for tag in tags:
+        if len(tag) > 100:
+            return _error_response("TAG_TOO_LONG", "Each tag must be 100 characters or fewer", 400)
+
+    tags = list(dict.fromkeys(tags))
+
+    container = get_container()
+    doc = container.project_document_repository.find_by_id(doc_uuid)
+    if doc is None or doc.deleted_at is not None or str(doc.project_id) != project_id:
+        return _error_response("NOT_FOUND", "Document not found", 404)
+
+    container.project_document_repository.set_tags(doc_uuid, tags)
+
+    from app import db as _db
+    _db.session.commit()
+
+    updated = container.project_document_repository.find_by_id(doc_uuid)
+    return jsonify(_serialize(updated)), 200
+
+
+@project_documents_bp.route("/projects/<project_id>/documents/tags", methods=["GET"])
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+def list_project_document_tags(project_id: str):
+    container = get_container()
+    tags = container.project_document_repository.list_tags_for_project(UUID(project_id))
+    return jsonify({"tags": tags}), 200

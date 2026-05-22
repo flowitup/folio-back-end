@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.application.project_documents.dtos import ListFiltersDTO, ListResultDTO
 from app.domain.project_document import ProjectDocument
-from app.infrastructure.database.models.project_document import ProjectDocumentModel
+from app.infrastructure.database.models.project_document import ProjectDocumentModel, ProjectDocumentTagRow
 
 # ---------------------------------------------------------------------------
 # Kind → file-extension mapping used for SQL-side filtering.
@@ -116,6 +116,22 @@ class SqlAlchemyProjectDocumentRepository:
 
             if kind_clauses:
                 base_where.append(or_(*kind_clauses))
+
+        # ------------------------------------------------------------------
+        # Tag filter — documents must have ALL requested tags (AND semantics)
+        # ------------------------------------------------------------------
+        if filters.tags:
+            for tag_value in filters.tags:
+                tag_exists = (
+                    select(ProjectDocumentTagRow.document_id)
+                    .where(
+                        ProjectDocumentTagRow.document_id == ProjectDocumentModel.id,
+                        ProjectDocumentTagRow.tag == tag_value,
+                    )
+                    .correlate(ProjectDocumentModel)
+                    .exists()
+                )
+                base_where.append(tag_exists)
 
         # ------------------------------------------------------------------
         # Uploader filter
@@ -237,3 +253,26 @@ class SqlAlchemyProjectDocumentRepository:
         stmt = delete(ProjectDocumentModel).where(ProjectDocumentModel.id == doc_id)
         self._session.execute(stmt)
         self._session.flush()
+
+    def set_tags(self, doc_id: UUID, tags: list[str]) -> None:
+        """Replace all tags on a document with the given set."""
+        self._session.execute(
+            delete(ProjectDocumentTagRow).where(ProjectDocumentTagRow.document_id == doc_id)
+        )
+        for tag in tags:
+            self._session.add(ProjectDocumentTagRow(document_id=doc_id, tag=tag))
+        self._session.flush()
+
+    def list_tags_for_project(self, project_id: UUID) -> list[str]:
+        """Return all distinct tags used by active documents in a project."""
+        stmt = (
+            select(ProjectDocumentTagRow.tag)
+            .join(ProjectDocumentModel, ProjectDocumentTagRow.document_id == ProjectDocumentModel.id)
+            .where(
+                ProjectDocumentModel.project_id == project_id,
+                ProjectDocumentModel.deleted_at.is_(None),
+            )
+            .distinct()
+            .order_by(ProjectDocumentTagRow.tag)
+        )
+        return list(self._session.execute(stmt).scalars().all())

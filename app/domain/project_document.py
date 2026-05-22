@@ -54,6 +54,7 @@ class ProjectDocument:
     storage_key: str  # opaque key in the object store
     created_at: datetime
     deleted_at: Optional[datetime] = None
+    tags: tuple[str, ...] = ()
 
     def compute_kind(self) -> str:
         """Return a category tag for the document based on extension and MIME type.

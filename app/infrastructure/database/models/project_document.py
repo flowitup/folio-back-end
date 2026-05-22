@@ -6,12 +6,22 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Text, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.project_document import ProjectDocument
 from app.infrastructure.database.models.base import Base
+
+class ProjectDocumentTagRow(Base):
+    __tablename__ = "project_document_tags"
+
+    document_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("project_documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tag: Mapped[str] = mapped_column(String(100), primary_key=True)
 
 
 class ProjectDocumentModel(Base):
@@ -53,10 +63,17 @@ class ProjectDocumentModel(Base):
         default=None,
     )
 
+    _tags = relationship(
+        "ProjectDocumentTagRow",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+    )
+
     @classmethod
     def from_domain(cls, doc: ProjectDocument) -> "ProjectDocumentModel":
         """Build an ORM model instance from a domain entity."""
-        return cls(
+        model = cls(
             id=doc.id,
             project_id=doc.project_id,
             uploader_user_id=doc.uploader_user_id,
@@ -67,6 +84,8 @@ class ProjectDocumentModel(Base):
             created_at=doc.created_at,
             deleted_at=doc.deleted_at,
         )
+        model._tags = [ProjectDocumentTagRow(document_id=doc.id, tag=t) for t in doc.tags]
+        return model
 
     def to_domain(self) -> ProjectDocument:
         """Convert this ORM model to the corresponding domain entity."""
@@ -80,6 +99,7 @@ class ProjectDocumentModel(Base):
             storage_key=self.storage_key,
             created_at=self.created_at,
             deleted_at=self.deleted_at,
+            tags=tuple(sorted(row.tag for row in self._tags)),
         )
 
     def __repr__(self) -> str:

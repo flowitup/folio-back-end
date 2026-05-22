@@ -14,6 +14,7 @@ class ListFiltersDTO:
     """Filters and pagination options for listing project documents."""
 
     kinds: tuple[str, ...] = ()  # subset of (pdf, image, spreadsheet, doc, cad, text, other)
+    tags: tuple[str, ...] = ()
     uploader_id: Optional[UUID] = None
     sort: str = "created_at"  # one of (name, size, created_at, uploader)
     order: str = "desc"  # asc | desc
