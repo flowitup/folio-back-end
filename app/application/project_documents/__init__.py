@@ -32,6 +32,14 @@ from app.application.project_documents.rename_project_document import RenameProj
 from app.application.project_documents.purge_soft_deleted_documents import (
     PurgeSoftDeletedDocumentsUseCase,
 )
+from app.application.project_documents.presign_project_document_upload import (
+    PresignProjectDocumentUploadUseCase,
+    PresignResult,
+)
+from app.application.project_documents.confirm_project_document_upload import (
+    ConfirmProjectDocumentUploadUseCase,
+    DocumentNotInStorageError,
+)
 from app.domain.exceptions.project_document_exceptions import ProjectDocumentNotFoundError
 
 __all__ = [
@@ -52,6 +60,10 @@ __all__ = [
     "DeleteProjectDocumentUseCase",
     "RenameProjectDocumentUseCase",
     "PurgeSoftDeletedDocumentsUseCase",
+    "PresignProjectDocumentUploadUseCase",
+    "PresignResult",
+    "ConfirmProjectDocumentUploadUseCase",
+    "DocumentNotInStorageError",
     # Exceptions
     "ProjectDocumentNotFoundError",
     "DocumentFileTooLargeError",

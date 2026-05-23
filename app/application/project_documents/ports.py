@@ -30,6 +30,21 @@ class IDocumentStorage(Protocol):
         """Remove an object. Idempotent — no-op if key does not exist."""
         ...
 
+    @property
+    def presigned_uploads_enabled(self) -> bool:
+        """True when presigned URL generation is available."""
+        ...
+
+    def generate_presigned_put_url(
+        self, key: str, content_type: str, expires_in: int = 600
+    ) -> str:
+        """Generate a presigned PUT URL for direct browser upload."""
+        ...
+
+    def head_object(self, key: str) -> Optional[dict]:
+        """Return object metadata or None if not found."""
+        ...
+
 
 @runtime_checkable
 class IProjectDocumentRepository(Protocol):

@@ -96,6 +96,9 @@ class Config:
     S3_SECRET_KEY: str = get_env("S3_SECRET_KEY", default="minioadmin")
     S3_BUCKET: str = get_env("S3_BUCKET", default="construction-attachments")
     S3_REGION: str = get_env("S3_REGION", default="us-east-1")
+    # Public-facing S3/MinIO URL for browser-direct presigned uploads.
+    # Empty = presigned upload disabled; frontend falls back to multipart POST.
+    S3_PUBLIC_ENDPOINT_URL: str = get_env("S3_PUBLIC_ENDPOINT_URL", default="")
 
     # Swagger / OpenAPI docs surface. Default off in production to reduce
     # post-credential-leak recon; set EXPOSE_DOCS=1 to force-enable.

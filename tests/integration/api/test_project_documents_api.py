@@ -427,7 +427,7 @@ class TestUploadDocumentErrorCases:
 
         Regression: previously Flask's MAX_CONTENT_LENGTH was lower than the
         use-case limit, returning 413 before the route handler ran. The 151 MiB
-        Flask cap allows files up to the 100 MiB use-case limit through.
+        Flask cap allows files up to the 150 MiB use-case limit through.
         """
         content_15mb = b"x" * (15 * 1024 * 1024)
         resp = _upload(

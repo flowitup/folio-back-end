@@ -22,6 +22,9 @@ from app.application.project_documents import (
     ProjectDocumentNotFoundError,
     UnsupportedDocumentTypeError,
 )
+from app.application.project_documents.confirm_project_document_upload import (
+    DocumentNotInStorageError,
+)
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -134,6 +137,128 @@ def upload_project_document(project_id: str):
         return _error_response("FILE_TOO_LARGE", str(exc), 413)
     except UnsupportedDocumentTypeError as exc:
         return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
+
+    return jsonify(_serialize(doc)), 201
+
+
+@project_documents_bp.route("/projects/<project_id>/documents/presign", methods=["POST"])
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def presign_project_document(project_id: str):
+    """Generate a presigned PUT URL for direct-to-S3 browser upload."""
+    body = request.get_json(silent=True)
+    if not body:
+        return _error_response("INVALID_BODY", "Request body must be JSON with filename, content_type, size_bytes", 400)
+
+    filename = body.get("filename")
+    content_type = body.get("content_type", "application/octet-stream")
+    size_bytes = body.get("size_bytes")
+
+    if not filename or not isinstance(filename, str):
+        return _error_response("MISSING_FILENAME", "filename is required", 400)
+    if not isinstance(size_bytes, int) or size_bytes <= 0:
+        return _error_response("INVALID_SIZE", "size_bytes must be a positive integer", 400)
+
+    container = get_container()
+
+    if container.presign_project_document_usecase is None:
+        return _error_response(
+            "NOT_AVAILABLE",
+            "Presigned uploads are not configured on this server",
+            501,
+        )
+
+    try:
+        result = container.presign_project_document_usecase.execute(
+            project_id=UUID(project_id),
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+        )
+    except EmptyFileError as exc:
+        return _error_response("EMPTY_FILE", str(exc), 400)
+    except DocumentFileTooLargeError as exc:
+        return _error_response("FILE_TOO_LARGE", str(exc), 413)
+    except UnsupportedDocumentTypeError as exc:
+        return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
+    except RuntimeError as exc:
+        # generate_presigned_put_url raises RuntimeError when public endpoint missing
+        return _error_response("NOT_AVAILABLE", str(exc), 501)
+
+    return jsonify({
+        "presigned_url": result.presigned_url,
+        "storage_key": result.storage_key,
+        "doc_id": result.doc_id,
+    }), 200
+
+
+@project_documents_bp.route("/projects/<project_id>/documents/confirm", methods=["POST"])
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def confirm_project_document_upload(project_id: str):
+    """Confirm a presigned upload — verify S3 object exists and persist DB row."""
+    body = request.get_json(silent=True)
+    if not body:
+        return _error_response("INVALID_BODY", "Request body must be JSON", 400)
+
+    doc_id_str = body.get("doc_id")
+    storage_key = body.get("storage_key")
+    filename = body.get("filename")
+    content_type = body.get("content_type", "application/octet-stream")
+    size_bytes = body.get("size_bytes")
+
+    # Validate required fields
+    if not doc_id_str or not isinstance(doc_id_str, str):
+        return _error_response("MISSING_DOC_ID", "doc_id is required", 400)
+    if not storage_key or not isinstance(storage_key, str):
+        return _error_response("MISSING_STORAGE_KEY", "storage_key is required", 400)
+    if not filename or not isinstance(filename, str):
+        return _error_response("MISSING_FILENAME", "filename is required", 400)
+    if not isinstance(size_bytes, int) or size_bytes <= 0:
+        return _error_response("INVALID_SIZE", "size_bytes must be a positive integer", 400)
+
+    # Validate UUID format
+    try:
+        doc_uuid = UUID(doc_id_str)
+    except ValueError:
+        return _error_response("INVALID_DOC_ID", "doc_id must be a valid UUID", 400)
+
+    # Security: verify storage_key contains this project_id to prevent
+    # cross-project confirmation attacks
+    expected_prefix = f"project-documents/{project_id}/"
+    if not storage_key.startswith(expected_prefix):
+        return _error_response(
+            "KEY_PROJECT_MISMATCH",
+            "storage_key does not belong to this project",
+            400,
+        )
+
+    uploader_id = UUID(get_jwt_identity())
+    container = get_container()
+
+    if container.confirm_project_document_usecase is None:
+        return _error_response("NOT_AVAILABLE", "Presigned uploads are not configured", 501)
+
+    try:
+        doc = container.confirm_project_document_usecase.execute(
+            project_id=UUID(project_id),
+            doc_id=doc_uuid,
+            storage_key=storage_key,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            uploader_user_id=uploader_id,
+        )
+    except DocumentNotInStorageError:
+        return _error_response(
+            "OBJECT_NOT_FOUND",
+            "File not found in storage — upload may have failed or expired",
+            404,
+        )
 
     return jsonify(_serialize(doc)), 201
 

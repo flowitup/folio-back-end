@@ -77,13 +77,12 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Flask cap above the 100 MiB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
+    # Flask cap above the 150 MiB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
     # so multipart envelope overhead doesn't false-positive a 413 before the use-case
     # can return its richer error. Invoice attachments have their own 10 MB cap enforced
     # in the use-case layer (upload_attachment.py), so this bump does not relax that limit.
-    # Cloudflare Tunnel caps uploads at 100 MB (Free/Pro plan), so a higher Flask
-    # limit only matters after upgrading the Cloudflare plan.
-    app.config["MAX_CONTENT_LENGTH"] = 101 * 1024 * 1024
+    # Multipart POST through CF is capped at 100 MB; presigned uploads bypass CF.
+    app.config["MAX_CONTENT_LENGTH"] = 151 * 1024 * 1024
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
@@ -220,6 +219,7 @@ def _configure_di_container() -> None:
         secret_key=Config.S3_SECRET_KEY,
         bucket=Config.S3_BUCKET,
         region=Config.S3_REGION,
+        public_endpoint_url=Config.S3_PUBLIC_ENDPOINT_URL,
     )
     # Best-effort bucket bootstrap — log but do not crash the app on transient S3 outage
     try:
@@ -228,6 +228,16 @@ def _configure_di_container() -> None:
         import logging
 
         logging.getLogger(__name__).warning("S3 bucket bootstrap failed: %s (uploads will fail until resolved)", exc)
+
+    # Configure CORS for presigned-URL direct uploads
+    if Config.S3_PUBLIC_ENDPOINT_URL:
+        import logging as _cors_log
+
+        _cors_origin = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")[0].strip()
+        try:
+            storage.ensure_cors([_cors_origin])
+        except Exception as exc:
+            _cors_log.getLogger(__name__).warning("S3 CORS setup failed: %s", exc)
 
     invitation_repo = SqlAlchemyInvitationRepository(db.session)
     membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
@@ -738,3 +748,22 @@ def _configure_di_container() -> None:
         storage=storage,
         db_session=db.session,
     )
+
+    # Presigned upload use cases — only wired when S3_PUBLIC_ENDPOINT_URL is set
+    if storage.presigned_uploads_enabled:
+        from app.application.project_documents.presign_project_document_upload import (
+            PresignProjectDocumentUploadUseCase,
+        )
+        from app.application.project_documents.confirm_project_document_upload import (
+            ConfirmProjectDocumentUploadUseCase,
+        )
+
+        _c.presign_project_document_usecase = PresignProjectDocumentUploadUseCase(
+            storage=storage,
+            filename_sanitizer=_filename_sanitizer,
+        )
+        _c.confirm_project_document_usecase = ConfirmProjectDocumentUploadUseCase(
+            repo=_doc_repo,
+            storage=storage,
+            db_session=db.session,
+        )

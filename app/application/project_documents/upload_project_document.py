@@ -23,9 +23,10 @@ from app.domain.project_document import ProjectDocument, kind_for_extension
 
 _log = logging.getLogger(__name__)
 
-# Default 100 MiB — matches Cloudflare Tunnel's upload limit (Free/Pro plan).
-# Override via environment variable if the Cloudflare plan is upgraded.
-MAX_SIZE_BYTES = int(os.environ.get("PROJECT_DOCUMENT_MAX_SIZE_BYTES", str(100 * 1024 * 1024)))
+# Default 150 MiB — presigned uploads bypass Cloudflare entirely (browser
+# PUTs directly to S3/MinIO). Multipart POST through CF is capped at 100 MB
+# by CF's Free/Pro plan; files >100 MB require the presigned path.
+MAX_SIZE_BYTES = int(os.environ.get("PROJECT_DOCUMENT_MAX_SIZE_BYTES", str(150 * 1024 * 1024)))
 
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".xlsx", ".dwg", ".txt"}
