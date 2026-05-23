@@ -28,6 +28,26 @@ class InMemoryDocumentStorage(IDocumentStorage):
         self._store.pop(key, None)
 
     # ------------------------------------------------------------------
+    # Presigned URL stubs (not available in-memory)
+    # ------------------------------------------------------------------
+
+    @property
+    def presigned_uploads_enabled(self) -> bool:
+        return False
+
+    def generate_presigned_put_url(self, key: str, content_type: str, expires_in: int = 600) -> str:
+        raise RuntimeError("Presigned PUT not available in-memory")
+
+    def generate_presigned_get_url(self, key: str, expires_in: int = 3600) -> str:
+        raise RuntimeError("Presigned GET not available in-memory")
+
+    def head_object(self, key: str) -> dict | None:
+        if key not in self._store:
+            return None
+        data, ct = self._store[key]
+        return {"ContentLength": len(data), "ContentType": ct}
+
+    # ------------------------------------------------------------------
     # Test convenience helpers
     # ------------------------------------------------------------------
 

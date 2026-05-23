@@ -35,10 +35,12 @@ class IDocumentStorage(Protocol):
         """True when presigned URL generation is available."""
         ...
 
-    def generate_presigned_put_url(
-        self, key: str, content_type: str, expires_in: int = 600
-    ) -> str:
+    def generate_presigned_put_url(self, key: str, content_type: str, expires_in: int = 600) -> str:
         """Generate a presigned PUT URL for direct browser upload."""
+        ...
+
+    def generate_presigned_get_url(self, key: str, expires_in: int = 3600) -> str:
+        """Generate a presigned GET URL for direct browser download."""
         ...
 
     def head_object(self, key: str) -> Optional[dict]:

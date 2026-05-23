@@ -59,9 +59,7 @@ class ConfirmProjectDocumentUploadUseCase:
         # --- Verify the object actually landed in S3 ---
         head = self._storage.head_object(storage_key)
         if head is None:
-            raise DocumentNotInStorageError(
-                f"Object not found at key '{storage_key}' — upload may have failed"
-            )
+            raise DocumentNotInStorageError(f"Object not found at key '{storage_key}' — upload may have failed")
 
         # Use actual size from S3 if available (more reliable than client-declared)
         actual_size = head.get("ContentLength", size_bytes)

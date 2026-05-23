@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -54,16 +53,12 @@ class PresignProjectDocumentUploadUseCase:
         if size_bytes <= 0:
             raise EmptyFileError("File has no content (size <= 0 bytes)")
         if size_bytes > MAX_SIZE_BYTES:
-            raise DocumentFileTooLargeError(
-                f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes"
-            )
+            raise DocumentFileTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
 
         # --- Filename sanitation ---
         sanitized = self._sanitizer.sanitize(filename)
         if not sanitized:
-            raise UnsupportedDocumentTypeError(
-                "Invalid filename after sanitation — no safe characters remain"
-            )
+            raise UnsupportedDocumentTypeError("Invalid filename after sanitation — no safe characters remain")
 
         # --- Type validation (extension + MIME) ---
         validate_file_type(sanitized, content_type)
