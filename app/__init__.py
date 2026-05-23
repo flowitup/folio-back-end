@@ -77,11 +77,13 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Flask cap above the 150 MiB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
+    # Flask cap above the 100 MiB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
     # so multipart envelope overhead doesn't false-positive a 413 before the use-case
     # can return its richer error. Invoice attachments have their own 10 MB cap enforced
     # in the use-case layer (upload_attachment.py), so this bump does not relax that limit.
-    app.config["MAX_CONTENT_LENGTH"] = 151 * 1024 * 1024
+    # Cloudflare Tunnel caps uploads at 100 MB (Free/Pro plan), so a higher Flask
+    # limit only matters after upgrading the Cloudflare plan.
+    app.config["MAX_CONTENT_LENGTH"] = 101 * 1024 * 1024
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]

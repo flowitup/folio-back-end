@@ -23,8 +23,9 @@ from app.domain.project_document import ProjectDocument, kind_for_extension
 
 _log = logging.getLogger(__name__)
 
-# Default 150 MiB; override via environment variable.
-MAX_SIZE_BYTES = int(os.environ.get("PROJECT_DOCUMENT_MAX_SIZE_BYTES", "157286400"))
+# Default 100 MiB — matches Cloudflare Tunnel's upload limit (Free/Pro plan).
+# Override via environment variable if the Cloudflare plan is upgraded.
+MAX_SIZE_BYTES = int(os.environ.get("PROJECT_DOCUMENT_MAX_SIZE_BYTES", str(100 * 1024 * 1024)))
 
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".xlsx", ".dwg", ".txt"}
