@@ -187,11 +187,16 @@ def presign_project_document(project_id: str):
         # generate_presigned_put_url raises RuntimeError when public endpoint missing
         return _error_response("NOT_AVAILABLE", str(exc), 501)
 
-    return jsonify({
-        "presigned_url": result.presigned_url,
-        "storage_key": result.storage_key,
-        "doc_id": result.doc_id,
-    }), 200
+    return (
+        jsonify(
+            {
+                "presigned_url": result.presigned_url,
+                "storage_key": result.storage_key,
+                "doc_id": result.doc_id,
+            }
+        ),
+        200,
+    )
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/confirm", methods=["POST"])
@@ -263,6 +268,44 @@ def confirm_project_document_upload(project_id: str):
     return jsonify(_serialize(doc)), 201
 
 
+@project_documents_bp.route("/projects/<project_id>/documents/<document_id>/preview-url", methods=["GET"])
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+def get_document_preview_url(project_id: str, document_id: str):
+    """Return a short-lived presigned GET URL so the browser can load the
+    document directly from S3/MinIO — bypasses Flask streaming entirely."""
+    try:
+        doc_uuid = UUID(document_id)
+    except ValueError:
+        return _error_response("INVALID_ID", "Invalid document id", 400)
+
+    container = get_container()
+    doc = container.project_document_repository.find_by_id(doc_uuid)
+    if doc is None or doc.deleted_at is not None:
+        return _error_response("NOT_FOUND", "Document not found", 404)
+
+    # Cross-project guard
+    if str(doc.project_id) != project_id:
+        return _error_response("NOT_FOUND", "Document not found", 404)
+
+    # Only serve presigned URLs for inline-safe types (PDF + images)
+    inline_safe = doc.content_type == "application/pdf" or doc.content_type.startswith("image/")
+    if not inline_safe:
+        return _error_response("NOT_PREVIEWABLE", "Document type does not support preview", 400)
+
+    storage = container.document_storage
+    if not storage.presigned_uploads_enabled:
+        return _error_response("NOT_AVAILABLE", "Presigned URLs not configured", 501)
+
+    try:
+        url = storage.generate_presigned_get_url(doc.storage_key, expires_in=3600)
+    except RuntimeError as exc:
+        return _error_response("NOT_AVAILABLE", str(exc), 501)
+
+    return jsonify({"url": url, "content_type": doc.content_type, "filename": doc.filename}), 200
+
+
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/download", methods=["GET"])
 @jwt_required()
 @require_permission("project:read")
@@ -293,6 +336,8 @@ def download_project_document(project_id: str, document_id: str):
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    # Cache immutable document bytes in browser for 1 hour; S3 objects are write-once
+    response.headers["Cache-Control"] = "private, max-age=3600, immutable"
     if length:
         response.headers["Content-Length"] = str(length)
     return response

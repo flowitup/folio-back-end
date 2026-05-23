@@ -88,9 +88,7 @@ class S3AttachmentStorage(IAttachmentStorage):
         """True when a public endpoint is configured for presigned URLs."""
         return self._public_client is not None
 
-    def generate_presigned_put_url(
-        self, key: str, content_type: str, expires_in: int = 600
-    ) -> str:
+    def generate_presigned_put_url(self, key: str, content_type: str, expires_in: int = 600) -> str:
         """Generate a presigned PUT URL for direct browser upload.
 
         Uses the public-facing client so the URL hostname is reachable from
@@ -104,6 +102,23 @@ class S3AttachmentStorage(IAttachmentStorage):
                 "Bucket": self._bucket,
                 "Key": key,
                 "ContentType": content_type,
+            },
+            ExpiresIn=expires_in,
+        )
+
+    def generate_presigned_get_url(self, key: str, expires_in: int = 3600) -> str:
+        """Generate a presigned GET URL for direct browser download.
+
+        Uses the public-facing client so the URL hostname is reachable from
+        the browser. Raises RuntimeError if no public endpoint is configured.
+        """
+        if self._public_client is None:
+            raise RuntimeError("S3_PUBLIC_ENDPOINT_URL not configured — presigned downloads disabled")
+        return self._public_client.generate_presigned_url(  # type: ignore[union-attr]
+            "get_object",
+            Params={
+                "Bucket": self._bucket,
+                "Key": key,
             },
             ExpiresIn=expires_in,
         )
@@ -142,7 +157,5 @@ class S3AttachmentStorage(IAttachmentStorage):
                 }
             ]
         }
-        self._client.put_bucket_cors(
-            Bucket=self._bucket, CORSConfiguration=cors_config
-        )
+        self._client.put_bucket_cors(Bucket=self._bucket, CORSConfiguration=cors_config)
         _log.info("S3 CORS configured for origins: %s", allowed_origins)
