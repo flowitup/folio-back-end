@@ -85,7 +85,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.note = entry.note
             model.shift_type = entry.shift_type
             model.supplement_hours = entry.supplement_hours
-            self._session.flush()
+            self._session.commit()
             return self._to_entity(model)
         return entry
 

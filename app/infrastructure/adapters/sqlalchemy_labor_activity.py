@@ -58,7 +58,7 @@ class SQLAlchemyLaborActivityRepository(ILaborActivityRepository):
             model.title = activity.title
             model.description = activity.description
             model.updated_at = activity.updated_at
-            self._session.flush()
+            self._session.commit()
             return self._to_entity(model)
         return activity
 
