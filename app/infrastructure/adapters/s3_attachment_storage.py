@@ -142,7 +142,8 @@ class S3AttachmentStorage(IAttachmentStorage):
             raise
 
     def ensure_cors(self, allowed_origins: list[str]) -> None:
-        """Set CORS rules on the bucket to allow presigned PUT uploads.
+        """Set CORS rules on the bucket to allow presigned PUT uploads
+        and Range-based GET downloads (PDF.js progressive page loading).
 
         Safe to call repeatedly — overwrites the existing CORS configuration.
         """
@@ -151,8 +152,8 @@ class S3AttachmentStorage(IAttachmentStorage):
                 {
                     "AllowedOrigins": allowed_origins,
                     "AllowedMethods": ["GET", "HEAD", "PUT"],
-                    "AllowedHeaders": ["Content-Type", "Content-Length"],
-                    "ExposeHeaders": ["ETag"],
+                    "AllowedHeaders": ["Content-Type", "Content-Length", "Range"],
+                    "ExposeHeaders": ["ETag", "Content-Range", "Accept-Ranges", "Content-Length"],
                     "MaxAgeSeconds": 3600,
                 }
             ]
