@@ -87,6 +87,7 @@ def create_project():
                 owner_id=result.owner_id,
                 user_count=0,
                 created_at=result.created_at,
+                invoice_prefix=result.invoice_prefix,
             ).model_dump()
         ),
         201,
@@ -130,6 +131,7 @@ def get_project(project_id: str):
             user_count=len(project.user_ids),
             created_at=project.created_at.isoformat(),
             company_id=company_id_str,
+            invoice_prefix=project.invoice_prefix,
         ).model_dump()
     )
 
@@ -173,7 +175,9 @@ def update_project(project_id: str):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     try:
-        result = container.update_project_usecase.execute(UUID(project_id), name=data.name, address=data.address)
+        result = container.update_project_usecase.execute(
+            UUID(project_id), name=data.name, address=data.address, invoice_prefix=data.invoice_prefix
+        )
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
 
@@ -185,6 +189,7 @@ def update_project(project_id: str):
             owner_id=str(result.owner_id),
             user_count=len(result.user_ids),
             created_at=result.created_at.isoformat(),
+            invoice_prefix=result.invoice_prefix,
         ).model_dump()
     )
 

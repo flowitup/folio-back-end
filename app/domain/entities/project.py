@@ -19,6 +19,7 @@ class Project:
     owner_id: UUID
     created_at: datetime
     address: Optional[str] = None
+    invoice_prefix: Optional[str] = None
     updated_at: Optional[datetime] = None
     user_ids: List[UUID] = field(default_factory=list)
 

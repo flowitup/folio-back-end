@@ -208,9 +208,17 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         return total
 
     def next_invoice_number(self, project_id: UUID) -> str:
-        """Generate next sequential invoice number: INV-YYYY-NNNN."""
+        """Generate next sequential invoice number: PREFIX-YYYY-NNNN.
+
+        Reads the project's custom invoice_prefix (falls back to "INV").
+        """
+        from app.infrastructure.database.models.project import ProjectModel
+
+        project_row = self._session.query(ProjectModel.invoice_prefix).filter_by(id=project_id).first()
+        tag = project_row[0] if project_row and project_row[0] else "INV"
+
         year = datetime.now(timezone.utc).year
-        prefix = f"INV-{year}-"
+        prefix = f"{tag}-{year}-"
         last = (
             self._session.query(InvoiceModel)
             .filter(

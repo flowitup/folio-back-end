@@ -1,5 +1,6 @@
 """Update project use case."""
 
+import re
 from typing import Optional
 from uuid import UUID
 
@@ -9,6 +10,8 @@ from app.domain.exceptions.project_exceptions import (
     ProjectNotFoundError,
     InvalidProjectDataError,
 )
+
+_PREFIX_RE = re.compile(r"^[A-Z0-9]{1,8}$")
 
 
 class UpdateProjectUseCase:
@@ -22,6 +25,7 @@ class UpdateProjectUseCase:
         project_id: UUID,
         name: Optional[str] = None,
         address: Optional[str] = None,
+        invoice_prefix: Optional[str] = None,
     ) -> Project:
         project = self._repo.find_by_id(project_id)
         if not project:
@@ -36,5 +40,14 @@ class UpdateProjectUseCase:
 
         if address is not None:
             project.address = address.strip() if address else None
+
+        if invoice_prefix is not None:
+            cleaned = invoice_prefix.strip().upper()
+            if cleaned == "":
+                project.invoice_prefix = None
+            else:
+                if not _PREFIX_RE.match(cleaned):
+                    raise InvalidProjectDataError("Invoice prefix must be 1-8 uppercase letters or digits (A-Z, 0-9)")
+                project.invoice_prefix = cleaned
 
         return self._repo.update(project)

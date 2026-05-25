@@ -31,6 +31,7 @@ class ProjectModel(Base):
         nullable=True,
         index=True,
     )
+    invoice_prefix = Column(String(8), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,
