@@ -16,6 +16,7 @@ class UpdateProjectRequest(BaseModel):
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     address: Optional[str] = Field(None, max_length=500)
+    invoice_prefix: Optional[str] = Field(None, max_length=8)
 
 
 class AddUserRequest(BaseModel):
@@ -34,6 +35,7 @@ class ProjectResponse(BaseModel):
     user_count: int
     created_at: str
     company_id: Optional[str] = None
+    invoice_prefix: Optional[str] = None
 
 
 class ProjectListResponse(BaseModel):

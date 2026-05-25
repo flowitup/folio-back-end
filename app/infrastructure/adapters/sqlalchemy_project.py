@@ -21,6 +21,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             id=project.id,
             name=project.name,
             address=project.address,
+            invoice_prefix=project.invoice_prefix,
             owner_id=project.owner_id,
             created_at=project.created_at,
         )
@@ -53,6 +54,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         if model:
             model.name = project.name
             model.address = project.address
+            model.invoice_prefix = project.invoice_prefix
             self._session.commit()
             return self._to_entity(model)
         return project
@@ -100,6 +102,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             id=model.id,
             name=model.name,
             address=model.address,
+            invoice_prefix=model.invoice_prefix,
             owner_id=model.owner_id,
             created_at=model.created_at,
             updated_at=model.updated_at,
