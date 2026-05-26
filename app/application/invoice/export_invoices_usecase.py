@@ -21,7 +21,7 @@ from app.domain.invoice.export.models import (
     TypeSubtotal,
 )
 
-_TYPE_ORDER = (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.MATERIALS_SERVICES)
+_TYPE_ORDER = (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.MATERIALS_SERVICES, InvoiceType.OTHERS)
 
 
 @dataclass

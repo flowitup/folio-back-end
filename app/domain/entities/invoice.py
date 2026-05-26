@@ -13,6 +13,7 @@ class InvoiceType(str, Enum):
     RELEASED_FUNDS = "released_funds"
     LABOR = "labor"
     MATERIALS_SERVICES = "materials_services"
+    OTHERS = "others"
 
 
 @dataclass(slots=True)
