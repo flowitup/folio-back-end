@@ -135,6 +135,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.persons import persons_bp
     from app.api.v1.payment_methods import payment_methods_bp
     from app.api.v1.project_documents import project_documents_bp
+    from app.api.v1.bibliotheque import bibliotheque_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -157,6 +158,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(persons_bp, url_prefix="/api/v1")
     app.register_blueprint(payment_methods_bp, url_prefix="/api/v1")
     app.register_blueprint(project_documents_bp, url_prefix="/api/v1")
+    app.register_blueprint(bibliotheque_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -767,3 +769,86 @@ def _configure_di_container() -> None:
             storage=storage,
             db_session=db.session,
         )
+
+    # -----------------------------------------------------------------------
+    # Bibliotheque DI wiring
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_bibliotheque_supplier_repository import (
+        SqlAlchemyBibliothequeSupplierRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_bibliotheque_product_repository import (
+        SqlAlchemyBibliothequeProductRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_bibliotheque_purchase_repository import (
+        SqlAlchemyBibliothequePurchaseRepository,
+    )
+    from app.infrastructure.adapters.bibliotheque_image_storage import BibliothequeImageStorage
+    from app.infrastructure.adapters.company_membership_reader import CompanyMembershipReader
+    from app.application.bibliotheque.list_suppliers_usecase import ListSuppliersUseCase as _ListSuppliersUC
+    from app.application.bibliotheque.list_categories_usecase import ListCategoriesUseCase as _ListCategoriesUC
+    from app.application.bibliotheque.list_products_usecase import ListProductsUseCase as _ListProductsUC
+    from app.application.bibliotheque.get_product_usecase import GetProductUseCase as _GetProductUC
+    from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase as _GetProductImageUC
+    from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase as _ImportPurchasesUC
+    from app.application.bibliotheque.upload_product_image_usecase import (
+        UploadProductImageUseCase as _UploadProductImageUC,
+    )
+
+    _biblio_supplier_repo = SqlAlchemyBibliothequeSupplierRepository(db.session)
+    _biblio_product_repo = SqlAlchemyBibliothequeProductRepository(db.session)
+    _biblio_purchase_repo = SqlAlchemyBibliothequePurchaseRepository(db.session)
+    _biblio_image_storage = BibliothequeImageStorage(
+        endpoint_url=Config.S3_ENDPOINT_URL,
+        access_key=Config.S3_ACCESS_KEY,
+        secret_key=Config.S3_SECRET_KEY,
+        bucket=Config.S3_BUCKET,
+        region=Config.S3_REGION,
+    )
+    # Reuse existing user_company_access_repo as the membership reader
+    _biblio_membership_reader = CompanyMembershipReader(_access_repo)
+    # Reuse existing authorization_service as the permission checker
+    _biblio_permission_checker = _role_checker
+
+    _c.bibliotheque_supplier_repo = _biblio_supplier_repo
+    _c.bibliotheque_product_repo = _biblio_product_repo
+    _c.bibliotheque_purchase_repo = _biblio_purchase_repo
+    _c.bibliotheque_image_storage = _biblio_image_storage
+    _c.bibliotheque_membership_reader = _biblio_membership_reader
+
+    _c.bibliotheque_list_suppliers_usecase = _ListSuppliersUC(
+        supplier_repo=_biblio_supplier_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.bibliotheque_list_categories_usecase = _ListCategoriesUC(
+        product_repo=_biblio_product_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.bibliotheque_list_products_usecase = _ListProductsUC(
+        product_repo=_biblio_product_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.bibliotheque_get_product_usecase = _GetProductUC(
+        product_repo=_biblio_product_repo,
+        purchase_repo=_biblio_purchase_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.bibliotheque_get_product_image_usecase = _GetProductImageUC(
+        product_repo=_biblio_product_repo,
+        image_storage=_biblio_image_storage,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.bibliotheque_import_usecase = _ImportPurchasesUC(
+        supplier_repo=_biblio_supplier_repo,
+        product_repo=_biblio_product_repo,
+        purchase_repo=_biblio_purchase_repo,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.bibliotheque_upload_image_usecase = _UploadProductImageUC(
+        product_repo=_biblio_product_repo,
+        image_storage=_biblio_image_storage,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
