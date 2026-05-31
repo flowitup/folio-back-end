@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.openapi import openapi_doc
 from app.api.v1.billing import billing_documents_bp
 from app.api.v1.billing.decorators import require_billing_document_owner
 from app.api.v1.billing.schemas import (
@@ -104,6 +105,7 @@ def _doc_to_json(dto) -> dict:
 
 
 @billing_documents_bp.route("/billing-documents", methods=["GET"])
+@openapi_doc(summary="List billing documents for the authenticated user", tags=["billing"])
 @jwt_required()
 def list_billing_documents():
     """List billing documents for the authenticated user.
@@ -173,6 +175,11 @@ def list_billing_documents():
 
 
 @billing_documents_bp.route("/billing-documents", methods=["POST"])
+@openapi_doc(
+    summary="Create a new billing document (devis or facture)",
+    request=CreateBillingDocumentRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 def create_billing_document():
@@ -224,6 +231,7 @@ def create_billing_document():
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>", methods=["GET"])
+@openapi_doc(summary="Retrieve a single billing document by ID", tags=["billing"])
 @jwt_required()
 @require_billing_document_owner
 def get_billing_document(doc_id: str, billing_doc):
@@ -239,6 +247,11 @@ def get_billing_document(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Partially update a billing document (immutable fields rejected by schema)",
+    request=UpdateBillingDocumentRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
@@ -290,6 +303,7 @@ def update_billing_document(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a billing document", tags=["billing"])
 @jwt_required()
 @require_billing_document_owner
 def delete_billing_document(doc_id: str, billing_doc):
@@ -313,6 +327,11 @@ def delete_billing_document(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>/clone", methods=["POST"])
+@openapi_doc(
+    summary="Clone an existing billing document into a new draft",
+    request=CloneRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
@@ -357,6 +376,11 @@ def clone_billing_document(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>/convert-to-facture", methods=["POST"])
+@openapi_doc(
+    summary="Convert an accepted devis to a new facture draft",
+    request=ConvertRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
@@ -412,6 +436,11 @@ def convert_to_facture(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>/status", methods=["PATCH"])
+@openapi_doc(
+    summary="Transition a billing document to a new status",
+    request=UpdateStatusRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
@@ -451,6 +480,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>/pdf", methods=["GET"])
+@openapi_doc(summary="Render billing document as PDF and stream as attachment", tags=["billing"])
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
@@ -491,6 +521,7 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/<doc_id>/xlsx", methods=["GET"])
+@openapi_doc(summary="Render billing document as XLSX and stream as attachment", tags=["billing"])
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
@@ -530,6 +561,11 @@ def render_billing_document_xlsx(doc_id: str, billing_doc):
 
 
 @billing_documents_bp.route("/billing-documents/activity-suggestions", methods=["GET"])
+@openapi_doc(
+    summary="Return line-item suggestions aggregated from the requester's documents",
+    query=ActivitySuggestionsQuery,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def get_activity_suggestions():
@@ -573,6 +609,11 @@ def get_activity_suggestions():
 
 
 @billing_documents_bp.route("/billing-documents/import", methods=["POST"])
+@openapi_doc(
+    summary="Import a historical billing document with a pre-supplied document number",
+    request=ImportBillingDocumentRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def import_billing_document():
@@ -638,6 +679,11 @@ def import_billing_document():
 
 
 @billing_documents_bp.route("/billing-documents/from-template/<template_id>", methods=["POST"])
+@openapi_doc(
+    summary="Create a new billing document pre-filled from a template",
+    request=ApplyTemplateRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 def create_document_from_template(template_id: str):

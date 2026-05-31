@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.openapi import openapi_doc
 from app.api.v1.payment_methods import payment_methods_bp
 from app.api.v1.payment_methods.schemas import (
     CreatePaymentMethodRequest,
@@ -42,6 +43,7 @@ def _err(error: str, message: str, status: int) -> tuple[Response, int]:
 
 
 @payment_methods_bp.route("/companies/<company_id>/payment-methods", methods=["GET"])
+@openapi_doc(summary="List payment methods for a company", tags=["payment_methods"])
 @jwt_required()
 def list_payment_methods(company_id: str):
     """List payment methods for a company.
@@ -81,6 +83,11 @@ def list_payment_methods(company_id: str):
 
 
 @payment_methods_bp.route("/companies/<company_id>/payment-methods", methods=["POST"])
+@openapi_doc(
+    summary="Create a new payment method for a company (admin only)",
+    request=CreatePaymentMethodRequest,
+    tags=["payment_methods"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def create_payment_method(company_id: str):
@@ -131,6 +138,11 @@ def create_payment_method(company_id: str):
 @payment_methods_bp.route(
     "/companies/<company_id>/payment-methods/<payment_method_id>",
     methods=["PATCH"],
+)
+@openapi_doc(
+    summary="Partially update a payment method (admin only)",
+    request=UpdatePaymentMethodRequest,
+    tags=["payment_methods"],
 )
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
@@ -206,6 +218,7 @@ def update_payment_method(company_id: str, payment_method_id: str):
     "/companies/<company_id>/payment-methods/<payment_method_id>",
     methods=["DELETE"],
 )
+@openapi_doc(summary="Soft-delete a payment method (admin only)", tags=["payment_methods"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_payment_method(company_id: str, payment_method_id: str):

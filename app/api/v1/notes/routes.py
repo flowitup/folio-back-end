@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.validation_error import safe_validation_fields
+from app.api.openapi import openapi_doc
 from app.api.v1.notes import notes_bp
 from app.api.v1.notes.schemas import NoteCreateBody, NoteUpdateBody
 from app.application.notes.dtos import NoteDto
@@ -62,6 +63,11 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 
 
 @notes_bp.post("/projects/<uuid:project_id>/notes")
+@openapi_doc(
+    summary="Create a note for a project",
+    request=NoteCreateBody,
+    tags=["notes"],
+)
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def create_note(project_id: UUID) -> Any:
@@ -103,6 +109,7 @@ def create_note(project_id: UUID) -> Any:
 
 
 @notes_bp.get("/projects/<uuid:project_id>/notes")
+@openapi_doc(summary="List all notes for a project", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_notes(project_id: UUID) -> Any:
@@ -133,6 +140,11 @@ def list_notes(project_id: UUID) -> Any:
 
 
 @notes_bp.patch("/projects/<uuid:project_id>/notes/<uuid:note_id>")
+@openapi_doc(
+    summary="Update a note's fields",
+    request=NoteUpdateBody,
+    tags=["notes"],
+)
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_note(project_id: UUID, note_id: UUID) -> Any:
@@ -195,6 +207,7 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
 
 
 @notes_bp.delete("/projects/<uuid:project_id>/notes/<uuid:note_id>")
+@openapi_doc(summary="Delete a note", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_note(project_id: UUID, note_id: UUID) -> Any:

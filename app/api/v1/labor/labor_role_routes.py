@@ -8,6 +8,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
@@ -38,6 +39,7 @@ def _role_response(role) -> LaborRoleResponse:
 
 
 @labor_bp.route("/labor/roles", methods=["GET"])
+@openapi_doc(summary="List all labor roles with the suggested color palette", tags=["labor"])
 @jwt_required()
 def list_labor_roles():
     """List all labor roles with the suggested color palette."""
@@ -51,6 +53,12 @@ def list_labor_roles():
 
 
 @labor_bp.route("/labor/roles", methods=["POST"])
+@openapi_doc(
+    summary="Create a new labor role",
+    request=CreateLaborRoleRequest,
+    responses={201: LaborRoleResponse},
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 def create_labor_role():
@@ -74,6 +82,12 @@ def create_labor_role():
 
 
 @labor_bp.route("/labor/roles/<role_id>", methods=["PATCH"])
+@openapi_doc(
+    summary="Update name and/or color of a labor role",
+    request=UpdateLaborRoleRequest,
+    responses={200: LaborRoleResponse},
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 def update_labor_role(role_id: str):
@@ -100,6 +114,7 @@ def update_labor_role(role_id: str):
 
 
 @labor_bp.route("/labor/roles/<role_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a labor role", tags=["labor"])
 @jwt_required()
 @limiter.limit("10 per minute")
 def delete_labor_role(role_id: str):

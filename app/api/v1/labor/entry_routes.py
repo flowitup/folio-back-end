@@ -9,6 +9,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
@@ -81,6 +82,7 @@ def _parse_list_limit(raw: Optional[str]) -> int:
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["GET"])
+@openapi_doc(summary="List labor entries for a project with optional filters", tags=["labor"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -133,6 +135,11 @@ def list_labor_entries(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["POST"])
+@openapi_doc(
+    summary="Log daily attendance for a worker",
+    request=LogAttendanceRequest,
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
@@ -181,6 +188,7 @@ def log_attendance(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/conflicts", methods=["GET"])
+@openapi_doc(summary="Return cross-project labor conflicts on a given date", tags=["labor"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -241,6 +249,11 @@ def get_cross_project_conflicts(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/bulk", methods=["POST"])
+@openapi_doc(
+    summary="Bulk-log attendance for N workers on a single date",
+    request=BulkLogAttendanceRequest,
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
@@ -321,6 +334,11 @@ def bulk_log_attendance(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Update an existing labor entry",
+    request=UpdateAttendanceRequest,
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
@@ -363,6 +381,7 @@ def update_attendance(project_id: str, entry_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a labor entry", tags=["labor"])
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
@@ -382,6 +401,7 @@ def delete_attendance(project_id: str, entry_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-summary", methods=["GET"])
+@openapi_doc(summary="Get aggregated labor summary for a project", tags=["labor"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -426,6 +446,7 @@ def get_labor_summary(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-monthly-summary", methods=["GET"])
+@openapi_doc(summary="Per-month rollup of labor totals across all workers on a project", tags=["labor"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)

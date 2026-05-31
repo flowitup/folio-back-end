@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.requester_identity import get_requester_email
+from app.api.openapi import openapi_doc
 from app.api.v1.invoices.schemas import ExportInvoicesQuery
 from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.invoice.export_invoices_usecase import ExportInvoicesRequest
@@ -24,6 +25,11 @@ invoice_export_bp = Blueprint("invoice_export", __name__)
 
 
 @invoice_export_bp.route("/projects/<project_id>/invoices-export", methods=["GET"])
+@openapi_doc(
+    summary="Stream xlsx or pdf export for a project's invoices",
+    query=ExportInvoicesQuery,
+    tags=["invoices"],
+)
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_permission("project:read")

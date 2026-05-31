@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.openapi import openapi_doc
 from app.api.v1.billing import billing_templates_bp
 from app.api.v1.billing.decorators import require_billing_template_owner
 from app.api.v1.billing.schemas import CreateTemplateRequest, UpdateTemplateRequest
@@ -69,6 +70,7 @@ def _tpl_to_json(dto) -> dict:
 
 
 @billing_templates_bp.route("/billing-document-templates", methods=["GET"])
+@openapi_doc(summary="List all billing templates for the authenticated user", tags=["billing"])
 @jwt_required()
 def list_billing_templates():
     """List all billing templates for the authenticated user.
@@ -97,6 +99,11 @@ def list_billing_templates():
 
 
 @billing_templates_bp.route("/billing-document-templates", methods=["POST"])
+@openapi_doc(
+    summary="Create a new billing document template",
+    request=CreateTemplateRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 def create_billing_template():
@@ -135,6 +142,7 @@ def create_billing_template():
 
 
 @billing_templates_bp.route("/billing-document-templates/<template_id>", methods=["GET"])
+@openapi_doc(summary="Retrieve a single billing template by ID", tags=["billing"])
 @jwt_required()
 @require_billing_template_owner
 def get_billing_template(template_id: str, billing_template):
@@ -150,6 +158,11 @@ def get_billing_template(template_id: str, billing_template):
 
 
 @billing_templates_bp.route("/billing-document-templates/<template_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Partially update a billing document template",
+    request=UpdateTemplateRequest,
+    tags=["billing"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_billing_template_owner
@@ -191,6 +204,7 @@ def update_billing_template(template_id: str, billing_template):
 
 
 @billing_templates_bp.route("/billing-document-templates/<template_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a billing document template", tags=["billing"])
 @jwt_required()
 @require_billing_template_owner
 def delete_billing_template(template_id: str, billing_template):

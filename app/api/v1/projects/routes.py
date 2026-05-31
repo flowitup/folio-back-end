@@ -6,6 +6,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
     CreateProjectRequest,
@@ -24,6 +25,7 @@ from wiring import get_container
 
 
 @projects_bp.route("", methods=["GET"])
+@openapi_doc(summary="List projects for current user", tags=["projects"])
 @jwt_required()
 @require_permission("project:read")
 def list_projects():
@@ -48,6 +50,12 @@ def list_projects():
 
 
 @projects_bp.route("", methods=["POST"])
+@openapi_doc(
+    summary="Create a new project",
+    request=CreateProjectRequest,
+    responses={201: ProjectResponse},
+    tags=["projects"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:create")
@@ -95,6 +103,7 @@ def create_project():
 
 
 @projects_bp.route("/<project_id>", methods=["GET"])
+@openapi_doc(summary="Get a single project by ID", responses={200: ProjectResponse}, tags=["projects"])
 @jwt_required()
 @require_permission("project:read")
 def get_project(project_id: str):
@@ -137,6 +146,12 @@ def get_project(project_id: str):
 
 
 @projects_bp.route("/<project_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Update an existing project",
+    request=UpdateProjectRequest,
+    responses={200: ProjectResponse},
+    tags=["projects"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:update")
@@ -195,6 +210,7 @@ def update_project(project_id: str):
 
 
 @projects_bp.route("/<project_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a project", tags=["projects"])
 @jwt_required()
 @limiter.limit("5 per minute")
 @require_permission("project:delete")
@@ -221,6 +237,7 @@ def delete_project(project_id: str):
 
 
 @projects_bp.route("/<project_id>/users", methods=["GET"])
+@openapi_doc(summary="Get users assigned to a project", tags=["projects"])
 @jwt_required()
 @require_permission("project:read")
 def get_project_users(project_id: str):
@@ -251,6 +268,7 @@ def get_project_users(project_id: str):
 
 
 @projects_bp.route("/<project_id>/users", methods=["POST"])
+@openapi_doc(summary="DEPRECATED — invite-only signup is the only membership-creation path", tags=["projects"])
 @jwt_required()
 def add_user_to_project(project_id: str):
     """DEPRECATED — invite-only signup is the only membership-creation path.
@@ -278,6 +296,7 @@ def add_user_to_project(project_id: str):
 
 
 @projects_bp.route("/<uuid:project_id>/members", methods=["GET"])
+@openapi_doc(summary="Return project members with role and join date", tags=["projects"])
 @jwt_required()
 @limiter.limit("60 per minute")
 def get_project_members(project_id: UUID):
@@ -336,6 +355,7 @@ def get_project_members(project_id: UUID):
 
 
 @projects_bp.route("/<project_id>/users/<user_id>", methods=["DELETE"])
+@openapi_doc(summary="Remove a user from a project", tags=["projects"])
 @jwt_required()
 @require_permission("project:manage_users")
 def remove_user_from_project(project_id: str, user_id: str):

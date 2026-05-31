@@ -165,14 +165,14 @@ def create_app(config_class: type = Config) -> Flask:
 
         app.register_blueprint(test_only_bp, url_prefix="/api/v1/__test__")
 
-    # Initialize Swagger API documentation. The doc surface is recon-rich
+    # Initialize OpenAPI documentation. The doc surface is recon-rich
     # (full schema map + endpoint catalogue) so it is disabled in
     # production unless EXPOSE_DOCS=1 forces it on.
     _is_production = os.environ.get("FLASK_ENV") == "production"
     if (not _is_production) or app.config.get("EXPOSE_DOCS"):
-        from app.api.swagger import init_swagger
+        from app.api.openapi import init_openapi
 
-        init_swagger(app)
+        init_openapi(app)
 
     return app
 

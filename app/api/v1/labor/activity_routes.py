@@ -8,6 +8,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from pydantic import BaseModel, Field, ValidationError
 from typing import Optional, List
 
+from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
@@ -89,6 +90,7 @@ def _detail_to_response(d: LaborActivityDetail) -> ActivityResponse:
 
 
 @labor_bp.route("/projects/<project_id>/labor-activities", methods=["GET"])
+@openapi_doc(summary="List labor activities for a project with optional date filters", tags=["labor"])
 @jwt_required()
 @require_permission("project:read")
 def list_labor_activities(project_id: str):
@@ -116,6 +118,11 @@ def list_labor_activities(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-activities", methods=["POST"])
+@openapi_doc(
+    summary="Create a new labor activity for a project day",
+    request=CreateActivitySchema,
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("30 per minute")
 @require_permission("project:manage_labor")
@@ -144,6 +151,11 @@ def create_labor_activity(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-activities/<activity_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Update an existing labor activity",
+    request=UpdateActivitySchema,
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("30 per minute")
 @require_permission("project:manage_labor")
@@ -171,6 +183,7 @@ def update_labor_activity(project_id: str, activity_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/labor-activities/<activity_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a labor activity", tags=["labor"])
 @jwt_required()
 @limiter.limit("30 per minute")
 @require_permission("project:manage_labor")
