@@ -1,7 +1,8 @@
-"""GetProductImageUseCase — return a presigned URL or stream for a product image."""
+"""GetProductImageUseCase — stream a product image's bytes through the API."""
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from app.application.bibliotheque.exceptions import CompanyAccessDeniedError, ProductNotFoundError
@@ -13,9 +14,11 @@ from app.application.bibliotheque.ports import (
 
 
 class GetProductImageUseCase:
-    """Return a presigned GET URL for the product image.
+    """Stream a product image's bytes back through the API.
 
-    Any company member may fetch a product image.
+    Any company member may fetch a product image. Bytes are streamed
+    server-side (not via a presigned object-store URL) because the store
+    endpoint is not browser-reachable; this mirrors invoice attachment serving.
     Raises ProductNotFoundError if the product or its image does not exist.
     """
 
@@ -29,8 +32,8 @@ class GetProductImageUseCase:
         self._image_storage = image_storage
         self._membership = membership_reader
 
-    def execute(self, *, requester_id: UUID, product_id: UUID) -> str:
-        """Return a presigned GET URL for the product's image.
+    def execute(self, *, requester_id: UUID, product_id: UUID) -> tuple[Any, int, str]:
+        """Return (body_stream, content_length, content_type) for the image.
 
         Raises:
             ProductNotFoundError: product not found or has no image.
@@ -46,4 +49,4 @@ class GetProductImageUseCase:
         if product.image_storage_key is None:
             raise ProductNotFoundError(f"Product {product_id} has no image.")
 
-        return self._image_storage.presigned_get_url(product.image_storage_key)
+        return self._image_storage.get_stream(product.image_storage_key)

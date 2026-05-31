@@ -74,24 +74,18 @@ class BibliothequeImageStorage:
             ExtraArgs={"ContentType": content_type},
         )
 
-    def get_stream(self, key: str) -> tuple[BinaryIO, int]:
-        """Return (body_stream, content_length) for the given key."""
-        obj = self._client.get_object(Bucket=self._bucket, Key=key)
-        return obj["Body"], int(obj.get("ContentLength", 0))
+    def get_stream(self, key: str) -> tuple[BinaryIO, int, str]:
+        """Return (body_stream, content_length, content_type) for the given key.
 
-    def presigned_get_url(self, key: str, expires_in: int = 3600) -> str:
-        """Return a presigned GET URL for browser download.
-
-        Uses the public-facing client so the hostname in the URL is browser-reachable.
-        Falls back to the internal client when no public endpoint is configured
-        (e.g. local dev without a reverse proxy).
+        Images are streamed back THROUGH the API rather than served via a
+        presigned object-store URL. The store endpoint (minio:9000 in dev, the
+        internal bucket host in prod) is not browser-reachable, so a presigned
+        URL would 404 in the browser. Streaming keeps the byte path entirely
+        server-side, mirroring how invoice attachments are served.
         """
-        client = self._public_client if self._public_client is not None else self._client
-        return client.generate_presigned_url(  # type: ignore[union-attr]
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
-            ExpiresIn=expires_in,
-        )
+        obj = self._client.get_object(Bucket=self._bucket, Key=key)
+        content_type = obj.get("ContentType") or "application/octet-stream"
+        return obj["Body"], int(obj.get("ContentLength", 0)), content_type
 
     def delete(self, key: str) -> None:
         """Delete the object at key. S3 delete_object is idempotent."""

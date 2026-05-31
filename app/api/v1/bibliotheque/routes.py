@@ -17,7 +17,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from flask import Response, jsonify, request
+from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
@@ -196,11 +196,19 @@ def get_product(product_id: UUID) -> Any:
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("120 per minute", key_func=jwt_user_key)
 def get_product_image(product_id: UUID) -> Any:
-    """Return a presigned GET URL for the product image."""
+    """Stream the product image bytes inline.
+
+    Bytes are proxied through the API rather than served via a presigned
+    object-store URL — the store endpoint is not browser-reachable. nosniff +
+    a locked-down CSP guard against MIME-sniffing user-controlled bytes into a
+    renderable type. Mirrors the invoice attachment download route.
+    """
     requester_id = UUID(get_jwt_identity())
     c = get_container()
     try:
-        url = c.bibliotheque_get_product_image_usecase.execute(requester_id=requester_id, product_id=product_id)
+        stream, length, content_type = c.bibliotheque_get_product_image_usecase.execute(
+            requester_id=requester_id, product_id=product_id
+        )
     except ProductNotFoundError:
         return _err(404, "NotFound", "Product or image not found.")
     except CompanyAccessDeniedError:
@@ -209,7 +217,13 @@ def get_product_image(product_id: UUID) -> Any:
         logger.exception("get_product_image error product_id=%s", product_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
-    return jsonify({"url": url}), 200
+    response = send_file(stream, mimetype=content_type or "application/octet-stream")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    response.headers["Cache-Control"] = "private, max-age=300"
+    if length:
+        response.headers["Content-Length"] = str(length)
+    return response
 
 
 # ---------------------------------------------------------------------------

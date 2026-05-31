@@ -95,12 +95,8 @@ class IProductImageStorage(Protocol):
         """Upload image bytes under the given key."""
         ...
 
-    def get_stream(self, key: str) -> tuple[object, int]:
-        """Return (body_stream, content_length) for the given key."""
-        ...
-
-    def presigned_get_url(self, key: str, expires_in: int = 3600) -> str:
-        """Return a presigned GET URL for the given key."""
+    def get_stream(self, key: str) -> tuple[object, int, str]:
+        """Return (body_stream, content_length, content_type) for the given key."""
         ...
 
     def delete(self, key: str) -> None:
