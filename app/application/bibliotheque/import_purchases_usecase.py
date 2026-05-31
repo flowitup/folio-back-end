@@ -12,6 +12,7 @@ skipped without aborting the outer transaction. Aggregate updates
 from __future__ import annotations
 
 import logging
+from datetime import timezone
 from typing import Optional
 from uuid import UUID
 
@@ -157,12 +158,21 @@ class ImportPurchasesUseCase:
                     updated += 1
 
             # Step 2b: attempt idempotent purchase insert
+            # Coerce naive datetimes to UTC so comparisons with the timezone-aware
+            # last_purchased_at column never raise "can't compare offset-naive and
+            # offset-aware datetimes".  Clients that omit the 'Z' suffix send naive
+            # datetimes; treating them as UTC is safe because all purchase timestamps
+            # in this system are expected to be UTC.
+            purchased_at = rec.purchased_at
+            if purchased_at.tzinfo is None:
+                purchased_at = purchased_at.replace(tzinfo=timezone.utc)
+
             purchase = LibraryPurchase(
                 product_id=product.id,  # type: ignore[union-attr]
                 source_document_ref=rec.source_document_ref,
                 source_document_type=rec.source_document_type,
                 line_index=rec.line_index,
-                purchased_at=rec.purchased_at,
+                purchased_at=purchased_at,
                 quantity=rec.quantity,
                 unit_price=rec.unit_price,
             )
@@ -177,7 +187,7 @@ class ImportPurchasesUseCase:
                     updated_product = locked_product.with_purchase_applied(
                         qty=rec.quantity,
                         unit_price=rec.unit_price,
-                        purchased_at=rec.purchased_at,
+                        purchased_at=purchased_at,
                     )
                     self._product_repo.upsert(updated_product)
                     if not is_new:

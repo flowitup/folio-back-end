@@ -84,10 +84,25 @@ class LibraryProduct:
         Called ONLY when a purchase was actually inserted (add_if_absent returned
         True). Calling this on a duplicate import would double-count; idempotency
         is the repository's responsibility, not this method's.
+
+        Naive datetimes are coerced to UTC so that comparisons with the DB's
+        timezone-aware last_purchased_at never raise a TypeError.  Callers should
+        already coerce at the use-case boundary; this is a belt-and-suspenders guard.
         """
-        new_first = self.first_purchased_at if self.first_purchased_at else purchased_at
-        is_latest = self.last_purchased_at is None or purchased_at > self.last_purchased_at
-        new_last = purchased_at if is_latest else self.last_purchased_at
+        if purchased_at.tzinfo is None:
+            purchased_at = purchased_at.replace(tzinfo=timezone.utc)
+        # Coerce the stored aggregate value as well: SQLite returns DateTime(timezone=True)
+        # columns as naive when the stored string lacks a UTC suffix — belt-and-suspenders
+        # guard so the comparison never raises even if the repository layer missed coercion.
+        last_at = self.last_purchased_at
+        if last_at is not None and last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=timezone.utc)
+        first_at = self.first_purchased_at
+        if first_at is not None and first_at.tzinfo is None:
+            first_at = first_at.replace(tzinfo=timezone.utc)
+        new_first = first_at if first_at else purchased_at
+        is_latest = last_at is None or purchased_at > last_at
+        new_last = purchased_at if is_latest else last_at
         # Only update last_unit_price when this purchase is actually the newest;
         # an older purchase applied after a newer one must not overwrite the price
         # that corresponds to last_purchased_at.

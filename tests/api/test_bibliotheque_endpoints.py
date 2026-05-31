@@ -55,6 +55,7 @@ def bibliotheque_app():
     from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase
     from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase
     from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
+    from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
     from config import TestingConfig
     from wiring import configure_container, get_container
 
@@ -206,6 +207,13 @@ def bibliotheque_app():
             db_session=db.session,
         )
         _c.bibliotheque_upload_image_usecase = UploadProductImageUseCase(
+            product_repo=_product_repo,
+            image_storage=_image_storage,
+            membership_reader=_membership_reader,
+            permission_checker=_role_checker,
+            db_session=db.session,
+        )
+        _c.bibliotheque_fetch_image_from_url_usecase = FetchProductImageFromUrlUseCase(
             product_repo=_product_repo,
             image_storage=_image_storage,
             membership_reader=_membership_reader,
@@ -842,3 +850,313 @@ class TestGetProductImageEndpoint:
             headers=_auth(manager_token),
         )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by image-from-url and date-coercion tests
+# ---------------------------------------------------------------------------
+
+
+def _create_product_via_import(bib_client, manager_token, company_id: str, sku: str = "IMG-URL-SKU") -> str:
+    """Import a product and return its product_id string."""
+    payload = {
+        "company_id": company_id,
+        "supplier_name": "ImageUrlCorp",
+        "supplier_slug": "image-url-corp",
+        "records": [
+            {
+                "supplier_reference": sku,
+                "product_name": f"Product {sku}",
+                "quantity": "1.0",
+                "unit_price": "9.99",
+                "purchased_at": datetime.now(timezone.utc).isoformat(),
+                "source_document_ref": f"DOC-{sku}",
+                "source_document_type": "ticket",
+                "line_index": 0,
+            }
+        ],
+    }
+    resp = bib_client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(manager_token))
+    assert resp.status_code == 200, f"Import failed: {resp.get_data(as_text=True)}"
+    list_resp = bib_client.get(
+        f"/api/v1/bibliotheque/products?company_id={company_id}",
+        headers=_auth(manager_token),
+    )
+    products = list_resp.get_json()["items"]
+    product = next((p for p in products if p["supplier_reference"] == sku), None)
+    assert product is not None, f"Product with SKU {sku} not found after import"
+    return product["id"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bibliotheque/products/<id>/image-from-url
+# ---------------------------------------------------------------------------
+
+
+class TestFetchProductImageFromUrlEndpoint:
+    """Tests for the server-side image fetch-from-URL endpoint.
+
+    All outbound HTTP is mocked — no real network calls in tests.
+    """
+
+    _FAKE_JPEG = b"\xff\xd8\xff\xe0" + b"X" * 100  # minimal JPEG header + padding
+
+    def _mock_ok_response(self, monkeypatch, content_type: str = "image/jpeg", body: bytes | None = None) -> None:
+        """Patch httpx.Client.get to return a successful image response."""
+        import httpx
+
+        body = body if body is not None else self._FAKE_JPEG
+
+        class _FakeResponse:
+            status_code = 200
+            content = body
+            headers = {"content-type": content_type}
+
+            def raise_for_status(self) -> None:
+                pass
+
+        class _FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def get(self, url, **kwargs):
+                return _FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", lambda **kw: _FakeClient())
+
+    def test_401_unauthenticated(self, bib_client):
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            json={"url": "https://media.adeo.com/media/1234/media.jpg"},
+        )
+        assert resp.status_code == 401
+
+    def test_403_missing_manage_permission(self, bib_client, member_token, bibliotheque_app, monkeypatch):
+        self._mock_ok_response(monkeypatch)
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            json={"url": "https://media.adeo.com/media/1234/media.jpg"},
+            headers=_auth(member_token),
+        )
+        # Either 403 (permission) or 404 (product not found first) — both acceptable
+        assert resp.status_code in (403, 404)
+
+    def test_404_product_not_found(self, bib_client, manager_token, monkeypatch):
+        self._mock_ok_response(monkeypatch)
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            json={"url": "https://media.adeo.com/media/1234/media.jpg"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 404
+
+    def test_422_disallowed_host(self, bib_client, manager_token, bibliotheque_app):
+        """Host not in allowlist must return 422 before any DB access."""
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            json={"url": "https://evil.example.com/image.jpg"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+        assert "allowlist" in resp.get_data(as_text=True).lower() or "ssrf" in resp.get_data(as_text=True).lower()
+
+    def test_422_non_https_url(self, bib_client, manager_token):
+        """HTTP (non-HTTPS) URL must return 422."""
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            json={"url": "http://media.adeo.com/media/1234/media.jpg"},
+            headers=_auth(manager_token),
+        )
+        # Pydantic HttpUrl may reject http:// itself as 422 before we even check SSRF
+        assert resp.status_code == 422
+
+    def test_415_non_image_content_type(self, bib_client, manager_token, bibliotheque_app, monkeypatch):
+        """Remote server returning text/html must yield 415."""
+        self._mock_ok_response(monkeypatch, content_type="text/html")
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-415-SKU"
+        )
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": "https://media.adeo.com/media/1234/media.jpg"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 415
+
+    def test_413_oversized_response(self, bib_client, manager_token, bibliotheque_app, monkeypatch):
+        """Remote server returning >10 MB must yield 413."""
+        oversized_body = b"X" * (10 * 1024 * 1024 + 1)
+        self._mock_ok_response(monkeypatch, content_type="image/jpeg", body=oversized_body)
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-413-SKU"
+        )
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": "https://media.adeo.com/media/1234/media.jpg"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 413
+
+    def test_200_success_stores_image_and_returns_key(self, bib_client, manager_token, bibliotheque_app, monkeypatch):
+        """Happy path: mock fetch returns valid JPEG, key is stored and returned."""
+        self._mock_ok_response(monkeypatch)
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-200-SKU"
+        )
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": "https://media.adeo.com/media/1234/media.jpg"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "image_storage_key" in data
+        assert data["image_storage_key"].startswith(f"library-products/{product_id}/")
+
+    def test_200_idempotent_skip_when_image_already_exists(
+        self, bib_client, manager_token, bibliotheque_app, monkeypatch
+    ):
+        """Second call without force=true must return 200 with same key, no re-fetch."""
+        self._mock_ok_response(monkeypatch)
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-IDEMPOTENT-SKU"
+        )
+        url = "https://media.adeo.com/media/9999/media.jpg"
+
+        resp1 = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": url},
+            headers=_auth(manager_token),
+        )
+        assert resp1.status_code == 200
+        key1 = resp1.get_json()["image_storage_key"]
+
+        # Second call — still 200, same key, no real fetch needed
+        resp2 = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": url},
+            headers=_auth(manager_token),
+        )
+        assert resp2.status_code == 200
+        assert resp2.get_json()["image_storage_key"] == key1
+
+    def test_200_force_overwrites_existing_image(self, bib_client, manager_token, bibliotheque_app, monkeypatch):
+        """?force=true must overwrite the existing image."""
+        self._mock_ok_response(monkeypatch)
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-FORCE-SKU"
+        )
+        url = "https://media.adeo.com/media/7777/media.jpg"
+        # First upload
+        bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": url},
+            headers=_auth(manager_token),
+        )
+        # Force overwrite
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url?force=true",
+            json={"url": url},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200
+        assert "image_storage_key" in resp.get_json()
+
+
+# ---------------------------------------------------------------------------
+# CHANGE 2 — naive datetime coercion regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestNaiveDatetimeCoercion:
+    """Regression tests for the naive-datetime 500 bug in import_purchases_usecase."""
+
+    def _record(self, sku: str, ref: str, dt_str: str) -> dict:
+        return {
+            "supplier_reference": sku,
+            "product_name": f"Product {sku}",
+            "quantity": "1.0",
+            "unit_price": "9.99",
+            "purchased_at": dt_str,
+            "source_document_ref": ref,
+            "source_document_type": "ticket",
+            "line_index": 0,
+        }
+
+    def test_naive_datetime_does_not_raise(self, bib_client, manager_token, bibliotheque_app):
+        """Import with a naive purchased_at (no Z/+00:00) must return 200, no 500."""
+        naive_dt = "2024-06-15T10:30:00"  # no timezone suffix
+        payload = {
+            "company_id": bibliotheque_app._test_company_id,
+            "supplier_name": "NaiveDateCorp",
+            "supplier_slug": "naive-date-corp",
+            "records": [self._record("NAIVE-001", "NAIVE-DOC-001", naive_dt)],
+        }
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json=payload,
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200, f"Naive datetime import failed: {resp.get_data(as_text=True)}"
+        result = resp.get_json()
+        assert result["purchases_added"] == 1
+
+    def test_two_naive_purchases_sequential_no_error(self, bib_client, manager_token, bibliotheque_app):
+        """Two sequential imports for the same product with naive datetimes must not raise.
+
+        This reproduces the exact prod scenario: purchase A imported first, then purchase B
+        (different source_document_ref, same product) — the second triggers with_purchase_applied
+        against an existing timezone-aware last_purchased_at.
+        """
+        naive_dt_a = "2024-05-01T08:00:00"
+        naive_dt_b = "2024-06-01T09:00:00"
+
+        base = {
+            "company_id": bibliotheque_app._test_company_id,
+            "supplier_name": "NaiveSeqCorp",
+            "supplier_slug": "naive-seq-corp",
+        }
+
+        # Purchase A
+        resp_a = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json={**base, "records": [self._record("NSEQ-001", "DOC-A", naive_dt_a)]},
+            headers=_auth(manager_token),
+        )
+        assert resp_a.status_code == 200, resp_a.get_data(as_text=True)
+
+        # Purchase B (different ref, same product) — triggers the tz comparison
+        resp_b = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json={**base, "records": [self._record("NSEQ-001", "DOC-B", naive_dt_b)]},
+            headers=_auth(manager_token),
+        )
+        assert resp_b.status_code == 200, f"Second naive import raised 500: {resp_b.get_data(as_text=True)}"
+        result_b = resp_b.get_json()
+        assert result_b["purchases_added"] == 1, "Second purchase must be added, not skipped"
+
+    def test_mixed_naive_and_aware_batch(self, bib_client, manager_token, bibliotheque_app):
+        """A batch with both naive and timezone-aware datetimes must return 200 for all records."""
+        records = [
+            self._record("MIX-001", "MIX-DOC-NAIVE", "2024-03-10T12:00:00"),  # naive
+            self._record("MIX-002", "MIX-DOC-AWARE", "2024-03-11T12:00:00+00:00"),  # aware
+            self._record("MIX-003", "MIX-DOC-Z", "2024-03-12T12:00:00Z"),  # UTC Z
+        ]
+        payload = {
+            "company_id": bibliotheque_app._test_company_id,
+            "supplier_name": "MixedTzCorp",
+            "supplier_slug": "mixed-tz-corp",
+            "records": records,
+        }
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json=payload,
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200, f"Mixed tz import failed: {resp.get_data(as_text=True)}"
+        result = resp.get_json()
+        assert result["purchases_added"] == 3
+        assert result["created"] == 3

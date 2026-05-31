@@ -793,6 +793,9 @@ def _configure_di_container() -> None:
     from app.application.bibliotheque.upload_product_image_usecase import (
         UploadProductImageUseCase as _UploadProductImageUC,
     )
+    from app.application.bibliotheque.fetch_product_image_from_url_usecase import (
+        FetchProductImageFromUrlUseCase as _FetchProductImageFromUrlUC,
+    )
 
     _biblio_supplier_repo = SqlAlchemyBibliothequeSupplierRepository(db.session)
     _biblio_product_repo = SqlAlchemyBibliothequeProductRepository(db.session)
@@ -846,6 +849,13 @@ def _configure_di_container() -> None:
         db_session=db.session,
     )
     _c.bibliotheque_upload_image_usecase = _UploadProductImageUC(
+        product_repo=_biblio_product_repo,
+        image_storage=_biblio_image_storage,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.bibliotheque_fetch_image_from_url_usecase = _FetchProductImageFromUrlUC(
         product_repo=_biblio_product_repo,
         image_storage=_biblio_image_storage,
         membership_reader=_biblio_membership_reader,
