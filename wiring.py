@@ -409,6 +409,22 @@ class Container:
     update_labor_activity_usecase: Optional[UpdateLaborActivityUseCase] = None
     delete_labor_activity_usecase: Optional[DeleteLaborActivityUseCase] = None
 
+    # -----------------------------------------------------------------------
+    # Bibliotheque repos + use-cases
+    # -----------------------------------------------------------------------
+    bibliotheque_supplier_repo: Optional[Any] = None  # SqlAlchemyBibliothequeSupplierRepository
+    bibliotheque_product_repo: Optional[Any] = None  # SqlAlchemyBibliothequeProductRepository
+    bibliotheque_purchase_repo: Optional[Any] = None  # SqlAlchemyBibliothequePurchaseRepository
+    bibliotheque_image_storage: Optional[Any] = None  # BibliothequeImageStorage
+    bibliotheque_membership_reader: Optional[Any] = None  # CompanyMembershipReader
+    bibliotheque_list_suppliers_usecase: Optional[Any] = None  # ListSuppliersUseCase
+    bibliotheque_list_categories_usecase: Optional[Any] = None  # ListCategoriesUseCase
+    bibliotheque_list_products_usecase: Optional[Any] = None  # ListProductsUseCase
+    bibliotheque_get_product_usecase: Optional[Any] = None  # GetProductUseCase
+    bibliotheque_get_product_image_usecase: Optional[Any] = None  # GetProductImageUseCase
+    bibliotheque_import_usecase: Optional[Any] = None  # ImportPurchasesUseCase
+    bibliotheque_upload_image_usecase: Optional[Any] = None  # UploadProductImageUseCase
+
 
 # =============================================================================
 # EMAIL PORT FACTORY
