@@ -23,8 +23,8 @@ from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.bibliotheque import bibliotheque_bp
-from app.api.v1.bibliotheque.schemas import ImageFromUrlSchema, ImportRequestSchema
-from app.application.bibliotheque.dtos import ImportRecordDTO
+from app.api.v1.bibliotheque.schemas import ImageFromUrlSchema, ImportRequestSchema, RecategorizeRequestSchema
+from app.application.bibliotheque.dtos import ImportRecordDTO, RecategorizeItemDTO
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
     ImageAlreadyExistsError,
@@ -32,6 +32,7 @@ from app.application.bibliotheque.exceptions import (
     InsufficientPermissionError,
     ProductNotFoundError,
     SsrfBlockedError,
+    SupplierNotFoundError,
     UnsupportedImageTypeError,
 )
 from app.infrastructure.rate_limiter import limiter
@@ -282,6 +283,51 @@ def import_purchases() -> Any:
         return _err(403, "Forbidden", "bibliotheque:manage permission required.")
     except Exception:
         logger.exception("import_purchases error company_id=%s", body.company_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    return jsonify(dataclasses.asdict(result)), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bibliotheque/recategorize
+# ---------------------------------------------------------------------------
+
+
+@bibliotheque_bp.post("/bibliotheque/recategorize")
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("10 per minute", key_func=jwt_user_key)
+def recategorize() -> Any:
+    """Bulk-reassign product categories for a supplier. Requires bibliotheque:manage.
+
+    Category is the one field import never overwrites; this endpoint is the
+    explicit path to re-bucket an existing library into a canonical taxonomy.
+    Only the category field changes — purchase rows and aggregates are untouched.
+    """
+    try:
+        body = RecategorizeRequestSchema.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        return _err(422, "ValidationError", str(exc))
+
+    requester_id = UUID(get_jwt_identity())
+    c = get_container()
+
+    items = [RecategorizeItemDTO(supplier_reference=i.supplier_reference, category=i.category) for i in body.items]
+
+    try:
+        result = c.bibliotheque_recategorize_usecase.execute(
+            requester_id=requester_id,
+            company_id=body.company_id,
+            supplier_slug=body.supplier_slug,
+            items=items,
+        )
+    except CompanyAccessDeniedError:
+        return _err(403, "Forbidden", "Not a member of this company.")
+    except InsufficientPermissionError:
+        return _err(403, "Forbidden", "bibliotheque:manage permission required.")
+    except SupplierNotFoundError:
+        return _err(404, "NotFound", "Supplier not found for this company.")
+    except Exception:
+        logger.exception("recategorize error company_id=%s", body.company_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     return jsonify(dataclasses.asdict(result)), 200

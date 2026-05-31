@@ -147,3 +147,14 @@ class LibraryProduct:
             product_url=product_url if product_url is not None and self.product_url is None else self.product_url,
             updated_at=datetime.now(timezone.utc),
         )
+
+    def with_category(self, category: str) -> "LibraryProduct":
+        """Return a copy with the category overwritten (curated override).
+
+        Unlike with_enrichment — which only fills an empty category and never
+        clobbers an existing value — this deliberately replaces whatever
+        category is set. It is the explicit path used to re-bucket an existing
+        library into a canonical supplier taxonomy. Purchase aggregates are
+        left untouched.
+        """
+        return replace(self, category=category, updated_at=datetime.now(timezone.utc))
