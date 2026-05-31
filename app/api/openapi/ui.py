@@ -28,7 +28,7 @@ swaggerui_bp = get_swaggerui_blueprint(
 @openapi_bp.route("/openapi.json", methods=["GET"])
 def openapi_spec():
     """
-    Serve the auto-generated OpenAPI 3.0 spec.
+    Serve the auto-generated OpenAPI 3.1.0 spec.
 
     Built lazily on each request so that registration order of blueprints
     is never a concern — all routes are already registered by the time
@@ -36,5 +36,9 @@ def openapi_spec():
     """
     from app.api.openapi.generator import build_spec
 
-    spec_dict = build_spec(current_app._get_current_object())  # type: ignore[attr-defined]
-    return jsonify(spec_dict)
+    try:
+        spec_dict = build_spec(current_app._get_current_object())  # type: ignore[attr-defined]
+        return jsonify(spec_dict)
+    except Exception as e:
+        current_app.logger.exception("OpenAPI spec generation failed")
+        return jsonify({"error": "spec_generation_failed", "message": str(e)}), 500

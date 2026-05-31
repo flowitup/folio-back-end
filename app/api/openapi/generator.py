@@ -1,5 +1,5 @@
 """
-OpenAPI 3.0 spec generator.
+OpenAPI 3.1.0 spec generator.
 
 Walks Flask's url_map to discover all registered routes, enriches each
 operation with ``_openapi_meta`` data written by ``@openapi_doc``, and
@@ -8,26 +8,18 @@ returns the full spec as a plain dict via ``build_spec(app)``.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
 from flask import Flask
 
+from app.api.openapi.path_utils import flask_path_to_openapi
+
+# Re-export under the private name so existing imports (e.g. tests) continue
+# to work without modification.
+_flask_path_to_openapi = flask_path_to_openapi
+
 # Endpoints that are publicly accessible — no bearerAuth required.
 _PUBLIC_ENDPOINTS: frozenset[str] = frozenset({"auth.login", "auth.refresh"})
-
-# Flask converter type → OpenAPI primitive type mapping.
-_CONVERTER_TYPE_MAP: dict[str, str] = {
-    "int": "integer",
-    "float": "number",
-    "uuid": "string",
-    "path": "string",
-    "string": "string",
-    "default": "string",
-}
-
-# Regex to extract Flask path variables: <converter:name> or <name>
-_PATH_VAR_RE = re.compile(r"<(?:([a-z_]+):)?([a-zA-Z_][a-zA-Z0-9_]*)>")
 
 
 def _resolve_version() -> str:
@@ -38,38 +30,6 @@ def _resolve_version() -> str:
         return version("construction-backend")
     except Exception:
         return "0.0.0"
-
-
-def _flask_path_to_openapi(rule_str: str) -> tuple[str, list[dict[str, Any]]]:
-    """
-    Convert a Flask URL rule string to an OpenAPI path string and path params.
-
-    Flask:   /api/v1/projects/<int:project_id>/tasks/<task_id>
-    OpenAPI: /api/v1/projects/{project_id}/tasks/{task_id}
-
-    Returns:
-        (openapi_path, list_of_parameter_objects)
-    """
-    params: list[dict[str, Any]] = []
-
-    def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
-        converter = match.group(1) or "default"
-        param_name = match.group(2)
-        oa_type = _CONVERTER_TYPE_MAP.get(converter, "string")
-        param: dict[str, Any] = {
-            "in": "path",
-            "name": param_name,
-            "required": True,
-            "schema": {"type": oa_type},
-        }
-        # UUID format hint
-        if converter == "uuid":
-            param["schema"]["format"] = "uuid"
-        params.append(param)
-        return "{" + param_name + "}"
-
-    openapi_path = _PATH_VAR_RE.sub(_replace, rule_str)
-    return openapi_path, params
 
 
 def _build_operation(
@@ -174,7 +134,7 @@ def _http_status_description(code: int) -> str:
 
 def build_spec(app: Flask) -> dict[str, Any]:
     """
-    Build the complete OpenAPI 3.0 spec dict for *app*.
+    Build the complete OpenAPI 3.1.0 spec dict for *app*.
 
     Iterates Flask's url_map, enriches each route with ``_openapi_meta``
     when present, and returns ``spec.to_dict()``.
@@ -184,7 +144,7 @@ def build_spec(app: Flask) -> dict[str, Any]:
     spec = APISpec(
         title="Folio API",
         version=_resolve_version(),
-        openapi_version="3.0.3",
+        openapi_version="3.1.0",
         plugins=[],
     )
 
@@ -194,7 +154,12 @@ def build_spec(app: Flask) -> dict[str, Any]:
         {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
     )
 
-    # Collect paths, collapsing multiple methods on the same path into one entry.
+    # Accumulate all operations per OpenAPI path before registering.
+    # Multiple Flask url_map rules can map to the same OpenAPI path (e.g.
+    # separate rules for GET and POST on the same resource URL). We merge
+    # their operations into one dict so spec.path() is called exactly once
+    # per unique path — preventing later rules from silently overwriting
+    # earlier ones.
     path_operations: dict[str, dict[str, Any]] = {}
 
     for rule in app.url_map.iter_rules():
@@ -213,7 +178,7 @@ def build_spec(app: Flask) -> dict[str, Any]:
         if not methods:
             continue
 
-        openapi_path, path_params = _flask_path_to_openapi(rule_str)
+        openapi_path, path_params = flask_path_to_openapi(rule_str)
 
         # Resolve view function and optional meta.
         view_func = app.view_functions.get(rule.endpoint)

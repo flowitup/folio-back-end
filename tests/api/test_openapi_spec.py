@@ -143,7 +143,7 @@ class TestSpecShape:
         assert resp.status_code == 200
 
     def test_openapi_version_prefix(self, spec):
-        assert spec["openapi"].startswith("3.0")
+        assert spec["openapi"].startswith("3.1")
 
     def test_paths_non_empty(self, spec):
         assert len(spec.get("paths", {})) > 0
@@ -280,3 +280,24 @@ class TestProdGateForceOn:
                 resp.status_code == 200
             ), f"Expected 200 for /openapi.json with EXPOSE_DOCS=1 in production, got {resp.status_code}"
             db.drop_all()
+
+
+# ---------------------------------------------------------------------------
+# Case 7: Spec-validity regression — full OpenAPI 3.1.0 dialect check
+# ---------------------------------------------------------------------------
+
+
+class TestSpecValidity:
+    def test_spec_is_valid_openapi_3_1(self, spec):
+        """
+        Validate the generated spec against the OpenAPI 3.1.0 schema.
+
+        Guards against dialect regressions: Pydantic v2 emits 2020-12 JSON
+        Schema (e.g. ``type: null``), which is invalid under 3.0.x but valid
+        under 3.1.0. If this test fails after changing the openapi_version or
+        any schema-generation logic, the spec has become structurally invalid.
+        """
+        from openapi_spec_validator import validate
+
+        # Raises openapi_spec_validator.OpenAPIValidationError on any violation.
+        validate(spec)
