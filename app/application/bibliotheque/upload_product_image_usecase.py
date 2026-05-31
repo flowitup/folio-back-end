@@ -12,8 +12,10 @@ from uuid import UUID
 
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
+    ImageTooLargeError,
     InsufficientPermissionError,
     ProductNotFoundError,
+    UnsupportedImageTypeError,
 )
 from app.application.bibliotheque.ports import (
     ICompanyMembershipReader,
@@ -25,6 +27,12 @@ from app.application.bibliotheque.ports import (
 from app.infrastructure.adapters.bibliotheque_image_storage import BibliothequeImageStorage
 
 _MANAGE_PERMISSION = "bibliotheque:manage"
+
+# Mirror the invoice attachment 10 MB cap.
+IMAGE_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# Allowlist of content-types accepted for product images.
+_ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 
 class UploadProductImageUseCase:
@@ -55,6 +63,7 @@ class UploadProductImageUseCase:
         fileobj: BinaryIO,
         content_type: str,
         filename: str = "image",
+        size_bytes: int = 0,
     ) -> str:
         """Upload image bytes, update the product's image_storage_key, return the key.
 
@@ -62,7 +71,20 @@ class UploadProductImageUseCase:
             ProductNotFoundError: product does not exist.
             CompanyAccessDeniedError: requester is not a company member.
             InsufficientPermissionError: requester lacks bibliotheque:manage.
+            UnsupportedImageTypeError: content-type is not in the allowed set.
+            ImageTooLargeError: uploaded bytes exceed IMAGE_MAX_SIZE_BYTES.
         """
+        # Validate content-type against the allowlist before touching the DB or storage.
+        if content_type not in _ALLOWED_IMAGE_TYPES:
+            raise UnsupportedImageTypeError(
+                f"Unsupported image type '{content_type}'. Allowed: {sorted(_ALLOWED_IMAGE_TYPES)}"
+            )
+
+        if size_bytes > IMAGE_MAX_SIZE_BYTES:
+            raise ImageTooLargeError(
+                f"Image size {size_bytes} bytes exceeds the {IMAGE_MAX_SIZE_BYTES // (1024 * 1024)} MB limit."
+            )
+
         product = self._product_repo.find_by_id(product_id)
         if product is None:
             raise ProductNotFoundError(f"Product {product_id} not found.")
@@ -72,7 +94,10 @@ class UploadProductImageUseCase:
         if not self._permission_checker.has_permission(requester_id, _MANAGE_PERMISSION):
             raise InsufficientPermissionError(f"User {requester_id} lacks '{_MANAGE_PERMISSION}' permission.")
 
-        key = BibliothequeImageStorage.build_key(product_id, filename)
+        # Always use a fixed object name derived from the sanitized basename — never
+        # interpolate the raw client filename which can contain path-traversal sequences
+        # like "../<other-product-id>/image".
+        key = BibliothequeImageStorage.build_key(product_id)
         self._image_storage.put(key, fileobj, content_type)
 
         updated = product.with_enrichment(image_storage_key=key)

@@ -15,8 +15,8 @@ class ImportRecordSchema(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    supplier_reference: str = Field(min_length=1, max_length=255)
-    product_name: str = Field(min_length=1, max_length=500)
+    supplier_reference: str = Field(min_length=1, max_length=200)
+    product_name: str = Field(min_length=1, max_length=1000)
     quantity: Decimal = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
     purchased_at: datetime
@@ -24,10 +24,10 @@ class ImportRecordSchema(BaseModel):
     source_document_type: Literal["ticket", "commande"]
     line_index: int = Field(ge=0)
     # Optional enrichment
-    size: Optional[str] = Field(default=None, max_length=100)
-    category: Optional[str] = Field(default=None, max_length=100)
+    size: Optional[str] = Field(default=None, max_length=200)
+    category: Optional[str] = Field(default=None, max_length=200)
     product_url: Optional[str] = Field(default=None, max_length=500)
-    description: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=1000)
 
 
 class ImportRequestSchema(BaseModel):
@@ -40,7 +40,7 @@ class ImportRequestSchema(BaseModel):
     supplier_slug: str = Field(min_length=1, max_length=100)
     supplier_website_url: Optional[str] = Field(default=None, max_length=500)
     supplier_product_url_template: Optional[str] = Field(default=None, max_length=500)
-    records: List[ImportRecordSchema] = Field(min_length=1)
+    records: List[ImportRecordSchema] = Field(min_length=1, max_length=1000)
 
     @field_validator("records")
     @classmethod

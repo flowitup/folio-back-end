@@ -27,8 +27,10 @@ from app.api.v1.bibliotheque.schemas import ImportRequestSchema
 from app.application.bibliotheque.dtos import ImportRecordDTO
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
+    ImageTooLargeError,
     InsufficientPermissionError,
     ProductNotFoundError,
+    UnsupportedImageTypeError,
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -298,7 +300,13 @@ def upload_product_image(product_id: UUID) -> Any:
 
     file = request.files["image"]
     content_type = file.content_type or "application/octet-stream"
-    filename = file.filename or "image"
+    # Read the stream into memory to get the byte length, then pass back as BytesIO.
+    # This is safe because IMAGE_MAX_SIZE_BYTES (10 MB) << MAX_CONTENT_LENGTH (151 MB).
+    raw = file.stream.read()
+    size_bytes = len(raw)
+    import io as _io
+
+    fileobj = _io.BytesIO(raw)
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -306,10 +314,14 @@ def upload_product_image(product_id: UUID) -> Any:
         key = c.bibliotheque_upload_image_usecase.execute(
             requester_id=requester_id,
             product_id=product_id,
-            fileobj=file.stream,
+            fileobj=fileobj,
             content_type=content_type,
-            filename=filename,
+            size_bytes=size_bytes,
         )
+    except UnsupportedImageTypeError as exc:
+        return _err(415, "UnsupportedMediaType", str(exc))
+    except ImageTooLargeError as exc:
+        return _err(413, "FileTooLarge", str(exc))
     except ProductNotFoundError:
         return _err(404, "NotFound", "Product not found.")
     except CompanyAccessDeniedError:

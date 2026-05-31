@@ -35,3 +35,15 @@ class InvalidImportError(BibliothequeError):
     """Raised when the import payload fails validation (bad references, negative qty, etc.)."""
 
     pass
+
+
+class ImageTooLargeError(BibliothequeError):
+    """Raised when the uploaded image exceeds the allowed byte limit."""
+
+    pass
+
+
+class UnsupportedImageTypeError(BibliothequeError):
+    """Raised when the uploaded image content-type is not in the allowed set."""
+
+    pass

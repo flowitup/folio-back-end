@@ -803,7 +803,6 @@ def _configure_di_container() -> None:
         secret_key=Config.S3_SECRET_KEY,
         bucket=Config.S3_BUCKET,
         region=Config.S3_REGION,
-        public_endpoint_url=Config.S3_PUBLIC_ENDPOINT_URL,
     )
     # Reuse existing user_company_access_repo as the membership reader
     _biblio_membership_reader = CompanyMembershipReader(_access_repo)

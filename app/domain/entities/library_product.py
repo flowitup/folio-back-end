@@ -86,16 +86,17 @@ class LibraryProduct:
         is the repository's responsibility, not this method's.
         """
         new_first = self.first_purchased_at if self.first_purchased_at else purchased_at
-        new_last = (
-            purchased_at
-            if (self.last_purchased_at is None or purchased_at > self.last_purchased_at)
-            else self.last_purchased_at
-        )
+        is_latest = self.last_purchased_at is None or purchased_at > self.last_purchased_at
+        new_last = purchased_at if is_latest else self.last_purchased_at
+        # Only update last_unit_price when this purchase is actually the newest;
+        # an older purchase applied after a newer one must not overwrite the price
+        # that corresponds to last_purchased_at.
+        new_last_price = unit_price if is_latest else self.last_unit_price
         return replace(
             self,
             purchase_count=self.purchase_count + 1,
             total_quantity=self.total_quantity + qty,
-            last_unit_price=unit_price,
+            last_unit_price=new_last_price,
             first_purchased_at=new_first,
             last_purchased_at=new_last,
             updated_at=datetime.now(timezone.utc),

@@ -6,6 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.entities.library_product import LibraryProduct
@@ -19,14 +20,35 @@ class SqlAlchemyBibliothequeProductRepository:
         self._session = session
 
     def upsert(self, product: LibraryProduct) -> LibraryProduct:
-        """Insert or update a product row. Returns the persisted instance."""
+        """Insert or update a product row. Returns the persisted instance.
+
+        New-product inserts run inside a SAVEPOINT so that a concurrent insert
+        of the same (company_id, supplier_id, supplier_reference) triple does not
+        abort the outer import transaction. On IntegrityError the savepoint rolls
+        back and we re-find the row that won the race, then apply the update path.
+        """
         row = self._session.get(BibliothequeProductModel, product.id)
         if row is None:
-            row = BibliothequeProductModel.from_entity(product)
-            self._session.add(row)
+            try:
+                with self._session.begin_nested():
+                    row = BibliothequeProductModel.from_entity(product)
+                    self._session.add(row)
+                    self._session.flush()
+            except IntegrityError:
+                # Another concurrent request inserted the same (company, supplier, reference).
+                # Re-find by the unique business key and fall through to the update path.
+                row = self._session.execute(
+                    select(BibliothequeProductModel).where(
+                        BibliothequeProductModel.company_id == product.company_id,
+                        BibliothequeProductModel.supplier_id == product.supplier_id,
+                        BibliothequeProductModel.supplier_reference == product.supplier_reference,
+                    )
+                ).scalar_one()
+                row.update_from_entity(product)
+                self._session.flush()
         else:
             row.update_from_entity(product)
-        self._session.flush()
+            self._session.flush()
         return row.to_entity()
 
     def find_by_reference(self, company_id: UUID, supplier_id: UUID, reference: str) -> Optional[LibraryProduct]:

@@ -499,6 +499,49 @@ class TestProductRepository:
         assert categories == ["Tools"]
         assert None not in categories
 
+    def test_upsert_concurrent_insert_same_key_converges_to_one_row(self, session):
+        """Simulates the concurrent new-product race: pre-inserting a row with the same
+        business key and then calling upsert with the original entity must not raise
+        and must leave exactly one row in the DB with the merged state.
+
+        This covers the savepoint path: upsert catches IntegrityError, re-finds the
+        existing row by (company_id, supplier_id, supplier_reference), and updates it
+        without aborting the outer transaction.
+        """
+        repo = SqlAlchemyBibliothequeProductRepository(session)
+        company_id = uuid4()
+        supplier_id = uuid4()
+
+        # Simulate the "other concurrent request" winning the race:
+        # insert the row directly so the business key already exists.
+        winner = LibraryProduct.create(
+            company_id=company_id,
+            supplier_id=supplier_id,
+            supplier_reference="SKU-RACE",
+            name="Winner",
+        )
+        repo.upsert(winner)  # This persists the row with winner.id
+
+        # Now simulate our request that also created an entity with a NEW uuid4()
+        # for the same business key — it should gracefully fall back to the existing row.
+        latecomer = LibraryProduct.create(
+            company_id=company_id,
+            supplier_id=supplier_id,
+            supplier_reference="SKU-RACE",
+            name="Latecomer",
+        )
+        # latecomer.id is different from winner.id; upsert should not raise
+        result = repo.upsert(latecomer)
+
+        # Only one row must exist for this business key
+        results, total = repo.list(company_id)
+        assert total == 1, f"Expected 1 row, got {total}"
+        # The returned entity must have the winner's id (first insert wins the race)
+        assert result.id == winner.id
+        # The outer session must still be usable (no aborted transaction)
+        found = repo.find_by_reference(company_id, supplier_id, "SKU-RACE")
+        assert found is not None
+
 
 class TestPurchaseRepository:
     """Test ILibraryPurchaseRepository contract."""

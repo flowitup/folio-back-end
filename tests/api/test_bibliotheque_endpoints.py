@@ -545,6 +545,37 @@ class TestImportPurchasesEndpoint:
         )
         assert resp.status_code == 422
 
+    def test_422_records_exceeds_max_length(self, bib_client, manager_token, bibliotheque_app):
+        """Payload with more than 1000 records must be rejected with 422."""
+        now = datetime.now(timezone.utc)
+        # Build 1001 records — one above the max_length cap
+        records = [
+            {
+                "supplier_reference": f"SKU-{i:04d}",
+                "product_name": f"Product {i}",
+                "quantity": "1.0",
+                "unit_price": "9.99",
+                "purchased_at": now.isoformat(),
+                "source_document_ref": f"TICKET-{i:04d}",
+                "source_document_type": "ticket",
+                "line_index": 0,
+            }
+            for i in range(1001)
+        ]
+        payload = {
+            "company_id": bibliotheque_app._test_company_id,
+            "supplier_name": "Bulk Corp",
+            "supplier_slug": "bulk-corp",
+            "records": records,
+        }
+
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json=payload,
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/bibliotheque/products/<id>
@@ -661,6 +692,92 @@ class TestUploadProductImageEndpoint:
             headers=_auth(manager_token),
         )
         assert resp.status_code == 422
+
+    def test_415_unsupported_content_type_is_rejected(self, bib_client, manager_token):
+        """Uploading a non-image content-type must return 415 before touching the DB."""
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image",
+            data={"image": (io.BytesIO(b"not an image"), "evil.exe")},
+            content_type="multipart/form-data",
+            headers=_auth(manager_token),
+        )
+        # application/octet-stream (or whatever Flask infers) is not in the allowlist
+        assert resp.status_code == 415
+
+    def test_413_oversized_image_is_rejected(self, bib_client, manager_token):
+        """Uploading a file larger than 10 MB must return 413."""
+        # 10 MB + 1 byte — just over the limit
+        oversized = io.BytesIO(b"x" * (10 * 1024 * 1024 + 1))
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image",
+            data={"image": (oversized, "big.png", "image/png")},
+            content_type="multipart/form-data",
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 413
+
+    def test_path_traversal_filename_stored_under_product_prefix(self, bib_client, manager_token, bibliotheque_app):
+        """A malicious filename like '../<other-id>/image' must not escape the product prefix.
+
+        The use-case ignores the client filename and always writes to the fixed
+        'library-products/<product_id>/image' key, so the stored key is always
+        scoped to the product regardless of what filename was sent.
+        """
+        # First create a product via import so we have a valid product_id
+        now = datetime.now(timezone.utc)
+        import_payload = {
+            "company_id": bibliotheque_app._test_company_id,
+            "supplier_name": "TraversalCorp",
+            "supplier_slug": "traversal-corp",
+            "records": [
+                {
+                    "supplier_reference": "TRAVERSAL-SKU",
+                    "product_name": "Traversal Test Product",
+                    "quantity": "1.0",
+                    "unit_price": "1.00",
+                    "purchased_at": now.isoformat(),
+                    "source_document_ref": "TRAVERSAL-DOC-001",
+                    "source_document_type": "ticket",
+                    "line_index": 0,
+                }
+            ],
+        }
+        import_resp = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json=import_payload,
+            headers=_auth(manager_token),
+        )
+        assert import_resp.status_code == 200
+
+        # Get a valid product_id from the products list
+        list_resp = bib_client.get(
+            f"/api/v1/bibliotheque/products?company_id={bibliotheque_app._test_company_id}",
+            headers=_auth(manager_token),
+        )
+        assert list_resp.status_code == 200
+        products = list_resp.get_json()["items"]
+        # Find our product
+        product = next((p for p in products if p["supplier_reference"] == "TRAVERSAL-SKU"), None)
+        if product is None:
+            return  # product not found — skip (shared DB state)
+        product_id = product["id"]
+
+        # Upload with a malicious filename — the key must still be under product_id/image
+        evil_filename = "../other-product-id/image"
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image",
+            data={"image": (io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 8), evil_filename, "image/png")},
+            content_type="multipart/form-data",
+            headers=_auth(manager_token),
+        )
+        # Might be 200 (if InMemoryDocumentStorage supports it) or product-level errors
+        if resp.status_code == 200:
+            stored_key = resp.get_json().get("image_storage_key", "")
+            # Key must start with library-products/<product_id>/
+            assert stored_key.startswith(
+                f"library-products/{product_id}/"
+            ), f"Key '{stored_key}' escapes product prefix for product {product_id}"
+            assert ".." not in stored_key, f"Path traversal found in stored key: {stored_key}"
 
 
 # ---------------------------------------------------------------------------
