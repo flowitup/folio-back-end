@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
 class ImportRecordSchema(BaseModel):
@@ -48,3 +48,11 @@ class ImportRequestSchema(BaseModel):
         if not v:
             raise ValueError("records must not be empty")
         return v
+
+
+class ImageFromUrlSchema(BaseModel):
+    """Request body for POST /api/v1/bibliotheque/products/<id>/image-from-url."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl = Field(description="HTTPS URL of the product image to fetch server-side.")

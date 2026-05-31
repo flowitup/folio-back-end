@@ -47,3 +47,15 @@ class UnsupportedImageTypeError(BibliothequeError):
     """Raised when the uploaded image content-type is not in the allowed set."""
 
     pass
+
+
+class SsrfBlockedError(BibliothequeError):
+    """Raised when the requested image URL is not in the SSRF allowlist or uses a disallowed scheme."""
+
+    pass
+
+
+class ImageAlreadyExistsError(BibliothequeError):
+    """Raised when the product already has an image and force=True was not requested."""
+
+    pass

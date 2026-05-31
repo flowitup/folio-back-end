@@ -23,13 +23,15 @@ from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.bibliotheque import bibliotheque_bp
-from app.api.v1.bibliotheque.schemas import ImportRequestSchema
+from app.api.v1.bibliotheque.schemas import ImageFromUrlSchema, ImportRequestSchema
 from app.application.bibliotheque.dtos import ImportRecordDTO
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
+    ImageAlreadyExistsError,
     ImageTooLargeError,
     InsufficientPermissionError,
     ProductNotFoundError,
+    SsrfBlockedError,
     UnsupportedImageTypeError,
 )
 from app.infrastructure.rate_limiter import limiter
@@ -330,6 +332,63 @@ def upload_product_image(product_id: UUID) -> Any:
         return _err(403, "Forbidden", "bibliotheque:manage permission required.")
     except Exception:
         logger.exception("upload_product_image error product_id=%s", product_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    return jsonify({"image_storage_key": key}), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bibliotheque/products/<id>/image-from-url
+# ---------------------------------------------------------------------------
+
+
+@bibliotheque_bp.post("/bibliotheque/products/<uuid:product_id>/image-from-url")
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("600 per minute", key_func=jwt_user_key)
+def fetch_product_image_from_url(product_id: UUID) -> Any:
+    """Fetch and store a product image from an allowlisted URL server-side.
+
+    Leroy Merlin / Adeo CDN images are hotlink-protected and cannot be fetched
+    from the browser.  This endpoint fetches them server-side using a spoofed
+    Referer/User-Agent and stores the bytes via BibliothequeImageStorage.
+
+    Body: {"url": "<https://media.adeo.com/...>"}
+    Query: ?force=true  — overwrite an existing image (default: skip if present).
+    Requires: JWT + company membership + bibliotheque:manage.
+    """
+    try:
+        body = ImageFromUrlSchema.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        return _err(422, "ValidationError", str(exc))
+
+    force = request.args.get("force", "").lower() in ("1", "true", "yes")
+    url = str(body.url)
+
+    requester_id = UUID(get_jwt_identity())
+    c = get_container()
+    try:
+        key = c.bibliotheque_fetch_image_from_url_usecase.execute(
+            requester_id=requester_id,
+            product_id=product_id,
+            url=url,
+            force=force,
+        )
+    except SsrfBlockedError as exc:
+        return _err(422, "SsrfBlocked", str(exc))
+    except UnsupportedImageTypeError as exc:
+        return _err(415, "UnsupportedMediaType", str(exc))
+    except ImageTooLargeError as exc:
+        return _err(413, "FileTooLarge", str(exc))
+    except ImageAlreadyExistsError as exc:
+        return _err(409, "Conflict", str(exc))
+    except ProductNotFoundError:
+        return _err(404, "NotFound", "Product not found.")
+    except CompanyAccessDeniedError:
+        return _err(403, "Forbidden", "Not a member of this company.")
+    except InsufficientPermissionError:
+        return _err(403, "Forbidden", "bibliotheque:manage permission required.")
+    except Exception:
+        logger.exception("fetch_product_image_from_url error product_id=%s url=%s", product_id, url)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     return jsonify({"image_storage_key": key}), 200
