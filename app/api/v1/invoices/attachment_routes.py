@@ -8,6 +8,7 @@ from uuid import UUID
 from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt, jwt_required
 
+from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.projects.decorators import (
     require_permission,
@@ -43,6 +44,7 @@ def _serialize(att) -> dict:
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>/attachments", methods=["GET"])
+@openapi_doc(summary="List attachments for an invoice", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
 @require_invoice_access(write=False)
@@ -58,6 +60,7 @@ def list_attachments(project_id: str, invoice_id: str):
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>/attachments", methods=["POST"])
+@openapi_doc(summary="Upload an attachment to an invoice", tags=["invoices"])
 @jwt_required()
 @require_permission("project:manage_invoices")
 @require_invoice_access(write=True)
@@ -103,6 +106,7 @@ def upload_attachment(project_id: str, invoice_id: str):
 
 
 @invoice_bp.route("/attachments/<attachment_id>/download", methods=["GET"])
+@openapi_doc(summary="Download an invoice attachment", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
 @require_attachment_access(write=False)
@@ -136,6 +140,7 @@ def download_attachment(attachment_id: str):
 
 
 @invoice_bp.route("/attachments/<attachment_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete an invoice attachment", tags=["invoices"])
 @jwt_required()
 @require_permission("project:manage_invoices")
 @require_attachment_access(write=True)

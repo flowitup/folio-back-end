@@ -9,6 +9,7 @@ from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.validation_error import validation_error_response
+from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.invoices.schemas import CreateInvoiceSchema, UpdateInvoiceSchema
 from app.api.v1.projects.decorators import (
@@ -77,6 +78,7 @@ def _get_project_company_id(project_id: UUID) -> "UUID | None":
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["GET"])
+@openapi_doc(summary="List invoices for a project, optionally filtered by ?type=", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -115,6 +117,11 @@ def list_invoices(project_id: str):
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])
+@openapi_doc(
+    summary="Create a new invoice for a project",
+    request=CreateInvoiceSchema,
+    tags=["invoices"],
+)
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")
@@ -165,6 +172,7 @@ def create_invoice(project_id: str):
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["GET"])
+@openapi_doc(summary="Retrieve a single invoice by ID, scoped to the project", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
 @require_invoice_access(write=False)
@@ -185,6 +193,11 @@ def get_invoice(project_id: str, invoice_id: str):
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Partially update an invoice (type is immutable after creation)",
+    request=UpdateInvoiceSchema,
+    tags=["invoices"],
+)
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")
@@ -253,6 +266,7 @@ def update_invoice(project_id: str, invoice_id: str):
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete an invoice by ID, scoped to the project", tags=["invoices"])
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")

@@ -9,6 +9,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.projects.decorators import (
     require_permission,
     require_project_access,
@@ -58,6 +59,7 @@ def _serialize(task) -> dict:
 
 
 @task_bp.route("/projects/<project_id>/tasks", methods=["GET"])
+@openapi_doc(summary="List tasks for a project", tags=["tasks"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -74,6 +76,7 @@ def list_tasks(project_id: str):
 
 
 @task_bp.route("/projects/<project_id>/tasks", methods=["POST"])
+@openapi_doc(summary="Create a new task in a project", request=CreateTaskSchema, tags=["tasks"])
 @jwt_required()
 @require_permission("project:read")  # any member can create tasks
 @require_project_access(write=False)
@@ -109,6 +112,7 @@ def create_task(project_id: str):
 
 
 @task_bp.route("/tasks/<task_id>", methods=["GET"])
+@openapi_doc(summary="Get a single task by ID", tags=["tasks"])
 @jwt_required()
 @require_permission("project:read")
 @require_task_access(write=False)
@@ -121,6 +125,7 @@ def get_task(task_id: str):
 
 
 @task_bp.route("/tasks/<task_id>", methods=["PUT"])
+@openapi_doc(summary="Update a task's fields", request=UpdateTaskSchema, tags=["tasks"])
 @jwt_required()
 @require_permission("project:read")
 @require_task_access(write=False)  # any project member may edit task content (kept lenient)
@@ -150,6 +155,7 @@ def update_task(task_id: str):
 
 
 @task_bp.route("/tasks/<task_id>/move", methods=["PATCH"])
+@openapi_doc(summary="Move a task to a new status column", request=MoveTaskSchema, tags=["tasks"])
 @jwt_required()
 @require_permission("project:read")
 @require_task_access(write=False)
@@ -171,6 +177,7 @@ def move_task(task_id: str):
 
 
 @task_bp.route("/tasks/<task_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a task", tags=["tasks"])
 @jwt_required()
 @require_permission("project:read")
 # Destructive operation — restrict to project owner / admin to prevent any

@@ -9,6 +9,7 @@ import pydantic
 from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
+from app.api.openapi import openapi_doc
 from app.api.v1.project_documents import project_documents_bp
 from app.api.v1.project_documents.schemas import ListQueryParams
 from app.api.v1.projects.decorators import has_permission, require_permission, require_project_access
@@ -56,6 +57,11 @@ def _serialize(doc) -> dict:
 
 
 @project_documents_bp.route("/projects/<project_id>/documents", methods=["GET"])
+@openapi_doc(
+    summary="List project documents with optional filters",
+    query=ListQueryParams,
+    tags=["project_documents"],
+)
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -101,6 +107,7 @@ def list_project_documents(project_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents", methods=["POST"])
+@openapi_doc(summary="Upload a document to a project (multipart/form-data)", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -142,6 +149,7 @@ def upload_project_document(project_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/presign", methods=["POST"])
+@openapi_doc(summary="Generate a presigned PUT URL for direct-to-S3 browser upload", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -200,6 +208,9 @@ def presign_project_document(project_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/confirm", methods=["POST"])
+@openapi_doc(
+    summary="Confirm a presigned upload — verify S3 object exists and persist DB row", tags=["project_documents"]
+)
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -269,6 +280,7 @@ def confirm_project_document_upload(project_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/preview-url", methods=["GET"])
+@openapi_doc(summary="Return a short-lived presigned GET URL for browser preview", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -307,6 +319,7 @@ def get_document_preview_url(project_id: str, document_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/download", methods=["GET"])
+@openapi_doc(summary="Download a project document", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -344,6 +357,7 @@ def download_project_document(project_id: str, document_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/rename", methods=["PATCH"])
+@openapi_doc(summary="Rename a project document", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -389,6 +403,7 @@ def rename_project_document(project_id: str, document_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a project document", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -424,6 +439,7 @@ def delete_project_document(project_id: str, document_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/tags", methods=["PUT"])
+@openapi_doc(summary="Replace all tags on a project document", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -466,6 +482,7 @@ def update_document_tags(project_id: str, document_id: str):
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/tags", methods=["GET"])
+@openapi_doc(summary="List all tags used in a project's documents", tags=["project_documents"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)

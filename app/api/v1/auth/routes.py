@@ -14,6 +14,7 @@ from flask_jwt_extended import (
 )
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
     LoginRequest,
@@ -31,6 +32,13 @@ logger = logging.getLogger(__name__)
 
 
 @auth_bp.route("/login", methods=["POST"])
+@openapi_doc(
+    summary="Authenticate user and return tokens",
+    request=LoginRequest,
+    responses={200: LoginResponse},
+    tags=["auth"],
+    auth=False,
+)
 @limiter.limit("5 per minute")
 def login():
     """
@@ -111,6 +119,7 @@ def login():
 
 
 @auth_bp.route("/logout", methods=["POST"])
+@openapi_doc(summary="Logout user and clear cookies", tags=["auth"])
 @jwt_required(optional=True)
 def logout():
     """Logout user - clear cookies and revoke both access and refresh tokens."""
@@ -150,6 +159,12 @@ def logout():
 
 
 @auth_bp.route("/refresh", methods=["POST"])
+@openapi_doc(
+    summary="Refresh access token using refresh token",
+    responses={200: RefreshResponse},
+    tags=["auth"],
+    auth=False,
+)
 @jwt_required(refresh=True)
 def refresh():
     """Refresh access token using refresh token."""
@@ -170,6 +185,7 @@ def refresh():
 
 
 @auth_bp.route("/me", methods=["GET"])
+@openapi_doc(summary="Get current authenticated user info", responses={200: UserResponse}, tags=["auth"])
 @jwt_required()
 def get_current_user():
     """Get current authenticated user info."""

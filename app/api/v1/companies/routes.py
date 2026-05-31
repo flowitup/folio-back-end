@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.openapi import openapi_doc
 from app.api.v1.companies import companies_bp, users_me_bp
 from app.api.v1.companies.decorators import require_admin, require_attached_company
 from app.api.v1.companies.schemas import (
@@ -80,6 +81,7 @@ def _company_to_dict(dto: CompanyResponse) -> dict:
 
 
 @companies_bp.route("/companies", methods=["GET"])
+@openapi_doc(summary="List companies", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def list_companies():
@@ -131,6 +133,11 @@ def list_companies():
 
 
 @companies_bp.route("/companies", methods=["POST"])
+@openapi_doc(
+    summary="Create a new company (admin only)",
+    request=CreateCompanyRequest,
+    tags=["companies"],
+)
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 @require_admin
@@ -171,6 +178,7 @@ def create_company():
 
 
 @companies_bp.route("/companies/<company_id>", methods=["GET"])
+@openapi_doc(summary="Get a company by ID", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def get_company(company_id: str):
@@ -201,6 +209,11 @@ def get_company(company_id: str):
 
 
 @companies_bp.route("/companies/<company_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Update a company (admin only)",
+    request=UpdateCompanyRequest,
+    tags=["companies"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
@@ -249,6 +262,7 @@ def update_company(company_id: str):
 
 
 @companies_bp.route("/companies/<company_id>", methods=["DELETE"])
+@openapi_doc(summary="Delete a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
@@ -283,6 +297,7 @@ def delete_company(company_id: str):
 
 
 @companies_bp.route("/companies/<company_id>/invite-tokens", methods=["POST"])
+@openapi_doc(summary="Generate an invite token for a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 @require_admin
@@ -357,6 +372,7 @@ def generate_invite_token(company_id: str):
 
 
 @companies_bp.route("/companies/<company_id>/invite-tokens/active", methods=["DELETE"])
+@openapi_doc(summary="Revoke the active invite token for a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
@@ -389,6 +405,11 @@ def revoke_invite_token(company_id: str):
 
 
 @companies_bp.route("/companies/attach-by-token", methods=["POST"])
+@openapi_doc(
+    summary="Attach the caller to a company by redeeming an invite token",
+    request=RedeemInviteTokenRequest,
+    tags=["companies"],
+)
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 def redeem_invite_token():
@@ -463,6 +484,7 @@ def redeem_invite_token():
 
 
 @companies_bp.route("/companies/<company_id>/access", methods=["DELETE"])
+@openapi_doc(summary="Detach the authenticated caller from a company", tags=["companies"])
 @jwt_required()
 @require_attached_company()
 def detach_company(company_id: str):
@@ -491,6 +513,7 @@ def detach_company(company_id: str):
 
 
 @companies_bp.route("/companies/<company_id>/access/<target_user_id>", methods=["DELETE"])
+@openapi_doc(summary="Remove a user from a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
@@ -544,6 +567,7 @@ def boot_attached_user(company_id: str, target_user_id: str):
 
 
 @companies_bp.route("/companies/<company_id>/attached-users", methods=["GET"])
+@openapi_doc(summary="List users attached to a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_admin
@@ -583,6 +607,11 @@ def list_attached_users(company_id: str):
 
 
 @users_me_bp.route("/users/me/primary-company", methods=["PUT"])
+@openapi_doc(
+    summary="Set the caller's primary company",
+    request=SetPrimaryCompanyRequest,
+    tags=["companies"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def set_primary_company():

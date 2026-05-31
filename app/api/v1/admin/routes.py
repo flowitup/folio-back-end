@@ -7,6 +7,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.admin import admin_bp
 from app.api.v1.admin.schemas import (
     BulkAddRequest,
@@ -63,6 +64,12 @@ def _require_superadmin():
 
 
 @admin_bp.route("/users/<uuid:user_id>/memberships", methods=["POST"])
+@openapi_doc(
+    summary="Bulk-add an existing user to multiple projects with the given role",
+    request=BulkAddRequest,
+    responses={200: BulkAddResponse},
+    tags=["admin"],
+)
 @jwt_required()
 @limiter.limit("5 per hour", key_func=jwt_user_key)
 @limiter.limit("10 per hour")
@@ -124,6 +131,7 @@ def bulk_add_memberships(user_id: UUID):
 
 
 @admin_bp.route("/users", methods=["GET"])
+@openapi_doc(summary="Search users by email or display name (superadmin only)", tags=["admin"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def search_users():

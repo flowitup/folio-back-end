@@ -6,6 +6,7 @@ from flask import jsonify, make_response, request
 from flask_jwt_extended import get_jwt_identity, jwt_required, set_access_cookies, set_refresh_cookies
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.invitations import invitations_bp
 from app.api.v1.invitations.schemas import (
     AcceptInviteRequest,
@@ -62,6 +63,12 @@ def _validation_err(e: ValidationError):
 
 
 @invitations_bp.route("", methods=["POST"])
+@openapi_doc(
+    summary="Create an invitation (or directly add existing user) to a project",
+    request=CreateInviteRequest,
+    responses={201: CreateInviteResponse},
+    tags=["invitations"],
+)
 @jwt_required()
 @limiter.limit("10 per hour", key_func=jwt_user_key)
 def create_invitation():
@@ -134,6 +141,7 @@ def create_invitation():
 
 
 @invitations_bp.route("/projects/<uuid:project_id>/invitations", methods=["GET"])
+@openapi_doc(summary="List invitations for a project", tags=["invitations"])
 @jwt_required()
 @limiter.limit("60 per minute")
 def list_project_invitations(project_id: UUID):
@@ -179,6 +187,7 @@ def list_project_invitations(project_id: UUID):
 
 
 @invitations_bp.route("/<uuid:invitation_id>/revoke", methods=["POST"])
+@openapi_doc(summary="Revoke a pending invitation", tags=["invitations"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def revoke_invitation(invitation_id: UUID):
@@ -210,6 +219,12 @@ def revoke_invitation(invitation_id: UUID):
 
 
 @invitations_bp.route("/verify/<token>", methods=["GET"])
+@openapi_doc(
+    summary="Verify an invitation token and return safe metadata",
+    responses={200: VerifyInviteResponse},
+    tags=["invitations"],
+    auth=False,
+)
 @limiter.limit("60 per minute")
 def verify_invitation(token: str):
     """Verify an invitation token and return safe metadata. Public endpoint."""
@@ -254,6 +269,12 @@ def verify_invitation(token: str):
 
 
 @invitations_bp.route("/accept", methods=["POST"])
+@openapi_doc(
+    summary="Accept an invitation: create account + membership, return JWT cookies",
+    request=AcceptInviteRequest,
+    tags=["invitations"],
+    auth=False,
+)
 @limiter.limit("5 per minute")
 def accept_invitation():
     """Accept an invitation: create account + membership, return JWT cookies."""

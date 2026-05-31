@@ -7,6 +7,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
@@ -58,6 +59,7 @@ def _worker_response(w) -> WorkerResponse:
 
 
 @labor_bp.route("/projects/<project_id>/workers", methods=["GET"])
+@openapi_doc(summary="List workers for a project", tags=["labor"])
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
@@ -72,6 +74,12 @@ def list_workers(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/workers", methods=["POST"])
+@openapi_doc(
+    summary="Create a new worker for a project",
+    request=CreateWorkerRequest,
+    responses={201: WorkerResponse},
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
@@ -110,6 +118,12 @@ def create_worker(project_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/workers/<worker_id>", methods=["PUT"])
+@openapi_doc(
+    summary="Update an existing worker",
+    request=UpdateWorkerRequest,
+    responses={200: WorkerResponse},
+    tags=["labor"],
+)
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
@@ -142,6 +156,7 @@ def update_worker(project_id: str, worker_id: str):
 
 
 @labor_bp.route("/projects/<project_id>/workers/<worker_id>", methods=["DELETE"])
+@openapi_doc(summary="Soft delete a worker (deactivate)", tags=["labor"])
 @jwt_required()
 @limiter.limit("10 per minute")
 @require_permission("project:manage_labor")
