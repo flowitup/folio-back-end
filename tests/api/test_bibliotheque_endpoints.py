@@ -54,6 +54,7 @@ def bibliotheque_app():
     from app.application.bibliotheque.get_product_usecase import GetProductUseCase
     from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase
     from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase
+    from app.application.bibliotheque.recategorize_usecase import RecategorizeUseCase
     from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
     from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
     from config import TestingConfig
@@ -202,6 +203,13 @@ def bibliotheque_app():
             supplier_repo=_supplier_repo,
             product_repo=_product_repo,
             purchase_repo=_purchase_repo,
+            membership_reader=_membership_reader,
+            permission_checker=_role_checker,
+            db_session=db.session,
+        )
+        _c.bibliotheque_recategorize_usecase = RecategorizeUseCase(
+            supplier_repo=_supplier_repo,
+            product_repo=_product_repo,
             membership_reader=_membership_reader,
             permission_checker=_role_checker,
             db_session=db.session,
@@ -1160,3 +1168,159 @@ class TestNaiveDatetimeCoercion:
         result = resp.get_json()
         assert result["purchases_added"] == 3
         assert result["created"] == 3
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bibliotheque/recategorize — curated category override
+# ---------------------------------------------------------------------------
+
+
+class TestRecategorizeEndpoint:
+    def _seed(self, client, token, company_id, slug, records):
+        """Seed products for a supplier via the import endpoint."""
+        payload = {
+            "company_id": company_id,
+            "supplier_name": slug,
+            "supplier_slug": slug,
+            "records": records,
+        }
+        resp = client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(token))
+        assert resp.status_code == 200, f"seed import failed: {resp.get_data(as_text=True)}"
+        return resp.get_json()
+
+    def _rec(self, ref, name, category=None):
+        r = {
+            "supplier_reference": ref,
+            "product_name": name,
+            "quantity": "1.0",
+            "unit_price": "1.00",
+            "purchased_at": "2024-01-01T00:00:00Z",
+            "source_document_ref": f"DOC-{ref}",
+            "source_document_type": "ticket",
+            "line_index": 0,
+        }
+        if category is not None:
+            r["category"] = category
+        return r
+
+    def _category_of(self, client, token, company_id, ref):
+        resp = client.get(
+            f"/api/v1/bibliotheque/products?company_id={company_id}&q={ref}",
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        items = resp.get_json()["items"]
+        match = next((p for p in items if p["supplier_reference"] == ref), None)
+        return match["category"] if match else None
+
+    def test_200_overwrites_existing_category(self, bib_client, manager_token, bibliotheque_app):
+        """KEY: recategorize overwrites a non-null category (import never does)."""
+        cid = bibliotheque_app._test_company_id
+        slug = "recat-overwrite"
+        self._seed(
+            bib_client,
+            manager_token,
+            cid,
+            slug,
+            [self._rec("RC-1", "Tuyau PVC", category="WrongCat"), self._rec("RC-2", "Vis inox")],
+        )
+        # RC-1 starts as "WrongCat", RC-2 starts null
+        assert self._category_of(bib_client, manager_token, cid, "RC-1") == "WrongCat"
+        assert self._category_of(bib_client, manager_token, cid, "RC-2") is None
+
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={
+                "company_id": cid,
+                "supplier_slug": slug,
+                "items": [
+                    {"supplier_reference": "RC-1", "category": "Plomberie"},
+                    {"supplier_reference": "RC-2", "category": "Quincaillerie"},
+                ],
+            },
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        result = resp.get_json()
+        assert result["updated"] == 2
+        assert result["not_found"] == 0
+        # Verify the overwrite actually persisted
+        assert self._category_of(bib_client, manager_token, cid, "RC-1") == "Plomberie"
+        assert self._category_of(bib_client, manager_token, cid, "RC-2") == "Quincaillerie"
+
+    def test_200_unchanged_and_not_found_counts(self, bib_client, manager_token, bibliotheque_app):
+        cid = bibliotheque_app._test_company_id
+        slug = "recat-counts"
+        self._seed(bib_client, manager_token, cid, slug, [self._rec("CNT-1", "Pinceau", category="Peinture")])
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={
+                "company_id": cid,
+                "supplier_slug": slug,
+                "items": [
+                    {"supplier_reference": "CNT-1", "category": "Peinture"},  # already this -> unchanged
+                    {"supplier_reference": "DOES-NOT-EXIST", "category": "X"},  # not_found
+                ],
+            },
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        result = resp.get_json()
+        assert result["updated"] == 0
+        assert result["unchanged"] == 1
+        assert result["not_found"] == 1
+
+    def test_404_supplier_not_found(self, bib_client, manager_token, bibliotheque_app):
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={
+                "company_id": bibliotheque_app._test_company_id,
+                "supplier_slug": "no-such-supplier-xyz",
+                "items": [{"supplier_reference": "X", "category": "Y"}],
+            },
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 404
+
+    def test_401_unauthenticated(self, bib_client, bibliotheque_app):
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={
+                "company_id": bibliotheque_app._test_company_id,
+                "supplier_slug": "x",
+                "items": [{"supplier_reference": "X", "category": "Y"}],
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_403_not_company_member(self, bib_client, outsider_token, bibliotheque_app):
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={
+                "company_id": bibliotheque_app._test_company_id,
+                "supplier_slug": "x",
+                "items": [{"supplier_reference": "X", "category": "Y"}],
+            },
+            headers=_auth(outsider_token),
+        )
+        assert resp.status_code == 403
+
+    def test_403_missing_manage_permission(self, bib_client, member_token, bibliotheque_app):
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={
+                "company_id": bibliotheque_app._test_company_id,
+                "supplier_slug": "x",
+                "items": [{"supplier_reference": "X", "category": "Y"}],
+            },
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 403
+
+    def test_422_missing_items(self, bib_client, manager_token, bibliotheque_app):
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/recategorize",
+            json={"company_id": bibliotheque_app._test_company_id, "supplier_slug": "x", "items": []},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422

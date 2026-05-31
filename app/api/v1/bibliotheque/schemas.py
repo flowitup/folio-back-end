@@ -50,6 +50,25 @@ class ImportRequestSchema(BaseModel):
         return v
 
 
+class RecategorizeItemSchema(BaseModel):
+    """One (supplier_reference -> category) reassignment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    supplier_reference: str = Field(min_length=1, max_length=200)
+    category: str = Field(min_length=1, max_length=200)
+
+
+class RecategorizeRequestSchema(BaseModel):
+    """Request body for POST /api/v1/bibliotheque/recategorize."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    company_id: UUID
+    supplier_slug: str = Field(min_length=1, max_length=100)
+    items: List[RecategorizeItemSchema] = Field(min_length=1, max_length=10000)
+
+
 class ImageFromUrlSchema(BaseModel):
     """Request body for POST /api/v1/bibliotheque/products/<id>/image-from-url."""
 
