@@ -54,7 +54,7 @@ def bibliotheque_app():
     from app.application.bibliotheque.get_product_usecase import GetProductUseCase
     from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase
     from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase
-    from app.application.bibliotheque.recategorize_usecase import RecategorizeUseCase
+    from app.application.bibliotheque.update_product_usecase import UpdateProductUseCase
     from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
     from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
     from config import TestingConfig
@@ -207,8 +207,7 @@ def bibliotheque_app():
             permission_checker=_role_checker,
             db_session=db.session,
         )
-        _c.bibliotheque_recategorize_usecase = RecategorizeUseCase(
-            supplier_repo=_supplier_repo,
+        _c.bibliotheque_update_product_usecase = UpdateProductUseCase(
             product_repo=_product_repo,
             membership_reader=_membership_reader,
             permission_checker=_role_checker,
@@ -1171,25 +1170,13 @@ class TestNaiveDatetimeCoercion:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/bibliotheque/recategorize — curated category override
+# PATCH /api/v1/bibliotheque/products/<id> — edit product metadata
 # ---------------------------------------------------------------------------
 
 
-class TestRecategorizeEndpoint:
-    def _seed(self, client, token, company_id, slug, records):
-        """Seed products for a supplier via the import endpoint."""
-        payload = {
-            "company_id": company_id,
-            "supplier_name": slug,
-            "supplier_slug": slug,
-            "records": records,
-        }
-        resp = client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(token))
-        assert resp.status_code == 200, f"seed import failed: {resp.get_data(as_text=True)}"
-        return resp.get_json()
-
-    def _rec(self, ref, name, category=None):
-        r = {
+class TestUpdateProductEndpoint:
+    def _seed_one(self, client, token, company_id, slug, ref, name, category=None):
+        rec = {
             "supplier_reference": ref,
             "product_name": name,
             "quantity": "1.0",
@@ -1200,127 +1187,105 @@ class TestRecategorizeEndpoint:
             "line_index": 0,
         }
         if category is not None:
-            r["category"] = category
-        return r
+            rec["category"] = category
+        payload = {"company_id": company_id, "supplier_name": slug, "supplier_slug": slug, "records": [rec]}
+        resp = client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
 
-    def _category_of(self, client, token, company_id, ref):
-        resp = client.get(
-            f"/api/v1/bibliotheque/products?company_id={company_id}&q={ref}",
-            headers=_auth(token),
-        )
+    def _product(self, client, token, company_id, ref):
+        resp = client.get(f"/api/v1/bibliotheque/products?company_id={company_id}&q={ref}", headers=_auth(token))
         assert resp.status_code == 200
         items = resp.get_json()["items"]
-        match = next((p for p in items if p["supplier_reference"] == ref), None)
-        return match["category"] if match else None
+        return next((p for p in items if p["supplier_reference"] == ref), None)
 
-    def test_200_overwrites_existing_category(self, bib_client, manager_token, bibliotheque_app):
-        """KEY: recategorize overwrites a non-null category (import never does)."""
+    def test_200_overwrites_name_and_category(self, bib_client, manager_token, bibliotheque_app):
         cid = bibliotheque_app._test_company_id
-        slug = "recat-overwrite"
-        self._seed(
-            bib_client,
-            manager_token,
-            cid,
-            slug,
-            [self._rec("RC-1", "Tuyau PVC", category="WrongCat"), self._rec("RC-2", "Vis inox")],
-        )
-        # RC-1 starts as "WrongCat", RC-2 starts null
-        assert self._category_of(bib_client, manager_token, cid, "RC-1") == "WrongCat"
-        assert self._category_of(bib_client, manager_token, cid, "RC-2") is None
+        self._seed_one(bib_client, manager_token, cid, "edit-co", "ED-1", "Old name", category="OldCat")
+        p = self._product(bib_client, manager_token, cid, "ED-1")
+        assert p["category"] == "OldCat"
 
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={
-                "company_id": cid,
-                "supplier_slug": slug,
-                "items": [
-                    {"supplier_reference": "RC-1", "category": "Plomberie"},
-                    {"supplier_reference": "RC-2", "category": "Quincaillerie"},
-                ],
-            },
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"name": "New name", "category": "Plomberie", "description": "d", "size": "L"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
-        result = resp.get_json()
-        assert result["updated"] == 2
-        assert result["not_found"] == 0
-        # Verify the overwrite actually persisted
-        assert self._category_of(bib_client, manager_token, cid, "RC-1") == "Plomberie"
-        assert self._category_of(bib_client, manager_token, cid, "RC-2") == "Quincaillerie"
+        out = resp.get_json()
+        assert out["name"] == "New name"
+        assert out["category"] == "Plomberie"
+        assert out["description"] == "d"
+        assert out["size"] == "L"
+        # Persisted
+        p2 = self._product(bib_client, manager_token, cid, "ED-1")
+        assert p2["category"] == "Plomberie" and p2["name"] == "New name"
 
-    def test_200_unchanged_and_not_found_counts(self, bib_client, manager_token, bibliotheque_app):
+    def test_200_partial_update_leaves_other_fields(self, bib_client, manager_token, bibliotheque_app):
         cid = bibliotheque_app._test_company_id
-        slug = "recat-counts"
-        self._seed(bib_client, manager_token, cid, slug, [self._rec("CNT-1", "Pinceau", category="Peinture")])
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={
-                "company_id": cid,
-                "supplier_slug": slug,
-                "items": [
-                    {"supplier_reference": "CNT-1", "category": "Peinture"},  # already this -> unchanged
-                    {"supplier_reference": "DOES-NOT-EXIST", "category": "X"},  # not_found
-                ],
-            },
+        self._seed_one(bib_client, manager_token, cid, "edit-partial", "EP-1", "Keep me", category="KeepCat")
+        p = self._product(bib_client, manager_token, cid, "EP-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"category": "Outillage"},  # only category
             headers=_auth(manager_token),
         )
-        assert resp.status_code == 200, resp.get_data(as_text=True)
-        result = resp.get_json()
-        assert result["updated"] == 0
-        assert result["unchanged"] == 1
-        assert result["not_found"] == 1
+        assert resp.status_code == 200
+        out = resp.get_json()
+        assert out["category"] == "Outillage"
+        assert out["name"] == "Keep me"  # unchanged
 
-    def test_404_supplier_not_found(self, bib_client, manager_token, bibliotheque_app):
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={
-                "company_id": bibliotheque_app._test_company_id,
-                "supplier_slug": "no-such-supplier-xyz",
-                "items": [{"supplier_reference": "X", "category": "Y"}],
-            },
+    def test_200_explicit_null_clears_field(self, bib_client, manager_token, bibliotheque_app):
+        cid = bibliotheque_app._test_company_id
+        self._seed_one(bib_client, manager_token, cid, "edit-null", "EN-1", "Has cat", category="SomeCat")
+        p = self._product(bib_client, manager_token, cid, "EN-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"category": None},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["category"] is None
+
+    def test_404_product_not_found(self, bib_client, manager_token):
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{uuid4()}",
+            json={"category": "X"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 404
 
-    def test_401_unauthenticated(self, bib_client, bibliotheque_app):
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={
-                "company_id": bibliotheque_app._test_company_id,
-                "supplier_slug": "x",
-                "items": [{"supplier_reference": "X", "category": "Y"}],
-            },
-        )
+    def test_401_unauthenticated(self, bib_client):
+        resp = bib_client.patch(f"/api/v1/bibliotheque/products/{uuid4()}", json={"category": "X"})
         assert resp.status_code == 401
 
-    def test_403_not_company_member(self, bib_client, outsider_token, bibliotheque_app):
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={
-                "company_id": bibliotheque_app._test_company_id,
-                "supplier_slug": "x",
-                "items": [{"supplier_reference": "X", "category": "Y"}],
-            },
-            headers=_auth(outsider_token),
-        )
-        assert resp.status_code == 403
-
-    def test_403_missing_manage_permission(self, bib_client, member_token, bibliotheque_app):
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={
-                "company_id": bibliotheque_app._test_company_id,
-                "supplier_slug": "x",
-                "items": [{"supplier_reference": "X", "category": "Y"}],
-            },
+    def test_403_missing_manage_permission(self, bib_client, manager_token, member_token, bibliotheque_app):
+        cid = bibliotheque_app._test_company_id
+        self._seed_one(bib_client, manager_token, cid, "edit-perm", "PERM-1", "P")
+        p = self._product(bib_client, manager_token, cid, "PERM-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"category": "X"},
             headers=_auth(member_token),
         )
         assert resp.status_code == 403
 
-    def test_422_missing_items(self, bib_client, manager_token, bibliotheque_app):
-        resp = bib_client.post(
-            "/api/v1/bibliotheque/recategorize",
-            json={"company_id": bibliotheque_app._test_company_id, "supplier_slug": "x", "items": []},
+    def test_403_not_company_member(self, bib_client, manager_token, outsider_token, bibliotheque_app):
+        cid = bibliotheque_app._test_company_id
+        self._seed_one(bib_client, manager_token, cid, "edit-outsider", "OUT-1", "O")
+        p = self._product(bib_client, manager_token, cid, "OUT-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"category": "X"},
+            headers=_auth(outsider_token),
+        )
+        assert resp.status_code == 403
+
+    def test_422_unknown_field_rejected(self, bib_client, manager_token, bibliotheque_app):
+        cid = bibliotheque_app._test_company_id
+        self._seed_one(bib_client, manager_token, cid, "edit-extra", "EX-1", "E")
+        p = self._product(bib_client, manager_token, cid, "EX-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"bogus": "nope"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 422

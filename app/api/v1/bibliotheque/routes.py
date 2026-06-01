@@ -23,8 +23,8 @@ from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.bibliotheque import bibliotheque_bp
-from app.api.v1.bibliotheque.schemas import ImageFromUrlSchema, ImportRequestSchema, RecategorizeRequestSchema
-from app.application.bibliotheque.dtos import ImportRecordDTO, RecategorizeItemDTO
+from app.api.v1.bibliotheque.schemas import ImageFromUrlSchema, ImportRequestSchema, UpdateProductSchema
+from app.application.bibliotheque.dtos import ImportRecordDTO, LibraryProductResponse
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
     ImageAlreadyExistsError,
@@ -32,9 +32,9 @@ from app.application.bibliotheque.exceptions import (
     InsufficientPermissionError,
     ProductNotFoundError,
     SsrfBlockedError,
-    SupplierNotFoundError,
     UnsupportedImageTypeError,
 )
+from app.application.bibliotheque.update_product_usecase import UNSET
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -289,48 +289,51 @@ def import_purchases() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/bibliotheque/recategorize
+# PATCH /api/v1/bibliotheque/products/<id>
 # ---------------------------------------------------------------------------
 
 
-@bibliotheque_bp.post("/bibliotheque/recategorize")
+@bibliotheque_bp.patch("/bibliotheque/products/<uuid:product_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
-@limiter.limit("10 per minute", key_func=jwt_user_key)
-def recategorize() -> Any:
-    """Bulk-reassign product categories for a supplier. Requires bibliotheque:manage.
+@limiter.limit("300 per minute", key_func=jwt_user_key)
+def update_product(product_id: UUID) -> Any:
+    """Edit an existing product's metadata. Requires bibliotheque:manage.
 
-    Category is the one field import never overwrites; this endpoint is the
-    explicit path to re-bucket an existing library into a canonical taxonomy.
-    Only the category field changes — purchase rows and aggregates are untouched.
+    Body (all optional): name, category, description, size, product_url. Only
+    fields present in the payload are changed; an explicit null clears a field.
+    Image bytes are edited via POST /products/<id>/image[-from-url]. Purchase
+    rows and aggregates are never modified.
     """
     try:
-        body = RecategorizeRequestSchema.model_validate(request.get_json(silent=True) or {})
+        body = UpdateProductSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
         return _err(422, "ValidationError", str(exc))
 
+    # Only forward fields the client actually sent (distinguish omitted from explicit null).
+    kwargs = {
+        f: (getattr(body, f) if f in body.model_fields_set else UNSET)
+        for f in ("name", "category", "description", "size", "product_url")
+    }
+
     requester_id = UUID(get_jwt_identity())
     c = get_container()
-
-    items = [RecategorizeItemDTO(supplier_reference=i.supplier_reference, category=i.category) for i in body.items]
-
     try:
-        result = c.bibliotheque_recategorize_usecase.execute(
+        product = c.bibliotheque_update_product_usecase.execute(
             requester_id=requester_id,
-            company_id=body.company_id,
-            supplier_slug=body.supplier_slug,
-            items=items,
+            product_id=product_id,
+            **kwargs,
         )
+    except ProductNotFoundError:
+        return _err(404, "NotFound", "Product not found.")
     except CompanyAccessDeniedError:
         return _err(403, "Forbidden", "Not a member of this company.")
     except InsufficientPermissionError:
         return _err(403, "Forbidden", "bibliotheque:manage permission required.")
-    except SupplierNotFoundError:
-        return _err(404, "NotFound", "Supplier not found for this company.")
     except Exception:
-        logger.exception("recategorize error company_id=%s", body.company_id)
+        logger.exception("update_product error product_id=%s", product_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
-    return jsonify(dataclasses.asdict(result)), 200
+    return jsonify(dataclasses.asdict(LibraryProductResponse.from_entity(product))), 200
 
 
 # ---------------------------------------------------------------------------

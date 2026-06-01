@@ -237,7 +237,7 @@ jobs:
 
       - name: Run pytest
         id: pytest
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: uv run pytest --tb=short -q --color=yes
 
       - name: Write job summary

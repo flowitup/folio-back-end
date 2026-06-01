@@ -790,7 +790,7 @@ def _configure_di_container() -> None:
     from app.application.bibliotheque.get_product_usecase import GetProductUseCase as _GetProductUC
     from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase as _GetProductImageUC
     from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase as _ImportPurchasesUC
-    from app.application.bibliotheque.recategorize_usecase import RecategorizeUseCase as _RecategorizeUC
+    from app.application.bibliotheque.update_product_usecase import UpdateProductUseCase as _UpdateProductUC
     from app.application.bibliotheque.upload_product_image_usecase import (
         UploadProductImageUseCase as _UploadProductImageUC,
     )
@@ -849,8 +849,7 @@ def _configure_di_container() -> None:
         permission_checker=_biblio_permission_checker,
         db_session=db.session,
     )
-    _c.bibliotheque_recategorize_usecase = _RecategorizeUC(
-        supplier_repo=_biblio_supplier_repo,
+    _c.bibliotheque_update_product_usecase = _UpdateProductUC(
         product_repo=_biblio_product_repo,
         membership_reader=_biblio_membership_reader,
         permission_checker=_biblio_permission_checker,
