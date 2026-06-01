@@ -113,7 +113,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         query = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
         if invoice_type is not None:
             query = query.filter(InvoiceModel.type == invoice_type.value)
-        models = query.order_by(InvoiceModel.created_at.desc()).all()
+        # Order by the invoice (issue) date, newest first; fall back to
+        # creation time so same-date invoices keep a stable, deterministic order.
+        models = query.order_by(InvoiceModel.issue_date.desc(), InvoiceModel.created_at.desc()).all()
         return [_model_to_entity(m) for m in models]
 
     def update(self, invoice: Invoice) -> Invoice:
