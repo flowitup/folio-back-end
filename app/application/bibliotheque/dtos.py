@@ -121,23 +121,6 @@ class ImportResultDTO:
 
 
 @dataclass(frozen=True)
-class RecategorizeItemDTO:
-    """One (supplier_reference -> category) reassignment for a supplier's products."""
-
-    supplier_reference: str
-    category: str
-
-
-@dataclass(frozen=True)
-class RecategorizeResultDTO:
-    """Summary returned by RecategorizeUseCase."""
-
-    updated: int  # products whose category was changed
-    unchanged: int  # products already in the requested category
-    not_found: int  # references with no matching product for the supplier
-
-
-@dataclass(frozen=True)
 class ImportRecordDTO:
     """One normalized purchase line plus optional product enrichment.
 

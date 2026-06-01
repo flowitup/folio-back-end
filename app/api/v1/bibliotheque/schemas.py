@@ -50,23 +50,22 @@ class ImportRequestSchema(BaseModel):
         return v
 
 
-class RecategorizeItemSchema(BaseModel):
-    """One (supplier_reference -> category) reassignment."""
+class UpdateProductSchema(BaseModel):
+    """Request body for PATCH /api/v1/bibliotheque/products/<id>.
+
+    All fields optional — only fields present in the payload are updated
+    (use model_fields_set / exclude_unset to distinguish omitted from null).
+    Sending an explicit null clears the field. Image is edited via the
+    dedicated image endpoints, not here.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    supplier_reference: str = Field(min_length=1, max_length=200)
-    category: str = Field(min_length=1, max_length=200)
-
-
-class RecategorizeRequestSchema(BaseModel):
-    """Request body for POST /api/v1/bibliotheque/recategorize."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    company_id: UUID
-    supplier_slug: str = Field(min_length=1, max_length=100)
-    items: List[RecategorizeItemSchema] = Field(min_length=1, max_length=10000)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    category: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    size: Optional[str] = Field(default=None, max_length=200)
+    product_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class ImageFromUrlSchema(BaseModel):

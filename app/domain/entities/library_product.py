@@ -148,13 +148,34 @@ class LibraryProduct:
             updated_at=datetime.now(timezone.utc),
         )
 
-    def with_category(self, category: str) -> "LibraryProduct":
-        """Return a copy with the category overwritten (curated override).
+    # Sentinel so callers can distinguish "leave field unchanged" (omitted) from
+    # an explicit clear. _UNSET means "don't touch"; None would mean "set to null".
+    _UNSET = object()
 
-        Unlike with_enrichment — which only fills an empty category and never
-        clobbers an existing value — this deliberately replaces whatever
-        category is set. It is the explicit path used to re-bucket an existing
-        library into a canonical supplier taxonomy. Purchase aggregates are
-        left untouched.
+    def with_updates(
+        self,
+        *,
+        name: object = _UNSET,
+        category: object = _UNSET,
+        description: object = _UNSET,
+        size: object = _UNSET,
+        product_url: object = _UNSET,
+    ) -> "LibraryProduct":
+        """Return a copy with the given editable fields overwritten.
+
+        Curated edit path (vs with_enrichment which only fills empty slots):
+        any field passed here REPLACES the current value — including overwriting
+        a non-null field or clearing it to None. Fields left as _UNSET are kept.
+        Image bytes are edited via the dedicated image endpoints, not here.
+        Purchase aggregates are never touched.
         """
-        return replace(self, category=category, updated_at=datetime.now(timezone.utc))
+        U = LibraryProduct._UNSET
+        return replace(
+            self,
+            name=self.name if name is U else name,
+            category=self.category if category is U else category,
+            description=self.description if description is U else description,
+            size=self.size if size is U else size,
+            product_url=self.product_url if product_url is U else product_url,
+            updated_at=datetime.now(timezone.utc),
+        )
