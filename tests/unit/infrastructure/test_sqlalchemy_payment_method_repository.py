@@ -1,7 +1,7 @@
 """Repository-level tests for SqlAlchemyPaymentMethodRepository.
 
 Runs against SQLite in-memory DB using the shared session fixture from conftest.
-Covers find_by_id, find_active_by_company, find_by_label_ci, count_invoices_referencing.
+Covers find_by_id, find_all_by_company, find_by_label_ci, save, insert_many.
 """
 
 from __future__ import annotations
@@ -54,33 +54,6 @@ class TestFindById:
         result = repo.find_by_id(uuid4())
 
         assert result is None
-
-
-class TestFindActiveByCompany:
-    def test_find_active_by_company_returns_only_active(self, session):
-        company_id = uuid4()
-        _insert_pm(session, company_id, "Active A", is_active=True)
-        _insert_pm(session, company_id, "Inactive B", is_active=False)
-        repo = SqlAlchemyPaymentMethodRepository(session)
-
-        results = repo.find_active_by_company(company_id)
-
-        assert len(results) == 1
-        assert results[0].label == "Active A"
-
-    def test_find_active_by_company_ordered_by_label(self, session):
-        company_id = uuid4()
-        _insert_pm(session, company_id, "Zorro")
-        _insert_pm(session, company_id, "Alpha")
-        repo = SqlAlchemyPaymentMethodRepository(session)
-
-        results = repo.find_active_by_company(company_id)
-
-        assert [r.label for r in results] == ["Alpha", "Zorro"]
-
-    def test_find_active_by_company_empty(self, session):
-        repo = SqlAlchemyPaymentMethodRepository(session)
-        assert repo.find_active_by_company(uuid4()) == []
 
 
 class TestFindByIdForUpdate:

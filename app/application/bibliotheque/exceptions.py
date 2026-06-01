@@ -13,12 +13,6 @@ class ProductNotFoundError(BibliothequeError):
     pass
 
 
-class SupplierNotFoundError(BibliothequeError):
-    """Raised when a referenced supplier does not exist."""
-
-    pass
-
-
 class CompanyAccessDeniedError(BibliothequeError):
     """Raised when the requester has no membership in the target company."""
 
@@ -27,12 +21,6 @@ class CompanyAccessDeniedError(BibliothequeError):
 
 class InsufficientPermissionError(BibliothequeError):
     """Raised when the requester lacks the required named permission (e.g. bibliotheque:manage)."""
-
-    pass
-
-
-class InvalidImportError(BibliothequeError):
-    """Raised when the import payload fails validation (bad references, negative qty, etc.)."""
 
     pass
 

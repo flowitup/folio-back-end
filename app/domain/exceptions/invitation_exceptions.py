@@ -25,12 +25,6 @@ class InvitationAlreadyAcceptedError(InvitationNotUsableError):
     pass
 
 
-class DuplicatePendingInvitationError(Exception):
-    """A pending invitation for this email + project already exists."""
-
-    pass
-
-
 class InvitationNotFoundError(Exception):
     """No invitation found for the given identifier."""
 

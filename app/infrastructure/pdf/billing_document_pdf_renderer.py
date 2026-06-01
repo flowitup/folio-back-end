@@ -634,39 +634,6 @@ def _build_closing_greeting(styles: dict) -> list:
     ]
 
 
-def _build_signature_block(doc: BillingDocument, styles: dict, usable_width: float) -> list:
-    """Two-column signature band: client left, issuer right."""
-    left_text = "Signature du client :"
-    right_text = doc.signature_block_text or "Signature :"
-
-    sig_data = [
-        [
-            Paragraph(left_text, styles["body_small"]),
-            Paragraph(_xml_escape(right_text), styles["body_small"]),
-        ],
-        [
-            Paragraph(" ", styles["body"]),  # space for signature
-            Paragraph(" ", styles["body"]),
-        ],
-    ]
-    t = Table(sig_data, colWidths=[usable_width / 2, usable_width / 2])
-    t.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), "DejaVu"),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 20),
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("BOX", (0, 0), (0, -1), 0.5, colors.HexColor("#CCCCCC")),
-                ("BOX", (1, 0), (1, -1), 0.5, colors.HexColor("#CCCCCC")),
-            ]
-        )
-    )
-    return [t]
-
-
 # ---------------------------------------------------------------------------
 # Footer callback
 # ---------------------------------------------------------------------------

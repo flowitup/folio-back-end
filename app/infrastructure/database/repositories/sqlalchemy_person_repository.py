@@ -57,12 +57,6 @@ class SqlAlchemyPersonRepository(IPersonRepository):
         models = q.order_by(PersonModel.normalized_name).limit(limit).all()
         return [self._to_entity(m) for m in models]
 
-    def find_by_phone(self, phone: str) -> Optional[Person]:
-        if not phone:
-            return None
-        model = self._session.query(PersonModel).filter(PersonModel.phone == phone).first()
-        return self._to_entity(model) if model else None
-
     def delete(self, person_id: UUID) -> bool:
         model = self._session.query(PersonModel).filter_by(id=person_id).first()
         if model is None:

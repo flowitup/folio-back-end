@@ -6,9 +6,7 @@ and prevent silent type coercion at the API boundary.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -53,17 +51,3 @@ class UpdatePaymentMethodRequest(BaseModel):
         return self
 
 
-class PaymentMethodResponseSchema(BaseModel):
-    """Response body for payment method endpoints."""
-
-    model_config = ConfigDict(strict=False, extra="ignore")
-
-    id: UUID
-    company_id: UUID
-    label: str
-    is_builtin: bool
-    is_active: bool
-    created_by: Optional[UUID]
-    created_at: datetime
-    updated_at: datetime
-    usage_count: Optional[int] = None

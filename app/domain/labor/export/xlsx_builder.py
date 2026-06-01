@@ -119,11 +119,6 @@ def _header_fill() -> PatternFill:
     return PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
 
 
-def _apply_border_row(ws: Worksheet, row: int, n_cols: int, border: Border) -> None:
-    for col in range(1, n_cols + 1):
-        ws.cell(row=row, column=col).border = border
-
-
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
