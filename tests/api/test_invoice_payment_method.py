@@ -374,6 +374,34 @@ class TestInvoiceListGetIncludesPaymentMethodFields:
         assert pm_invoices[0]["payment_method_label"] == "Wire G"
 
 
+class TestInvoiceListOrdering:
+    def test_list_invoices_ordered_by_issue_date_newest_first(self, inv_pm_client, inv_pm_app, admin_token):
+        """The Expense list must be ordered by invoice (issue) date, newest first,
+        regardless of the order rows were created in."""
+        marker = "OrderMarker-" + uuid4().hex[:8]
+        # Create out of date order: middle, oldest, newest.
+        for iso_date in ("2025-03-15", "2025-01-10", "2025-05-20"):
+            body = {
+                **_base_invoice_body(),
+                "issue_date": iso_date,
+                "recipient_name": marker,
+            }
+            resp = inv_pm_client.post(
+                _create_invoice_url(inv_pm_app._test_project_id),
+                json=body,
+                headers=_auth(admin_token),
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+
+        resp = inv_pm_client.get(
+            _create_invoice_url(inv_pm_app._test_project_id),
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        mine = [i["issue_date"] for i in resp.get_json()["invoices"] if i["recipient_name"] == marker]
+        assert mine == ["2025-05-20", "2025-03-15", "2025-01-10"]
+
+
 class TestSnapshotAuditSafety:
     def test_get_invoice_after_method_renamed_shows_old_label(self, inv_pm_client, inv_pm_app, admin_token):
         """Snapshot audit safety: renaming the payment method must NOT change
