@@ -1,5 +1,6 @@
 """Update attendance use case."""
 
+import dataclasses
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
@@ -7,6 +8,11 @@ from uuid import UUID
 
 from app.application.labor.ports import ILaborEntryRepository, IWorkerRepository
 from app.domain.exceptions.labor_exceptions import LaborEntryNotFoundError
+
+
+# Sentinel for "tag_id not provided in the PUT body" — distinct from None
+# (which means "explicitly clear the tag").
+_TAG_UNSET: object = object()
 
 
 @dataclass
@@ -19,6 +25,8 @@ class UpdateAttendanceRequest:
     note: Optional[str] = None
     shift_type: Optional[str] = None
     supplement_hours: Optional[int] = None
+    # tag_id uses sentinel: _TAG_UNSET = not provided, None = clear, UUID = assign.
+    tag_id: object = dataclasses.field(default_factory=lambda: _TAG_UNSET)
 
 
 @dataclass
@@ -31,6 +39,7 @@ class UpdateAttendanceResponse:
     shift_type: Optional[str]
     supplement_hours: int
     created_at: str
+    tag_id: Optional[str] = None
 
 
 class UpdateAttendanceUseCase:
@@ -52,8 +61,8 @@ class UpdateAttendanceUseCase:
         if worker is None or worker.project_id != request.project_id:
             raise LaborEntryNotFoundError(str(request.entry_id))
 
-        # All four fields use PATCH semantics: None means "do not touch".
-        # A caller wanting to clear a field must send an explicit clearing value.
+        # All fields use PATCH semantics: None means "do not touch" (except tag_id
+        # which uses the _TAG_UNSET sentinel to distinguish "not provided" from "clear").
         if request.amount_override is not None:
             entry.amount_override = request.amount_override
         if request.note is not None:
@@ -62,6 +71,8 @@ class UpdateAttendanceUseCase:
             entry.shift_type = request.shift_type
         if request.supplement_hours is not None:
             entry.supplement_hours = request.supplement_hours
+        if request.tag_id is not _TAG_UNSET:
+            entry.tag_id = request.tag_id  # type: ignore[assignment]  # None or UUID
 
         saved = self._repo.update(entry)
 
@@ -74,4 +85,5 @@ class UpdateAttendanceUseCase:
             shift_type=saved.shift_type,
             supplement_hours=saved.supplement_hours,
             created_at=saved.created_at.isoformat(),
+            tag_id=str(saved.tag_id) if saved.tag_id is not None else None,
         )

@@ -737,6 +737,52 @@ def invitation_app():
             db_session=db.session,
         )
 
+        # ------------------------------------------------------------------
+        # Wire tags use-cases — mirrors app/__init__.py wiring.
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
+            SqlAlchemyProjectTagRepository as _ProjectTagRepo,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
+            SqlAlchemyProjectMembershipReader as _TagMembershipReader,
+        )
+        from app.application.tags.create_project_tag_usecase import CreateProjectTagUseCase as _CreateTagUC
+        from app.application.tags.list_project_tags_usecase import ListProjectTagsUseCase as _ListTagsUC
+        from app.application.tags.update_project_tag_usecase import UpdateProjectTagUseCase as _UpdateTagUC
+        from app.application.tags.delete_project_tag_usecase import DeleteProjectTagUseCase as _DeleteTagUC
+        from app.application.tags.tag_summary_usecase import TagSummaryUseCase as _TagSummaryUC
+
+        _tag_repo = _ProjectTagRepo(db.session)
+        _tag_membership_reader = _TagMembershipReader(db.session)
+
+        _c.create_project_tag_usecase = _CreateTagUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+            db_session=db.session,
+        )
+        _c.list_project_tags_usecase = _ListTagsUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+        )
+        _c.update_project_tag_usecase = _UpdateTagUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+            db_session=db.session,
+        )
+        _c.delete_project_tag_usecase = _DeleteTagUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+            db_session=db.session,
+        )
+        _c.tag_summary_usecase = _TagSummaryUC(
+            tag_repo=_tag_repo,
+            labor_reader=_tag_repo,
+            expense_reader=_tag_repo,
+            membership_reader=_tag_membership_reader,
+        )
+
         yield test_app
 
         db.session.remove()

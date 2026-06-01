@@ -410,6 +410,15 @@ class Container:
     delete_labor_activity_usecase: Optional[DeleteLaborActivityUseCase] = None
 
     # -----------------------------------------------------------------------
+    # Tags repo + use-cases (project-scoped phase tags)
+    # -----------------------------------------------------------------------
+    create_project_tag_usecase: Optional[Any] = None  # CreateProjectTagUseCase
+    list_project_tags_usecase: Optional[Any] = None  # ListProjectTagsUseCase
+    update_project_tag_usecase: Optional[Any] = None  # UpdateProjectTagUseCase
+    delete_project_tag_usecase: Optional[Any] = None  # DeleteProjectTagUseCase
+    tag_summary_usecase: Optional[Any] = None  # TagSummaryUseCase
+
+    # -----------------------------------------------------------------------
     # Bibliotheque repos + use-cases
     # -----------------------------------------------------------------------
     bibliotheque_supplier_repo: Optional[Any] = None  # SqlAlchemyBibliothequeSupplierRepository

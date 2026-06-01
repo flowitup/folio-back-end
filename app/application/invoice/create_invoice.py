@@ -29,6 +29,8 @@ class CreateInvoiceRequest:
     # the same company as the invoice's project. Optional: when None, the
     # cross-company check is skipped (e.g. payment_method_repo unavailable).
     company_id: Optional[UUID] = None
+    # Phase tag — optional; validated (project scope) in the route layer.
+    tag_id: Optional[UUID] = None
 
 
 class CreateInvoiceUseCase:
@@ -106,6 +108,7 @@ class CreateInvoiceUseCase:
             updated_at=now,
             payment_method_id=payment_method_id,
             payment_method_label=payment_method_label,
+            tag_id=request.tag_id,
         )
 
         saved = self._repo.create(invoice)

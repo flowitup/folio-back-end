@@ -137,11 +137,13 @@ class ILaborEntryRepository(ABC):
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
         limit: Optional[int] = None,
+        tag_id: Optional[UUID] = None,
     ) -> List[LaborEntry]:
         """List entries for a project with optional filters.
 
         When ``limit`` is set, returns at most that many rows ordered by date
         descending — i.e. the most recent ``limit`` entries.
+        When ``tag_id`` is set, returns only entries with that tag_id.
         """
         ...
 

@@ -36,6 +36,8 @@ class UpdateInvoiceRequest:
     # company_id is used to cross-validate that the payment method belongs to
     # the same company as the invoice's project. Optional: when None, skipped.
     company_id: Optional[UUID] = None
+    # tag_id uses sentinel: _UNSET = not provided, None = clear tag, UUID = assign tag.
+    tag_id: object = dataclasses.field(default_factory=lambda: _UNSET)
 
 
 class UpdateInvoiceUseCase:
@@ -116,6 +118,10 @@ class UpdateInvoiceUseCase:
 
                 updates["payment_method_id"] = method.id
                 updates["payment_method_label"] = method.label
+
+        # tag_id: only process if explicitly provided (not _UNSET).
+        if request.tag_id is not _UNSET:
+            updates["tag_id"] = request.tag_id  # None = clear, UUID = assign
 
         updated = dataclasses.replace(invoice, **updates)
         saved = self._repo.update(updated)

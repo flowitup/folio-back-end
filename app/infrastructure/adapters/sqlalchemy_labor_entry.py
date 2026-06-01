@@ -43,6 +43,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             shift_type=entry.shift_type,
             supplement_hours=entry.supplement_hours,
             created_at=entry.created_at,
+            tag_id=entry.tag_id,
         )
         try:
             self._session.add(model)
@@ -63,6 +64,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
         limit: Optional[int] = None,
+        tag_id: Optional[UUID] = None,
     ) -> List[LaborEntry]:
         query = self._session.query(LaborEntryModel).join(WorkerModel).filter(WorkerModel.project_id == project_id)
         if date_from:
@@ -71,6 +73,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             query = query.filter(LaborEntryModel.date <= date_to)
         if worker_id:
             query = query.filter(LaborEntryModel.worker_id == worker_id)
+        if tag_id is not None:
+            query = query.filter(LaborEntryModel.tag_id == tag_id)
 
         query = query.order_by(LaborEntryModel.date.desc())
         if limit is not None and limit > 0:
@@ -85,6 +89,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.note = entry.note
             model.shift_type = entry.shift_type
             model.supplement_hours = entry.supplement_hours
+            model.tag_id = entry.tag_id
             self._session.commit()
             return self._to_entity(model)
         return entry
@@ -359,4 +364,5 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             shift_type=model.shift_type,  # pass-through; may be None for supplement-only entries
             supplement_hours=model.supplement_hours if model.supplement_hours is not None else 0,
             created_at=model.created_at,
+            tag_id=model.tag_id,
         )

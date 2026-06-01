@@ -20,6 +20,7 @@ class LogAttendanceRequest:
     note: Optional[str] = None
     shift_type: Optional[str] = None  # "full" | "half" | "overtime" | None
     supplement_hours: int = 0
+    tag_id: Optional[UUID] = None
 
 
 @dataclass
@@ -32,6 +33,7 @@ class LogAttendanceResponse:
     shift_type: Optional[str]
     supplement_hours: int
     created_at: str
+    tag_id: Optional[str] = None
 
 
 class LogAttendanceUseCase:
@@ -60,6 +62,7 @@ class LogAttendanceUseCase:
             shift_type=request.shift_type,
             supplement_hours=request.supplement_hours,
             created_at=datetime.now(timezone.utc),
+            tag_id=request.tag_id,
         )
 
         # DuplicateEntryError will be raised by repo if constraint violated
@@ -74,4 +77,5 @@ class LogAttendanceUseCase:
             shift_type=saved.shift_type,
             supplement_hours=saved.supplement_hours,
             created_at=saved.created_at.isoformat(),
+            tag_id=str(saved.tag_id) if saved.tag_id is not None else None,
         )

@@ -39,6 +39,8 @@ class Invoice:
     payment_method_label: Optional[str] = None
     source_billing_document_id: Optional[UUID] = None
     is_auto_generated: bool = False
+    # Phase tag — optional; NULL when invoice has no tag assignment.
+    tag_id: Optional[UUID] = None
 
     @property
     def total_amount(self) -> Decimal:

@@ -56,6 +56,7 @@ class BulkLogAttendanceEntry:
     supplement_hours: int = 0
     amount_override: Optional[Decimal] = None
     note: Optional[str] = None
+    tag_id: Optional[UUID] = None
 
 
 @dataclass
@@ -182,6 +183,7 @@ class BulkLogAttendanceUseCase:
                 shift_type=entry.shift_type,
                 supplement_hours=entry.supplement_hours,
                 created_at=now,
+                tag_id=entry.tag_id,
             )
             # Repo.create commits per-row in the current impl. For
             # this bulk path we keep the simple per-row commit because:
