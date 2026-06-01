@@ -22,7 +22,7 @@ class InMemoryPaymentMethodRepository:
 
     def __init__(self):
         self._store: dict[UUID, PaymentMethod] = {}
-        # invoice reference counts, keyed by payment_method_id
+        # invoice reference counts, keyed by payment_method_id (used by find_all_by_company_with_usage_count)
         self._invoice_counts: dict[UUID, int] = {}
 
     def find_by_id(self, id: UUID) -> Optional[PaymentMethod]:
@@ -30,12 +30,6 @@ class InMemoryPaymentMethodRepository:
 
     def find_by_id_for_update(self, id: UUID) -> Optional[PaymentMethod]:
         return self._store.get(id)
-
-    def find_active_by_company(self, company_id: UUID) -> list[PaymentMethod]:
-        return sorted(
-            [m for m in self._store.values() if m.company_id == company_id and m.is_active],
-            key=lambda m: m.label,
-        )
 
     def find_all_by_company(self, company_id: UUID, *, include_inactive: bool = False) -> list[PaymentMethod]:
         results = [m for m in self._store.values() if m.company_id == company_id]
@@ -60,9 +54,6 @@ class InMemoryPaymentMethodRepository:
     def insert_many(self, methods: list[PaymentMethod]) -> None:
         for m in methods:
             self._store[m.id] = m
-
-    def count_invoices_referencing(self, payment_method_id: UUID) -> int:
-        return self._invoice_counts.get(payment_method_id, 0)
 
     def find_all_by_company_with_usage_count(
         self, company_id: UUID, *, include_inactive: bool = False

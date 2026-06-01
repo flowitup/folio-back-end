@@ -19,12 +19,6 @@ class UpdateProjectRequest(BaseModel):
     invoice_prefix: Optional[str] = Field(None, max_length=8)
 
 
-class AddUserRequest(BaseModel):
-    """Request body for adding user to project."""
-
-    user_id: str = Field(..., description="UUID of user to add")
-
-
 class ProjectResponse(BaseModel):
     """Single project response."""
 

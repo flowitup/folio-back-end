@@ -36,15 +36,6 @@ class IPersonRepository(ABC):
         ...
 
     @abstractmethod
-    def find_by_phone(self, phone: str) -> Optional[Person]:
-        """Find a Person by exact phone match. Returns None if not found.
-
-        Used by Phase 1c backfill to detect identity-equivalence between
-        per-project Worker rows.
-        """
-        ...
-
-    @abstractmethod
     def delete(self, person_id: UUID) -> bool:
         """Hard-delete a Person row. Returns True if a row was deleted.
 

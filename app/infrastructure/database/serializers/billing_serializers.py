@@ -12,7 +12,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from app.domain.billing.company_profile import CompanyProfile
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
@@ -23,7 +22,6 @@ if TYPE_CHECKING:
     from app.infrastructure.database.models.billing_document_template import (
         BillingDocumentTemplateModel,
     )
-    from app.infrastructure.database.models.company_profile import CompanyProfileModel
 
 
 # ---------------------------------------------------------------------------
@@ -196,56 +194,6 @@ def deserialize_orm_to_template(
         terms=model.terms,
         default_vat_rate=default_vat_rate,
         items=items,
-        created_at=created_at,
-        updated_at=updated_at,
-    )
-
-
-# ---------------------------------------------------------------------------
-# CompanyProfile
-# ---------------------------------------------------------------------------
-
-
-def serialize_profile_to_orm(
-    profile: CompanyProfile,
-    model: "CompanyProfileModel",
-) -> None:
-    """Write all domain fields from *profile* into *model* (in-place mutation)."""
-    model.user_id = profile.user_id
-    model.legal_name = profile.legal_name
-    model.address = profile.address
-    model.siret = profile.siret
-    model.tva_number = profile.tva_number
-    model.iban = profile.iban
-    model.bic = profile.bic
-    model.logo_url = profile.logo_url
-    model.default_payment_terms = profile.default_payment_terms
-    model.prefix_override = profile.prefix_override
-    model.created_at = profile.created_at
-    model.updated_at = profile.updated_at
-
-
-def deserialize_orm_to_profile(model: "CompanyProfileModel") -> CompanyProfile:
-    """Reconstruct a CompanyProfile domain entity from an ORM model row."""
-    created_at = model.created_at
-    if created_at is not None and created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-
-    updated_at = model.updated_at
-    if updated_at is not None and updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
-
-    return CompanyProfile(
-        user_id=UUID(str(model.user_id)),
-        legal_name=model.legal_name,
-        address=model.address,
-        siret=model.siret,
-        tva_number=model.tva_number,
-        iban=model.iban,
-        bic=model.bic,
-        logo_url=model.logo_url,
-        default_payment_terms=model.default_payment_terms,
-        prefix_override=model.prefix_override,
         created_at=created_at,
         updated_at=updated_at,
     )

@@ -1,7 +1,6 @@
 """Invite token value object — generation and verification helpers."""
 
 import hashlib
-import hmac
 import secrets
 
 
@@ -20,8 +19,3 @@ def generate_token() -> tuple[str, str]:
 def hash_token(raw: str) -> str:
     """Return the sha256 hex digest of a raw token string (for verification)."""
     return hashlib.sha256(raw.encode()).hexdigest()
-
-
-def compare_token_hashes(a: str, b: str) -> bool:
-    """Constant-time comparison of two token hashes to prevent timing attacks."""
-    return hmac.compare_digest(a, b)

@@ -81,19 +81,6 @@ class SqlAlchemyPaymentMethodRepository:
         row = self._session.execute(stmt).scalar_one_or_none()
         return _to_entity(row) if row is not None else None
 
-    def find_active_by_company(self, company_id: UUID) -> list[PaymentMethod]:
-        """Return all active methods for a company, ordered by label."""
-        stmt = (
-            select(PaymentMethodModel)
-            .where(
-                PaymentMethodModel.company_id == company_id,
-                PaymentMethodModel.is_active.is_(True),
-            )
-            .order_by(PaymentMethodModel.label)
-        )
-        rows = self._session.execute(stmt).scalars().all()
-        return [_to_entity(r) for r in rows]
-
     def find_all_by_company(self, company_id: UUID, *, include_inactive: bool = False) -> list[PaymentMethod]:
         """Return methods for a company, optionally including inactive rows."""
         stmt = select(PaymentMethodModel).where(PaymentMethodModel.company_id == company_id)
@@ -118,20 +105,10 @@ class SqlAlchemyPaymentMethodRepository:
         row = self._session.execute(stmt).scalar_one_or_none()
         return _to_entity(row) if row is not None else None
 
-    def count_invoices_referencing(self, payment_method_id: UUID) -> int:
-        """Return the number of invoices that reference *payment_method_id*."""
-        stmt = select(func.count()).where(InvoiceModel.payment_method_id == payment_method_id)
-        result: int = self._session.execute(stmt).scalar_one()
-        return result
-
     def find_all_by_company_with_usage_count(
         self, company_id: UUID, *, include_inactive: bool = False
     ) -> list[tuple[PaymentMethod, int]]:
-        """Return (PaymentMethod, usage_count) pairs for a company in a single query.
-
-        Uses LEFT JOIN + GROUP BY to avoid the N+1 pattern of calling
-        ``count_invoices_referencing`` per method.
-        """
+        """Return (PaymentMethod, usage_count) pairs for a company in a single query via LEFT JOIN + GROUP BY."""
         pm = PaymentMethodModel
         inv = InvoiceModel
 

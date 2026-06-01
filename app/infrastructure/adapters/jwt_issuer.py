@@ -93,17 +93,3 @@ class JWTTokenIssuer:
         if self._redis:
             return self._redis.exists(f"blacklist:{jti}") > 0
         return jti in _token_blacklist
-
-    def clear_blacklist(self) -> None:
-        """Clear blacklist. For testing only."""
-        if self._redis:
-            # Clear all blacklist keys (pattern match)
-            cursor = 0
-            while True:
-                cursor, keys = self._redis.scan(cursor, match="blacklist:*", count=100)
-                if keys:
-                    self._redis.delete(*keys)
-                if cursor == 0:
-                    break
-        else:
-            _token_blacklist.clear()

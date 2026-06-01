@@ -27,10 +27,6 @@ class IPaymentMethodRepository(Protocol):
         """Return a payment method with SELECT FOR UPDATE lock, or None."""
         ...
 
-    def find_active_by_company(self, company_id: UUID) -> list[PaymentMethod]:
-        """Return all active (is_active=True) methods for a company, ordered by label."""
-        ...
-
     def find_all_by_company(self, company_id: UUID, *, include_inactive: bool = False) -> list[PaymentMethod]:
         """Return all methods for a company.
 
@@ -59,22 +55,10 @@ class IPaymentMethodRepository(Protocol):
         """
         ...
 
-    def count_invoices_referencing(self, payment_method_id: UUID) -> int:
-        """Return how many invoices reference *payment_method_id*.
-
-        Used to populate ``usage_count`` on ``PaymentMethodResponse`` so the
-        delete-confirm UX can warn the user about historical references.
-        """
-        ...
-
     def find_all_by_company_with_usage_count(
         self, company_id: UUID, *, include_inactive: bool = False
     ) -> list[tuple["PaymentMethod", int]]:
-        """Return (PaymentMethod, usage_count) pairs for a company in a single query.
-
-        Replaces the N+1 pattern of calling ``find_all_by_company`` then
-        ``count_invoices_referencing`` per method.
-        """
+        """Return (PaymentMethod, usage_count) pairs for a company in a single query."""
         ...
 
 

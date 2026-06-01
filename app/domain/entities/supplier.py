@@ -46,14 +46,3 @@ class Supplier:
             product_url_template=product_url_template,
             created_at=datetime.now(timezone.utc),
         )
-
-    @classmethod
-    def for_leroy_merlin(cls, company_id: UUID) -> "Supplier":
-        """Factory for the Leroy Merlin supplier with canonical defaults."""
-        return cls.create(
-            company_id=company_id,
-            name="Leroy Merlin",
-            slug="leroy-merlin",
-            website_url="https://www.leroymerlin.fr",
-            product_url_template="https://www.leroymerlin.fr/produits/{reference}.html",
-        )

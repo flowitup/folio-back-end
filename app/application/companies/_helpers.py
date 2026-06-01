@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from app.domain.companies.company import Company
 from app.domain.companies.exceptions import ForbiddenCompanyError
 
 _TOKEN_EXPIRY_DAYS = 7
@@ -61,20 +60,3 @@ def _validate_address(address: str) -> str:
     if not addr:
         raise ValueError("address is required and cannot be blank")
     return addr
-
-
-def _snapshot_company_issuer(company: Company) -> dict:
-    """Copy all issuer-relevant fields from Company by value.
-
-    Returns a plain dict ready to be unpacked into BillingDocument kwargs.
-    All values are immutable scalars — this is effectively a deep copy.
-    """
-    return {
-        "issuer_legal_name": company.legal_name,
-        "issuer_address": company.address,
-        "issuer_siret": company.siret,
-        "issuer_tva_number": company.tva_number,
-        "issuer_iban": company.iban,
-        "issuer_bic": company.bic,
-        "issuer_logo_url": company.logo_url,
-    }
