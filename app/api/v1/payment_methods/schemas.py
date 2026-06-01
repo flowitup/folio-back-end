@@ -49,5 +49,3 @@ class UpdatePaymentMethodRequest(BaseModel):
         if self.label is None and self.is_active is None:
             raise ValueError("At least one of 'label' or 'is_active' must be provided")
         return self
-
-

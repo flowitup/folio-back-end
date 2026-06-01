@@ -60,5 +60,3 @@ def _validate_address(address: str) -> str:
     if not addr:
         raise ValueError("address is required and cannot be blank")
     return addr
-
-
