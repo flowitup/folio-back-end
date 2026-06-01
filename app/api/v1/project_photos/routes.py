@@ -24,6 +24,7 @@ from app.application.project_photos import (
     ThumbnailGenerationError,
     UnsupportedImageTypeError,
 )
+from app.application.project_photos.upload_project_photo import MAX_SIZE_BYTES
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -96,8 +97,19 @@ def upload_project_photo(project_id: str):
     if not file or file.filename == "":
         return _error_response("MISSING_FILE", "Empty filename", 400)
 
+    # Measure stream size before reading the body — avoids buffering an
+    # oversized upload into memory.  werkzeug file.stream supports seek/tell.
+    file.stream.seek(0, 2)
+    size_bytes = file.stream.tell()
+    file.stream.seek(0)
+
+    if size_bytes <= 0:
+        return _error_response("EMPTY_FILE", "Uploaded image is empty (0 bytes)", 400)
+    if size_bytes > MAX_SIZE_BYTES:
+        return _error_response("FILE_TOO_LARGE", f"Image exceeds {MAX_SIZE_BYTES} byte limit", 413)
+
+    # Size is within bounds — safe to buffer the body (≤ 25 MiB).
     data = file.stream.read()
-    size_bytes = len(data)
 
     caption = request.form.get("caption") or None
     raw_captured_at = request.form.get("captured_at")

@@ -177,3 +177,55 @@ class TestExifOrientation:
         result = self.thumbnailer.generate(data, "image/jpeg")
         img = Image.open(BytesIO(result))
         assert img.width > img.height
+
+
+class TestDecompressionBombGuard:
+    """Verify that oversized images are rejected before decoding the bitmap."""
+
+    def setup_method(self):
+        self.thumbnailer = PillowImageThumbnailer()
+
+    def test_oversized_image_raises_thumbnail_generation_error(self):
+        """An image whose pixel count exceeds 80 MP must raise ThumbnailGenerationError.
+
+        Image.new("RGB", (10000, 9000)) = 90,000,000 pixels > 80,000,000 ceiling.
+        We temporarily lower MAX_IMAGE_PIXELS so Pillow's own guard does not
+        interfere before our explicit dimension check runs, and to keep the test
+        fast (no actual 90 MP allocation needed — monkeypatching img.size suffices).
+        """
+        import unittest.mock as _mock
+
+        from app.infrastructure.adapters import pillow_image_thumbnailer as _mod
+
+        # Build a small real image that Pillow can open quickly.
+        small = Image.new("RGB", (100, 100), color=(0, 0, 0))
+        buf = BytesIO()
+        small.save(buf, format="PNG")
+        data = buf.getvalue()
+
+        # Patch img.size to report 90 MP so the pixel-count guard fires
+        # without allocating a real 90 MP buffer.
+        original_open = Image.open
+
+        def _fake_open(fp):
+            img = original_open(fp)
+            # Monkey-patch the size property to report an oversized image.
+            type(img).size = property(lambda self: (10000, 9000))
+            return img
+
+        with _mock.patch.object(_mod.Image, "open", side_effect=_fake_open):
+            with pytest.raises(ThumbnailGenerationError, match="decompression-bomb ceiling"):
+                self.thumbnailer.generate(data, "image/png")
+
+    def test_normal_phone_photo_succeeds(self):
+        """A 4000×3000 (12 MP) image must pass the guard and produce a thumbnail."""
+        # Build a real 4000x3000 image — still fast as it's a solid colour fill.
+        img = Image.new("RGB", (4000, 3000), color=(128, 64, 32))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=50)
+        data = buf.getvalue()
+
+        result = self.thumbnailer.generate(data, "image/jpeg")
+        out = Image.open(BytesIO(result))
+        assert out.format == "JPEG"
+        assert max(out.width, out.height) <= _MAX_EDGE
