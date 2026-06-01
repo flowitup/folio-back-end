@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.labor.ports import ILaborEntryRepository, IWorkerRepository
+from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.exceptions.labor_exceptions import LaborEntryNotFoundError
 
 
@@ -45,9 +46,15 @@ class UpdateAttendanceResponse:
 class UpdateAttendanceUseCase:
     """Update an existing attendance entry."""
 
-    def __init__(self, entry_repo: ILaborEntryRepository, worker_repo: IWorkerRepository):
+    def __init__(
+        self,
+        entry_repo: ILaborEntryRepository,
+        worker_repo: IWorkerRepository,
+        tag_repo=None,  # ProjectTagRepositoryPort | None
+    ):
         self._repo = entry_repo
         self._workers = worker_repo
+        self._tag_repo = tag_repo
 
     def execute(self, request: UpdateAttendanceRequest) -> UpdateAttendanceResponse:
         entry = self._repo.find_by_id(request.entry_id)
@@ -60,6 +67,14 @@ class UpdateAttendanceUseCase:
         worker = self._workers.find_by_id(entry.worker_id)
         if worker is None or worker.project_id != request.project_id:
             raise LaborEntryNotFoundError(str(request.entry_id))
+
+        # Guard: when a new tag_id is being assigned (not _TAG_UNSET, not None),
+        # it must belong to the same project as the worker.
+        if request.tag_id is not _TAG_UNSET and request.tag_id is not None and self._tag_repo is not None:
+            tag_uuid: UUID = request.tag_id  # type: ignore[assignment]
+            tag = self._tag_repo.get_by_id(tag_uuid)
+            if tag is None or tag.project_id != worker.project_id:
+                raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
 
         # All fields use PATCH semantics: None means "do not touch" (except tag_id
         # which uses the _TAG_UNSET sentinel to distinguish "not provided" from "clear").

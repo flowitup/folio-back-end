@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
+from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 
@@ -43,15 +44,23 @@ class LogAttendanceUseCase:
         self,
         worker_repo: IWorkerRepository,
         entry_repo: ILaborEntryRepository,
+        tag_repo=None,  # ProjectTagRepositoryPort | None
     ):
         self._worker_repo = worker_repo
         self._entry_repo = entry_repo
+        self._tag_repo = tag_repo
 
     def execute(self, request: LogAttendanceRequest) -> LogAttendanceResponse:
         # Verify worker exists and belongs to project
         worker = self._worker_repo.find_by_id(request.worker_id)
         if not worker or worker.project_id != request.project_id:
             raise WorkerNotFoundError(str(request.worker_id))
+
+        # Guard: tag must belong to the same project as the worker
+        if request.tag_id is not None and self._tag_repo is not None:
+            tag = self._tag_repo.get_by_id(request.tag_id)
+            if tag is None or tag.project_id != worker.project_id:
+                raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
 
         entry = LaborEntry(
             id=uuid4(),

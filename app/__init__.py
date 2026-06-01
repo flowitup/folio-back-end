@@ -915,3 +915,45 @@ def _configure_di_container() -> None:
         expense_reader=_tag_repo,
         membership_reader=_tag_membership_reader,
     )
+
+    # Re-wire labor write use-cases with tag_repo so they can enforce
+    # same-project tag assignment.
+    from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
+    from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
+    from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
+
+    if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+        _c.log_attendance_usecase = _LogAttendUC(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            tag_repo=_tag_repo,
+        )
+        _c.update_attendance_usecase = _UpdateAttendUC(
+            entry_repo=_c.labor_entry_repository,
+            worker_repo=_c.worker_repository,
+            tag_repo=_tag_repo,
+        )
+        _c.bulk_log_attendance_usecase = _BulkLogUC(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            db_session=db.session,
+            tag_repo=_tag_repo,
+        )
+
+    # Re-wire invoice write use-cases with tag_repo so they can enforce
+    # same-project tag assignment.
+    from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
+    from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
+
+    if _c.invoice_repository is not None:
+        _pm = _c.payment_method_repo
+        _c.create_invoice_usecase = _CreateInvUC(
+            invoice_repo=_c.invoice_repository,
+            payment_method_repo=_pm,
+            tag_repo=_tag_repo,
+        )
+        _c.update_invoice_usecase = _UpdateInvUC(
+            invoice_repo=_c.invoice_repository,
+            payment_method_repo=_pm,
+            tag_repo=_tag_repo,
+        )

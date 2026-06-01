@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
+from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import Invoice, InvoiceType
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
@@ -40,9 +41,11 @@ class CreateInvoiceUseCase:
         self,
         invoice_repo: IInvoiceRepository,
         payment_method_repo: object = None,  # IPaymentMethodRepository | None
+        tag_repo=None,  # ProjectTagRepositoryPort | None
     ) -> None:
         self._repo = invoice_repo
         self._pm_repo = payment_method_repo
+        self._tag_repo = tag_repo
 
     def execute(self, request: CreateInvoiceRequest) -> InvoiceResponse:
         # Validate recipient
@@ -88,6 +91,12 @@ class CreateInvoiceUseCase:
 
             payment_method_id = method.id
             payment_method_label = method.label
+
+        # Guard: tag must belong to the same project as the invoice.
+        if request.tag_id is not None and self._tag_repo is not None:
+            tag = self._tag_repo.get_by_id(request.tag_id)
+            if tag is None or tag.project_id != request.project_id:
+                raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
 
         # Generate invoice number via repo
         invoice_number = self._repo.next_invoice_number(request.project_id)
