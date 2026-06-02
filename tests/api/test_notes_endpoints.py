@@ -436,7 +436,6 @@ class TestNoteStatusNotifications:
         The real list_due_for_user uses Postgres-specific SQL so we stub it to return an empty
         list (the only correct result for a SQLite test DB without legacy rows).
         """
-        from app.application.notes.dtos import DueNotificationDto
 
         create_resp = inv_client.post(
             _notes_url(invitation_app._test_project_id),
