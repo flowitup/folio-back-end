@@ -13,6 +13,7 @@ from app.api.v1.admin.schemas import (
     BulkAddRequest,
     BulkAddResponse,
     BulkAddResultItem,
+    UpdateUserRequest,
     UserSearchItem,
     UserSearchResponse,
 )
@@ -191,3 +192,55 @@ def search_users():
         count=len(users),
     )
     return jsonify(response.model_dump()), 200
+
+
+@admin_bp.route("/users/<user_id>", methods=["PATCH"])
+@openapi_doc(summary="Update a user's email / display name (superadmin only)", tags=["admin"])
+@jwt_required()
+@limiter.limit("20 per hour", key_func=jwt_user_key)
+def update_user(user_id: str):
+    """Update a user's profile (email and/or display name). Superadmin only.
+
+    Email is the login identity, so it is normalised to lowercase and must stay
+    unique across users (409 on collision). At least one field must be provided.
+    """
+    guard = _require_superadmin()
+    if guard is not None:
+        return guard
+
+    try:
+        uid = UUID(user_id)
+    except ValueError:
+        return _err(400, "BadRequest", "Invalid user id")
+
+    try:
+        data = UpdateUserRequest(**(request.get_json(silent=True) or {}))
+    except ValidationError as e:
+        return _validation_err(e)
+
+    provided = data.model_dump(exclude_unset=True)
+    if not provided:
+        return _err(400, "BadRequest", "No fields to update")
+
+    container = get_container()
+    user = container.user_repository.find_by_id(uid)
+    if user is None:
+        return _err(404, "NotFound", "User not found")
+
+    if "email" in provided and provided["email"]:
+        new_email = str(provided["email"]).strip().lower()
+        existing = container.user_repository.find_by_email(new_email)
+        if existing is not None and existing.id != uid:
+            return _err(409, "Conflict", "Email already in use")
+        user.email = new_email
+
+    if "display_name" in provided:
+        dn = provided["display_name"]
+        user.display_name = dn.strip() if isinstance(dn, str) and dn.strip() else None
+
+    container.user_repository.save(user)
+    from app import db
+
+    db.session.commit()
+
+    return jsonify({"id": str(user.id), "email": user.email, "display_name": user.display_name}), 200

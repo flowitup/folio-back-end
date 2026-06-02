@@ -76,3 +76,17 @@ class SqlAlchemyProjectMembershipRepository:
 
         raw = row[0]
         return raw if isinstance(raw, _UUID) else _UUID(str(raw))
+
+    def set_role(self, user_id: UUID, project_id: UUID, role_id: UUID) -> bool:
+        """Update an existing membership's role. Returns True if a row was updated.
+
+        The new role takes effect immediately on the next request: project-scoped
+        permission checks resolve membership-role permissions per request, so no
+        token refresh is needed.
+        """
+        result = self._session.execute(
+            text("UPDATE user_projects SET role_id = :rid WHERE user_id = :uid AND project_id = :pid"),
+            {"rid": str(role_id), "uid": str(user_id), "pid": str(project_id)},
+        )
+        self._session.commit()
+        return result.rowcount > 0

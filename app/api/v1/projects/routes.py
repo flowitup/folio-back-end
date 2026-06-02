@@ -330,7 +330,7 @@ def get_project_members(project_id: UUID):
     rows = db.session.execute(
         text(
             """
-            SELECT u.id, u.email, u.display_name, r.name AS role_name, up.assigned_at
+            SELECT u.id, u.email, u.display_name, r.name AS role_name, up.assigned_at, up.role_id
             FROM user_projects up
             JOIN users u ON u.id = up.user_id
             LEFT JOIN roles r ON r.id = up.role_id
@@ -348,6 +348,7 @@ def get_project_members(project_id: UUID):
             "display_name": row[2],
             "role_name": row[3],
             "joined_at": row[4].isoformat() if row[4] else None,
+            "role_id": str(row[5]) if row[5] else None,
         }
         for row in rows
     ]
@@ -378,3 +379,71 @@ def remove_user_from_project(project_id: str, user_id: str):
 
     container.project_repository.remove_user(UUID(project_id), UUID(user_id))
     return "", 204
+
+
+@projects_bp.route("/<project_id>/members/<user_id>", methods=["PATCH"])
+@openapi_doc(summary="Change a project member's role", tags=["projects"])
+@jwt_required()
+@limiter.limit("30 per minute")
+@require_permission("project:manage_users")
+def update_member_role(project_id: str, user_id: str):
+    """Change an existing member's role on a project.
+
+    The new role's permissions take effect immediately (project-scoped checks
+    resolve the membership role per request — no token refresh needed).
+    """
+    container = get_container()
+    caller_id = UUID(get_jwt_identity())
+
+    try:
+        project_uuid = UUID(project_id)
+        user_uuid = UUID(user_id)
+    except ValueError:
+        return jsonify(ErrorResponse(error="ValidationError", message="Invalid id", status_code=400).model_dump()), 400
+
+    try:
+        project = container.get_project_usecase.execute(project_uuid)
+    except ProjectNotFoundError:
+        return (
+            jsonify(
+                ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()
+            ),
+            404,
+        )
+
+    if not can_mutate_project(project, caller_id):
+        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+
+    body = request.get_json(silent=True) or {}
+    role_id_raw = body.get("role_id")
+    try:
+        role_uuid = UUID(str(role_id_raw))
+    except (ValueError, TypeError):
+        return (
+            jsonify(
+                ErrorResponse(error="ValidationError", message="role_id is required", status_code=400).model_dump()
+            ),
+            400,
+        )
+
+    role = container.role_repository.find_by_id(role_uuid)
+    if role is None:
+        return jsonify(ErrorResponse(error="NotFound", message="Role not found", status_code=404).model_dump()), 404
+    if role.name == "superadmin":
+        return (
+            jsonify(
+                ErrorResponse(
+                    error="Forbidden", message="Cannot assign the superadmin role", status_code=403
+                ).model_dump()
+            ),
+            403,
+        )
+
+    if container.project_membership_repo.find_role_id(user_uuid, project_uuid) is None:
+        return (
+            jsonify(ErrorResponse(error="NotFound", message="User is not a member", status_code=404).model_dump()),
+            404,
+        )
+
+    container.project_membership_repo.set_role(user_uuid, project_uuid, role_uuid)
+    return jsonify({"user_id": user_id, "role_id": str(role_uuid), "role_name": role.name}), 200

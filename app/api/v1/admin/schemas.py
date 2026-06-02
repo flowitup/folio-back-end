@@ -32,6 +32,17 @@ class BulkAddResponse(BaseModel):
     results: list[BulkAddResultItem]
 
 
+class UpdateUserRequest(BaseModel):
+    """PATCH /admin/users/<user_id> request body. All fields optional; at least one required.
+
+    ``email`` is the login identity — changing it is superadmin-only and must stay unique.
+    ``display_name`` may be set to null/empty to clear it.
+    """
+
+    email: EmailStr | None = None
+    display_name: str | None = Field(default=None, max_length=255)
+
+
 class UserSearchItem(BaseModel):
     """Single user entry in user-search response. Excludes sensitive fields."""
 
