@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Literal
+from datetime import datetime
 from uuid import UUID
 
 from app.domain.entities.note import Note
@@ -19,26 +18,20 @@ class NoteDto:
     created_by: UUID
     title: str
     description: str | None
-    due_date: date
-    lead_time_minutes: int
-    status: Literal["open", "done"]
-    fire_at: datetime
+    category: str
     created_at: datetime
     updated_at: datetime
 
     @classmethod
     def from_entity(cls, note: Note) -> NoteDto:
-        """Build a NoteDto from a Note entity, computing fire_at inline."""
+        """Build a NoteDto from a Note entity."""
         return cls(
             id=note.id,
             project_id=note.project_id,
             created_by=note.created_by,
             title=note.title,
             description=note.description,
-            due_date=note.due_date,
-            lead_time_minutes=note.lead_time_minutes,
-            status=note.status,
-            fire_at=Note.fire_at(note.due_date, note.lead_time_minutes),
+            category=note.category,
             created_at=note.created_at,
             updated_at=note.updated_at,
         )
@@ -52,6 +45,9 @@ class DueNotificationDto:
     ``dismissed`` is always False in v1 (the query filters dismissed notes out).
     The field is retained for forward-compatibility with a future "show recently
     dismissed" UI variant.
+
+    Note: the ``note`` field here carries a NoteDto from legacy reminder rows;
+    its category will be 'general' (the DB server_default) for pre-journal rows.
     """
 
     note: NoteDto

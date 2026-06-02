@@ -119,8 +119,6 @@ from app.application.notes.create_note_usecase import CreateNoteUseCase
 from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
 from app.application.notes.update_note_usecase import UpdateNoteUseCase
 from app.application.notes.delete_note_usecase import DeleteNoteUseCase
-from app.application.notes.mark_note_done_usecase import MarkNoteDoneUseCase
-from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
 from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
 from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
 
@@ -288,8 +286,6 @@ class Container:
     list_project_notes_usecase: Optional[ListProjectNotesUseCase] = None
     update_note_usecase: Optional[UpdateNoteUseCase] = None
     delete_note_usecase: Optional[DeleteNoteUseCase] = None
-    mark_note_done_usecase: Optional[MarkNoteDoneUseCase] = None
-    mark_note_open_usecase: Optional[MarkNoteOpenUseCase] = None
     list_due_notifications_usecase: Optional[ListDueNotificationsUseCase] = None
     dismiss_notification_usecase: Optional[DismissNotificationUseCase] = None
 

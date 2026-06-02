@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -43,9 +43,7 @@ def _make_note(*, project_id=None) -> Note:
         created_by=uuid4(),
         title="Test note",
         description=None,
-        due_date=date(2026, 5, 1),
-        lead_time_minutes=0,
-        status="open",
+        category="general",
         created_at=now,
         updated_at=now,
     )

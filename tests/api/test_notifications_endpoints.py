@@ -77,20 +77,23 @@ class TestListNotificationsEndpoint:
         assert resp.status_code == 401
 
     @_needs_pg
-    def test_200_item_shape_when_notifications_present(self, inv_client, member_token, invitation_app, note_open):
-        """When a due note exists, each item has 'note' and 'dismissed' fields."""
-        # note_open has due_date=today with lead_time=0 → fire_at=09:00 UTC today.
-        # The endpoint calls list_due_notifications which passes now=datetime.now(UTC).
-        # This test verifies shape only — exact notification visibility is clock-dependent.
+    def test_200_item_shape_when_notifications_present(self, inv_client, member_token, invitation_app, note_legacy_due):
+        """A legacy due row (due_date past, lead_time=0, status=open) surfaces in GET /notifications.
+
+        Asserts the serialized item shape: outer 'note'+'dismissed' envelope, plus
+        key fields including 'category' (added by the journal pivot serializer).
+        The loop is guaranteed to iterate because note_legacy_due is a qualifying row.
+        """
         resp = inv_client.get(_NOTIFICATIONS_URL, headers=_auth(member_token))
         assert resp.status_code == 200
         items = resp.get_json()["items"]
+        assert len(items) >= 1, "Expected at least one due notification from note_legacy_due fixture"
         for item in items:
             assert "note" in item
             assert "dismissed" in item
             assert "id" in item["note"]
             assert "title" in item["note"]
-            assert "status" in item["note"]
+            assert "category" in item["note"]
 
     @_needs_pg
     def test_200_count_matches_items_length(self, inv_client, member_token):

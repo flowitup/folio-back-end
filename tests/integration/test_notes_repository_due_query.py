@@ -1,10 +1,9 @@
 """Integration tests for SqlAlchemyNoteRepository.list_due_for_user — real DB.
 
-fire_at SQL math test:
-    Insert a note with due_date=today and lead_time=0.
-    fire_at = combine(today, 09:00) UTC.
-    Query at 08:59 UTC → 0 results (not yet due).
-    Query at 09:01 UTC → 1 result (just past fire_at).
+Legacy reminder query test (dormant notifications path):
+    Inserts legacy notes (with due_date/lead_time_minutes/status set).
+    Verifies the NULL-safe SQL query correctly excludes journal notes
+    (NULL due_date) and includes only open legacy rows past fire_at.
 
 Requires TEST_DATABASE_URL to point to a real Postgres instance.
 Skipped automatically when TEST_DATABASE_URL is not set (SQLite in-memory).
@@ -149,27 +148,20 @@ def _insert_note(session, *, project_id, user_id, due_date, lead_time=0):
 
 
 class TestFireAtSqlMath:
-    """Verify the SQL fire_at formula matches Note.fire_at() Python computation."""
+    """Verify the SQL fire_at formula works for legacy reminder rows."""
 
     def test_query_before_fire_at_returns_empty(self, pg_session):
         """At 08:59 UTC for lead_time=0, the note is not yet due → 0 results."""
         from app.infrastructure.database.repositories.sqlalchemy_note_repository import (
             SqlAlchemyNoteRepository,
         )
-        from app.domain.entities.note import Note
 
         user_id, project_id = _insert_user_and_project(pg_session)
         today = date.today()
         _insert_note(pg_session, project_id=project_id, user_id=user_id, due_date=today, lead_time=0)
 
-        # fire_at = 09:00 UTC; query at 08:59 → not due
+        # fire_at for lead_time=0 is 09:00 UTC; query at 08:59 → not due
         before_fire = datetime(today.year, today.month, today.day, 8, 59, 0, tzinfo=UTC)
-
-        # Verify Python formula agrees
-        python_fire_at = Note.fire_at(today, 0)
-        assert python_fire_at == datetime(today.year, today.month, today.day, 9, 0, 0, tzinfo=UTC)
-        assert before_fire < python_fire_at
-
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=before_fire, limit=100)
         assert results == []
@@ -186,25 +178,22 @@ class TestFireAtSqlMath:
 
         # fire_at = 09:00 UTC; query at 09:01 → due
         after_fire = datetime(today.year, today.month, today.day, 9, 1, 0, tzinfo=UTC)
-
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=after_fire, limit=100)
         assert len(results) == 1
         assert results[0].id == note_id
 
-    def test_fire_at_python_formula_matches_sql_boundary(self, pg_session):
-        """fire_at boundary: query exactly AT fire_at timestamp → 1 result (<=)."""
+    def test_fire_at_boundary_inclusive(self, pg_session):
+        """fire_at boundary: query exactly at 09:00:00 UTC → 1 result (<=)."""
         from app.infrastructure.database.repositories.sqlalchemy_note_repository import (
             SqlAlchemyNoteRepository,
         )
-        from app.domain.entities.note import Note
 
         user_id, project_id = _insert_user_and_project(pg_session)
         today = date.today()
         note_id = _insert_note(pg_session, project_id=project_id, user_id=user_id, due_date=today, lead_time=0)
 
-        exact_fire_at = Note.fire_at(today, 0)  # 09:00:00 UTC
-
+        exact_fire_at = datetime(today.year, today.month, today.day, 9, 0, 0, tzinfo=UTC)
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=exact_fire_at, limit=100)
         assert len(results) == 1
@@ -215,14 +204,10 @@ class TestFireAtSqlMath:
         from app.infrastructure.database.repositories.sqlalchemy_note_repository import (
             SqlAlchemyNoteRepository,
         )
-        from app.domain.entities.note import Note
 
         user_id, project_id = _insert_user_and_project(pg_session)
         today = date.today()
         _insert_note(pg_session, project_id=project_id, user_id=user_id, due_date=today, lead_time=60)
-
-        python_fire_at = Note.fire_at(today, 60)
-        assert python_fire_at == datetime(today.year, today.month, today.day, 8, 0, 0, tzinfo=UTC)
 
         before = datetime(today.year, today.month, today.day, 7, 59, 0, tzinfo=UTC)
         repo = SqlAlchemyNoteRepository(pg_session)
@@ -231,6 +216,39 @@ class TestFireAtSqlMath:
         after = datetime(today.year, today.month, today.day, 8, 1, 0, tzinfo=UTC)
         results = repo.list_due_for_user(user_id=user_id, now=after, limit=100)
         assert len(results) == 1
+
+    def test_journal_note_null_due_date_excluded(self, pg_session):
+        """Journal notes (NULL due_date) must never appear in due results."""
+        from sqlalchemy import text
+        from app.infrastructure.database.repositories.sqlalchemy_note_repository import (
+            SqlAlchemyNoteRepository,
+        )
+
+        user_id, project_id = _insert_user_and_project(pg_session)
+        now = datetime.now(UTC)
+        # Insert a new-style journal note with NULL due_date/status
+        journal_note_id = uuid4()
+        pg_session.execute(
+            text(
+                "INSERT INTO notes (id, project_id, created_by, title, description, "
+                " category, created_at, updated_at) "
+                "VALUES (:id, :pid, :uid, 'Journal note', NULL, 'general', :now, :now)"
+            ),
+            {
+                "id": str(journal_note_id),
+                "pid": str(project_id),
+                "uid": str(user_id),
+                "now": now,
+            },
+        )
+        pg_session.flush()
+
+        # Query far in the future — journal note should never appear
+        far_future = datetime(2099, 1, 1, 0, 0, 0, tzinfo=UTC)
+        repo = SqlAlchemyNoteRepository(pg_session)
+        results = repo.list_due_for_user(user_id=user_id, now=far_future, limit=100)
+        ids = [r.id for r in results]
+        assert journal_note_id not in ids
 
     def test_dismissed_note_not_returned(self, pg_session):
         """A note the user dismissed must not appear in due results."""
@@ -243,9 +261,8 @@ class TestFireAtSqlMath:
         today = date.today()
         note_id = _insert_note(pg_session, project_id=project_id, user_id=user_id, due_date=today, lead_time=0)
 
-        # Dismiss the note
         pg_session.execute(
-            text("INSERT INTO notes_dismissed (user_id, note_id, dismissed_at) " "VALUES (:uid, :nid, :now)"),
+            text("INSERT INTO notes_dismissed (user_id, note_id, dismissed_at) VALUES (:uid, :nid, :now)"),
             {"uid": str(user_id), "nid": str(note_id), "now": datetime.now(UTC)},
         )
         pg_session.flush()

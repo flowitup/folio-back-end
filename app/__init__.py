@@ -213,8 +213,6 @@ def _configure_di_container() -> None:
     from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
     from app.application.notes.update_note_usecase import UpdateNoteUseCase
     from app.application.notes.delete_note_usecase import DeleteNoteUseCase
-    from app.application.notes.mark_note_done_usecase import MarkNoteDoneUseCase
-    from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
     from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
     from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
     from config import Config
@@ -306,21 +304,10 @@ def _configure_di_container() -> None:
     )
     _c.update_note_usecase = UpdateNoteUseCase(
         note_repo=_note_repo,
-        dismissal_repo=_dismissal_repo,
         membership_reader=_membership_reader,
         db_session=db.session,
     )
     _c.delete_note_usecase = DeleteNoteUseCase(
-        note_repo=_note_repo,
-        membership_reader=_membership_reader,
-        db_session=db.session,
-    )
-    _c.mark_note_done_usecase = MarkNoteDoneUseCase(
-        note_repo=_note_repo,
-        membership_reader=_membership_reader,
-        db_session=db.session,
-    )
-    _c.mark_note_open_usecase = MarkNoteOpenUseCase(
         note_repo=_note_repo,
         membership_reader=_membership_reader,
         db_session=db.session,

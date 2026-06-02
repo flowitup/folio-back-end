@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -18,17 +18,15 @@ UTC = timezone.utc
 _CLOCK = datetime(2026, 4, 27, 9, 0, 0, tzinfo=UTC)
 
 
-def _make_note(*, project_id=None, status="open", due_date=date(2026, 4, 27)) -> Note:
+def _make_note(*, project_id=None) -> Note:
     now = datetime(2026, 4, 27, 9, 0, 0, tzinfo=UTC)
     return Note(
         id=uuid4(),
         project_id=project_id or uuid4(),
         created_by=uuid4(),
-        title="Reminder note",
+        title="Legacy reminder note",
         description=None,
-        due_date=due_date,
-        lead_time_minutes=0,
-        status=status,
+        category="general",
         created_at=now,
         updated_at=now,
     )

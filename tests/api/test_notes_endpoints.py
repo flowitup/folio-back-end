@@ -1,9 +1,8 @@
-"""Integration tests for project-scoped notes endpoints (4 routes)."""
+"""Integration tests for project-scoped journal notes endpoints (4 routes)."""
 
 from __future__ import annotations
 
 import uuid
-from datetime import date
 
 
 # ---------------------------------------------------------------------------
@@ -27,15 +26,13 @@ def _valid_body(**overrides) -> dict:
     base = {
         "title": "Test note",
         "description": None,
-        "due_date": str(date.today()),
-        "lead_time_minutes": 0,
     }
     base.update(overrides)
     return base
 
 
 # ===========================================================================
-# POST /api/v1/projects/<project_id>/notes  — create note
+# POST /api/v1/projects/<project_id>/notes  — create journal note
 # ===========================================================================
 
 
@@ -49,9 +46,8 @@ class TestCreateNoteEndpoint:
         assert resp.status_code == 201
         data = resp.get_json()
         assert data["title"] == "Brand new note"
-        assert data["status"] == "open"
+        assert data["category"] == "general"
         assert "id" in data
-        assert "fire_at" in data
         assert "created_at" in data
 
     def test_201_response_shape_complete(self, inv_client, member_token, invitation_app):
@@ -68,32 +64,43 @@ class TestCreateNoteEndpoint:
             "created_by",
             "title",
             "description",
-            "due_date",
-            "lead_time_minutes",
-            "status",
-            "fire_at",
+            "category",
             "created_at",
             "updated_at",
         }
         assert required_keys.issubset(data.keys())
+        # Reminder fields must NOT be present in journal response
+        assert "fire_at" not in data
+        assert "due_date" not in data
+        assert "lead_time_minutes" not in data
+        assert "status" not in data
 
-    def test_201_with_lead_time_60(self, inv_client, member_token, invitation_app):
+    def test_201_with_explicit_category(self, inv_client, member_token, invitation_app):
         resp = inv_client.post(
             _notes_url(invitation_app._test_project_id),
-            json=_valid_body(lead_time_minutes=60),
+            json=_valid_body(category="inspection"),
             headers=_auth(member_token),
         )
         assert resp.status_code == 201
-        assert resp.get_json()["lead_time_minutes"] == 60
+        assert resp.get_json()["category"] == "inspection"
 
-    def test_201_with_lead_time_1440(self, inv_client, member_token, invitation_app):
+    def test_201_all_valid_categories(self, inv_client, member_token, invitation_app):
+        for cat in ("inspection", "delivery", "payment", "decision", "call", "general"):
+            resp = inv_client.post(
+                _notes_url(invitation_app._test_project_id),
+                json=_valid_body(title=f"Cat {cat}", category=cat),
+                headers=_auth(member_token),
+            )
+            assert resp.status_code == 201, f"category={cat} failed: {resp.get_data(as_text=True)}"
+            assert resp.get_json()["category"] == cat
+
+    def test_422_invalid_category(self, inv_client, member_token, invitation_app):
         resp = inv_client.post(
             _notes_url(invitation_app._test_project_id),
-            json=_valid_body(lead_time_minutes=1440),
+            json=_valid_body(category="reminder"),
             headers=_auth(member_token),
         )
-        assert resp.status_code == 201
-        assert resp.get_json()["lead_time_minutes"] == 1440
+        assert resp.status_code == 422
 
     def test_401_unauthenticated(self, inv_client, invitation_app):
         resp = inv_client.post(
@@ -110,27 +117,10 @@ class TestCreateNoteEndpoint:
         )
         assert resp.status_code == 403
 
-    def test_400_invalid_lead_time(self, inv_client, member_token, invitation_app):
-        resp = inv_client.post(
-            _notes_url(invitation_app._test_project_id),
-            json=_valid_body(lead_time_minutes=30),
-            headers=_auth(member_token),
-        )
-        # Pydantic Literal[0,60,1440] rejects 30 at schema layer → 422
-        assert resp.status_code in (400, 422)
-
     def test_422_missing_title(self, inv_client, member_token, invitation_app):
         resp = inv_client.post(
             _notes_url(invitation_app._test_project_id),
-            json={"due_date": str(date.today())},
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 422
-
-    def test_422_missing_due_date(self, inv_client, member_token, invitation_app):
-        resp = inv_client.post(
-            _notes_url(invitation_app._test_project_id),
-            json={"title": "No date"},
+            json={"description": "No title"},
             headers=_auth(member_token),
         )
         assert resp.status_code == 422
@@ -143,13 +133,24 @@ class TestCreateNoteEndpoint:
         )
         assert resp.status_code == 422
 
-    def test_past_due_date_accepted(self, inv_client, member_token, invitation_app):
+    def test_422_extra_fields_rejected(self, inv_client, member_token, invitation_app):
+        """extra='forbid' rejects unknown fields."""
         resp = inv_client.post(
             _notes_url(invitation_app._test_project_id),
-            json=_valid_body(due_date="2020-01-01"),
+            json=_valid_body(due_date="2027-01-01"),
             headers=_auth(member_token),
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 422
+
+    def test_400_whitespace_only_title_create(self, inv_client, member_token, invitation_app):
+        """A title of all whitespace passes Pydantic min_length but fails domain _validate_title → 400."""
+        resp = inv_client.post(
+            _notes_url(invitation_app._test_project_id),
+            json=_valid_body(title="   "),
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "BadRequest"
 
 
 # ===========================================================================
@@ -170,7 +171,7 @@ class TestListNotesEndpoint:
         assert isinstance(data["items"], list)
         assert data["count"] == len(data["items"])
 
-    def test_200_includes_open_note(self, inv_client, member_token, invitation_app, note_open):
+    def test_200_includes_note_open(self, inv_client, member_token, invitation_app, note_open):
         resp = inv_client.get(
             _notes_url(invitation_app._test_project_id),
             headers=_auth(member_token),
@@ -179,7 +180,7 @@ class TestListNotesEndpoint:
         ids = [item["id"] for item in resp.get_json()["items"]]
         assert note_open in ids
 
-    def test_200_includes_done_note(self, inv_client, member_token, invitation_app, note_done):
+    def test_200_includes_note_done(self, inv_client, member_token, invitation_app, note_done):
         resp = inv_client.get(
             _notes_url(invitation_app._test_project_id),
             headers=_auth(member_token),
@@ -215,34 +216,31 @@ class TestUpdateNoteEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["title"] == "Updated title"
 
-    def test_200_mark_done_via_status_field(self, inv_client, member_token, invitation_app, note_open):
+    def test_200_update_category(self, inv_client, member_token, invitation_app, note_open):
+        resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_open),
+            json={"category": "payment"},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["category"] == "payment"
+
+    def test_422_invalid_category_on_patch(self, inv_client, member_token, invitation_app, note_open):
+        resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_open),
+            json={"category": "bogus"},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 422
+
+    def test_422_status_field_rejected(self, inv_client, member_token, invitation_app, note_open):
+        """status field is no longer accepted — extra='forbid' rejects it."""
         resp = inv_client.patch(
             _note_url(invitation_app._test_project_id, note_open),
             json={"status": "done"},
             headers=_auth(member_token),
         )
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "done"
-
-    def test_200_reopen_via_status_field(self, inv_client, member_token, invitation_app, note_done):
-        resp = inv_client.patch(
-            _note_url(invitation_app._test_project_id, note_done),
-            json={"status": "open"},
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "open"
-
-    def test_200_update_due_date_clears_dismissals(
-        self, inv_client, member_token, invitation_app, note_dismissed_by_member
-    ):
-        """Changing due_date cascades dismissals — endpoint returns 200."""
-        resp = inv_client.patch(
-            _note_url(invitation_app._test_project_id, note_dismissed_by_member),
-            json={"due_date": "2027-01-01"},
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 200
+        assert resp.status_code == 422
 
     def test_401_unauthenticated(self, inv_client, invitation_app, note_open):
         resp = inv_client.patch(
@@ -268,24 +266,18 @@ class TestUpdateNoteEndpoint:
         )
         assert resp.status_code == 404
 
-    def test_422_invalid_lead_time_value(self, inv_client, member_token, invitation_app, note_open):
+    def test_400_whitespace_only_title_update(self, inv_client, member_token, invitation_app, note_open):
+        """A title of all whitespace passes Pydantic min_length but fails domain _validate_title → 400."""
         resp = inv_client.patch(
             _note_url(invitation_app._test_project_id, note_open),
-            json={"lead_time_minutes": 30},
+            json={"title": "   "},
             headers=_auth(member_token),
         )
-        assert resp.status_code in (400, 422)
-
-    def test_422_invalid_status_value(self, inv_client, member_token, invitation_app, note_open):
-        resp = inv_client.patch(
-            _note_url(invitation_app._test_project_id, note_open),
-            json={"status": "archived"},
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "BadRequest"
 
     def test_patch_description_persists(self, inv_client, member_token, invitation_app):
-        """C1 regression: PATCH with description must update and be reflected in response."""
+        """PATCH with description must update and be reflected in list response."""
         create_resp = inv_client.post(
             _notes_url(invitation_app._test_project_id),
             json=_valid_body(title="Desc test note"),
