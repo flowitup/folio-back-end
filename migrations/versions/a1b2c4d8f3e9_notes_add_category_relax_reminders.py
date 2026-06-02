@@ -8,7 +8,7 @@ that are no longer valid once status/lead_time_minutes become nullable. Adds a
 composite index on (project_id, created_at) for the journal list query.
 
 Revision ID: a1b2c4d8f3e9
-Revises: c78cbcf5a73b, c9a1b7e3d2f5
+Revises: 3a1b2c4d5e6f
 Create Date: 2026-06-02 10:00:00.000000
 
 """
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "a1b2c4d8f3e9"
-down_revision = ("c78cbcf5a73b", "c9a1b7e3d2f5")
+down_revision = "3a1b2c4d5e6f"
 branch_labels = None
 depends_on = None
 
