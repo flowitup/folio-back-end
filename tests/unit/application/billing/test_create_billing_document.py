@@ -9,7 +9,8 @@ import pytest
 from app.application.billing.create_billing_document_usecase import CreateBillingDocumentUseCase
 from app.application.billing.dtos import CreateBillingDocumentInput, ItemInput
 from app.domain.billing.enums import BillingDocumentKind
-from app.domain.billing.exceptions import MissingCompanyProfileError
+from app.domain.billing.exceptions import ForbiddenCompanyBillingError, MissingCompanyProfileError
+from tests.unit.application.billing.conftest import make_access, make_company
 
 
 @pytest.fixture
@@ -35,6 +36,18 @@ def _inp(user_id, company_id=None, kind=BillingDocumentKind.DEVIS, **overrides):
     )
     defaults.update(overrides)
     return CreateBillingDocumentInput(**defaults)
+
+
+class TestCreateBillingDocumentRoleGate:
+    def test_member_cannot_create_company_billing(self, usecase, company_repo, access_repo, fake_session):
+        uid = uuid4()
+        cid = uuid4()
+        company_repo.save(make_company(owner_id=uid, company_id=cid))
+        # Attached as a plain member → must be forbidden from creating billing.
+        access_repo.save(make_access(user_id=uid, company_id=cid, role="member"))
+
+        with pytest.raises(ForbiddenCompanyBillingError):
+            usecase.execute(_inp(uid, company_id=cid), fake_session)
 
 
 class TestCreateBillingDocumentHappyPath:

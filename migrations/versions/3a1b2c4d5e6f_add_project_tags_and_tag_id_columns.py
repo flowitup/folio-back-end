@@ -1,7 +1,7 @@
 """add project_tags table and tag_id FK columns on labor_entries and invoices
 
 Revision ID: 3a1b2c4d5e6f
-Revises: 383b1db5c576
+Revises: 0e9904e84af6
 Create Date: 2026-06-02 00:58:00.000000
 
 """
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "3a1b2c4d5e6f"
-down_revision = "383b1db5c576"
+down_revision = "0e9904e84af6"
 branch_labels = None
 depends_on = None
 

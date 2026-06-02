@@ -728,6 +728,46 @@ def invitation_app():
         )
 
         # ------------------------------------------------------------------
+        # Wire project_photos use-cases
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_project_photo_repository import (
+            SqlAlchemyProjectPhotoRepository as _PhotoRepo,
+        )
+        from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer as _Thumbnailer
+        from app.application.project_photos import (
+            UploadProjectPhotoUseCase as _UploadPhotoUC,
+            ListProjectPhotosUseCase as _ListPhotosUC,
+            GetProjectPhotoUseCase as _GetPhotoUC,
+            UpdateProjectPhotoUseCase as _UpdatePhotoUC,
+            DeleteProjectPhotoUseCase as _DeletePhotoUC,
+        )
+
+        _photo_repo = _PhotoRepo(db.session)
+        _photo_thumbnailer = _Thumbnailer()
+        # Reuse the existing InMemoryDocumentStorage instance wired above for documents.
+        _c.project_photo_repository = _photo_repo
+
+        _c.upload_project_photo_usecase = _UploadPhotoUC(
+            repo=_photo_repo,
+            storage=_doc_storage,
+            thumbnailer=_photo_thumbnailer,
+            db_session=db.session,
+            filename_sanitizer=_Sanitizer(),
+        )
+        _c.list_project_photos_usecase = _ListPhotosUC(repo=_photo_repo)
+        _c.get_project_photo_usecase = _GetPhotoUC(repo=_photo_repo, storage=_doc_storage)
+        _c.update_project_photo_usecase = _UpdatePhotoUC(
+            repo=_photo_repo,
+            db_session=db.session,
+        )
+        _c.delete_project_photo_usecase = _DeletePhotoUC(
+            repo=_photo_repo,
+            db_session=db.session,
+        )
+
+        # ------------------------------------------------------------------
         # Wire tags use-cases — mirrors app/__init__.py wiring.
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the invitation_app test fixture will drift from prod.

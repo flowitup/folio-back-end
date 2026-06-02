@@ -88,6 +88,17 @@ class MissingPrimaryCompanyError(CompaniesDomainError):
         super().__init__(f"User {user_id} has no attached company. Attach a company first.")
 
 
+class LastCompanyAdminError(CompaniesDomainError):
+    """Raised when demoting/removing the last remaining admin of a company.
+
+    Every company must keep at least one admin so its billing stays manageable.
+    """
+
+    def __init__(self, company_id: UUID) -> None:
+        self.company_id = company_id
+        super().__init__(f"Company {company_id} must keep at least one admin")
+
+
 class InviteTokenSystemOverloadError(CompaniesDomainError):
     """Raised when the DOS guard fires: too many active invite tokens in the system.
 

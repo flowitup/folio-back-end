@@ -136,6 +136,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.persons import persons_bp
     from app.api.v1.payment_methods import payment_methods_bp
     from app.api.v1.project_documents import project_documents_bp
+    from app.api.v1.project_photos import project_photos_bp
     from app.api.v1.bibliotheque import bibliotheque_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
@@ -160,6 +161,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(persons_bp, url_prefix="/api/v1")
     app.register_blueprint(payment_methods_bp, url_prefix="/api/v1")
     app.register_blueprint(project_documents_bp, url_prefix="/api/v1")
+    app.register_blueprint(project_photos_bp, url_prefix="/api/v1")
     app.register_blueprint(bibliotheque_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
@@ -360,6 +362,7 @@ def _configure_di_container() -> None:
         GetCompanyUseCase as _GetCompanyUseCase,
         RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
         SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
+        SetMemberRoleUseCase as _SetMemberRoleUseCase,
         DetachCompanyUseCase as _DetachCompanyUseCase,
     )
     import datetime as _dt
@@ -441,6 +444,10 @@ def _configure_di_container() -> None:
     )
     _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
         access_repo=_access_repo,
+    )
+    _c.set_member_role_usecase = _SetMemberRoleUseCase(
+        access_repo=_access_repo,
+        role_checker=_role_checker,
     )
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
@@ -585,6 +592,7 @@ def _configure_di_container() -> None:
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        access_repo=_access_repo,  # company-admin may manage company billing
     )
     from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
 
@@ -592,24 +600,29 @@ def _configure_di_container() -> None:
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
+        access_repo=_access_repo,  # company-admin may manage company billing
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        access_repo=_access_repo,  # per-company admin scoping for visibility
     )
     _c.get_billing_document_usecase = GetBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
     )
     _c.delete_billing_document_usecase = DeleteBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
+        access_repo=_access_repo,  # company-admin may manage company billing
     )
     _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
         doc_repo=_billing_doc_repo,
         pdf_renderer=_billing_pdf_renderer,
+        access_repo=_access_repo,  # company-admin may render company billing
     )
     _c.render_billing_document_xlsx_usecase = RenderBillingDocumentXlsxUseCase(
         doc_repo=_billing_doc_repo,
         xlsx_renderer=_billing_xlsx_renderer,
+        access_repo=_access_repo,  # company-admin may render company billing
     )
 
     # billing-template use-cases
@@ -760,6 +773,45 @@ def _configure_di_container() -> None:
             storage=storage,
             db_session=db.session,
         )
+
+    # -----------------------------------------------------------------------
+    # Project photos DI wiring
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_project_photo_repository import (
+        SqlAlchemyProjectPhotoRepository,
+    )
+    from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
+    from app.application.project_photos import (
+        UploadProjectPhotoUseCase,
+        ListProjectPhotosUseCase,
+        GetProjectPhotoUseCase,
+        UpdateProjectPhotoUseCase,
+        DeleteProjectPhotoUseCase,
+    )
+
+    _photo_repo = SqlAlchemyProjectPhotoRepository(db.session)
+    _c.project_photo_repository = _photo_repo
+    _photo_thumbnailer = PillowImageThumbnailer()
+
+    # Reuse document_storage singleton (S3AttachmentStorage satisfies IDocumentStorage).
+    # Reuse _filename_sanitizer already instantiated above for project documents.
+    _c.upload_project_photo_usecase = UploadProjectPhotoUseCase(
+        repo=_photo_repo,
+        storage=storage,
+        thumbnailer=_photo_thumbnailer,
+        db_session=db.session,
+        filename_sanitizer=_filename_sanitizer,
+    )
+    _c.list_project_photos_usecase = ListProjectPhotosUseCase(repo=_photo_repo)
+    _c.get_project_photo_usecase = GetProjectPhotoUseCase(repo=_photo_repo, storage=storage)
+    _c.update_project_photo_usecase = UpdateProjectPhotoUseCase(
+        repo=_photo_repo,
+        db_session=db.session,
+    )
+    _c.delete_project_photo_usecase = DeleteProjectPhotoUseCase(
+        repo=_photo_repo,
+        db_session=db.session,
+    )
 
     # -----------------------------------------------------------------------
     # Bibliotheque DI wiring

@@ -9,10 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.application.billing._helpers import _assert_owner
+from app.application.billing._helpers import _assert_billing_doc_access
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingDocumentXlsxRendererPort,
+    UserCompanyAccessRepositoryPort,
 )
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
 
@@ -36,15 +37,17 @@ class RenderBillingDocumentXlsxUseCase:
         self,
         doc_repo: BillingDocumentRepositoryPort,
         xlsx_renderer: BillingDocumentXlsxRendererPort,
+        access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._xlsx_renderer = xlsx_renderer
+        self._access_repo = access_repo
 
     def execute(self, doc_id: UUID, user_id: UUID) -> RenderXlsxResult:
         doc = self._doc_repo.find_by_id(doc_id)
         if doc is None:
             raise BillingDocumentNotFoundError(doc_id)
-        _assert_owner(doc, user_id)
+        _assert_billing_doc_access(doc, user_id, self._access_repo)
 
         xlsx_bytes = self._xlsx_renderer.render(doc)
         # Replace any path-unsafe chars in the doc number when forming filename.

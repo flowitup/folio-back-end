@@ -25,7 +25,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from flask import Response, jsonify, request, send_file
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
@@ -61,7 +61,7 @@ from app.application.billing import (
     MissingCompanyProfileError,
 )
 from app.application.billing.dtos import ImportBillingDocumentInput
-from app.domain.billing.exceptions import BillingDocumentAlreadyExistsError
+from app.domain.billing.exceptions import BillingDocumentAlreadyExistsError, ForbiddenCompanyBillingError
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -150,6 +150,7 @@ def list_billing_documents():
         return _err("ValidationError", "limit and offset must be integers", 400)
 
     user_id = UUID(get_jwt_identity())
+    is_superadmin = "*:*" in get_jwt().get("permissions", [])
     result = get_container().list_billing_documents_usecase.execute(
         user_id=user_id,
         kind=kind,
@@ -158,6 +159,7 @@ def list_billing_documents():
         company_id=company_id,
         limit=limit,
         offset=offset,
+        is_superadmin=is_superadmin,
     )
     return jsonify(
         {
@@ -213,6 +215,8 @@ def create_billing_document():
 
     try:
         result = get_container().create_billing_document_usecase.execute(inp, db.session)
+    except ForbiddenCompanyBillingError:
+        return _err("Forbidden", "Company billing requires the admin role for this company", 403)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
     except CompanyNotAttachedError:
@@ -356,6 +360,8 @@ def clone_billing_document(doc_id: str, billing_doc):
 
     try:
         result = get_container().clone_billing_document_usecase.execute(inp, db.session)
+    except ForbiddenCompanyBillingError:
+        return _err("Forbidden", "Company billing requires the admin role for this company", 403)
     except BillingDocumentNotFoundError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except MissingCompanyProfileError:
@@ -409,6 +415,8 @@ def convert_to_facture(doc_id: str, billing_doc):
 
     try:
         result = get_container().convert_devis_to_facture_usecase.execute(inp, db.session)
+    except ForbiddenCompanyBillingError:
+        return _err("Forbidden", "Company billing requires the admin role for this company", 403)
     except BillingDocumentNotFoundError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
@@ -715,6 +723,8 @@ def create_document_from_template(template_id: str):
 
     try:
         result = get_container().apply_template_usecase.execute(inp, db.session)
+    except ForbiddenCompanyBillingError:
+        return _err("Forbidden", "Company billing requires the admin role for this company", 403)
     except BillingTemplateNotFoundError:
         return _err("NotFound", f"Billing template {template_id} not found", 404)
     except ForbiddenBillingDocumentError:

@@ -68,6 +68,38 @@ class InMemoryBillingDocumentRepository:
         total = len(docs)
         return docs[offset : offset + limit], total
 
+    def list_visible(
+        self,
+        kind: BillingDocumentKind,
+        *,
+        owner_id: Optional[UUID] = None,
+        company_ids: Optional[list[UUID]] = None,
+        all_documents: bool = False,
+        status: Optional[BillingDocumentStatus] = None,
+        project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[BillingDocument], int]:
+        company_ids = company_ids or []
+        docs = []
+        for d in self._store.values():
+            if d.kind != kind:
+                continue
+            if not all_documents:
+                visible = (owner_id is not None and d.user_id == owner_id) or (d.company_id in company_ids)
+                if not visible:
+                    continue
+            docs.append(d)
+        if company_id is not None:
+            docs = [d for d in docs if d.company_id == company_id]
+        if status is not None:
+            docs = [d for d in docs if d.status == status]
+        if project_id is not None:
+            docs = [d for d in docs if d.project_id == project_id]
+        total = len(docs)
+        return docs[offset : offset + limit], total
+
     def save(self, doc: BillingDocument) -> BillingDocument:
         self._store[doc.id] = doc
         return doc
@@ -320,14 +352,25 @@ def make_company(owner_id: UUID, company_id: Optional[UUID] = None, prefix: str 
     )
 
 
-def make_access(user_id: UUID, company_id: UUID, is_primary: bool = True) -> UserCompanyAccess:
-    """Build a UserCompanyAccess domain entity for billing unit tests."""
+def make_access(
+    user_id: UUID,
+    company_id: UUID,
+    is_primary: bool = True,
+    role: str = "admin",
+) -> UserCompanyAccess:
+    """Build a UserCompanyAccess domain entity for billing unit tests.
+
+    Defaults to the 'admin' role so the attached user can manage the company's
+    billing (the common case in these tests). Pass role="member" to exercise the
+    per-company billing gate.
+    """
     now = datetime.now(timezone.utc)
     return UserCompanyAccess(
         user_id=user_id,
         company_id=company_id,
         is_primary=is_primary,
         attached_at=now,
+        role=role,
     )
 
 

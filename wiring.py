@@ -138,6 +138,7 @@ from app.application.companies import (
     GetCompanyUseCase,
     RedeemInviteTokenUseCase,
     SetPrimaryCompanyUseCase,
+    SetMemberRoleUseCase,
     DetachCompanyUseCase,
 )
 
@@ -317,6 +318,7 @@ class Container:
     get_company_usecase: Optional[GetCompanyUseCase] = None
     redeem_invite_token_usecase: Optional[RedeemInviteTokenUseCase] = None
     set_primary_company_usecase: Optional[SetPrimaryCompanyUseCase] = None
+    set_member_role_usecase: Optional[SetMemberRoleUseCase] = None
     detach_company_usecase: Optional[DetachCompanyUseCase] = None
 
     # -----------------------------------------------------------------------

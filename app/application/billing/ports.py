@@ -14,8 +14,13 @@ from uuid import UUID
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
-from app.domain.billing.exceptions import CompanyNotAttachedError, ForbiddenProjectAccessError
+from app.domain.billing.exceptions import (
+    CompanyNotAttachedError,
+    ForbiddenCompanyBillingError,
+    ForbiddenProjectAccessError,
+)
 from app.domain.companies.company import Company
+from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 
 if TYPE_CHECKING:
@@ -52,6 +57,31 @@ class BillingDocumentRepositoryPort(Protocol):
         Filters: kind required; status, project_id, and company_id are optional.
         Returns (items, total_count) where total_count is the unfiltered total
         matching user_id + kind + optional filters (for pagination metadata).
+        """
+        ...
+
+    def list_visible(
+        self,
+        kind: BillingDocumentKind,
+        *,
+        owner_id: Optional[UUID] = None,
+        company_ids: Optional[list[UUID]] = None,
+        all_documents: bool = False,
+        status: Optional[BillingDocumentStatus] = None,
+        project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[BillingDocument], int]:
+        """Return paginated documents visible to a caller, with total count.
+
+        Visibility (unless ``all_documents`` for superadmins, which lifts all
+        owner/company restrictions): a document is visible when the caller owns
+        it (``user_id == owner_id``) OR it belongs to a company the caller
+        administers (``company_id IN company_ids``).
+
+        ``company_id`` is an additional exact filter (e.g. the UI scoping to one
+        company). ``status``/``project_id``/``kind`` filter as usual.
         """
         ...
 
@@ -208,6 +238,52 @@ class UserCompanyAccessRepositoryPort(Protocol):
     def find(self, user_id: UUID, company_id: UUID) -> Optional[UserCompanyAccess]:
         """Return the access row for (user_id, company_id), or None."""
         ...
+
+    def list_for_user(self, user_id: UUID) -> list[UserCompanyAccess]:
+        """Return all access rows for a user (used to resolve admin companies)."""
+        ...
+
+
+def is_company_admin(
+    access_repo: Optional[UserCompanyAccessRepositoryPort],
+    user_id: UUID,
+    company_id: Optional[UUID],
+) -> bool:
+    """Return True if user holds the 'admin' role for company_id.
+
+    False when company_id is None, the repo is None (test/legacy context), the
+    user has no access row, or their role is not 'admin'.
+    """
+    if company_id is None or access_repo is None:
+        return False
+    access = access_repo.find(user_id, company_id)
+    return access is not None and access.role == CompanyRole.ADMIN.value
+
+
+def admin_company_ids(
+    access_repo: Optional[UserCompanyAccessRepositoryPort],
+    user_id: UUID,
+) -> list[UUID]:
+    """Return the company_ids where the user holds the 'admin' role (possibly empty)."""
+    if access_repo is None:
+        return []
+    return [a.company_id for a in access_repo.list_for_user(user_id) if a.role == CompanyRole.ADMIN.value]
+
+
+def assert_company_admin(
+    access_repo: Optional[UserCompanyAccessRepositoryPort],
+    user_id: UUID,
+    company_id: Optional[UUID],
+) -> None:
+    """Raise ForbiddenCompanyBillingError unless user is an admin of company_id.
+
+    No-op when access_repo is None (legacy/test wiring) or company_id is None
+    (no company context) — never widens access by accident in those paths.
+    """
+    if access_repo is None or company_id is None:
+        return
+    if not is_company_admin(access_repo, user_id, company_id):
+        raise ForbiddenCompanyBillingError(company_id)
 
 
 def assert_user_company_access(

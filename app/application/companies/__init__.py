@@ -21,6 +21,7 @@ from app.application.companies.list_my_companies_usecase import ListMyCompaniesU
 from app.application.companies.get_company_usecase import GetCompanyUseCase
 from app.application.companies.redeem_invite_token_usecase import RedeemInviteTokenUseCase
 from app.application.companies.set_primary_company_usecase import SetPrimaryCompanyUseCase
+from app.application.companies.set_member_role_usecase import SetMemberRoleUseCase
 from app.application.companies.detach_company_usecase import DetachCompanyUseCase
 
 # --- DTOs ---
@@ -32,6 +33,7 @@ from app.application.companies.dtos import (
     RevokeInviteTokenInput,
     RedeemInviteTokenInput,
     SetPrimaryCompanyInput,
+    SetMemberRoleInput,
     DetachCompanyInput,
     BootAttachedUserInput,
     ListAllCompaniesInput,
@@ -71,6 +73,7 @@ from app.domain.companies.exceptions import (
     ForbiddenCompanyError,
     MissingPrimaryCompanyError,
     InviteTokenSystemOverloadError,
+    LastCompanyAdminError,
 )
 
 __all__ = [
@@ -88,6 +91,7 @@ __all__ = [
     "GetCompanyUseCase",
     "RedeemInviteTokenUseCase",
     "SetPrimaryCompanyUseCase",
+    "SetMemberRoleUseCase",
     "DetachCompanyUseCase",
     # DTOs
     "CreateCompanyInput",
@@ -97,6 +101,7 @@ __all__ = [
     "RevokeInviteTokenInput",
     "RedeemInviteTokenInput",
     "SetPrimaryCompanyInput",
+    "SetMemberRoleInput",
     "DetachCompanyInput",
     "BootAttachedUserInput",
     "ListAllCompaniesInput",
@@ -130,4 +135,5 @@ __all__ = [
     "ForbiddenCompanyError",
     "MissingPrimaryCompanyError",
     "InviteTokenSystemOverloadError",
+    "LastCompanyAdminError",
 ]

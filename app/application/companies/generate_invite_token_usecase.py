@@ -24,10 +24,18 @@ from app.domain.companies.exceptions import (
     CompanyNotFoundError,
 )
 from app.domain.companies.invite_token import CompanyInviteToken
+from app.domain.companies.roles import CompanyRole
 
 _ADMIN_PERMISSION = "*:*"
 _TOKEN_EXPIRY_DAYS = 7
 _TOKEN_BYTE_LENGTH = 32
+
+
+def _normalize_role(role: str) -> str:
+    """Validate and normalize a per-company role string, defaulting to 'member'."""
+    if role not in CompanyRole.values():
+        raise ValueError(f"Invalid company role: {role!r} (expected one of {CompanyRole.values()})")
+    return role
 
 
 class GenerateInviteTokenUseCase:
@@ -105,6 +113,7 @@ class GenerateInviteTokenUseCase:
             expires_at=expires_at,
             redeemed_at=None,
             redeemed_by=None,
+            role=_normalize_role(inp.role),
         )
         saved = self._token_repo.save(token)
         db_session.commit()
