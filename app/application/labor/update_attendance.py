@@ -50,7 +50,7 @@ class UpdateAttendanceUseCase:
         self,
         entry_repo: ILaborEntryRepository,
         worker_repo: IWorkerRepository,
-        tag_repo=None,  # ProjectTagRepositoryPort | None
+        tag_repo,  # ProjectTagRepositoryPort — required so same-project guard is always active
     ):
         self._repo = entry_repo
         self._workers = worker_repo
@@ -70,7 +70,7 @@ class UpdateAttendanceUseCase:
 
         # Guard: when a new tag_id is being assigned (not _TAG_UNSET, not None),
         # it must belong to the same project as the worker.
-        if request.tag_id is not _TAG_UNSET and request.tag_id is not None and self._tag_repo is not None:
+        if request.tag_id is not _TAG_UNSET and request.tag_id is not None:
             tag_uuid: UUID = request.tag_id  # type: ignore[assignment]
             tag = self._tag_repo.get_by_id(tag_uuid)
             if tag is None or tag.project_id != worker.project_id:

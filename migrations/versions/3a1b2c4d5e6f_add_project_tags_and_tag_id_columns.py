@@ -1,7 +1,7 @@
 """add project_tags table and tag_id FK columns on labor_entries and invoices
 
 Revision ID: 3a1b2c4d5e6f
-Revises: fe343de24e08
+Revises: 383b1db5c576
 Create Date: 2026-06-02 00:58:00.000000
 
 """
@@ -34,7 +34,6 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint("project_id", "name", name="uq_project_tags_project_id_name"),
     )
-    op.create_index("ix_project_tags_project_id", "project_tags", ["project_id"])
 
     # --- labor_entries.tag_id ---------------------------------------------
     op.add_column(
@@ -79,5 +78,4 @@ def downgrade():
     op.drop_column("labor_entries", "tag_id")
 
     # --- project_tags table -----------------------------------------------
-    op.drop_index("ix_project_tags_project_id", table_name="project_tags")
     op.drop_table("project_tags")

@@ -356,16 +356,12 @@ def update_attendance(project_id: str, entry_id: str):
     except ValidationError as e:
         return _validation_error_response(e)
 
-    raw_body = request.get_json(silent=True) or {}
+    # Use exclude_unset to distinguish "field absent" (_TAG_UNSET) from
+    # "field=null (clear)" and "field=uuid (assign)". Mirrors invoice route.
     from app.application.labor.update_attendance import _TAG_UNSET
 
-    tag_id_arg: object
-    if "tag_id" in raw_body:
-        # Caller explicitly provided tag_id (may be null to clear, or a UUID string)
-        raw_tag = raw_body["tag_id"]
-        tag_id_arg = UUID(raw_tag) if raw_tag else None
-    else:
-        tag_id_arg = _TAG_UNSET
+    provided_fields = data.model_dump(exclude_unset=True)
+    tag_id_arg: object = provided_fields["tag_id"] if "tag_id" in provided_fields else _TAG_UNSET
 
     try:
         result = get_container().update_attendance_usecase.execute(

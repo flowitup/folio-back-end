@@ -174,7 +174,7 @@ class TestLogAttendanceUseCase:
     def test_log_attendance_success(self, mock_worker_repo, mock_entry_repo, sample_worker, sample_entry):
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_entry_repo.create.return_value = sample_entry
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         result = usecase.execute(
             LogAttendanceRequest(
@@ -190,7 +190,7 @@ class TestLogAttendanceUseCase:
 
     def test_log_attendance_worker_not_found_raises_error(self, mock_worker_repo, mock_entry_repo):
         mock_worker_repo.find_by_id.return_value = None
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         with pytest.raises(WorkerNotFoundError):
             usecase.execute(
@@ -213,7 +213,7 @@ class TestLogAttendanceUseCase:
             created_at=datetime.now(timezone.utc),
         )
         mock_entry_repo.create.return_value = entry_with_override
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         result = usecase.execute(
             LogAttendanceRequest(
@@ -235,7 +235,7 @@ class TestUpdateAttendanceUseCase:
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = sample_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         result = usecase.execute(
             UpdateAttendanceRequest(
@@ -250,7 +250,7 @@ class TestUpdateAttendanceUseCase:
 
     def test_update_attendance_not_found_raises_error(self, mock_entry_repo, mock_worker_repo):
         mock_entry_repo.find_by_id.return_value = None
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         with pytest.raises(LaborEntryNotFoundError):
             usecase.execute(
@@ -268,7 +268,7 @@ class TestUpdateAttendanceUseCase:
         normal not-found path so entry existence is not leaked across tenants."""
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         with pytest.raises(LaborEntryNotFoundError):
             usecase.execute(
@@ -308,7 +308,7 @@ class TestUpdateAttendanceUseCase:
         mock_entry_repo.update.side_effect = lambda e: e
         mock_worker_repo.find_by_id.return_value = worker
 
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
         result = usecase.execute(
             UpdateAttendanceRequest(
                 entry_id=entry.id,
@@ -567,7 +567,7 @@ class TestLogAttendanceUseCaseSupplementHours:
         )
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_entry_repo.create.return_value = supplement_entry
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         result = usecase.execute(
             LogAttendanceRequest(
@@ -594,7 +594,7 @@ class TestLogAttendanceUseCaseSupplementHours:
         )
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_entry_repo.create.return_value = saved_entry
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         usecase.execute(
             LogAttendanceRequest(
@@ -627,7 +627,7 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = updated_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         result = usecase.execute(
             UpdateAttendanceRequest(
@@ -651,7 +651,7 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = sample_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         usecase.execute(
             UpdateAttendanceRequest(

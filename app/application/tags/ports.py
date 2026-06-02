@@ -60,7 +60,7 @@ class LaborCostReaderPort(Protocol):
 
         Labor cost = effective_cost() per entry = amount_override if set,
         else daily_rate * shift_multiplier. Supplement-only rows (shift_type NULL)
-        contribute 0 cost (not counted).
+        contribute 0 cost but ARE counted (entry_count is incremented).
         """
         ...
 

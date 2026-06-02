@@ -44,7 +44,7 @@ class LogAttendanceUseCase:
         self,
         worker_repo: IWorkerRepository,
         entry_repo: ILaborEntryRepository,
-        tag_repo=None,  # ProjectTagRepositoryPort | None
+        tag_repo,  # ProjectTagRepositoryPort — required so same-project guard is always active
     ):
         self._worker_repo = worker_repo
         self._entry_repo = entry_repo
@@ -57,7 +57,7 @@ class LogAttendanceUseCase:
             raise WorkerNotFoundError(str(request.worker_id))
 
         # Guard: tag must belong to the same project as the worker
-        if request.tag_id is not None and self._tag_repo is not None:
+        if request.tag_id is not None:
             tag = self._tag_repo.get_by_id(request.tag_id)
             if tag is None or tag.project_id != worker.project_id:
                 raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")

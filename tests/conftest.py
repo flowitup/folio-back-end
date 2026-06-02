@@ -643,23 +643,13 @@ def invitation_app():
             payment_method_repo=_pm_repo,
         )
 
-        # Re-wire invoice use-cases with payment_method_repo injected
-        from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvoiceUC
-        from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvoiceUC
-
+        # Note: invoice write use-cases are constructed once in the tags block below
+        # so tag_repo is included from the start (single construction site).
         if _c.invoice_repository is None:
             from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository as _InvRepo
 
             _inv_repo = _InvRepo(db.session)
             _c.invoice_repository = _inv_repo
-        _c.create_invoice_usecase = _CreateInvoiceUC(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
-        _c.update_invoice_usecase = _UpdateInvoiceUC(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
 
         # Re-wire create_company_usecase with seeder
         from app.application.companies.create_company_usecase import (
@@ -784,9 +774,8 @@ def invitation_app():
         )
 
         # ------------------------------------------------------------------
-        # Re-wire labor + invoice write use-cases with tag_repo so
-        # same-project tag enforcement is active in tests.
-        # CRITICAL: mirrors app/__init__.py post-tags re-wiring.
+        # Single construction of labor write use-cases — tag_repo is required;
+        # built here once alongside tag_repo. Mirrors app/__init__.py.
         # ------------------------------------------------------------------
         from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
         from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
@@ -810,6 +799,7 @@ def invitation_app():
                 tag_repo=_tag_repo,
             )
 
+        # Single construction of invoice write use-cases — includes tag_repo from the start.
         from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
         from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
 

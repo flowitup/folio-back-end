@@ -684,19 +684,8 @@ def _configure_di_container() -> None:
         payment_method_repo=_pm_repo,
     )
 
-    # Inject payment_method_repo into invoice use-cases (phase 04)
-    from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvoiceUseCase
-    from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvoiceUseCase
-
-    if _c.invoice_repository is not None:
-        _c.create_invoice_usecase = _CreateInvoiceUseCase(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
-        _c.update_invoice_usecase = _UpdateInvoiceUseCase(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
+    # Note: invoice write use-cases (create_invoice_usecase, update_invoice_usecase) are
+    # constructed once in the Tags DI block below so tag_repo is included from the start.
 
     # Wire seeder into create_company_usecase (phase 05)
     from app.application.companies.create_company_usecase import (
@@ -916,8 +905,8 @@ def _configure_di_container() -> None:
         membership_reader=_tag_membership_reader,
     )
 
-    # Re-wire labor write use-cases with tag_repo so they can enforce
-    # same-project tag assignment.
+    # Single construction of labor write use-cases — tag_repo is a required arg,
+    # so these are built here (after tag_repo exists) and nowhere else.
     from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
     from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
     from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
@@ -940,8 +929,7 @@ def _configure_di_container() -> None:
             tag_repo=_tag_repo,
         )
 
-    # Re-wire invoice write use-cases with tag_repo so they can enforce
-    # same-project tag assignment.
+    # Single construction of invoice write use-cases — includes tag_repo from the start.
     from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
     from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
 
