@@ -32,15 +32,16 @@ class CreateInvoiceSchema(BaseModel):
     notes: Optional[str] = None
     items: List[InvoiceItemSchema] = Field(..., min_length=1)
     payment_method_id: Optional[UUID] = None
+    tag_id: Optional[UUID] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
     """Request body for partially updating an invoice (type is immutable).
 
-    payment_method_id uses exclude_unset semantics to distinguish:
-      - field absent  → do not touch payment method
-      - field = null  → clear payment method
-      - field = UUID  → set payment method
+    payment_method_id and tag_id use exclude_unset semantics to distinguish:
+      - field absent  → do not touch that field
+      - field = null  → clear the field
+      - field = UUID  → set to that UUID
     """
 
     issue_date: Optional[date] = None  # Pydantic parses ISO date string automatically
@@ -49,6 +50,7 @@ class UpdateInvoiceSchema(BaseModel):
     notes: Optional[str] = None
     items: Optional[List[InvoiceItemSchema]] = None
     payment_method_id: Optional[UUID] = None
+    tag_id: Optional[UUID] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")

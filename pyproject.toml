@@ -1,6 +1,6 @@
 [project]
 name = "construction-backend"
-version = "0.2.62"
+version = "0.2.64"
 description = "Construction Management System - Backend API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,6 +29,7 @@ dependencies = [
     "reportlab>=4.4",
     "python-slugify>=8.0",
     "httpx>=0.27",
+    "pillow>=10",
 ]
 
 [project.optional-dependencies]

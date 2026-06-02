@@ -284,7 +284,7 @@ def _render_header(context: ExportContext, styles: dict) -> list:
             styles["h2"],
         ),
         Paragraph(
-            f"Generated: {context.generated_at.strftime('%Y-%m-%d %H:%M UTC')} "
+            f"Generated: {context.generated_at.strftime('%d/%m/%Y %H:%M UTC')} "
             f"by {_xml_escape(context.generated_by_email)}",
             styles["h2"],
         ),
@@ -419,7 +419,7 @@ def _make_footer_callback(context: ExportContext):
 
     v1: draws "Page X" only (no X/Y — two-pass total page count is future work).
     """
-    date_label = context.generated_at.strftime("%Y-%m-%d")
+    date_label = context.generated_at.strftime("%d/%m/%Y")
     project_label = context.project_name
 
     def _footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]

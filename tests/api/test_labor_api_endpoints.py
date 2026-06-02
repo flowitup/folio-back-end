@@ -116,6 +116,32 @@ def labor_app():
         _c.delete_labor_role_usecase = _DeleteLRUC(repo=_labor_role_repo, db_session=db.session)
         _c.list_labor_roles_usecase = _ListLRUC(repo=_labor_role_repo)
 
+        # Wire labor write use-cases with tag_repo (required arg).
+        from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
+            SqlAlchemyProjectTagRepository as _LaborTestTagRepo,
+        )
+        from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
+        from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
+        from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
+
+        _tag_repo_labor = _LaborTestTagRepo(db.session)
+        _c.log_attendance_usecase = _LogAttendUC(
+            worker_repo=worker_repo,
+            entry_repo=entry_repo,
+            tag_repo=_tag_repo_labor,
+        )
+        _c.update_attendance_usecase = _UpdateAttendUC(
+            entry_repo=entry_repo,
+            worker_repo=worker_repo,
+            tag_repo=_tag_repo_labor,
+        )
+        _c.bulk_log_attendance_usecase = _BulkLogUC(
+            worker_repo=worker_repo,
+            entry_repo=entry_repo,
+            db_session=db.session,
+            tag_repo=_tag_repo_labor,
+        )
+
         test_app._test_admin_email = "laboradmin@test.com"
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_id = str(project.id)

@@ -162,9 +162,18 @@ def inv_pm_app():
             payment_method_repo=_pm_repo, role_checker=_role_checker
         )
 
-        # Re-wire invoice use-cases with payment_method_repo injected
-        _c.create_invoice_usecase = CreateInvoiceUseCase(invoice_repo=invoice_repo, payment_method_repo=_pm_repo)
-        _c.update_invoice_usecase = UpdateInvoiceUseCase(invoice_repo=invoice_repo, payment_method_repo=_pm_repo)
+        # Wire invoice use-cases with payment_method_repo and tag_repo
+        from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
+            SqlAlchemyProjectTagRepository as _PmTestTagRepo,
+        )
+
+        _tag_repo_pm = _PmTestTagRepo(db.session)
+        _c.create_invoice_usecase = CreateInvoiceUseCase(
+            invoice_repo=invoice_repo, payment_method_repo=_pm_repo, tag_repo=_tag_repo_pm
+        )
+        _c.update_invoice_usecase = UpdateInvoiceUseCase(
+            invoice_repo=invoice_repo, payment_method_repo=_pm_repo, tag_repo=_tag_repo_pm
+        )
         _c.list_invoices_usecase = ListInvoicesUseCase(invoice_repo)
         _c.get_invoice_usecase = GetInvoiceUseCase(invoice_repo)
         _c.delete_invoice_usecase = DeleteInvoiceUseCase(invoice_repo, None, None)

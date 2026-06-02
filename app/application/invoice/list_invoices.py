@@ -13,6 +13,7 @@ from app.domain.entities.invoice import InvoiceType
 class ListInvoicesRequest:
     project_id: UUID
     invoice_type: Optional[InvoiceType] = None  # filter by type
+    tag_id: Optional[UUID] = None  # filter by phase tag (None = no filter)
 
 
 class ListInvoicesUseCase:
@@ -22,5 +23,5 @@ class ListInvoicesUseCase:
         self._repo = invoice_repo
 
     def execute(self, request: ListInvoicesRequest) -> list:
-        invoices = self._repo.list_by_project(request.project_id, request.invoice_type)
+        invoices = self._repo.list_by_project(request.project_id, request.invoice_type, tag_id=request.tag_id)
         return [InvoiceResponse.from_entity(inv) for inv in invoices]

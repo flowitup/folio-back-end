@@ -3,16 +3,18 @@
 import pytest
 from decimal import Decimal
 from datetime import date, datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 from unittest.mock import Mock
 
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
+from app.domain.entities.project_tag import ProjectTag
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     LaborEntryNotFoundError,
     InvalidWorkerDataError,
 )
+from app.application.tags.exceptions import InvalidProjectTagError
 from app.application.labor import (
     CreateWorkerUseCase,
     CreateWorkerRequest,
@@ -172,7 +174,7 @@ class TestLogAttendanceUseCase:
     def test_log_attendance_success(self, mock_worker_repo, mock_entry_repo, sample_worker, sample_entry):
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_entry_repo.create.return_value = sample_entry
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         result = usecase.execute(
             LogAttendanceRequest(
@@ -188,7 +190,7 @@ class TestLogAttendanceUseCase:
 
     def test_log_attendance_worker_not_found_raises_error(self, mock_worker_repo, mock_entry_repo):
         mock_worker_repo.find_by_id.return_value = None
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         with pytest.raises(WorkerNotFoundError):
             usecase.execute(
@@ -211,7 +213,7 @@ class TestLogAttendanceUseCase:
             created_at=datetime.now(timezone.utc),
         )
         mock_entry_repo.create.return_value = entry_with_override
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         result = usecase.execute(
             LogAttendanceRequest(
@@ -233,7 +235,7 @@ class TestUpdateAttendanceUseCase:
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = sample_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         result = usecase.execute(
             UpdateAttendanceRequest(
@@ -248,7 +250,7 @@ class TestUpdateAttendanceUseCase:
 
     def test_update_attendance_not_found_raises_error(self, mock_entry_repo, mock_worker_repo):
         mock_entry_repo.find_by_id.return_value = None
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         with pytest.raises(LaborEntryNotFoundError):
             usecase.execute(
@@ -266,7 +268,7 @@ class TestUpdateAttendanceUseCase:
         normal not-found path so entry existence is not leaked across tenants."""
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         with pytest.raises(LaborEntryNotFoundError):
             usecase.execute(
@@ -306,7 +308,7 @@ class TestUpdateAttendanceUseCase:
         mock_entry_repo.update.side_effect = lambda e: e
         mock_worker_repo.find_by_id.return_value = worker
 
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
         result = usecase.execute(
             UpdateAttendanceRequest(
                 entry_id=entry.id,
@@ -565,7 +567,7 @@ class TestLogAttendanceUseCaseSupplementHours:
         )
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_entry_repo.create.return_value = supplement_entry
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         result = usecase.execute(
             LogAttendanceRequest(
@@ -592,7 +594,7 @@ class TestLogAttendanceUseCaseSupplementHours:
         )
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_entry_repo.create.return_value = saved_entry
-        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo)
+        usecase = LogAttendanceUseCase(mock_worker_repo, mock_entry_repo, Mock())
 
         usecase.execute(
             LogAttendanceRequest(
@@ -625,7 +627,7 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = updated_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         result = usecase.execute(
             UpdateAttendanceRequest(
@@ -649,7 +651,7 @@ class TestUpdateAttendanceUseCaseSupplementHours:
         mock_entry_repo.find_by_id.return_value = sample_entry
         mock_entry_repo.update.return_value = sample_entry
         mock_worker_repo.find_by_id.return_value = sample_worker
-        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo)
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
 
         usecase.execute(
             UpdateAttendanceRequest(
@@ -758,3 +760,253 @@ def test_mixed_priced_plus_supplement_cost(mock_entry_repo):
     assert Decimal(str(row.bonus_cost)).quantize(Decimal("0.01")) == Decimal("100.00")
     # total_cost = priced(200) + bonus(100) = 300
     assert Decimal(str(row.total_cost)).quantize(Decimal("0.01")) == Decimal("300.00")
+
+
+# ---------------------------------------------------------------------------
+# Same-project tag enforcement — LogAttendance / UpdateAttendance
+# ---------------------------------------------------------------------------
+
+
+def _make_tag(project_id: UUID) -> ProjectTag:
+    """Build a minimal ProjectTag fixture for the given project."""
+    return ProjectTag(
+        id=uuid4(),
+        project_id=project_id,
+        name="Phase 1",
+        color="#123456",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def _make_worker(project_id: UUID) -> Worker:
+    return Worker(
+        id=uuid4(),
+        project_id=project_id,
+        name="Worker A",
+        daily_rate=Decimal("100.00"),
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def _make_entry(worker_id: UUID) -> LaborEntry:
+    return LaborEntry(
+        id=uuid4(),
+        worker_id=worker_id,
+        date=date.today(),
+        shift_type="full",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+class TestLogAttendanceTagGuard:
+    """LogAttendanceUseCase must reject cross-project tag assignments."""
+
+    def test_log_attendance_same_project_tag_succeeds(self):
+        project_id = uuid4()
+        worker = _make_worker(project_id)
+        tag = _make_tag(project_id)
+        entry = _make_entry(worker.id)
+        entry_with_tag = LaborEntry(
+            id=entry.id,
+            worker_id=entry.worker_id,
+            date=entry.date,
+            shift_type=entry.shift_type,
+            created_at=entry.created_at,
+            tag_id=tag.id,
+        )
+
+        worker_repo = Mock()
+        entry_repo = Mock()
+        tag_repo = Mock()
+        worker_repo.find_by_id.return_value = worker
+        entry_repo.create.return_value = entry_with_tag
+        tag_repo.get_by_id.return_value = tag
+
+        usecase = LogAttendanceUseCase(worker_repo, entry_repo, tag_repo)
+        result = usecase.execute(
+            LogAttendanceRequest(
+                project_id=project_id,
+                worker_id=worker.id,
+                date=date.today(),
+                shift_type="full",
+                tag_id=tag.id,
+            )
+        )
+
+        assert result.tag_id == str(tag.id)
+
+    def test_log_attendance_cross_project_tag_raises(self):
+        project_id = uuid4()
+        other_project_id = uuid4()
+        worker = _make_worker(project_id)
+        tag = _make_tag(other_project_id)  # belongs to a DIFFERENT project
+
+        worker_repo = Mock()
+        entry_repo = Mock()
+        tag_repo = Mock()
+        worker_repo.find_by_id.return_value = worker
+        tag_repo.get_by_id.return_value = tag
+
+        usecase = LogAttendanceUseCase(worker_repo, entry_repo, tag_repo)
+
+        with pytest.raises(InvalidProjectTagError):
+            usecase.execute(
+                LogAttendanceRequest(
+                    project_id=project_id,
+                    worker_id=worker.id,
+                    date=date.today(),
+                    shift_type="full",
+                    tag_id=tag.id,
+                )
+            )
+
+    def test_log_attendance_nonexistent_tag_raises(self):
+        project_id = uuid4()
+        worker = _make_worker(project_id)
+
+        worker_repo = Mock()
+        entry_repo = Mock()
+        tag_repo = Mock()
+        worker_repo.find_by_id.return_value = worker
+        tag_repo.get_by_id.return_value = None  # tag does not exist
+
+        usecase = LogAttendanceUseCase(worker_repo, entry_repo, tag_repo)
+
+        with pytest.raises(InvalidProjectTagError):
+            usecase.execute(
+                LogAttendanceRequest(
+                    project_id=project_id,
+                    worker_id=worker.id,
+                    date=date.today(),
+                    shift_type="full",
+                    tag_id=uuid4(),
+                )
+            )
+
+    def test_log_attendance_no_tag_skips_guard(self):
+        """tag_id=None must not trigger the tag guard."""
+        project_id = uuid4()
+        worker = _make_worker(project_id)
+        entry = _make_entry(worker.id)
+
+        worker_repo = Mock()
+        entry_repo = Mock()
+        tag_repo = Mock()
+        worker_repo.find_by_id.return_value = worker
+        entry_repo.create.return_value = entry
+
+        usecase = LogAttendanceUseCase(worker_repo, entry_repo, tag_repo)
+        result = usecase.execute(
+            LogAttendanceRequest(
+                project_id=project_id,
+                worker_id=worker.id,
+                date=date.today(),
+                shift_type="full",
+                tag_id=None,
+            )
+        )
+
+        tag_repo.get_by_id.assert_not_called()
+        assert result is not None
+
+
+class TestUpdateAttendanceTagGuard:
+    """UpdateAttendanceUseCase must reject cross-project tag assignments."""
+
+    def test_update_attendance_same_project_tag_succeeds(self):
+        project_id = uuid4()
+        worker = _make_worker(project_id)
+        entry = _make_entry(worker.id)
+        tag = _make_tag(project_id)
+        updated_entry = LaborEntry(
+            id=entry.id,
+            worker_id=entry.worker_id,
+            date=entry.date,
+            shift_type=entry.shift_type,
+            created_at=entry.created_at,
+            tag_id=tag.id,
+        )
+
+        entry_repo = Mock()
+        worker_repo = Mock()
+        tag_repo = Mock()
+        entry_repo.find_by_id.return_value = entry
+        entry_repo.update.return_value = updated_entry
+        worker_repo.find_by_id.return_value = worker
+        tag_repo.get_by_id.return_value = tag
+
+        from app.application.labor.update_attendance import UpdateAttendanceUseCase, UpdateAttendanceRequest
+
+        usecase = UpdateAttendanceUseCase(entry_repo, worker_repo, tag_repo)
+        result = usecase.execute(
+            UpdateAttendanceRequest(
+                entry_id=entry.id,
+                project_id=project_id,
+                tag_id=tag.id,
+            )
+        )
+
+        assert result.tag_id == str(tag.id)
+
+    def test_update_attendance_cross_project_tag_raises(self):
+        project_id = uuid4()
+        other_project_id = uuid4()
+        worker = _make_worker(project_id)
+        entry = _make_entry(worker.id)
+        tag = _make_tag(other_project_id)  # belongs to a DIFFERENT project
+
+        entry_repo = Mock()
+        worker_repo = Mock()
+        tag_repo = Mock()
+        entry_repo.find_by_id.return_value = entry
+        worker_repo.find_by_id.return_value = worker
+        tag_repo.get_by_id.return_value = tag
+
+        from app.application.labor.update_attendance import UpdateAttendanceUseCase, UpdateAttendanceRequest
+
+        usecase = UpdateAttendanceUseCase(entry_repo, worker_repo, tag_repo)
+
+        with pytest.raises(InvalidProjectTagError):
+            usecase.execute(
+                UpdateAttendanceRequest(
+                    entry_id=entry.id,
+                    project_id=project_id,
+                    tag_id=tag.id,
+                )
+            )
+
+    def test_update_attendance_clear_tag_skips_guard(self):
+        """tag_id=None (explicit clear) must not trigger the tag guard."""
+        project_id = uuid4()
+        worker = _make_worker(project_id)
+        entry = _make_entry(worker.id)
+        cleared_entry = LaborEntry(
+            id=entry.id,
+            worker_id=entry.worker_id,
+            date=entry.date,
+            shift_type=entry.shift_type,
+            created_at=entry.created_at,
+            tag_id=None,
+        )
+
+        entry_repo = Mock()
+        worker_repo = Mock()
+        tag_repo = Mock()
+        entry_repo.find_by_id.return_value = entry
+        entry_repo.update.return_value = cleared_entry
+        worker_repo.find_by_id.return_value = worker
+
+        from app.application.labor.update_attendance import UpdateAttendanceUseCase, UpdateAttendanceRequest
+
+        usecase = UpdateAttendanceUseCase(entry_repo, worker_repo, tag_repo)
+        result = usecase.execute(
+            UpdateAttendanceRequest(
+                entry_id=entry.id,
+                project_id=project_id,
+                tag_id=None,
+            )
+        )
+
+        tag_repo.get_by_id.assert_not_called()
+        assert result.tag_id is None

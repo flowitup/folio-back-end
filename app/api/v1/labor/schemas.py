@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal, Optional, List
+from uuid import UUID
 
 # Shift type constraint shared by request and response schemas.
 ShiftTypeLiteral = Literal["full", "half", "overtime"]
@@ -58,6 +59,7 @@ class LogAttendanceRequest(BaseModel):
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: int = Field(default=0, ge=0, le=12)
+    tag_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
     @model_validator(mode="after")
     def _validate_non_empty_and_override_consistency(self) -> "LogAttendanceRequest":
@@ -76,6 +78,7 @@ class BulkLogAttendanceEntry(BaseModel):
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: int = Field(default=0, ge=0, le=12)
+    tag_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
     @model_validator(mode="after")
     def _validate_non_empty_and_override_consistency(self) -> "BulkLogAttendanceEntry":
@@ -151,6 +154,7 @@ class UpdateAttendanceRequest(BaseModel):
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: Optional[int] = Field(None, ge=0, le=12)
+    tag_id: Optional[UUID] = None
 
     @model_validator(mode="after")
     def _validate_override_consistency(self) -> "UpdateAttendanceRequest":
@@ -221,6 +225,7 @@ class LaborEntryResponse(BaseModel):
     supplement_hours: int
     created_at: str
     role_color: Optional[str] = None
+    tag_id: Optional[str] = None
 
 
 class LaborEntryListResponse(BaseModel):

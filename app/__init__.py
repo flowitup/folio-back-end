@@ -130,11 +130,13 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.admin import admin_bp
     from app.api.v1.notes import notes_bp
     from app.api.v1.notifications import notifications_bp
+    from app.api.v1.tags import tags_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
     from app.api.v1.companies import companies_bp, users_me_bp
     from app.api.v1.persons import persons_bp
     from app.api.v1.payment_methods import payment_methods_bp
     from app.api.v1.project_documents import project_documents_bp
+    from app.api.v1.project_photos import project_photos_bp
     from app.api.v1.bibliotheque import bibliotheque_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
@@ -150,6 +152,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
+    app.register_blueprint(tags_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
     # company_profile_bp retired — table dropped in migration 2d9c35848b9b (C2)
@@ -158,6 +161,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(persons_bp, url_prefix="/api/v1")
     app.register_blueprint(payment_methods_bp, url_prefix="/api/v1")
     app.register_blueprint(project_documents_bp, url_prefix="/api/v1")
+    app.register_blueprint(project_photos_bp, url_prefix="/api/v1")
     app.register_blueprint(bibliotheque_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
@@ -680,19 +684,8 @@ def _configure_di_container() -> None:
         payment_method_repo=_pm_repo,
     )
 
-    # Inject payment_method_repo into invoice use-cases (phase 04)
-    from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvoiceUseCase
-    from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvoiceUseCase
-
-    if _c.invoice_repository is not None:
-        _c.create_invoice_usecase = _CreateInvoiceUseCase(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
-        _c.update_invoice_usecase = _UpdateInvoiceUseCase(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
+    # Note: invoice write use-cases (create_invoice_usecase, update_invoice_usecase) are
+    # constructed once in the Tags DI block below so tag_repo is included from the start.
 
     # Wire seeder into create_company_usecase (phase 05)
     from app.application.companies.create_company_usecase import (
@@ -767,6 +760,45 @@ def _configure_di_container() -> None:
             storage=storage,
             db_session=db.session,
         )
+
+    # -----------------------------------------------------------------------
+    # Project photos DI wiring
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_project_photo_repository import (
+        SqlAlchemyProjectPhotoRepository,
+    )
+    from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
+    from app.application.project_photos import (
+        UploadProjectPhotoUseCase,
+        ListProjectPhotosUseCase,
+        GetProjectPhotoUseCase,
+        UpdateProjectPhotoUseCase,
+        DeleteProjectPhotoUseCase,
+    )
+
+    _photo_repo = SqlAlchemyProjectPhotoRepository(db.session)
+    _c.project_photo_repository = _photo_repo
+    _photo_thumbnailer = PillowImageThumbnailer()
+
+    # Reuse document_storage singleton (S3AttachmentStorage satisfies IDocumentStorage).
+    # Reuse _filename_sanitizer already instantiated above for project documents.
+    _c.upload_project_photo_usecase = UploadProjectPhotoUseCase(
+        repo=_photo_repo,
+        storage=storage,
+        thumbnailer=_photo_thumbnailer,
+        db_session=db.session,
+        filename_sanitizer=_filename_sanitizer,
+    )
+    _c.list_project_photos_usecase = ListProjectPhotosUseCase(repo=_photo_repo)
+    _c.get_project_photo_usecase = GetProjectPhotoUseCase(repo=_photo_repo, storage=storage)
+    _c.update_project_photo_usecase = UpdateProjectPhotoUseCase(
+        repo=_photo_repo,
+        db_session=db.session,
+    )
+    _c.delete_project_photo_usecase = DeleteProjectPhotoUseCase(
+        repo=_photo_repo,
+        db_session=db.session,
+    )
 
     # -----------------------------------------------------------------------
     # Bibliotheque DI wiring
@@ -867,3 +899,88 @@ def _configure_di_container() -> None:
         permission_checker=_biblio_permission_checker,
         db_session=db.session,
     )
+
+    # -----------------------------------------------------------------------
+    # Tags DI wiring — project-scoped phase tags + cost rollup
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
+        SqlAlchemyProjectTagRepository as _ProjectTagRepo,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
+        SqlAlchemyProjectMembershipReader as _TagMembershipReader,
+    )
+    from app.application.tags.create_project_tag_usecase import CreateProjectTagUseCase as _CreateTagUC
+    from app.application.tags.list_project_tags_usecase import ListProjectTagsUseCase as _ListTagsUC
+    from app.application.tags.update_project_tag_usecase import UpdateProjectTagUseCase as _UpdateTagUC
+    from app.application.tags.delete_project_tag_usecase import DeleteProjectTagUseCase as _DeleteTagUC
+    from app.application.tags.tag_summary_usecase import TagSummaryUseCase as _TagSummaryUC
+
+    _tag_repo = _ProjectTagRepo(db.session)
+    _tag_membership_reader = _TagMembershipReader(db.session)
+
+    _c.create_project_tag_usecase = _CreateTagUC(
+        tag_repo=_tag_repo,
+        membership_reader=_tag_membership_reader,
+        db_session=db.session,
+    )
+    _c.list_project_tags_usecase = _ListTagsUC(
+        tag_repo=_tag_repo,
+        membership_reader=_tag_membership_reader,
+    )
+    _c.update_project_tag_usecase = _UpdateTagUC(
+        tag_repo=_tag_repo,
+        membership_reader=_tag_membership_reader,
+        db_session=db.session,
+    )
+    _c.delete_project_tag_usecase = _DeleteTagUC(
+        tag_repo=_tag_repo,
+        membership_reader=_tag_membership_reader,
+        db_session=db.session,
+    )
+    _c.tag_summary_usecase = _TagSummaryUC(
+        tag_repo=_tag_repo,
+        labor_reader=_tag_repo,
+        expense_reader=_tag_repo,
+        membership_reader=_tag_membership_reader,
+    )
+
+    # Single construction of labor write use-cases — tag_repo is a required arg,
+    # so these are built here (after tag_repo exists) and nowhere else.
+    from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
+    from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
+    from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
+
+    if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+        _c.log_attendance_usecase = _LogAttendUC(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            tag_repo=_tag_repo,
+        )
+        _c.update_attendance_usecase = _UpdateAttendUC(
+            entry_repo=_c.labor_entry_repository,
+            worker_repo=_c.worker_repository,
+            tag_repo=_tag_repo,
+        )
+        _c.bulk_log_attendance_usecase = _BulkLogUC(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            db_session=db.session,
+            tag_repo=_tag_repo,
+        )
+
+    # Single construction of invoice write use-cases — includes tag_repo from the start.
+    from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
+    from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
+
+    if _c.invoice_repository is not None:
+        _pm = _c.payment_method_repo
+        _c.create_invoice_usecase = _CreateInvUC(
+            invoice_repo=_c.invoice_repository,
+            payment_method_repo=_pm,
+            tag_repo=_tag_repo,
+        )
+        _c.update_invoice_usecase = _UpdateInvUC(
+            invoice_repo=_c.invoice_repository,
+            payment_method_repo=_pm,
+            tag_repo=_tag_repo,
+        )

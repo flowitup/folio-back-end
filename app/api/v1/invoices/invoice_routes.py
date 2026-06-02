@@ -85,6 +85,7 @@ def _get_project_company_id(project_id: UUID) -> "UUID | None":
 def list_invoices(project_id: str):
     """List invoices for a project, optionally filtered by ?type=."""
     invoice_type_param = request.args.get("type")
+    tag_id_param = request.args.get("tag_id")
     try:
         parsed_type = InvoiceType(invoice_type_param) if invoice_type_param else None
     except ValueError:
@@ -100,6 +101,7 @@ def list_invoices(project_id: str):
             ListInvoicesRequest(
                 project_id=UUID(project_id),
                 invoice_type=parsed_type,
+                tag_id=UUID(tag_id_param) if tag_id_param else None,
             )
         )
     except ValueError as e:
@@ -153,6 +155,7 @@ def create_invoice(project_id: str):
                 items=[item.model_dump() for item in data.items],
                 payment_method_id=data.payment_method_id,
                 company_id=company_id,
+                tag_id=data.tag_id,
             )
         )
     except InvoiceNumberConflictError:
@@ -211,10 +214,12 @@ def update_invoice(project_id: str, invoice_id: str):
 
     # Build kwargs — only pass fields the caller provided.
     # issue_date is already a date object from Pydantic (no manual conversion needed).
-    # payment_method_id is handled separately: use exclude_unset so we can
+    # payment_method_id and tag_id are handled separately: use exclude_unset so we can
     # distinguish "not provided" (absent) from "explicitly null".
     provided_fields = data.model_dump(exclude_unset=True)
-    update_kwargs = {k: v for k, v in provided_fields.items() if k != "payment_method_id" and v is not None}
+    update_kwargs = {
+        k: v for k, v in provided_fields.items() if k not in ("payment_method_id", "tag_id") and v is not None
+    }
 
     # Verify invoice belongs to the requested project before updating
     try:
@@ -238,12 +243,14 @@ def update_invoice(project_id: str, invoice_id: str):
             invoice_id=invoice_uuid,
             payment_method_id=pm_id,
             company_id=company_id,
+            tag_id=provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET,
             **update_kwargs,
         )
     else:
         update_req = UpdateInvoiceRequest(
             invoice_id=invoice_uuid,
             payment_method_id=_UNSET,
+            tag_id=provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET,
             **update_kwargs,
         )
 

@@ -26,6 +26,7 @@ from app.application.labor.ports import (
     ILaborEntryRepository,
     IWorkerRepository,
 )
+from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 
@@ -56,6 +57,7 @@ class BulkLogAttendanceEntry:
     supplement_hours: int = 0
     amount_override: Optional[Decimal] = None
     note: Optional[str] = None
+    tag_id: Optional[UUID] = None
 
 
 @dataclass
@@ -99,10 +101,12 @@ class BulkLogAttendanceUseCase:
         worker_repo: IWorkerRepository,
         entry_repo: ILaborEntryRepository,
         db_session: Session,
+        tag_repo,  # ProjectTagRepositoryPort — required so same-project guard is always active
     ):
         self._worker_repo = worker_repo
         self._entry_repo = entry_repo
         self._db = db_session
+        self._tag_repo = tag_repo
 
     def execute(self, request: BulkLogAttendanceRequest) -> BulkLogAttendanceResponse:
         if not request.entries:
@@ -117,6 +121,12 @@ class BulkLogAttendanceUseCase:
             worker = self._worker_repo.find_by_id(entry.worker_id)
             if worker is None or worker.project_id != request.project_id:
                 raise WorkerNotFoundError(str(entry.worker_id))
+
+            # Guard: tag must belong to the same project as the worker.
+            if entry.tag_id is not None:
+                tag = self._tag_repo.get_by_id(entry.tag_id)
+                if tag is None or tag.project_id != request.project_id:
+                    raise InvalidProjectTagError(f"Tag {entry.tag_id} does not belong to this project")
 
         # 2. Build skip set from existing entries on this date.
         existing = self._entry_repo.list_by_project(
@@ -182,6 +192,7 @@ class BulkLogAttendanceUseCase:
                 shift_type=entry.shift_type,
                 supplement_hours=entry.supplement_hours,
                 created_at=now,
+                tag_id=entry.tag_id,
             )
             # Repo.create commits per-row in the current impl. For
             # this bulk path we keep the simple per-row commit because:

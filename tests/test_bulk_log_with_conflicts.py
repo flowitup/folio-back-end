@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -121,7 +122,7 @@ class TestBulkLogWithConflicts:
     def test_raises_when_conflicts_unacknowledged(self, session, owner, company):
         worker_repo = SQLAlchemyWorkerRepository(session)
         entry_repo = SQLAlchemyLaborEntryRepository(session)
-        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session)
+        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session, Mock())
 
         a = _proj(session, owner, company, "A")
         b = _proj(session, owner, company, "B")
@@ -144,7 +145,7 @@ class TestBulkLogWithConflicts:
     def test_proceeds_with_acknowledge_flag(self, session, owner, company):
         worker_repo = SQLAlchemyWorkerRepository(session)
         entry_repo = SQLAlchemyLaborEntryRepository(session)
-        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session)
+        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session, Mock())
 
         a = _proj(session, owner, company, "A")
         b = _proj(session, owner, company, "B")
@@ -167,7 +168,7 @@ class TestBulkLogWithConflicts:
     def test_no_conflicts_path_unchanged(self, session, owner, company):
         worker_repo = SQLAlchemyWorkerRepository(session)
         entry_repo = SQLAlchemyLaborEntryRepository(session)
-        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session)
+        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session, Mock())
 
         a = _proj(session, owner, company, "Solo")
         hugo = _person(session, owner, "Hugo")

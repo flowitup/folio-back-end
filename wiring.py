@@ -408,6 +408,15 @@ class Container:
     delete_labor_activity_usecase: Optional[DeleteLaborActivityUseCase] = None
 
     # -----------------------------------------------------------------------
+    # Tags repo + use-cases (project-scoped phase tags)
+    # -----------------------------------------------------------------------
+    create_project_tag_usecase: Optional[Any] = None  # CreateProjectTagUseCase
+    list_project_tags_usecase: Optional[Any] = None  # ListProjectTagsUseCase
+    update_project_tag_usecase: Optional[Any] = None  # UpdateProjectTagUseCase
+    delete_project_tag_usecase: Optional[Any] = None  # DeleteProjectTagUseCase
+    tag_summary_usecase: Optional[Any] = None  # TagSummaryUseCase
+
+    # -----------------------------------------------------------------------
     # Bibliotheque repos + use-cases
     # -----------------------------------------------------------------------
     bibliotheque_supplier_repo: Optional[Any] = None  # SqlAlchemyBibliothequeSupplierRepository
@@ -586,21 +595,9 @@ def configure_container(
         container.list_workers_usecase = ListWorkersUseCase(worker_repository)
 
     if worker_repository and labor_entry_repository:
-        container.log_attendance_usecase = LogAttendanceUseCase(worker_repository, labor_entry_repository)
+        # log_attendance_usecase, update_attendance_usecase, and bulk_log_attendance_usecase
+        # are wired in app/__init__.py after tag_repo is constructed, so they require tag_repo.
         container.list_labor_entries_usecase = ListLaborEntriesUseCase(worker_repository, labor_entry_repository)
-        # Bulk-log: shares the SQLAlchemy session with the other labor
-        # write paths so the atomic-batch contract holds end-to-end.
-        from app.application.labor.bulk_log_attendance import (
-            BulkLogAttendanceUseCase as _BulkLog,
-        )
-        from app import db as _db_for_bulk_log
-
-        container.bulk_log_attendance_usecase = _BulkLog(
-            worker_repo=worker_repository,
-            entry_repo=labor_entry_repository,
-            db_session=_db_for_bulk_log.session,
-        )
-        container.update_attendance_usecase = UpdateAttendanceUseCase(labor_entry_repository, worker_repository)
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository, worker_repository)
 
     if labor_entry_repository:
