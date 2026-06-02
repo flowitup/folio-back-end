@@ -27,6 +27,7 @@ def _make_note(*, project_id=None) -> Note:
         title="Legacy reminder note",
         description=None,
         category="general",
+        status="open",
         created_at=now,
         updated_at=now,
     )

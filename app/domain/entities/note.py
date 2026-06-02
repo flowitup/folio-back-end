@@ -9,6 +9,9 @@ from uuid import UUID, uuid4
 # Category scopes a note to the type of journal entry being recorded.
 VALID_CATEGORIES: frozenset[str] = frozenset({"inspection", "delivery", "payment", "decision", "call", "general"})
 
+# Status tracks whether a journal note is still actionable.
+VALID_STATUSES: frozenset[str] = frozenset({"open", "done"})
+
 _MAX_TITLE_LEN = 200
 _MAX_DESC_LEN = 2000
 
@@ -64,6 +67,13 @@ def _validate_category(category: str) -> str:
     return category
 
 
+def _validate_status(status: str) -> str:
+    """Validate status is in the allowed set. Raises ValueError on failure."""
+    if status not in VALID_STATUSES:
+        raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}, got '{status}'.")
+    return status
+
+
 # ------------------------------------------------------------------
 # Entity
 # ------------------------------------------------------------------
@@ -84,6 +94,7 @@ class Note:
     title: str
     description: str | None
     category: str  # ∈ VALID_CATEGORIES
+    status: str  # ∈ VALID_STATUSES; default "open"
     created_at: datetime
     updated_at: datetime
 
@@ -104,6 +115,8 @@ class Note:
         """
         Create a new journal Note with validated fields.
 
+        New notes always start with status="open".
+
         Raises:
             ValueError: if title or description fail validation.
             InvalidCategoryError: if category ∉ VALID_CATEGORIES.
@@ -116,6 +129,7 @@ class Note:
             title=_validate_title(title),
             description=_validate_description(description),
             category=_validate_category(category),
+            status="open",
             created_at=now,
             updated_at=now,
         )
@@ -130,15 +144,17 @@ class Note:
         title: str | None = None,
         description: str | None | _Unset = _UNSET,
         category: str | None = None,
+        status: str | None = None,
     ) -> Note:
         """
         Return a new Note with the given fields replaced.
 
         Pass ``description=None`` explicitly to clear the description.
         Omitting ``description`` (or passing the sentinel) leaves it unchanged.
+        Omitting ``status`` (or passing None) leaves it unchanged.
 
         Raises:
-            ValueError: if title or description fail validation.
+            ValueError: if title, description, or status fail validation.
             InvalidCategoryError: if category ∉ VALID_CATEGORIES.
         """
         new_title = _validate_title(title) if title is not None else self.title
@@ -148,10 +164,12 @@ class Note:
         else:
             new_desc = _validate_description(description)  # type: ignore[arg-type]
         new_category = _validate_category(category) if category is not None else self.category
+        new_status = _validate_status(status) if status is not None else self.status
         return replace(
             self,
             title=new_title,
             description=new_desc,
             category=new_category,
+            status=new_status,
             updated_at=datetime.now(timezone.utc),
         )

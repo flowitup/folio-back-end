@@ -1,9 +1,10 @@
 """SQLAlchemy ORM models for notes and note dismissals.
 
 Maps to the 'notes' and 'notes_dismissed' tables.
-Legacy reminder columns (due_date, lead_time_minutes, status) are kept nullable
+Legacy reminder columns (due_date, lead_time_minutes) are kept nullable
 for backwards-compatibility with pre-journal rows and the dormant notifications
-query; they are not mapped to the journal Note entity.
+query. The status column is now re-exposed: new journal rows persist the entity
+status; legacy rows with NULL status are treated as "open" on read.
 """
 
 from __future__ import annotations
@@ -61,7 +62,10 @@ class NoteOrm(Base):
     )
 
     def to_entity(self) -> Note:
-        """Convert ORM model to domain entity."""
+        """Convert ORM model to domain entity.
+
+        NULL status (legacy rows created before status was re-exposed) maps to "open".
+        """
         return Note(
             id=self.id,
             project_id=self.project_id,
@@ -69,6 +73,7 @@ class NoteOrm(Base):
             title=self.title,
             description=self.description,
             category=self.category or "general",
+            status=self.status if self.status is not None else "open",
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -77,8 +82,8 @@ class NoteOrm(Base):
     def from_entity(cls, note: Note) -> "NoteOrm":
         """Convert domain entity to ORM model.
 
-        Legacy reminder fields (due_date, lead_time_minutes, status) are left
-        NULL — the entity no longer carries them.
+        Legacy reminder fields (due_date, lead_time_minutes) are left NULL.
+        Status is persisted from the entity (always "open" for new notes).
         """
         return cls(
             id=note.id,
@@ -87,6 +92,7 @@ class NoteOrm(Base):
             title=note.title,
             description=note.description,
             category=note.category,
+            status=note.status,
             created_at=note.created_at,
             updated_at=note.updated_at,
         )
@@ -96,6 +102,7 @@ class NoteOrm(Base):
         self.title = note.title
         self.description = note.description
         self.category = note.category
+        self.status = note.status
         self.updated_at = note.updated_at
 
     def __repr__(self) -> str:

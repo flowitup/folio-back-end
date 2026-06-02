@@ -27,6 +27,7 @@ def _make_note(*, project_id=None, category: str = "general") -> Note:
         title="Test note",
         description=None,
         category=category,
+        status="open",
         created_at=now,
         updated_at=now,
     )
