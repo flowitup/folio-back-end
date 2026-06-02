@@ -65,9 +65,17 @@ def _login(client, email: str, password: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="module")
 def tags_app():
-    """Flask app with in-memory DB + full tags container for route tests."""
+    """Flask app with in-memory DB + full tags container for route tests.
+
+    Module-scoped: the app + DI container + base seed (users, roles, two
+    projects, memberships) are built once for the whole file — the construction
+    is expensive (~10s) and rebuilding it per test made the suite exceed the CI
+    job timeout. Per-test isolation is restored by the autouse `_reset_tag_rows`
+    fixture below, which clears the only mutable table these tests touch
+    (project_tags) between tests.
+    """
     from app import create_app, db
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
@@ -220,6 +228,11 @@ def tags_app():
         db.drop_all()
 
 
+# Client + tokens stay function-scoped (cheap: a test client + one login POST).
+# A fresh client per test means a fresh cookie jar, so the unauthenticated tests
+# don't see auth cookies left over from a previous test's login (login sets
+# cookies because JWT_TOKEN_LOCATION includes "cookies"). Authenticated tests
+# pass the token via the Authorization header, not cookies.
 @pytest.fixture
 def tags_client(tags_app):
     return tags_app.test_client()
@@ -233,6 +246,23 @@ def admin_token(tags_client, tags_app):
 @pytest.fixture
 def outsider_token(tags_client, tags_app):
     return _login(tags_client, tags_app._test_outsider_email, tags_app._test_outsider_password)
+
+
+@pytest.fixture(autouse=True)
+def _reset_tag_rows(tags_app):
+    """Clear the only mutable table the tag route tests touch between tests.
+
+    Keeps the module-scoped base seed (users/roles/projects/memberships) intact
+    while giving each test a clean project_tags slate, so count/empty/isolation
+    assertions hold exactly as they did under the old function-scoped app.
+    """
+    from app import db
+    from app.infrastructure.database.models import ProjectTagModel
+
+    with tags_app.app_context():
+        db.session.query(ProjectTagModel).delete()
+        db.session.commit()
+    yield
 
 
 # ===========================================================================
