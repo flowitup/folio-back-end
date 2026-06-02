@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
 from app.application.notes.create_note_usecase import CreateNoteUseCase
-from app.application.notes.exceptions import InvalidLeadTimeError, NotProjectMemberError
+from app.application.notes.exceptions import InvalidCategoryError, NotProjectMemberError
 
 
 # ---------------------------------------------------------------------------
@@ -68,17 +67,28 @@ class TestCreateNoteHappyPath:
             project_id=project_id,
             title="Fix the roof",
             description="urgent",
-            due_date=date(2026, 5, 1),
-            lead_time_minutes=0,
+            category="inspection",
         )
 
         assert dto.title == "Fix the roof"
         assert dto.description == "urgent"
-        assert dto.due_date == date(2026, 5, 1)
-        assert dto.lead_time_minutes == 0
-        assert dto.status == "open"
+        assert dto.category == "inspection"
         assert dto.project_id == project_id
         assert dto.created_by == actor_id
+
+    def test_default_category_is_general(self):
+        membership = MagicMock()
+        membership.is_member.return_value = True
+
+        uc = _make_usecase(membership_reader=membership)
+        dto = uc.execute(
+            actor_id=uuid4(),
+            project_id=uuid4(),
+            title="Default cat",
+            description=None,
+        )
+
+        assert dto.category == "general"
 
     def test_note_repo_add_called_once(self):
         membership = MagicMock()
@@ -91,7 +101,6 @@ class TestCreateNoteHappyPath:
             project_id=uuid4(),
             title="Test note",
             description=None,
-            due_date=date(2026, 5, 1),
         )
 
         note_repo.add.assert_called_once()
@@ -107,7 +116,6 @@ class TestCreateNoteHappyPath:
             project_id=uuid4(),
             title="Commit test",
             description=None,
-            due_date=date(2026, 5, 1),
         )
 
         assert db.commit_calls == 1
@@ -122,58 +130,9 @@ class TestCreateNoteHappyPath:
             project_id=uuid4(),
             title="No description",
             description=None,
-            due_date=date(2026, 5, 1),
         )
 
         assert dto.description is None
-
-    def test_lead_time_60_accepted(self):
-        membership = MagicMock()
-        membership.is_member.return_value = True
-
-        uc = _make_usecase(membership_reader=membership)
-        dto = uc.execute(
-            actor_id=uuid4(),
-            project_id=uuid4(),
-            title="Lead 60",
-            description=None,
-            due_date=date(2026, 5, 1),
-            lead_time_minutes=60,
-        )
-
-        assert dto.lead_time_minutes == 60
-
-    def test_lead_time_1440_accepted(self):
-        membership = MagicMock()
-        membership.is_member.return_value = True
-
-        uc = _make_usecase(membership_reader=membership)
-        dto = uc.execute(
-            actor_id=uuid4(),
-            project_id=uuid4(),
-            title="Lead 1440",
-            description=None,
-            due_date=date(2026, 5, 1),
-            lead_time_minutes=1440,
-        )
-
-        assert dto.lead_time_minutes == 1440
-
-    def test_past_due_date_allowed(self):
-        """Past due_date is deliberately allowed (user forgot to set it earlier)."""
-        membership = MagicMock()
-        membership.is_member.return_value = True
-
-        uc = _make_usecase(membership_reader=membership)
-        dto = uc.execute(
-            actor_id=uuid4(),
-            project_id=uuid4(),
-            title="Old note",
-            description=None,
-            due_date=date(2020, 1, 1),
-        )
-
-        assert dto.due_date == date(2020, 1, 1)
 
     def test_title_200_chars_boundary(self):
         """Title at exactly 200 characters must be accepted."""
@@ -187,28 +146,25 @@ class TestCreateNoteHappyPath:
             project_id=uuid4(),
             title=title,
             description=None,
-            due_date=date(2026, 5, 1),
         )
 
         assert len(dto.title) == 200
 
-    def test_fire_at_computed_correctly(self):
-        """fire_at for lead_time=0 must be 09:00 UTC on due_date."""
+    def test_all_valid_categories_accepted(self):
+        """All 6 journal categories must be accepted."""
         membership = MagicMock()
         membership.is_member.return_value = True
 
-        uc = _make_usecase(membership_reader=membership)
-        dto = uc.execute(
-            actor_id=uuid4(),
-            project_id=uuid4(),
-            title="Fire at check",
-            description=None,
-            due_date=date(2026, 5, 1),
-            lead_time_minutes=0,
-        )
-
-        expected = datetime(2026, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
-        assert dto.fire_at == expected
+        for cat in ("inspection", "delivery", "payment", "decision", "call", "general"):
+            uc = _make_usecase(membership_reader=membership)
+            dto = uc.execute(
+                actor_id=uuid4(),
+                project_id=uuid4(),
+                title=f"Note {cat}",
+                description=None,
+                category=cat,
+            )
+            assert dto.category == cat
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +184,6 @@ class TestCreateNoteAuthz:
                 project_id=uuid4(),
                 title="Nope",
                 description=None,
-                due_date=date(2026, 5, 1),
             )
 
     def test_membership_check_uses_correct_ids(self):
@@ -243,7 +198,6 @@ class TestCreateNoteAuthz:
             project_id=project_id,
             title="Check IDs",
             description=None,
-            due_date=date(2026, 5, 1),
         )
 
         membership.is_member.assert_called_once_with(actor_id, project_id)
@@ -260,7 +214,6 @@ class TestCreateNoteAuthz:
                 project_id=uuid4(),
                 title="Should not persist",
                 description=None,
-                due_date=date(2026, 5, 1),
             )
 
         note_repo.add.assert_not_called()
@@ -272,19 +225,18 @@ class TestCreateNoteAuthz:
 
 
 class TestCreateNoteValidation:
-    def test_invalid_lead_time_raises(self):
+    def test_invalid_category_raises(self):
         membership = MagicMock()
         membership.is_member.return_value = True
 
         uc = _make_usecase(membership_reader=membership)
-        with pytest.raises(InvalidLeadTimeError):
+        with pytest.raises(InvalidCategoryError):
             uc.execute(
                 actor_id=uuid4(),
                 project_id=uuid4(),
-                title="Bad lead time",
+                title="Bad category",
                 description=None,
-                due_date=date(2026, 5, 1),
-                lead_time_minutes=30,
+                category="reminder",
             )
 
     def test_empty_title_raises_value_error(self):
@@ -298,7 +250,6 @@ class TestCreateNoteValidation:
                 project_id=uuid4(),
                 title="   ",
                 description=None,
-                due_date=date(2026, 5, 1),
             )
 
     def test_title_too_long_raises_value_error(self):
@@ -312,5 +263,4 @@ class TestCreateNoteValidation:
                 project_id=uuid4(),
                 title="A" * 201,
                 description=None,
-                due_date=date(2026, 5, 1),
             )

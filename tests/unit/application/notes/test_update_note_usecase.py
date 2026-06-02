@@ -1,15 +1,15 @@
-"""Unit tests for UpdateNoteUseCase — including dismissal-cascade tests."""
+"""Unit tests for UpdateNoteUseCase — journal model (title/description/category)."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
 from app.application.notes.exceptions import (
-    InvalidLeadTimeError,
+    InvalidCategoryError,
     NoteNotFoundError,
     NotProjectMemberError,
 )
@@ -44,9 +44,7 @@ def _make_note(
     project_id=None,
     title="Original title",
     description: str | None = None,
-    due_date=date(2026, 5, 1),
-    lead_time_minutes=0,
-    status="open",
+    category: str = "general",
 ) -> Note:
     now = datetime(2026, 4, 27, 9, 0, 0, tzinfo=timezone.utc)
     return Note(
@@ -55,9 +53,7 @@ def _make_note(
         created_by=uuid4(),
         title=title,
         description=description,
-        due_date=due_date,
-        lead_time_minutes=lead_time_minutes,
-        status=status,
+        category=category,
         created_at=now,
         updated_at=now,
     )
@@ -65,20 +61,18 @@ def _make_note(
 
 def _make_usecase(
     note_repo=None,
-    dismissal_repo=None,
     membership_reader=None,
     db_session=None,
 ) -> UpdateNoteUseCase:
     return UpdateNoteUseCase(
         note_repo=note_repo or MagicMock(),
-        dismissal_repo=dismissal_repo or MagicMock(),
         membership_reader=membership_reader or MagicMock(),
         db_session=db_session or _FakeSession(),
     )
 
 
 # ---------------------------------------------------------------------------
-# Happy path — title only, dismissals UNCHANGED
+# Happy path
 # ---------------------------------------------------------------------------
 
 
@@ -90,85 +84,36 @@ class TestUpdateNoteHappyPath:
         note_repo.save = MagicMock()
         membership = MagicMock()
         membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
 
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        dto = uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            title="New title",
-        )
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="New title")
 
         assert dto.title == "New title"
 
-    def test_edit_only_title_dismissals_unchanged(self):
-        """Critical: editing title only must NOT cascade-delete dismissals."""
-        note = _make_note()
+    def test_category_update_returns_updated_dto(self):
+        note = _make_note(category="general")
         note_repo = MagicMock()
         note_repo.find_by_id_for_update.return_value = note
         membership = MagicMock()
         membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
 
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            title="Only title changed",
-        )
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, category="inspection")
 
-        dismissal_repo.delete_all_for_note.assert_not_called()
+        assert dto.category == "inspection"
 
-    def test_edit_same_due_date_no_cascade(self):
-        """Setting due_date to its current value must not trigger cascade."""
-        note = _make_note(due_date=date(2026, 5, 1))
+    def test_category_preserved_when_not_in_update(self):
+        note = _make_note(category="delivery")
         note_repo = MagicMock()
         note_repo.find_by_id_for_update.return_value = note
         membership = MagicMock()
         membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
 
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            due_date=date(2026, 5, 1),  # same value
-        )
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="Only title changed")
 
-        dismissal_repo.delete_all_for_note.assert_not_called()
-
-    def test_edit_same_lead_time_no_cascade(self):
-        note = _make_note(lead_time_minutes=60)
-        note_repo = MagicMock()
-        note_repo.find_by_id_for_update.return_value = note
-        membership = MagicMock()
-        membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
-
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            lead_time_minutes=60,  # same value
-        )
-
-        dismissal_repo.delete_all_for_note.assert_not_called()
+        # category unchanged
+        assert dto.category == "delivery"
 
     def test_commit_called_once(self):
         note = _make_note()
@@ -194,109 +139,6 @@ class TestUpdateNoteHappyPath:
         uc.execute(actor_id=uuid4(), note_id=note.id, title="Updated")
 
         note_repo.save.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Dismissal-cascade tests (CRITICAL)
-# ---------------------------------------------------------------------------
-
-
-class TestDismissalCascade:
-    def test_edit_due_date_cascades_dismissals(self):
-        """CRITICAL: changing due_date must delete all dismissals in same TX."""
-        note = _make_note(due_date=date(2026, 5, 1))
-        note_repo = MagicMock()
-        note_repo.find_by_id_for_update.return_value = note
-        membership = MagicMock()
-        membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
-
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            due_date=date(2026, 6, 1),  # changed
-        )
-
-        dismissal_repo.delete_all_for_note.assert_called_once_with(note.id)
-
-    def test_edit_lead_time_cascades_dismissals(self):
-        """CRITICAL: changing lead_time_minutes must delete all dismissals."""
-        note = _make_note(lead_time_minutes=0)
-        note_repo = MagicMock()
-        note_repo.find_by_id_for_update.return_value = note
-        membership = MagicMock()
-        membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
-
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            lead_time_minutes=60,  # changed
-        )
-
-        dismissal_repo.delete_all_for_note.assert_called_once_with(note.id)
-
-    def test_edit_both_schedule_fields_cascades_once(self):
-        """Changing both due_date and lead_time should cascade (only once)."""
-        note = _make_note(due_date=date(2026, 5, 1), lead_time_minutes=0)
-        note_repo = MagicMock()
-        note_repo.find_by_id_for_update.return_value = note
-        membership = MagicMock()
-        membership.is_member.return_value = True
-        dismissal_repo = MagicMock()
-
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            due_date=date(2026, 6, 1),
-            lead_time_minutes=60,
-        )
-
-        # delete_all_for_note is called exactly once (schedule_changed is a bool)
-        dismissal_repo.delete_all_for_note.assert_called_once_with(note.id)
-
-    def test_cascade_fires_before_save(self):
-        """Order: dismissal delete must happen before note save (within TX)."""
-        call_order: list[str] = []
-        note = _make_note(due_date=date(2026, 5, 1))
-
-        note_repo = MagicMock()
-        note_repo.find_by_id_for_update.return_value = note
-        note_repo.save.side_effect = lambda _n: call_order.append("save")
-
-        membership = MagicMock()
-        membership.is_member.return_value = True
-
-        dismissal_repo = MagicMock()
-        dismissal_repo.delete_all_for_note.side_effect = lambda _id: call_order.append("delete")
-
-        uc = _make_usecase(
-            note_repo=note_repo,
-            dismissal_repo=dismissal_repo,
-            membership_reader=membership,
-        )
-        uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            due_date=date(2026, 6, 1),
-        )
-
-        assert call_order == ["delete", "save"]
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +185,7 @@ class TestUpdateNoteAuthz:
 
 
 class TestUpdateNoteValidation:
-    def test_invalid_lead_time_raises(self):
+    def test_invalid_category_raises(self):
         note = _make_note()
         note_repo = MagicMock()
         note_repo.find_by_id_for_update.return_value = note
@@ -351,12 +193,8 @@ class TestUpdateNoteValidation:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        with pytest.raises(InvalidLeadTimeError):
-            uc.execute(
-                actor_id=uuid4(),
-                note_id=note.id,
-                lead_time_minutes=30,  # invalid
-            )
+        with pytest.raises(InvalidCategoryError):
+            uc.execute(actor_id=uuid4(), note_id=note.id, category="invalid")
 
     def test_empty_title_raises_value_error(self):
         note = _make_note()
@@ -367,23 +205,18 @@ class TestUpdateNoteValidation:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(ValueError):
-            uc.execute(
-                actor_id=uuid4(),
-                note_id=note.id,
-                title="   ",
-            )
+            uc.execute(actor_id=uuid4(), note_id=note.id, title="   ")
 
 
 # ---------------------------------------------------------------------------
-# C1 regression — description threading
+# Description threading
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateNoteDescription:
-    """Regression tests for C1: description must be threaded through with_updates."""
+    """Description must be threaded correctly through with_updates."""
 
     def test_update_description_persists(self):
-        """PATCH with description='new value' must update the stored description."""
         note = _make_note(description=None)
         note_repo = MagicMock()
         note_repo.find_by_id_for_update.return_value = note
@@ -391,16 +224,11 @@ class TestUpdateNoteDescription:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            description="new description",
-        )
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, description="new description")
 
         assert dto.description == "new description"
 
     def test_update_description_can_clear_to_none(self):
-        """PATCH with description=None must clear an existing description."""
         note = _make_note(description="existing text")
         note_repo = MagicMock()
         note_repo.find_by_id_for_update.return_value = note
@@ -408,11 +236,7 @@ class TestUpdateNoteDescription:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            description=None,
-        )
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, description=None)
 
         assert dto.description is None
 
@@ -425,11 +249,6 @@ class TestUpdateNoteDescription:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        # No description= kwarg → uses default _UNSET sentinel
-        dto = uc.execute(
-            actor_id=uuid4(),
-            note_id=note.id,
-            title="only title changed",
-        )
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="only title changed")
 
         assert dto.description == "keep me"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -18,7 +18,7 @@ from app.domain.entities.note import Note
 # ---------------------------------------------------------------------------
 
 
-def _make_note(*, project_id=None, due_date=date(2026, 5, 1)) -> Note:
+def _make_note(*, project_id=None, category: str = "general") -> Note:
     now = datetime(2026, 4, 27, 9, 0, 0, tzinfo=timezone.utc)
     return Note(
         id=uuid4(),
@@ -26,9 +26,7 @@ def _make_note(*, project_id=None, due_date=date(2026, 5, 1)) -> Note:
         created_by=uuid4(),
         title="Test note",
         description=None,
-        due_date=due_date,
-        lead_time_minutes=0,
-        status="open",
+        category=category,
         created_at=now,
         updated_at=now,
     )
@@ -86,7 +84,7 @@ class TestListProjectNotesHappyPath:
 
     def test_dto_fields_match_entity(self):
         project_id = uuid4()
-        note = _make_note(project_id=project_id, due_date=date(2026, 6, 15))
+        note = _make_note(project_id=project_id, category="inspection")
         note_repo = MagicMock()
         note_repo.list_by_project.return_value = [note]
         membership = MagicMock()
@@ -98,37 +96,24 @@ class TestListProjectNotesHappyPath:
         dto = result[0]
         assert dto.id == note.id
         assert dto.project_id == project_id
-        assert dto.due_date == date(2026, 6, 15)
-        assert dto.status == "open"
+        assert dto.category == "inspection"
 
-    def test_includes_done_notes_in_result(self):
-        """list_by_project returns all notes including done ones."""
+    def test_includes_multiple_categories_in_result(self):
+        """list_by_project returns notes of all categories."""
         project_id = uuid4()
-        open_note = _make_note(project_id=project_id)
-        now = datetime(2026, 4, 27, 9, 0, 0, tzinfo=timezone.utc)
-        done_note = Note(
-            id=uuid4(),
-            project_id=project_id,
-            created_by=uuid4(),
-            title="Done note",
-            description=None,
-            due_date=date(2026, 5, 1),
-            lead_time_minutes=0,
-            status="done",
-            created_at=now,
-            updated_at=now,
-        )
+        note_a = _make_note(project_id=project_id, category="general")
+        note_b = _make_note(project_id=project_id, category="delivery")
         note_repo = MagicMock()
-        note_repo.list_by_project.return_value = [open_note, done_note]
+        note_repo.list_by_project.return_value = [note_a, note_b]
         membership = MagicMock()
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         result = uc.execute(actor_id=uuid4(), project_id=project_id)
 
-        statuses = {dto.status for dto in result}
-        assert "open" in statuses
-        assert "done" in statuses
+        categories = {dto.category for dto in result}
+        assert "general" in categories
+        assert "delivery" in categories
 
     def test_no_db_session_needed(self):
         """ListProjectNotesUseCase is read-only — no session injected."""
