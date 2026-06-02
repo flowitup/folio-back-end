@@ -25,30 +25,45 @@ from app.domain.project_photo import ProjectPhoto
 
 _log = logging.getLogger(__name__)
 
-# Default 25 MiB — images don't need the 150 MiB document headroom.
+# Default 25 MiB for images; videos get a larger 50 MiB headroom.
 MAX_SIZE_BYTES = int(os.environ.get("PROJECT_PHOTO_MAX_SIZE_BYTES", str(25 * 1024 * 1024)))
+MAX_VIDEO_SIZE_BYTES = int(os.environ.get("PROJECT_VIDEO_MAX_SIZE_BYTES", str(50 * 1024 * 1024)))
 
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-
 ALLOWED_MIME_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
 
+ALLOWED_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".webm", ".mov"})
+ALLOWED_VIDEO_MIME_TYPES: frozenset[str] = frozenset({"video/mp4", "video/webm", "video/quicktime"})
 
-def validate_image_type(filename: str, mime_type: str) -> None:
-    """Validate that both the extension and MIME type are in the image allowlist.
+
+def validate_media_type(filename: str, mime_type: str) -> str:
+    """Validate the extension + MIME against the image OR video allowlist.
 
     Args:
         filename: Sanitized filename (already through the filename sanitizer).
         mime_type: MIME type reported by the client.
 
+    Returns:
+        The media kind: ``"image"`` or ``"video"``.
+
     Raises:
-        UnsupportedImageTypeError: Extension or MIME type not in the allowlist.
+        UnsupportedImageTypeError: Extension or MIME type not in any allowlist.
     """
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise UnsupportedImageTypeError(f"Extension '{ext}' is not allowed — must be one of {ALLOWED_EXTENSIONS}")
     # Some browsers/proxies send generic octet-stream; allow it as a fallback.
-    if mime_type not in ALLOWED_MIME_TYPES and mime_type != "application/octet-stream":
+    octet = mime_type == "application/octet-stream"
+
+    if ext in ALLOWED_EXTENSIONS:
+        if mime_type in ALLOWED_MIME_TYPES or octet:
+            return "image"
         raise UnsupportedImageTypeError(f"MIME type '{mime_type}' is not allowed for image uploads")
+    if ext in ALLOWED_VIDEO_EXTENSIONS:
+        if mime_type in ALLOWED_VIDEO_MIME_TYPES or octet:
+            return "video"
+        raise UnsupportedImageTypeError(f"MIME type '{mime_type}' is not allowed for video uploads")
+
+    allowed = ALLOWED_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
+    raise UnsupportedImageTypeError(f"Extension '{ext}' is not allowed — must be one of {allowed}")
 
 
 class UploadProjectPhotoUseCase:
@@ -103,11 +118,9 @@ class UploadProjectPhotoUseCase:
         Returns:
             The saved ProjectPhoto entity.
         """
-        # --- Size validation ---
+        # --- Empty guard ---
         if size_bytes <= 0:
-            raise EmptyImageError("Uploaded image has no content (size <= 0 bytes)")
-        if size_bytes > MAX_SIZE_BYTES:
-            raise ImageTooLargeError(f"Image size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
+            raise EmptyImageError("Uploaded file has no content (size <= 0 bytes)")
 
         # --- Filename sanitization ---
         sanitized = self._filename_sanitizer.sanitize(filename)
@@ -115,7 +128,13 @@ class UploadProjectPhotoUseCase:
             raise UnsupportedImageTypeError("Invalid filename after sanitization — no safe characters remain")
 
         # --- Type allowlist (defense-in-depth: sanitized name + MIME check) ---
-        validate_image_type(sanitized, content_type)
+        # Determines media kind, which selects the size cap below.
+        kind = validate_media_type(sanitized, content_type)
+
+        # --- Size validation (per-kind cap: video gets more headroom) ---
+        max_bytes = MAX_VIDEO_SIZE_BYTES if kind == "video" else MAX_SIZE_BYTES
+        if size_bytes > max_bytes:
+            raise ImageTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {max_bytes} bytes")
 
         # --- Build storage keys using sanitized filename to prevent path traversal ---
         photo_id = uuid4()

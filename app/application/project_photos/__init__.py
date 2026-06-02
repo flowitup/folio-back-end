@@ -23,9 +23,12 @@ from app.application.project_photos.exceptions import (
 from app.application.project_photos.upload_project_photo import (
     UploadProjectPhotoUseCase,
     MAX_SIZE_BYTES,
+    MAX_VIDEO_SIZE_BYTES,
     ALLOWED_EXTENSIONS,
     ALLOWED_MIME_TYPES,
-    validate_image_type,
+    ALLOWED_VIDEO_EXTENSIONS,
+    ALLOWED_VIDEO_MIME_TYPES,
+    validate_media_type,
 )
 from app.application.project_photos.list_project_photos import ListProjectPhotosUseCase
 from app.application.project_photos.get_project_photo import GetProjectPhotoUseCase
@@ -58,7 +61,10 @@ __all__ = [
     "DeleteProjectPhotoUseCase",
     # Upload constants / helpers
     "MAX_SIZE_BYTES",
+    "MAX_VIDEO_SIZE_BYTES",
     "ALLOWED_EXTENSIONS",
     "ALLOWED_MIME_TYPES",
-    "validate_image_type",
+    "ALLOWED_VIDEO_EXTENSIONS",
+    "ALLOWED_VIDEO_MIME_TYPES",
+    "validate_media_type",
 ]

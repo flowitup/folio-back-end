@@ -18,8 +18,9 @@ from app.application.project_photos.exceptions import (
 from app.application.project_photos.ports import IDocumentStorage, IProjectPhotoRepository
 from app.application.project_photos.upload_project_photo import (
     MAX_SIZE_BYTES,
+    MAX_VIDEO_SIZE_BYTES,
     UploadProjectPhotoUseCase,
-    validate_image_type,
+    validate_media_type,
 )
 from app.domain.project_photo import ProjectPhoto
 from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
@@ -280,26 +281,98 @@ class TestTypeValidation:
         assert result is not None
 
 
-class TestValidateImageTypeHelper:
+def _fake_video_thumbnailer():
+    """Thumbnailer stub that returns canned JPEG bytes — no ffmpeg needed."""
+    tn = MagicMock()
+    tn.generate.return_value = _make_jpeg_bytes()
+    return tn
+
+
+class TestVideoUpload:
+    def test_mp4_upload_persists_video(self):
+        uc, repo, storage, session = _make_use_case(thumbnailer=_fake_video_thumbnailer())
+        result = uc.execute(
+            project_id=uuid4(),
+            filename="walkthrough.mp4",
+            content_type="video/mp4",
+            size_bytes=10 * 1024 * 1024,
+            data=b"fake-video-bytes",
+            uploader_user_id=uuid4(),
+            caption="Site walkthrough",
+            captured_at=None,
+        )
+        assert isinstance(result, ProjectPhoto)
+        assert result.content_type == "video/mp4"
+        # Original + poster thumbnail both stored.
+        assert storage.put.call_count == 2
+
+    def test_video_uses_larger_cap(self):
+        """A 40 MiB video is accepted (over the 25 MiB image cap, under 50 MiB)."""
+        uc, _, storage, _ = _make_use_case(thumbnailer=_fake_video_thumbnailer())
+        result = uc.execute(
+            project_id=uuid4(),
+            filename="clip.webm",
+            content_type="video/webm",
+            size_bytes=40 * 1024 * 1024,
+            data=b"v",
+            uploader_user_id=uuid4(),
+            caption=None,
+            captured_at=None,
+        )
+        assert result.content_type == "video/webm"
+
+    def test_oversize_video_raises(self):
+        uc, _, storage, _ = _make_use_case(thumbnailer=_fake_video_thumbnailer())
+        with pytest.raises(ImageTooLargeError):
+            uc.execute(
+                project_id=uuid4(),
+                filename="big.mp4",
+                content_type="video/mp4",
+                size_bytes=MAX_VIDEO_SIZE_BYTES + 1,
+                data=b"v",
+                uploader_user_id=uuid4(),
+                caption=None,
+                captured_at=None,
+            )
+        storage.put.assert_not_called()
+
+
+class TestValidateMediaTypeHelper:
     def test_allowed_jpeg(self):
-        validate_image_type("photo.jpg", "image/jpeg")  # no raise
+        assert validate_media_type("photo.jpg", "image/jpeg") == "image"
 
     def test_allowed_png(self):
-        validate_image_type("img.png", "image/png")
+        assert validate_media_type("img.png", "image/png") == "image"
 
     def test_allowed_webp(self):
-        validate_image_type("img.webp", "image/webp")
+        assert validate_media_type("img.webp", "image/webp") == "image"
+
+    def test_allowed_video_mp4(self):
+        assert validate_media_type("clip.mp4", "video/mp4") == "video"
+
+    def test_allowed_video_webm(self):
+        assert validate_media_type("clip.webm", "video/webm") == "video"
+
+    def test_allowed_video_mov(self):
+        assert validate_media_type("clip.mov", "video/quicktime") == "video"
 
     def test_unsupported_extension_raises(self):
         with pytest.raises(UnsupportedImageTypeError, match="Extension"):
-            validate_image_type("doc.pdf", "application/pdf")
+            validate_media_type("doc.pdf", "application/pdf")
 
     def test_disallowed_mime_raises(self):
         with pytest.raises(UnsupportedImageTypeError, match="MIME"):
-            validate_image_type("photo.jpg", "text/html")
+            validate_media_type("photo.jpg", "text/html")
+
+    def test_disallowed_video_mime_raises(self):
+        with pytest.raises(UnsupportedImageTypeError, match="MIME"):
+            validate_media_type("clip.mp4", "video/x-msvideo")
 
     def test_octet_stream_allowed_as_fallback(self):
-        validate_image_type("photo.png", "application/octet-stream")  # no raise
+        assert validate_media_type("photo.png", "application/octet-stream") == "image"
+
+    def test_octet_stream_video_fallback(self):
+        assert validate_media_type("clip.mp4", "application/octet-stream") == "video"
 
 
 # ---------------------------------------------------------------------------

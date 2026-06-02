@@ -27,6 +27,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# ffmpeg: extract poster frames from uploaded project videos
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app
 
