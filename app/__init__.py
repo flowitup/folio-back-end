@@ -768,6 +768,8 @@ def _configure_di_container() -> None:
         SqlAlchemyProjectPhotoRepository,
     )
     from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
+    from app.infrastructure.adapters.ffmpeg_video_thumbnailer import FfmpegVideoThumbnailer
+    from app.infrastructure.adapters.media_thumbnailer import MediaThumbnailer
     from app.application.project_photos import (
         UploadProjectPhotoUseCase,
         ListProjectPhotosUseCase,
@@ -778,7 +780,11 @@ def _configure_di_container() -> None:
 
     _photo_repo = SqlAlchemyProjectPhotoRepository(db.session)
     _c.project_photo_repository = _photo_repo
-    _photo_thumbnailer = PillowImageThumbnailer()
+    # Dispatch thumbnailing by media kind: images via Pillow, videos via ffmpeg poster frame.
+    _photo_thumbnailer = MediaThumbnailer(
+        image_thumbnailer=PillowImageThumbnailer(),
+        video_thumbnailer=FfmpegVideoThumbnailer(),
+    )
 
     # Reuse document_storage singleton (S3AttachmentStorage satisfies IDocumentStorage).
     # Reuse _filename_sanitizer already instantiated above for project documents.

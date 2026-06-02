@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timezone
 from typing import Tuple
 from uuid import UUID
@@ -24,7 +25,11 @@ from app.application.project_photos import (
     ThumbnailGenerationError,
     UnsupportedImageTypeError,
 )
-from app.application.project_photos.upload_project_photo import MAX_SIZE_BYTES
+from app.application.project_photos.upload_project_photo import (
+    ALLOWED_VIDEO_EXTENSIONS,
+    MAX_SIZE_BYTES,
+    MAX_VIDEO_SIZE_BYTES,
+)
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -104,11 +109,14 @@ def upload_project_photo(project_id: str):
     file.stream.seek(0)
 
     if size_bytes <= 0:
-        return _error_response("EMPTY_FILE", "Uploaded image is empty (0 bytes)", 400)
-    if size_bytes > MAX_SIZE_BYTES:
-        return _error_response("FILE_TOO_LARGE", f"Image exceeds {MAX_SIZE_BYTES} byte limit", 413)
+        return _error_response("EMPTY_FILE", "Uploaded file is empty (0 bytes)", 400)
+    # Pick the cap by media kind before buffering — videos get more headroom.
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    max_bytes = MAX_VIDEO_SIZE_BYTES if ext in ALLOWED_VIDEO_EXTENSIONS else MAX_SIZE_BYTES
+    if size_bytes > max_bytes:
+        return _error_response("FILE_TOO_LARGE", f"File exceeds {max_bytes} byte limit", 413)
 
-    # Size is within bounds — safe to buffer the body (≤ 25 MiB).
+    # Size is within bounds — safe to buffer the body (≤ 50 MiB).
     data = file.stream.read()
 
     caption = request.form.get("caption") or None
