@@ -60,7 +60,9 @@ class SetMemberRoleUseCase:
 
         # 5. Last-admin guard: block demoting the only admin of the company
         if access.role == CompanyRole.ADMIN.value and inp.role == CompanyRole.MEMBER.value:
-            admins = [a for a in self._access_repo.list_for_company(inp.company_id) if a.role == CompanyRole.ADMIN.value]
+            admins = [
+                a for a in self._access_repo.list_for_company(inp.company_id) if a.role == CompanyRole.ADMIN.value
+            ]
             if len(admins) <= 1:
                 raise LastCompanyAdminError(inp.company_id)
 

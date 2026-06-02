@@ -39,9 +39,7 @@ def _inp(user_id, company_id=None, kind=BillingDocumentKind.DEVIS, **overrides):
 
 
 class TestCreateBillingDocumentRoleGate:
-    def test_member_cannot_create_company_billing(
-        self, usecase, company_repo, access_repo, fake_session
-    ):
+    def test_member_cannot_create_company_billing(self, usecase, company_repo, access_repo, fake_session):
         uid = uuid4()
         cid = uuid4()
         company_repo.save(make_company(owner_id=uid, company_id=cid))

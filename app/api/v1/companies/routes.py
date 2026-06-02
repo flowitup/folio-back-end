@@ -615,9 +615,10 @@ def set_member_role(company_id: str, target_user_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
     except LastCompanyAdminError:
-        return jsonify(
-            {"error": "Conflict", "message": "Company must keep at least one admin", "reason": "last_admin"}
-        ), 409
+        return (
+            jsonify({"error": "Conflict", "message": "Company must keep at least one admin", "reason": "last_admin"}),
+            409,
+        )
 
     return jsonify(dataclasses.asdict(result))
 
