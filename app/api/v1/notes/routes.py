@@ -90,8 +90,8 @@ def create_note(project_id: UUID) -> Any:
         )
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
-    except (InvalidCategoryError, ValueError) as exc:  # pragma: no cover
-        return _err(400, "BadRequest", str(exc))  # pragma: no cover
+    except (InvalidCategoryError, ValueError) as exc:
+        return _err(400, "BadRequest", str(exc))
     except Exception:
         logger.exception("create_note unexpected error project_id=%s", project_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
@@ -171,8 +171,8 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
         return _err(404, "NotFound", "Note not found")
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
-    except (InvalidCategoryError, ValueError) as exc:  # pragma: no cover
-        return _err(400, "BadRequest", str(exc))  # pragma: no cover
+    except (InvalidCategoryError, ValueError) as exc:
+        return _err(400, "BadRequest", str(exc))
     except Exception:
         logger.exception("update_note unexpected error note_id=%s", note_id)
         return _err(500, "InternalError", "An unexpected error occurred.")

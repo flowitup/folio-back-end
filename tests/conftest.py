@@ -929,6 +929,48 @@ def note_dismissed_by_member(invitation_app):
 
 
 @pytest.fixture
+def note_legacy_due(invitation_app):
+    """A legacy reminder row with past due_date and lead_time_minutes=0 (status=open).
+
+    list_due_for_user includes rows where due_date IS NOT NULL AND lead_time_minutes IS NOT NULL,
+    so this row surfaces as a due notification. Used to verify the notifications response shape.
+    """
+    from datetime import date, datetime, timedelta, timezone
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models.note_orm import NoteOrm
+
+    with invitation_app.app_context():
+        now = datetime.now(timezone.utc)
+        yesterday = date.today() - timedelta(days=1)
+        note = NoteOrm(
+            id=uuid4(),
+            project_id=UUID(invitation_app._test_project_id),
+            created_by=UUID(invitation_app._test_member_user_id),
+            title="Legacy due note",
+            description=None,
+            category="general",
+            due_date=yesterday,
+            lead_time_minutes=0,
+            status="open",
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(note)
+        db.session.commit()
+        note_id = str(note.id)
+
+    yield note_id
+
+    with invitation_app.app_context():
+        from sqlalchemy import text
+
+        db.session.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        db.session.commit()
+
+
+@pytest.fixture
 def non_member_user(invitation_app):
     """Alias for outsider_user — a user with no project memberships."""
     # The existing 'outsider@invite-test.com' has no memberships in P1.

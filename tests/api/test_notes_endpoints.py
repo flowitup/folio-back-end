@@ -142,6 +142,16 @@ class TestCreateNoteEndpoint:
         )
         assert resp.status_code == 422
 
+    def test_400_whitespace_only_title_create(self, inv_client, member_token, invitation_app):
+        """A title of all whitespace passes Pydantic min_length but fails domain _validate_title → 400."""
+        resp = inv_client.post(
+            _notes_url(invitation_app._test_project_id),
+            json=_valid_body(title="   "),
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "BadRequest"
+
 
 # ===========================================================================
 # GET /api/v1/projects/<project_id>/notes  — list notes
@@ -255,6 +265,16 @@ class TestUpdateNoteEndpoint:
             headers=_auth(member_token),
         )
         assert resp.status_code == 404
+
+    def test_400_whitespace_only_title_update(self, inv_client, member_token, invitation_app, note_open):
+        """A title of all whitespace passes Pydantic min_length but fails domain _validate_title → 400."""
+        resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_open),
+            json={"title": "   "},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "BadRequest"
 
     def test_patch_description_persists(self, inv_client, member_token, invitation_app):
         """PATCH with description must update and be reflected in list response."""

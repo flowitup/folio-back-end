@@ -15,12 +15,6 @@ class NotProjectMemberError(Exception):
     pass
 
 
-class InvalidLeadTimeError(ValueError):
-    """Raised when lead_time_minutes is not one of {0, 60, 1440}."""
-
-    pass
-
-
 class InvalidCategoryError(ValueError):
     """Raised when category is not one of the allowed journal categories."""
 
