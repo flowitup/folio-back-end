@@ -17,7 +17,13 @@ from app.api.v1.projects.schemas import (
     ProjectUserResponse,
     ProjectUsersListResponse,
 )
-from app.api.v1.projects.decorators import require_permission, has_permission, can_read_project, can_mutate_project
+from app.api.v1.projects.decorators import (
+    require_permission,
+    has_permission,
+    can_read_project,
+    can_mutate_project,
+    _effective_perms_for,
+)
 from app.application.projects import CreateProjectRequest as CreateDTO
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError, InvalidProjectDataError
 from app.infrastructure.rate_limiter import limiter
@@ -36,11 +42,18 @@ def list_projects():
 
     projects = container.list_projects_usecase.execute(UUID(user_id), is_admin=is_admin)
 
+    user_uuid = UUID(user_id)
     return jsonify(
         ProjectListResponse(
             projects=[
                 ProjectResponse(
-                    id=p.id, name=p.name, address=p.address, owner_id=p.owner_id, user_count=p.user_count, created_at=""
+                    id=p.id,
+                    name=p.name,
+                    address=p.address,
+                    owner_id=p.owner_id,
+                    user_count=p.user_count,
+                    created_at="",
+                    my_permissions=sorted(_effective_perms_for(UUID(str(p.id)), user_uuid)),
                 )
                 for p in projects
             ],
@@ -141,6 +154,7 @@ def get_project(project_id: str):
             created_at=project.created_at.isoformat(),
             company_id=company_id_str,
             invoice_prefix=project.invoice_prefix,
+            my_permissions=sorted(_effective_perms_for(project.id, user_id)),
         ).model_dump()
     )
 
