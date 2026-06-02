@@ -21,6 +21,7 @@ class LaborEntryDetail:
     supplement_hours: int
     created_at: str
     role_color: Optional[str] = None
+    tag_id: Optional[str] = None
 
 
 @dataclass
@@ -33,6 +34,8 @@ class ListLaborEntriesRequest:
     # (500) and an upper bound (1000) — keep this Optional so callers that
     # genuinely want everything (e.g. exports) can pass None.
     limit: Optional[int] = None
+    # Phase tag filter — when set, returns only entries with this tag_id.
+    tag_id: Optional[UUID] = None
 
 
 class ListLaborEntriesUseCase:
@@ -57,6 +60,7 @@ class ListLaborEntriesUseCase:
             date_to=request.date_to,
             worker_id=request.worker_id,
             limit=request.limit,
+            tag_id=request.tag_id,
         )
 
         result = []
@@ -81,6 +85,7 @@ class ListLaborEntriesUseCase:
                     supplement_hours=entry.supplement_hours,
                     created_at=entry.created_at.isoformat(),
                     role_color=worker.role_color,
+                    tag_id=str(entry.tag_id) if entry.tag_id is not None else None,
                 )
             )
 

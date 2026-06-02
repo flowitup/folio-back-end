@@ -643,23 +643,13 @@ def invitation_app():
             payment_method_repo=_pm_repo,
         )
 
-        # Re-wire invoice use-cases with payment_method_repo injected
-        from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvoiceUC
-        from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvoiceUC
-
+        # Note: invoice write use-cases are constructed once in the tags block below
+        # so tag_repo is included from the start (single construction site).
         if _c.invoice_repository is None:
             from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository as _InvRepo
 
             _inv_repo = _InvRepo(db.session)
             _c.invoice_repository = _inv_repo
-        _c.create_invoice_usecase = _CreateInvoiceUC(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
-        _c.update_invoice_usecase = _UpdateInvoiceUC(
-            invoice_repo=_c.invoice_repository,
-            payment_method_repo=_pm_repo,
-        )
 
         # Re-wire create_company_usecase with seeder
         from app.application.companies.create_company_usecase import (
@@ -776,6 +766,95 @@ def invitation_app():
             repo=_photo_repo,
             db_session=db.session,
         )
+
+        # ------------------------------------------------------------------
+        # Wire tags use-cases — mirrors app/__init__.py wiring.
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
+            SqlAlchemyProjectTagRepository as _ProjectTagRepo,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
+            SqlAlchemyProjectMembershipReader as _TagMembershipReader,
+        )
+        from app.application.tags.create_project_tag_usecase import CreateProjectTagUseCase as _CreateTagUC
+        from app.application.tags.list_project_tags_usecase import ListProjectTagsUseCase as _ListTagsUC
+        from app.application.tags.update_project_tag_usecase import UpdateProjectTagUseCase as _UpdateTagUC
+        from app.application.tags.delete_project_tag_usecase import DeleteProjectTagUseCase as _DeleteTagUC
+        from app.application.tags.tag_summary_usecase import TagSummaryUseCase as _TagSummaryUC
+
+        _tag_repo = _ProjectTagRepo(db.session)
+        _tag_membership_reader = _TagMembershipReader(db.session)
+
+        _c.create_project_tag_usecase = _CreateTagUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+            db_session=db.session,
+        )
+        _c.list_project_tags_usecase = _ListTagsUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+        )
+        _c.update_project_tag_usecase = _UpdateTagUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+            db_session=db.session,
+        )
+        _c.delete_project_tag_usecase = _DeleteTagUC(
+            tag_repo=_tag_repo,
+            membership_reader=_tag_membership_reader,
+            db_session=db.session,
+        )
+        _c.tag_summary_usecase = _TagSummaryUC(
+            tag_repo=_tag_repo,
+            labor_reader=_tag_repo,
+            expense_reader=_tag_repo,
+            membership_reader=_tag_membership_reader,
+        )
+
+        # ------------------------------------------------------------------
+        # Single construction of labor write use-cases — tag_repo is required;
+        # built here once alongside tag_repo. Mirrors app/__init__.py.
+        # ------------------------------------------------------------------
+        from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
+        from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
+        from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
+
+        if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+            _c.log_attendance_usecase = _LogAttendUC(
+                worker_repo=_c.worker_repository,
+                entry_repo=_c.labor_entry_repository,
+                tag_repo=_tag_repo,
+            )
+            _c.update_attendance_usecase = _UpdateAttendUC(
+                entry_repo=_c.labor_entry_repository,
+                worker_repo=_c.worker_repository,
+                tag_repo=_tag_repo,
+            )
+            _c.bulk_log_attendance_usecase = _BulkLogUC(
+                worker_repo=_c.worker_repository,
+                entry_repo=_c.labor_entry_repository,
+                db_session=db.session,
+                tag_repo=_tag_repo,
+            )
+
+        # Single construction of invoice write use-cases — includes tag_repo from the start.
+        from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
+        from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
+
+        if _c.invoice_repository is not None:
+            _pm = _c.payment_method_repo
+            _c.create_invoice_usecase = _CreateInvUC(
+                invoice_repo=_c.invoice_repository,
+                payment_method_repo=_pm,
+                tag_repo=_tag_repo,
+            )
+            _c.update_invoice_usecase = _UpdateInvUC(
+                invoice_repo=_c.invoice_repository,
+                payment_method_repo=_pm,
+                tag_repo=_tag_repo,
+            )
 
         yield test_app
 

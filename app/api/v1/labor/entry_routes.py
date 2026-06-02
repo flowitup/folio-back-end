@@ -96,6 +96,7 @@ def list_labor_entries(project_id: str):
     date_from = request.args.get("from")
     date_to = request.args.get("to")
     worker_id = request.args.get("worker_id")
+    tag_id_raw = request.args.get("tag_id")
     limit_raw = request.args.get("limit")
 
     try:
@@ -106,6 +107,7 @@ def list_labor_entries(project_id: str):
                 date_to=_parse_date(date_to) if date_to else None,
                 worker_id=UUID(worker_id) if worker_id else None,
                 limit=_parse_list_limit(limit_raw),
+                tag_id=UUID(tag_id_raw) if tag_id_raw else None,
             )
         )
     except ValueError as e:
@@ -126,6 +128,7 @@ def list_labor_entries(project_id: str):
                     supplement_hours=e.supplement_hours,
                     created_at=e.created_at,
                     role_color=e.role_color,
+                    tag_id=e.tag_id,
                 )
                 for e in entries
             ],
@@ -161,6 +164,7 @@ def log_attendance(project_id: str):
                 note=data.note,
                 shift_type=data.shift_type,
                 supplement_hours=data.supplement_hours,
+                tag_id=UUID(data.tag_id) if data.tag_id else None,
             )
         )
     except ValueError as e:
@@ -181,6 +185,7 @@ def log_attendance(project_id: str):
                 "amount_override": result.amount_override,
                 "note": result.note,
                 "created_at": result.created_at,
+                "tag_id": result.tag_id,
             }
         ),
         201,
@@ -283,6 +288,7 @@ def bulk_log_attendance(project_id: str):
                         supplement_hours=e.supplement_hours,
                         amount_override=(Decimal(str(e.amount_override)) if e.amount_override is not None else None),
                         note=e.note,
+                        tag_id=UUID(e.tag_id) if e.tag_id else None,
                     )
                     for e in data.entries
                 ],
@@ -350,6 +356,13 @@ def update_attendance(project_id: str, entry_id: str):
     except ValidationError as e:
         return _validation_error_response(e)
 
+    # Use exclude_unset to distinguish "field absent" (_TAG_UNSET) from
+    # "field=null (clear)" and "field=uuid (assign)". Mirrors invoice route.
+    from app.application.labor.update_attendance import _TAG_UNSET
+
+    provided_fields = data.model_dump(exclude_unset=True)
+    tag_id_arg: object = provided_fields["tag_id"] if "tag_id" in provided_fields else _TAG_UNSET
+
     try:
         result = get_container().update_attendance_usecase.execute(
             UpdateAttendanceDTO(
@@ -359,6 +372,7 @@ def update_attendance(project_id: str, entry_id: str):
                 note=data.note,
                 shift_type=data.shift_type,
                 supplement_hours=data.supplement_hours,
+                tag_id=tag_id_arg,
             )
         )
     except ValueError as e:
@@ -376,6 +390,7 @@ def update_attendance(project_id: str, entry_id: str):
             "amount_override": result.amount_override,
             "note": result.note,
             "created_at": result.created_at,
+            "tag_id": result.tag_id,
         }
     )
 

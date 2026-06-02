@@ -65,6 +65,7 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         payment_method_label=m.payment_method_label,
         source_billing_document_id=m.source_billing_document_id,
         is_auto_generated=m.is_auto_generated or False,
+        tag_id=m.tag_id,
     )
 
 
@@ -92,6 +93,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             payment_method_label=invoice.payment_method_label,
             source_billing_document_id=invoice.source_billing_document_id,
             is_auto_generated=invoice.is_auto_generated,
+            tag_id=invoice.tag_id,
         )
         self._session.add(model)
         try:
@@ -109,10 +111,17 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model = self._session.query(InvoiceModel).filter_by(id=invoice_id).first()
         return _model_to_entity(model) if model else None
 
-    def list_by_project(self, project_id: UUID, invoice_type: Optional[InvoiceType] = None) -> List[Invoice]:
+    def list_by_project(
+        self,
+        project_id: UUID,
+        invoice_type: Optional[InvoiceType] = None,
+        tag_id: Optional[UUID] = None,
+    ) -> List[Invoice]:
         query = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
         if invoice_type is not None:
             query = query.filter(InvoiceModel.type == invoice_type.value)
+        if tag_id is not None:
+            query = query.filter(InvoiceModel.tag_id == tag_id)
         # Order by the invoice (issue) date, newest first; fall back to
         # creation time so same-date invoices keep a stable, deterministic order.
         models = query.order_by(InvoiceModel.issue_date.desc(), InvoiceModel.created_at.desc()).all()
@@ -130,6 +139,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.updated_at = datetime.now(timezone.utc)
         model.payment_method_id = invoice.payment_method_id
         model.payment_method_label = invoice.payment_method_label
+        model.tag_id = invoice.tag_id
         self._session.commit()
         return _model_to_entity(model)
 

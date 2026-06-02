@@ -1,13 +1,16 @@
 """Unit tests for CreateInvoiceUseCase."""
 
-from datetime import date
-from unittest.mock import MagicMock
+from datetime import date, datetime, timezone
+from unittest.mock import MagicMock, Mock
 from uuid import uuid4
 import pytest
 
 from app.application.invoice.create_invoice import CreateInvoiceUseCase, CreateInvoiceRequest
 from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.update_invoice import UpdateInvoiceUseCase, UpdateInvoiceRequest
+from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.entities.project_tag import ProjectTag
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError
 
 
@@ -230,3 +233,163 @@ class TestCreateInvoiceInvoiceType:
         result = use_case.execute(request)
 
         assert result.type == "materials_services"
+
+
+# ---------------------------------------------------------------------------
+# Same-project tag enforcement — CreateInvoice / UpdateInvoice
+# ---------------------------------------------------------------------------
+
+
+def _make_tag(project_id) -> ProjectTag:
+    return ProjectTag(
+        id=uuid4(),
+        project_id=project_id,
+        name="Phase A",
+        color="#aabbcc",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def _make_tag_repo(tag):
+    repo = Mock()
+    repo.get_by_id.return_value = tag
+    return repo
+
+
+def _make_invoice(project_id) -> Invoice:
+    """Build a minimal Invoice entity for update tests."""
+    from app.domain.value_objects.invoice_item import InvoiceItem
+    from decimal import Decimal
+
+    return Invoice(
+        id=uuid4(),
+        project_id=project_id,
+        invoice_number="INV-2026-0001",
+        type=InvoiceType.RELEASED_FUNDS,
+        issue_date=date.today(),
+        recipient_name="ACME Corp",
+        recipient_address=None,
+        notes=None,
+        items=[InvoiceItem(description="Work", quantity=Decimal("1"), unit_price=Decimal("100"))],
+        created_by=uuid4(),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        is_auto_generated=False,
+    )
+
+
+class TestCreateInvoiceTagGuard:
+    """CreateInvoiceUseCase must reject tags that belong to a different project."""
+
+    def test_create_invoice_same_project_tag_succeeds(self):
+        project_id = uuid4()
+        tag = _make_tag(project_id)
+
+        repo = make_mock_repo()
+        tag_repo = _make_tag_repo(tag)
+        use_case = CreateInvoiceUseCase(repo, tag_repo=tag_repo)
+
+        result = use_case.execute(make_request(project_id=project_id, tag_id=tag.id))
+
+        assert result is not None
+        tag_repo.get_by_id.assert_called_once_with(tag.id)
+
+    def test_create_invoice_cross_project_tag_raises(self):
+        project_id = uuid4()
+        other_project_id = uuid4()
+        tag = _make_tag(other_project_id)  # belongs to a DIFFERENT project
+
+        repo = make_mock_repo()
+        tag_repo = _make_tag_repo(tag)
+        use_case = CreateInvoiceUseCase(repo, tag_repo=tag_repo)
+
+        with pytest.raises(InvalidProjectTagError):
+            use_case.execute(make_request(project_id=project_id, tag_id=tag.id))
+
+    def test_create_invoice_nonexistent_tag_raises(self):
+        project_id = uuid4()
+
+        repo = make_mock_repo()
+        tag_repo = Mock()
+        tag_repo.get_by_id.return_value = None  # tag does not exist
+        use_case = CreateInvoiceUseCase(repo, tag_repo=tag_repo)
+
+        with pytest.raises(InvalidProjectTagError):
+            use_case.execute(make_request(project_id=project_id, tag_id=uuid4()))
+
+    def test_create_invoice_no_tag_skips_guard(self):
+        """tag_id=None must not trigger the tag guard."""
+        repo = make_mock_repo()
+        tag_repo = Mock()
+        use_case = CreateInvoiceUseCase(repo, tag_repo=tag_repo)
+
+        result = use_case.execute(make_request(tag_id=None))
+
+        tag_repo.get_by_id.assert_not_called()
+        assert result is not None
+
+
+class TestUpdateInvoiceTagGuard:
+    """UpdateInvoiceUseCase must reject tags that belong to a different project."""
+
+    def test_update_invoice_same_project_tag_succeeds(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)
+        tag = _make_tag(project_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        tag_repo = _make_tag_repo(tag)
+        use_case = UpdateInvoiceUseCase(inv_repo, tag_repo=tag_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, tag_id=tag.id))
+
+        assert result is not None
+        tag_repo.get_by_id.assert_called_once_with(tag.id)
+
+    def test_update_invoice_cross_project_tag_raises(self):
+        project_id = uuid4()
+        other_project_id = uuid4()
+        invoice = _make_invoice(project_id)
+        tag = _make_tag(other_project_id)  # belongs to a DIFFERENT project
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        tag_repo = _make_tag_repo(tag)
+        use_case = UpdateInvoiceUseCase(inv_repo, tag_repo=tag_repo)
+
+        with pytest.raises(InvalidProjectTagError):
+            use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, tag_id=tag.id))
+
+    def test_update_invoice_clear_tag_skips_guard(self):
+        """tag_id=None (explicit clear) must not trigger the tag guard."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        tag_repo = Mock()
+        use_case = UpdateInvoiceUseCase(inv_repo, tag_repo=tag_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, tag_id=None))
+
+        tag_repo.get_by_id.assert_not_called()
+        assert result is not None
+
+    def test_update_invoice_unset_tag_skips_guard(self):
+        """tag_id not provided (_UNSET sentinel) must not trigger the tag guard."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        tag_repo = Mock()
+        use_case = UpdateInvoiceUseCase(inv_repo, tag_repo=tag_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id))  # tag_id defaults to _UNSET
+
+        tag_repo.get_by_id.assert_not_called()
+        assert result is not None
