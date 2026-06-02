@@ -36,6 +36,13 @@ class UserCompanyAccess:
     # --- audit ---
     attached_at: datetime
 
+    # --- per-company role ---
+    # Governs company-scoped capabilities (e.g. billing access). "admin" grants
+    # full visibility/management of the company's billing + members; "member" is
+    # attached-only. Defaults to "member" so call sites that predate this field
+    # stay safe-by-default. See app/domain/companies/roles.py::CompanyRole.
+    role: str = "member"
+
     # ------------------------------------------------------------------
     # Mutation helper
     # ------------------------------------------------------------------

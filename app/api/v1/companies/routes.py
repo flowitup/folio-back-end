@@ -40,6 +40,7 @@ from app.application.companies import (
     ListAllCompaniesInput,
     ListAttachedUsersInput,
     RedeemInviteTokenInput,
+    SetMemberRoleInput,
     SetPrimaryCompanyInput,
     UpdateCompanyInput,
     ActiveInviteTokenAlreadyExistsError,
@@ -50,6 +51,7 @@ from app.application.companies import (
     InviteTokenExpiredError,
     InviteTokenNotFoundError,
     InviteTokenSystemOverloadError,
+    LastCompanyAdminError,
     MissingPrimaryCompanyError,
     UserCompanyAccessNotFoundError,
 )
@@ -315,17 +317,24 @@ def generate_invite_token(company_id: str):
     regenerate_str = request.args.get("regenerate", "false").lower()
     regenerate = regenerate_str in ("1", "true", "yes")
 
+    # Optional per-company role to grant on redemption (admin | member; default member).
+    body = request.get_json(force=True, silent=True) or {}
+    role = body.get("role", "member")
+
     caller_id = UUID(get_jwt_identity())
     inp = GenerateInviteTokenInput(
         company_id=company_uuid,
         caller_id=caller_id,
         regenerate=regenerate,
+        role=role,
     )
 
     from app import db
 
     try:
         result = get_container().generate_invite_token_usecase.execute(inp, db.session)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
     except ForbiddenCompanyError:
@@ -559,6 +568,59 @@ def boot_attached_user(company_id: str, target_user_id: str):
         )
 
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# PATCH /companies/<company_id>/access/<target_user_id>/role — set member role (admin)
+# ---------------------------------------------------------------------------
+
+
+@companies_bp.route("/companies/<company_id>/access/<target_user_id>/role", methods=["PATCH"])
+@openapi_doc(summary="Change a company member's role (admin only)", tags=["companies"])
+@jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+@require_admin
+def set_member_role(company_id: str, target_user_id: str):
+    """Promote/demote a company member between 'admin' and 'member' (admin only)."""
+    try:
+        company_uuid = UUID(company_id)
+    except ValueError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    try:
+        target_uuid = UUID(target_user_id)
+    except ValueError:
+        return _err("NotFound", f"User {target_user_id} not found", 404)
+
+    body = request.get_json(force=True, silent=True) or {}
+    role = body.get("role")
+    if not role:
+        return _err("ValidationError", "role is required", 400)
+
+    caller_id = UUID(get_jwt_identity())
+    inp = SetMemberRoleInput(
+        caller_id=caller_id,
+        company_id=company_uuid,
+        user_id=target_uuid,
+        role=role,
+    )
+
+    from app import db
+
+    try:
+        result = get_container().set_member_role_usecase.execute(inp, db.session)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
+    except UserCompanyAccessNotFoundError:
+        return _err("NotFound", f"User {target_user_id} is not attached to this company", 404)
+    except ForbiddenCompanyError:
+        return _err("Forbidden", "Admin permission required", 403)
+    except LastCompanyAdminError:
+        return (
+            jsonify({"error": "Conflict", "message": "Company must keep at least one admin", "reason": "last_admin"}),
+            409,
+        )
+
+    return jsonify(dataclasses.asdict(result))
 
 
 # ---------------------------------------------------------------------------

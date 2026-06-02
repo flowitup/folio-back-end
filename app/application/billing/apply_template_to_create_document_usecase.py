@@ -23,6 +23,7 @@ from app.application.billing.ports import (
     ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
+    assert_company_admin,
     assert_project_read_access,
     assert_user_company_access,
 )
@@ -92,6 +93,9 @@ class ApplyTemplateToCreateDocumentUseCase:
         company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, company_id)
         if company is None:
             raise MissingCompanyProfileError(inp.user_id)
+
+        # Only company admins may create company billing documents.
+        assert_company_admin(self._access_repo, inp.user_id, company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
         effective_prefix = _effective_prefix_from_company(company) or ""

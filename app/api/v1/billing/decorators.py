@@ -35,11 +35,25 @@ def _has_superadmin() -> bool:
     return "*:*" in jwt_claims.get("permissions", [])
 
 
+def _can_access_billing_doc(doc, caller_id: UUID, container) -> bool:
+    """Return True if caller may access this billing document.
+
+    Allowed when the caller is a superadmin, owns the document, OR holds the
+    'admin' role in the document's company (company-scoped billing sharing).
+    """
+    from app.application.billing.ports import is_company_admin
+
+    if _has_superadmin() or doc.user_id == caller_id:
+        return True
+    return is_company_admin(container.user_company_access_repo, caller_id, doc.company_id)
+
+
 def require_billing_document_owner(fn):
-    """Decorator: load billing doc by <doc_id> → verify ownership → inject billing_doc.
+    """Decorator: load billing doc by <doc_id> → verify access → inject billing_doc.
 
     Calls the repo directly (not the use-case) so we can return 404 for both
-    missing and unauthorised cases without a 403 existence leak.
+    missing and unauthorised cases without a 403 existence leak. Access is granted
+    to the owner, a superadmin, or a company-admin of the document's company.
 
     Expected decorator order on a route:
         @jwt_required()
@@ -67,7 +81,7 @@ def require_billing_document_owner(fn):
             return _not_found(f"Billing document {doc_id_str} not found")
 
         caller_id = UUID(get_jwt_identity())
-        if doc.user_id != caller_id and not _has_superadmin():
+        if not _can_access_billing_doc(doc, caller_id, container):
             # Return 404, not 403 — avoids leaking that the document exists
             return _not_found(f"Billing document {doc_id_str} not found")
 

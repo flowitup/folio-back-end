@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.application.billing._helpers import _assert_owner, _items_from_inputs
+from app.application.billing._helpers import _assert_billing_doc_access, _items_from_inputs
 from app.application.billing.dtos import BillingDocumentResponse, UpdateBillingDocumentInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     ProjectReadPort,
     TransactionalSessionPort,
+    UserCompanyAccessRepositoryPort,
     assert_project_read_access,
 )
 from app.domain.billing.enums import BillingDocumentKind
@@ -29,9 +30,11 @@ class UpdateBillingDocumentUseCase:
         self,
         doc_repo: BillingDocumentRepositoryPort,
         project_repo: ProjectReadPort = None,  # type: ignore[assignment]
+        access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._project_repo = project_repo
+        self._access_repo = access_repo
 
     def execute(
         self,
@@ -41,7 +44,7 @@ class UpdateBillingDocumentUseCase:
         doc = self._doc_repo.find_by_id(inp.id)
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
-        _assert_owner(doc, inp.user_id)
+        _assert_billing_doc_access(doc, inp.user_id, self._access_repo)
 
         # M3: Reject kind-incompatible field updates before touching the DB.
         if doc.kind == BillingDocumentKind.DEVIS:

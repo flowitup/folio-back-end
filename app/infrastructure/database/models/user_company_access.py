@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -33,6 +33,8 @@ class UserCompanyAccessModel(Base):
         nullable=False,
     )
     is_primary = Column(Boolean, nullable=False, default=False, server_default="FALSE")
+    # Per-company role: "admin" (billing + member management) or "member".
+    role = Column(Text, nullable=False, default="member", server_default="member")
     attached_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -46,6 +48,10 @@ class UserCompanyAccessModel(Base):
     __table_args__ = (
         # Regular index for company-side lookups (who has access to a company)
         Index("ix_user_company_access_company_id", "company_id"),
+        CheckConstraint(
+            "role IN ('admin','member')",
+            name="ck_user_company_access_role",
+        ),
         # Partial unique is defined in the migration; declared here for reflection
         # completeness only — SQLAlchemy does not emit CREATE INDEX for this when
         # using create_all() because it lacks a postgresql_where expression on Index.

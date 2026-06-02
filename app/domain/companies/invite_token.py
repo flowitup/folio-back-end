@@ -47,6 +47,11 @@ class CompanyInviteToken:
     redeemed_at: Optional[datetime]
     redeemed_by: Optional[UUID]
 
+    # --- role granted on redemption ---
+    # The per-company role the redeeming user receives. Defaults to "member".
+    # See app/domain/companies/roles.py::CompanyRole.
+    role: str = "member"
+
     # ------------------------------------------------------------------
     # Computed state properties
     # ------------------------------------------------------------------

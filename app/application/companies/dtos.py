@@ -74,6 +74,7 @@ class GenerateInviteTokenInput:
     company_id: UUID
     caller_id: UUID
     regenerate: bool = False  # True → revoke existing active token first
+    role: str = "member"  # per-company role granted on redemption (admin | member)
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,16 @@ class SetPrimaryCompanyInput:
 
     user_id: UUID
     company_id: UUID
+
+
+@dataclass(frozen=True)
+class SetMemberRoleInput:
+    """Input for SetMemberRoleUseCase (admin promotes/demotes a company member)."""
+
+    caller_id: UUID
+    company_id: UUID
+    user_id: UUID  # the member whose role is being changed
+    role: str  # admin | member
 
 
 @dataclass(frozen=True)
@@ -235,6 +246,7 @@ class UserCompanyAccessResponse:
     company_id: UUID
     is_primary: bool
     attached_at: datetime
+    role: str = "member"
 
     @staticmethod
     def from_entity(access: UserCompanyAccess) -> "UserCompanyAccessResponse":
@@ -244,6 +256,7 @@ class UserCompanyAccessResponse:
             company_id=access.company_id,
             is_primary=access.is_primary,
             attached_at=access.attached_at,
+            role=access.role,
         )
 
 
