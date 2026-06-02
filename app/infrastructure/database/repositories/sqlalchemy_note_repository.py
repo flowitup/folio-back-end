@@ -35,7 +35,7 @@ class SqlAlchemyNoteRepository:
     def find_by_id_for_update(self, note_id: UUID) -> Optional[Note]:
         """Return Note with SELECT FOR UPDATE row lock, or None if not found.
 
-        Serializes concurrent dismiss against the same note (H2 code-review).
+        Serializes concurrent updates against the same note row.
         Falls back to plain SELECT on dialects that don't support FOR UPDATE
         (e.g. SQLite in tests).
         """
@@ -44,9 +44,12 @@ class SqlAlchemyNoteRepository:
         return orm.to_entity() if orm is not None else None
 
     def list_by_project(self, project_id: UUID) -> list[Note]:
-        """Return all notes for a project ordered by due_date ASC."""
+        """Return all notes for a project ordered by created_at DESC."""
         rows = (
-            self._session.query(NoteOrm).filter(NoteOrm.project_id == project_id).order_by(NoteOrm.due_date.asc()).all()
+            self._session.query(NoteOrm)
+            .filter(NoteOrm.project_id == project_id)
+            .order_by(NoteOrm.created_at.desc())
+            .all()
         )
         return [r.to_entity() for r in rows]
 
@@ -72,16 +75,17 @@ class SqlAlchemyNoteRepository:
             self._session.flush()
 
     # ------------------------------------------------------------------
-    # NoteQueryPort
+    # NoteQueryPort (dormant notifications path)
     # ------------------------------------------------------------------
 
     def list_due_for_user(self, user_id: UUID, now: datetime, limit: int = 100) -> list[Note]:
-        """Return open notes whose fire_at has passed for user_id.
+        """Return open notes with a passed fire_at for user_id.
 
-        Single SQL statement — delegates all filtering to the DB engine.
-        Bound parameters only; no string interpolation.
+        Legacy reminder rows only (due_date IS NOT NULL guard excludes new
+        journal rows that have NULL due_date/status). Single SQL statement
+        — no Python-side filtering, no N+1 queries.
 
-        fire_at formula (mirrored from Note.fire_at):
+        fire_at formula:
             (due_date::timestamp + TIME '09:00:00') AT TIME ZONE 'UTC'
             - (lead_time_minutes * INTERVAL '1 minute')
         """
@@ -93,15 +97,15 @@ class SqlAlchemyNoteRepository:
                 n.created_by,
                 n.title,
                 n.description,
-                n.due_date,
-                n.lead_time_minutes,
-                n.status,
+                n.category,
                 n.created_at,
                 n.updated_at
             FROM notes n
             INNER JOIN user_projects m ON m.project_id = n.project_id
             WHERE m.user_id = :user_id
               AND n.status = 'open'
+              AND n.due_date IS NOT NULL
+              AND n.lead_time_minutes IS NOT NULL
               AND (
                 (n.due_date::timestamp + TIME '09:00:00') AT TIME ZONE 'UTC'
                 - (n.lead_time_minutes * INTERVAL '1 minute')
@@ -134,9 +138,7 @@ def _row_to_entity(row: object) -> Note:
         created_by=r[2],
         title=r[3],
         description=r[4],
-        due_date=r[5],
-        lead_time_minutes=r[6],
-        status=r[7],
-        created_at=r[8],
-        updated_at=r[9],
+        category=r[5] if r[5] is not None else "general",
+        created_at=r[6],
+        updated_at=r[7],
     )

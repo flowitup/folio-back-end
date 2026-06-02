@@ -1,14 +1,18 @@
 """SQLAlchemy ORM models for notes and note dismissals.
 
-Maps to the 'notes' and 'notes_dismissed' tables created in migration dfe858ecff3d.
+Maps to the 'notes' and 'notes_dismissed' tables.
+Legacy reminder columns (due_date, lead_time_minutes, status) are kept nullable
+for backwards-compatibility with pre-journal rows and the dormant notifications
+query; they are not mapped to the journal Note entity.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +24,10 @@ class NoteOrm(Base):
     """SQLAlchemy mapping for the notes table."""
 
     __tablename__ = "notes"
+    __table_args__ = (
+        # Index supporting journal list query (project_id + created_at DESC).
+        Index("ix_notes_project_created", "project_id", "created_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[UUID] = mapped_column(
@@ -33,10 +41,14 @@ class NoteOrm(Base):
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    due_date: Mapped[date] = mapped_column(Date, nullable=False)
-    lead_time_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Journal category — required for all new notes; defaults to 'general'.
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="general", server_default="general")
+    # Legacy reminder columns — retained for dormant notifications path.
+    # Nullable so new journal rows do not need to supply them.
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    lead_time_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -56,25 +68,25 @@ class NoteOrm(Base):
             created_by=self.created_by,
             title=self.title,
             description=self.description,
-            due_date=self.due_date,
-            lead_time_minutes=self.lead_time_minutes,
-            status=self.status,  # type: ignore[arg-type]  # DB-enforced to be 'open'|'done'
+            category=self.category or "general",
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
 
     @classmethod
     def from_entity(cls, note: Note) -> "NoteOrm":
-        """Convert domain entity to ORM model."""
+        """Convert domain entity to ORM model.
+
+        Legacy reminder fields (due_date, lead_time_minutes, status) are left
+        NULL — the entity no longer carries them.
+        """
         return cls(
             id=note.id,
             project_id=note.project_id,
             created_by=note.created_by,
             title=note.title,
             description=note.description,
-            due_date=note.due_date,
-            lead_time_minutes=note.lead_time_minutes,
-            status=note.status,
+            category=note.category,
             created_at=note.created_at,
             updated_at=note.updated_at,
         )
@@ -83,13 +95,11 @@ class NoteOrm(Base):
         """Mutate this ORM instance in-place from a domain entity (for save operations)."""
         self.title = note.title
         self.description = note.description
-        self.due_date = note.due_date
-        self.lead_time_minutes = note.lead_time_minutes
-        self.status = note.status
+        self.category = note.category
         self.updated_at = note.updated_at
 
     def __repr__(self) -> str:
-        return f"<NoteOrm {self.id} '{self.title}' status={self.status}>"
+        return f"<NoteOrm {self.id} '{self.title}' category={self.category}>"
 
 
 class NoteDismissalOrm(Base):
