@@ -19,6 +19,7 @@ class NoteDto:
     title: str
     description: str | None
     category: str
+    status: str  # "open" | "done"
     created_at: datetime
     updated_at: datetime
 
@@ -32,6 +33,7 @@ class NoteDto:
             title=note.title,
             description=note.description,
             category=note.category,
+            status=note.status,
             created_at=note.created_at,
             updated_at=note.updated_at,
         )

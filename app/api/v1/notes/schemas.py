@@ -19,6 +19,9 @@ class NoteCreateBody(BaseModel):
     category: NoteCategory = "general"
 
 
+NoteStatus = Literal["open", "done"]
+
+
 class NoteUpdateBody(BaseModel):
     """Request body for PATCH /api/v1/projects/<id>/notes/<id>."""
 
@@ -27,3 +30,4 @@ class NoteUpdateBody(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     category: NoteCategory | None = None
+    status: NoteStatus | None = None

@@ -130,6 +130,8 @@ def _row_to_entity(row: object) -> Note:
 
     SQLAlchemy Row supports positional access. We cast to Any once to avoid
     per-line ignores — the shape is guaranteed by the SELECT column list above.
+    Legacy reminder rows have NULL status in the DB; treat as "open" on read
+    (consistent with the ORM to_entity mapping).
     """
     r: Any = row
     return Note(
@@ -139,6 +141,7 @@ def _row_to_entity(row: object) -> Note:
         title=r[3],
         description=r[4],
         category=r[5] if r[5] is not None else "general",
+        status="open",
         created_at=r[6],
         updated_at=r[7],
     )

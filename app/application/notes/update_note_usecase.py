@@ -38,17 +38,19 @@ class UpdateNoteUseCase:
         title: str | None = None,
         description: str | None | _Unset = _UNSET,
         category: str | None = None,
+        status: str | None = None,
     ) -> NoteDto:
         """Apply updates and return the updated NoteDto.
 
         ``description=_UNSET`` (default) → leave description unchanged.
         ``description=None``  → clear the description.
         ``description="..."`` → replace the description.
+        ``status=None`` (default) → leave status unchanged.
 
         Raises:
             NoteNotFoundError: note_id does not exist.
             NotProjectMemberError: actor is not a member of the note's project.
-            ValueError: title or description fails validation.
+            ValueError: title, description, or status fails validation.
             InvalidCategoryError: category ∉ VALID_CATEGORIES.
         """
         note = self._note_repo.find_by_id_for_update(note_id)
@@ -62,6 +64,7 @@ class UpdateNoteUseCase:
             title=title,
             description=description,
             category=category,
+            status=status,
         )
 
         self._note_repo.save(updated_note)

@@ -45,6 +45,7 @@ def _serialize_note(dto: NoteDto) -> dict[str, Any]:
         "title": dto.title,
         "description": dto.description,
         "category": dto.category,
+        "status": dto.status,
         "created_at": dto.created_at.isoformat(),
         "updated_at": dto.updated_at.isoformat(),
     }
@@ -166,6 +167,7 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
             title=body.title,
             description=description_arg,
             category=body.category,
+            status=body.status,
         )
     except NoteNotFoundError:
         return _err(404, "NotFound", "Note not found")

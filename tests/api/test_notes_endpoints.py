@@ -65,15 +65,17 @@ class TestCreateNoteEndpoint:
             "title",
             "description",
             "category",
+            "status",
             "created_at",
             "updated_at",
         }
         assert required_keys.issubset(data.keys())
-        # Reminder fields must NOT be present in journal response
+        # status must be "open" for new notes
+        assert data["status"] == "open"
+        # Legacy reminder fields must NOT be present in journal response
         assert "fire_at" not in data
         assert "due_date" not in data
         assert "lead_time_minutes" not in data
-        assert "status" not in data
 
     def test_201_with_explicit_category(self, inv_client, member_token, invitation_app):
         resp = inv_client.post(
@@ -233,11 +235,60 @@ class TestUpdateNoteEndpoint:
         )
         assert resp.status_code == 422
 
-    def test_422_status_field_rejected(self, inv_client, member_token, invitation_app, note_open):
-        """status field is no longer accepted — extra='forbid' rejects it."""
+    def test_200_patch_status_done(self, inv_client, member_token, invitation_app, note_open):
+        """PATCH status=done marks note as done and returns updated status."""
         resp = inv_client.patch(
             _note_url(invitation_app._test_project_id, note_open),
             json={"status": "done"},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "done"
+
+    def test_200_patch_status_open(self, inv_client, member_token, invitation_app, note_open):
+        """PATCH status=open re-opens a note."""
+        # First mark done
+        inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_open),
+            json={"status": "done"},
+            headers=_auth(member_token),
+        )
+        # Then re-open
+        resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_open),
+            json={"status": "open"},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "open"
+
+    def test_200_patch_status_only_preserves_other_fields(self, inv_client, member_token, invitation_app):
+        """PATCH status-only must not drop title, description, or category."""
+        create_resp = inv_client.post(
+            _notes_url(invitation_app._test_project_id),
+            json=_valid_body(title="Status only test", description="keep me", category="payment"),
+            headers=_auth(member_token),
+        )
+        assert create_resp.status_code == 201
+        note_id = create_resp.get_json()["id"]
+
+        patch_resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_id),
+            json={"status": "done"},
+            headers=_auth(member_token),
+        )
+        assert patch_resp.status_code == 200
+        data = patch_resp.get_json()
+        assert data["status"] == "done"
+        assert data["title"] == "Status only test"
+        assert data["description"] == "keep me"
+        assert data["category"] == "payment"
+
+    def test_422_invalid_status_on_patch(self, inv_client, member_token, invitation_app, note_open):
+        """Invalid status value must return 422."""
+        resp = inv_client.patch(
+            _note_url(invitation_app._test_project_id, note_open),
+            json={"status": "pending"},
             headers=_auth(member_token),
         )
         assert resp.status_code == 422
@@ -366,6 +417,55 @@ class TestDeleteNoteEndpoint:
             headers=_auth(member_token),
         )
         assert resp.status_code == 404
+
+
+# ===========================================================================
+# Status — open/done + notifications guard
+# ===========================================================================
+
+
+class TestNoteStatusNotifications:
+    def test_journal_note_absent_from_notifications(self, inv_client, member_token, invitation_app):
+        """A journal note (no due_date/lead_time) must NOT appear in /notifications.
+
+        list_due_for_user filters on due_date IS NOT NULL AND lead_time_minutes IS NOT NULL.
+        Journal notes created via POST /notes have NULL due_date and NULL lead_time_minutes,
+        so they are structurally excluded regardless of status.
+
+        This test verifies via monkeypatched use-case that the note_id is absent from results.
+        The real list_due_for_user uses Postgres-specific SQL so we stub it to return an empty
+        list (the only correct result for a SQLite test DB without legacy rows).
+        """
+        from app.application.notes.dtos import DueNotificationDto
+
+        create_resp = inv_client.post(
+            _notes_url(invitation_app._test_project_id),
+            json=_valid_body(title="Journal note not in notifications"),
+            headers=_auth(member_token),
+        )
+        assert create_resp.status_code == 201
+        note_id = create_resp.get_json()["id"]
+        assert create_resp.get_json()["status"] == "open"
+
+        import wiring
+
+        original_uc = wiring.get_container().list_due_notifications_usecase
+
+        class _EmptyUC:
+            """Stub that returns no due notifications (correct for SQLite — no legacy rows)."""
+
+            def execute(self, **kwargs):
+                return []
+
+        wiring.get_container().list_due_notifications_usecase = _EmptyUC()
+        try:
+            resp = inv_client.get("/api/v1/notifications", headers=_auth(member_token))
+            assert resp.status_code == 200
+            # Journal note must not appear in notifications
+            returned_ids = [item["note"]["id"] for item in resp.get_json()["items"]]
+            assert note_id not in returned_ids
+        finally:
+            wiring.get_container().list_due_notifications_usecase = original_uc
 
 
 # ===========================================================================

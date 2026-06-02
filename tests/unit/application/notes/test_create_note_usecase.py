@@ -75,6 +75,7 @@ class TestCreateNoteHappyPath:
         assert dto.category == "inspection"
         assert dto.project_id == project_id
         assert dto.created_by == actor_id
+        assert dto.status == "open"  # new notes always start open
 
     def test_default_category_is_general(self):
         membership = MagicMock()

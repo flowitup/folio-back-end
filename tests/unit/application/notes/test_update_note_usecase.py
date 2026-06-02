@@ -45,6 +45,7 @@ def _make_note(
     title="Original title",
     description: str | None = None,
     category: str = "general",
+    status: str = "open",
 ) -> Note:
     now = datetime(2026, 4, 27, 9, 0, 0, tzinfo=timezone.utc)
     return Note(
@@ -54,6 +55,7 @@ def _make_note(
         title=title,
         description=description,
         category=category,
+        status=status,
         created_at=now,
         updated_at=now,
     )
@@ -206,6 +208,65 @@ class TestUpdateNoteValidation:
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(ValueError):
             uc.execute(actor_id=uuid4(), note_id=note.id, title="   ")
+
+    def test_invalid_status_raises_value_error(self):
+        note = _make_note()
+        note_repo = MagicMock()
+        note_repo.find_by_id_for_update.return_value = note
+        membership = MagicMock()
+        membership.is_member.return_value = True
+
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        with pytest.raises(ValueError):
+            uc.execute(actor_id=uuid4(), note_id=note.id, status="pending")
+
+
+# ---------------------------------------------------------------------------
+# Status threading
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateNoteStatus:
+    """Status must thread through with_updates without dropping other fields."""
+
+    def test_status_update_to_done(self):
+        note = _make_note(status="open")
+        note_repo = MagicMock()
+        note_repo.find_by_id_for_update.return_value = note
+        membership = MagicMock()
+        membership.is_member.return_value = True
+
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, status="done")
+
+        assert dto.status == "done"
+
+    def test_status_unchanged_when_omitted(self):
+        note = _make_note(status="done")
+        note_repo = MagicMock()
+        note_repo.find_by_id_for_update.return_value = note
+        membership = MagicMock()
+        membership.is_member.return_value = True
+
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="Only title changed")
+
+        assert dto.status == "done"  # unchanged
+
+    def test_status_only_preserves_other_fields(self):
+        note = _make_note(title="Keep me", description="also keep", category="payment", status="open")
+        note_repo = MagicMock()
+        note_repo.find_by_id_for_update.return_value = note
+        membership = MagicMock()
+        membership.is_member.return_value = True
+
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, status="done")
+
+        assert dto.status == "done"
+        assert dto.title == "Keep me"
+        assert dto.description == "also keep"
+        assert dto.category == "payment"
 
 
 # ---------------------------------------------------------------------------
