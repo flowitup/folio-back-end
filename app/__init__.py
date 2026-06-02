@@ -135,6 +135,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.persons import persons_bp
     from app.api.v1.payment_methods import payment_methods_bp
     from app.api.v1.project_documents import project_documents_bp
+    from app.api.v1.project_photos import project_photos_bp
     from app.api.v1.bibliotheque import bibliotheque_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
@@ -158,6 +159,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(persons_bp, url_prefix="/api/v1")
     app.register_blueprint(payment_methods_bp, url_prefix="/api/v1")
     app.register_blueprint(project_documents_bp, url_prefix="/api/v1")
+    app.register_blueprint(project_photos_bp, url_prefix="/api/v1")
     app.register_blueprint(bibliotheque_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
@@ -780,6 +782,45 @@ def _configure_di_container() -> None:
             storage=storage,
             db_session=db.session,
         )
+
+    # -----------------------------------------------------------------------
+    # Project photos DI wiring
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_project_photo_repository import (
+        SqlAlchemyProjectPhotoRepository,
+    )
+    from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
+    from app.application.project_photos import (
+        UploadProjectPhotoUseCase,
+        ListProjectPhotosUseCase,
+        GetProjectPhotoUseCase,
+        UpdateProjectPhotoUseCase,
+        DeleteProjectPhotoUseCase,
+    )
+
+    _photo_repo = SqlAlchemyProjectPhotoRepository(db.session)
+    _c.project_photo_repository = _photo_repo
+    _photo_thumbnailer = PillowImageThumbnailer()
+
+    # Reuse document_storage singleton (S3AttachmentStorage satisfies IDocumentStorage).
+    # Reuse _filename_sanitizer already instantiated above for project documents.
+    _c.upload_project_photo_usecase = UploadProjectPhotoUseCase(
+        repo=_photo_repo,
+        storage=storage,
+        thumbnailer=_photo_thumbnailer,
+        db_session=db.session,
+        filename_sanitizer=_filename_sanitizer,
+    )
+    _c.list_project_photos_usecase = ListProjectPhotosUseCase(repo=_photo_repo)
+    _c.get_project_photo_usecase = GetProjectPhotoUseCase(repo=_photo_repo, storage=storage)
+    _c.update_project_photo_usecase = UpdateProjectPhotoUseCase(
+        repo=_photo_repo,
+        db_session=db.session,
+    )
+    _c.delete_project_photo_usecase = DeleteProjectPhotoUseCase(
+        repo=_photo_repo,
+        db_session=db.session,
+    )
 
     # -----------------------------------------------------------------------
     # Bibliotheque DI wiring
