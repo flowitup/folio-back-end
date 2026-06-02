@@ -299,8 +299,6 @@ def invitation_app():
         from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
         from app.application.notes.update_note_usecase import UpdateNoteUseCase
         from app.application.notes.delete_note_usecase import DeleteNoteUseCase
-        from app.application.notes.mark_note_done_usecase import MarkNoteDoneUseCase
-        from app.application.notes.mark_note_open_usecase import MarkNoteOpenUseCase
         from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
         from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
         from wiring import get_container as _get_container
@@ -324,21 +322,10 @@ def invitation_app():
         )
         _c.update_note_usecase = UpdateNoteUseCase(
             note_repo=_note_repo,
-            dismissal_repo=_dismissal_repo,
             membership_reader=_membership_reader,
             db_session=db.session,
         )
         _c.delete_note_usecase = DeleteNoteUseCase(
-            note_repo=_note_repo,
-            membership_reader=_membership_reader,
-            db_session=db.session,
-        )
-        _c.mark_note_done_usecase = MarkNoteDoneUseCase(
-            note_repo=_note_repo,
-            membership_reader=_membership_reader,
-            db_session=db.session,
-        )
-        _c.mark_note_open_usecase = MarkNoteOpenUseCase(
             note_repo=_note_repo,
             membership_reader=_membership_reader,
             db_session=db.session,
@@ -787,8 +774,8 @@ def superadmin_token(inv_client, invitation_app):
 
 @pytest.fixture
 def note_open(invitation_app):
-    """An open note with due_date=today, created_by member_user in project P1."""
-    from datetime import date, datetime, timezone
+    """A journal note with category=general, created_by member_user in project P1."""
+    from datetime import datetime, timezone
     from uuid import UUID, uuid4
 
     from app import db
@@ -803,9 +790,7 @@ def note_open(invitation_app):
             created_by=UUID(invitation_app._test_member_user_id),
             title="Open test note",
             description=None,
-            due_date=date.today(),
-            lead_time_minutes=0,
-            status="open",
+            category="general",
             created_at=now,
             updated_at=now,
         )
@@ -824,8 +809,8 @@ def note_open(invitation_app):
 
 @pytest.fixture
 def note_done(invitation_app):
-    """A done note for 'Done' bucket assertions."""
-    from datetime import date, datetime, timezone
+    """A journal note with category=inspection (used where a second note is needed)."""
+    from datetime import datetime, timezone
     from uuid import UUID, uuid4
 
     from app import db
@@ -837,11 +822,9 @@ def note_done(invitation_app):
             id=uuid4(),
             project_id=UUID(invitation_app._test_project_id),
             created_by=UUID(invitation_app._test_member_user_id),
-            title="Done test note",
+            title="Second test note",
             description=None,
-            due_date=date.today(),
-            lead_time_minutes=0,
-            status="done",
+            category="inspection",
             created_at=now,
             updated_at=now,
         )
@@ -861,7 +844,7 @@ def note_done(invitation_app):
 @pytest.fixture
 def note_other_project(invitation_app):
     """A note in a project where member_user is NOT a member (for 403 tests)."""
-    from datetime import date, datetime, timezone
+    from datetime import datetime, timezone
     from uuid import UUID, uuid4
 
     from app import db
@@ -884,9 +867,7 @@ def note_other_project(invitation_app):
             created_by=UUID(invitation_app._test_superadmin_user_id),
             title="Note in other project",
             description=None,
-            due_date=date.today(),
-            lead_time_minutes=0,
-            status="open",
+            category="general",
             created_at=now,
             updated_at=now,
         )
@@ -907,8 +888,8 @@ def note_other_project(invitation_app):
 
 @pytest.fixture
 def note_dismissed_by_member(invitation_app):
-    """An open note that member_user has already dismissed."""
-    from datetime import date, datetime, timezone
+    """A journal note that member_user has already dismissed."""
+    from datetime import datetime, timezone
     from uuid import UUID, uuid4
 
     from app import db
@@ -922,9 +903,7 @@ def note_dismissed_by_member(invitation_app):
             created_by=UUID(invitation_app._test_member_user_id),
             title="Already dismissed note",
             description=None,
-            due_date=date.today(),
-            lead_time_minutes=0,
-            status="open",
+            category="general",
             created_at=now,
             updated_at=now,
         )

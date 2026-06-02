@@ -1,6 +1,6 @@
 """Notes API routes — 4 project-scoped CRUD endpoints.
 
-Authorization note (M7):
+Authorization note:
     Authorization is single-layer: use-cases are the authoritative gate.
     Each use-case calls ``is_member()`` and raises ``NotProjectMemberError``
     which the route maps to 403. There is no redundant route-layer membership
@@ -25,7 +25,7 @@ from app.api.v1.notes import notes_bp
 from app.api.v1.notes.schemas import NoteCreateBody, NoteUpdateBody
 from app.application.notes.dtos import NoteDto
 from app.application.notes.exceptions import (
-    InvalidLeadTimeError,
+    InvalidCategoryError,
     NoteNotFoundError,
     NotProjectMemberError,
 )
@@ -44,10 +44,7 @@ def _serialize_note(dto: NoteDto) -> dict[str, Any]:
         "created_by": str(dto.created_by),
         "title": dto.title,
         "description": dto.description,
-        "due_date": dto.due_date.isoformat(),
-        "lead_time_minutes": dto.lead_time_minutes,
-        "status": dto.status,
-        "fire_at": dto.fire_at.isoformat() if dto.fire_at else None,
+        "category": dto.category,
         "created_at": dto.created_at.isoformat(),
         "updated_at": dto.updated_at.isoformat(),
     }
@@ -64,14 +61,14 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 
 @notes_bp.post("/projects/<uuid:project_id>/notes")
 @openapi_doc(
-    summary="Create a note for a project",
+    summary="Create a journal note for a project",
     request=NoteCreateBody,
     tags=["notes"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def create_note(project_id: UUID) -> Any:
-    """Create a note for a project. Actor must be a project member."""
+    """Create a journal note for a project. Actor must be a project member."""
     try:
         body = NoteCreateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
@@ -89,12 +86,11 @@ def create_note(project_id: UUID) -> Any:
             project_id=project_id,
             title=body.title,
             description=body.description,
-            due_date=body.due_date,
-            lead_time_minutes=body.lead_time_minutes,
+            category=body.category,
         )
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
-    except (InvalidLeadTimeError, ValueError) as exc:  # pragma: no cover
+    except (InvalidCategoryError, ValueError) as exc:  # pragma: no cover
         return _err(400, "BadRequest", str(exc))  # pragma: no cover
     except Exception:
         logger.exception("create_note unexpected error project_id=%s", project_id)
@@ -109,11 +105,11 @@ def create_note(project_id: UUID) -> Any:
 
 
 @notes_bp.get("/projects/<uuid:project_id>/notes")
-@openapi_doc(summary="List all notes for a project", tags=["notes"])
+@openapi_doc(summary="List all journal notes for a project", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_notes(project_id: UUID) -> Any:
-    """List all notes for a project. Actor must be a project member."""
+    """List journal notes for a project ordered by created_at DESC."""
     actor_id = UUID(get_jwt_identity())
     container = get_container()
     if container.list_project_notes_usecase is None:
@@ -141,14 +137,14 @@ def list_notes(project_id: UUID) -> Any:
 
 @notes_bp.patch("/projects/<uuid:project_id>/notes/<uuid:note_id>")
 @openapi_doc(
-    summary="Update a note's fields",
+    summary="Update a journal note's fields",
     request=NoteUpdateBody,
     tags=["notes"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_note(project_id: UUID, note_id: UUID) -> Any:
-    """Update a note's fields. Dismissal-cascade fires if due_date/lead_time changes."""
+    """Update a journal note's title, description, or category."""
     try:
         body = NoteUpdateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
@@ -159,10 +155,6 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
     container = get_container()
     if container.update_note_usecase is None:
         raise RuntimeError("update_note_usecase not wired in container")
-    if container.mark_note_done_usecase is None:
-        raise RuntimeError("mark_note_done_usecase not wired in container")
-    if container.mark_note_open_usecase is None:
-        raise RuntimeError("mark_note_open_usecase not wired in container")
 
     raw = request.get_json(silent=True) or {}
     description_arg = body.description if "description" in raw else _UNSET
@@ -173,26 +165,13 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
             note_id=note_id,
             title=body.title,
             description=description_arg,
-            due_date=body.due_date,
-            lead_time_minutes=body.lead_time_minutes,
+            category=body.category,
         )
-
-        if body.status == "done":
-            note_dto = container.mark_note_done_usecase.execute(
-                actor_id=actor_id,
-                note_id=note_id,
-            )
-        elif body.status == "open":
-            note_dto = container.mark_note_open_usecase.execute(
-                actor_id=actor_id,
-                note_id=note_id,
-            )
-
     except NoteNotFoundError:
         return _err(404, "NotFound", "Note not found")
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
-    except (InvalidLeadTimeError, ValueError) as exc:  # pragma: no cover
+    except (InvalidCategoryError, ValueError) as exc:  # pragma: no cover
         return _err(400, "BadRequest", str(exc))  # pragma: no cover
     except Exception:
         logger.exception("update_note unexpected error note_id=%s", note_id)
@@ -207,11 +186,11 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
 
 
 @notes_bp.delete("/projects/<uuid:project_id>/notes/<uuid:note_id>")
-@openapi_doc(summary="Delete a note", tags=["notes"])
+@openapi_doc(summary="Delete a journal note", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_note(project_id: UUID, note_id: UUID) -> Any:
-    """Delete a note. Actor must be a project member."""
+    """Delete a journal note. Actor must be a project member."""
     actor_id = UUID(get_jwt_identity())
     container = get_container()
     if container.delete_note_usecase is None:
