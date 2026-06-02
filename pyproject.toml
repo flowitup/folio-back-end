@@ -1,6 +1,6 @@
 [project]
 name = "construction-backend"
-version = "0.2.66"
+version = "0.2.67"
 description = "Construction Management System - Backend API"
 readme = "README.md"
 requires-python = ">=3.12"
