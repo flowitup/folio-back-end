@@ -73,6 +73,14 @@ class ForbiddenProjectAccessError(BillingDomainError):
         super().__init__(f"User does not have project:read access on project {project_id}")
 
 
+class ForbiddenCompanyBillingError(BillingDomainError):
+    """Raised when a non-admin company member attempts to manage company billing."""
+
+    def __init__(self, company_id: UUID) -> None:
+        self.company_id = company_id
+        super().__init__(f"Company billing access requires the 'admin' role on company {company_id}")
+
+
 class BillingTemplateNameConflictError(BillingDomainError):
     """Raised when a template with the same (user_id, kind, name) already exists."""
 

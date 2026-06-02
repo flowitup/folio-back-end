@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.application.billing._helpers import (
-    _assert_owner,
+    _assert_billing_doc_access,
     _build_doc_from_inputs,
     _effective_prefix_from_company,
     _snapshot_issuer_from_company,
@@ -25,6 +25,7 @@ from app.application.billing.ports import (
     ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
+    assert_company_admin,
     assert_project_read_access,
     assert_user_company_access,
 )
@@ -74,7 +75,7 @@ class ConvertDevisToFactureUseCase:
         source = self._doc_repo.find_by_id_for_update(inp.source_devis_id)
         if source is None:
             raise BillingDocumentNotFoundError(inp.source_devis_id)
-        _assert_owner(source, inp.user_id)
+        _assert_billing_doc_access(source, inp.user_id, self._access_repo)
 
         # 2. Assert kind and status preconditions
         if source.kind != BillingDocumentKind.DEVIS:
@@ -103,6 +104,9 @@ class ConvertDevisToFactureUseCase:
         company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, effective_company_id)
         if company is None:
             raise MissingCompanyProfileError(inp.user_id)
+
+        # Only company admins may create company billing documents.
+        assert_company_admin(self._access_repo, inp.user_id, effective_company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
         effective_prefix = _effective_prefix_from_company(company) or ""

@@ -92,10 +92,10 @@ def billing_profile(_billing_client, billing_token, invitation_app):
     company = resp.get_json()
     company_id = company["id"]
 
-    # 2. Generate invite token for the company
+    # 2. Generate invite token for the company (admin role → can manage billing)
     resp = _billing_client.post(
         f"/api/v1/companies/{company_id}/invite-tokens",
-        json={},
+        json={"role": "admin"},
         headers=_auth(billing_token),
     )
     assert resp.status_code == 201, f"Generate token failed: {resp.get_data(as_text=True)}"

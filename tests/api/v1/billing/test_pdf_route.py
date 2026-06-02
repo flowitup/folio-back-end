@@ -316,6 +316,7 @@ def rl_doc(rl_client, rl_token, rate_limit_app):
             company_id=company_id,
             is_primary=True,
             attached_at=now,
+            role="admin",
         )
         SqlAlchemyUserCompanyAccessRepository(db.session).save(access)
         db.session.commit()

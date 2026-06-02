@@ -6,9 +6,14 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from app.application.billing._helpers import _assert_owner
+from app.application.billing._helpers import _assert_billing_doc_access
 from app.application.billing.dtos import BillingDocumentResponse, UpdateStatusInput
-from app.application.billing.ports import BillingDocumentRepositoryPort, FundsReleasePort, TransactionalSessionPort
+from app.application.billing.ports import (
+    BillingDocumentRepositoryPort,
+    FundsReleasePort,
+    TransactionalSessionPort,
+    UserCompanyAccessRepositoryPort,
+)
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
 from app.domain.billing.status import validate_status_transition
@@ -35,9 +40,11 @@ class UpdateBillingDocumentStatusUseCase:
         self,
         doc_repo: BillingDocumentRepositoryPort,
         funds_release: Optional[FundsReleasePort] = None,
+        access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
     ) -> None:
         self._doc_repo = doc_repo
         self._funds_release = funds_release
+        self._access_repo = access_repo
 
     def execute(
         self,
@@ -47,7 +54,7 @@ class UpdateBillingDocumentStatusUseCase:
         doc = self._doc_repo.find_by_id(inp.id)
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
-        _assert_owner(doc, inp.user_id)
+        _assert_billing_doc_access(doc, inp.user_id, self._access_repo)
 
         old_status = doc.status
 

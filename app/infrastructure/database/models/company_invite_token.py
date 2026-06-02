@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -44,6 +44,9 @@ class CompanyInviteTokenModel(Base):
     )
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
+    # Per-company role granted to the user who redeems this token.
+    role = Column(Text, nullable=False, default="member", server_default="member")
+
     # NULL = not yet redeemed
     redeemed_at = Column(DateTime(timezone=True), nullable=True)
     redeemed_by = Column(
@@ -59,6 +62,10 @@ class CompanyInviteTokenModel(Base):
 
     __table_args__ = (
         Index("ix_company_invite_tokens_company_id", "company_id"),
+        CheckConstraint(
+            "role IN ('admin','member')",
+            name="ck_company_invite_tokens_role",
+        ),
         # Partial unique uix_company_invite_tokens_active_per_company
         # WHERE redeemed_at IS NULL is defined in the migration only.
     )

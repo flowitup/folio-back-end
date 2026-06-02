@@ -16,6 +16,7 @@ from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import ForbiddenBillingDocumentError
 from app.domain.billing.value_objects import BillingDocumentItem
 from app.domain.companies.company import Company
+from app.domain.companies.roles import CompanyRole
 from app.application.billing.dtos import ItemInput
 
 _DEFAULT_VALIDITY_DAYS = 30  # devis
@@ -26,6 +27,22 @@ def _assert_owner(doc: BillingDocument, user_id: UUID) -> None:
     """Raise ForbiddenBillingDocumentError if user_id does not own doc."""
     if doc.user_id != user_id:
         raise ForbiddenBillingDocumentError(doc.id)
+
+
+def _assert_billing_doc_access(doc: BillingDocument, user_id: UUID, access_repo=None) -> None:
+    """Allow the document owner OR a company-admin of the doc's company.
+
+    Raises ForbiddenBillingDocumentError otherwise. ``access_repo`` is the
+    UserCompanyAccessRepositoryPort; when None (legacy/test wiring) the check
+    degrades to owner-only — never widens access by accident.
+    """
+    if doc.user_id == user_id:
+        return
+    if access_repo is not None and doc.company_id is not None:
+        access = access_repo.find(user_id, doc.company_id)
+        if access is not None and access.role == CompanyRole.ADMIN.value:
+            return
+    raise ForbiddenBillingDocumentError(doc.id)
 
 
 def _snapshot_issuer_from_company(company: Company) -> dict:

@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import false as sa_false
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.application.billing.dtos import (
@@ -82,6 +83,50 @@ class SqlAlchemyBillingDocumentRepository:
         total: int = self._session.execute(count_stmt).scalar_one()
 
         # Paginated rows, newest first
+        rows_stmt = base.order_by(BillingDocumentModel.created_at.desc()).limit(limit).offset(offset)
+        rows = self._session.execute(rows_stmt).scalars().all()
+        return ([deserialize_orm_to_doc(r) for r in rows], total)
+
+    def list_visible(
+        self,
+        kind: BillingDocumentKind,
+        *,
+        owner_id: Optional[UUID] = None,
+        company_ids: Optional[list[UUID]] = None,
+        all_documents: bool = False,
+        status: Optional[BillingDocumentStatus] = None,
+        project_id: Optional[UUID] = None,
+        company_id: Optional[UUID] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[BillingDocument], int]:
+        """Return paginated documents visible to a caller, with unfiltered count.
+
+        Visibility: owns the doc (user_id == owner_id) OR doc belongs to a company
+        the caller administers (company_id IN company_ids). ``all_documents``
+        (superadmin) removes the owner/company restriction entirely.
+        """
+        base = select(BillingDocumentModel).where(BillingDocumentModel.kind == kind.value)
+
+        if not all_documents:
+            visibility = []
+            if owner_id is not None:
+                visibility.append(BillingDocumentModel.user_id == owner_id)
+            if company_ids:
+                visibility.append(BillingDocumentModel.company_id.in_(company_ids))
+            # No owner and no admin companies → caller sees nothing.
+            base = base.where(or_(*visibility)) if visibility else base.where(sa_false())
+
+        if company_id is not None:
+            base = base.where(BillingDocumentModel.company_id == company_id)
+        if status is not None:
+            base = base.where(BillingDocumentModel.status == status.value)
+        if project_id is not None:
+            base = base.where(BillingDocumentModel.project_id == project_id)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total: int = self._session.execute(count_stmt).scalar_one()
+
         rows_stmt = base.order_by(BillingDocumentModel.created_at.desc()).limit(limit).offset(offset)
         rows = self._session.execute(rows_stmt).scalars().all()
         return ([deserialize_orm_to_doc(r) for r in rows], total)

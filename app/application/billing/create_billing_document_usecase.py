@@ -23,6 +23,7 @@ from app.application.billing.ports import (
     ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
+    assert_company_admin,
     assert_project_read_access,
     assert_user_company_access,
 )
@@ -71,6 +72,9 @@ class CreateBillingDocumentUseCase:
         if company is None:
             # repos not wired (unlikely in prod) — surface as missing-profile error
             raise MissingCompanyProfileError(inp.user_id)
+
+        # Only company admins may create/manage the company's billing.
+        assert_company_admin(self._access_repo, inp.user_id, inp.company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
         effective_prefix = _effective_prefix_from_company(company) or ""

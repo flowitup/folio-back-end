@@ -130,12 +130,13 @@ class RedeemInviteTokenUseCase:
         )
         self._token_repo.save(redeemed_token)
 
-        # 8. Insert user_company_access
+        # 8. Insert user_company_access with the role carried by the invite token
         access = UserCompanyAccess(
             user_id=inp.user_id,
             company_id=token.company_id,
             is_primary=is_primary,
             attached_at=now,
+            role=token.role,
         )
         self._access_repo.save(access)
 

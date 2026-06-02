@@ -358,6 +358,7 @@ def _configure_di_container() -> None:
         GetCompanyUseCase as _GetCompanyUseCase,
         RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
         SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
+        SetMemberRoleUseCase as _SetMemberRoleUseCase,
         DetachCompanyUseCase as _DetachCompanyUseCase,
     )
     import datetime as _dt
@@ -439,6 +440,10 @@ def _configure_di_container() -> None:
     )
     _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
         access_repo=_access_repo,
+    )
+    _c.set_member_role_usecase = _SetMemberRoleUseCase(
+        access_repo=_access_repo,
+        role_checker=_role_checker,
     )
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
@@ -583,6 +588,7 @@ def _configure_di_container() -> None:
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        access_repo=_access_repo,  # company-admin may manage company billing
     )
     from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
 
@@ -590,24 +596,29 @@ def _configure_di_container() -> None:
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
+        access_repo=_access_repo,  # company-admin may manage company billing
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
+        access_repo=_access_repo,  # per-company admin scoping for visibility
     )
     _c.get_billing_document_usecase = GetBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
     )
     _c.delete_billing_document_usecase = DeleteBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
+        access_repo=_access_repo,  # company-admin may manage company billing
     )
     _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
         doc_repo=_billing_doc_repo,
         pdf_renderer=_billing_pdf_renderer,
+        access_repo=_access_repo,  # company-admin may render company billing
     )
     _c.render_billing_document_xlsx_usecase = RenderBillingDocumentXlsxUseCase(
         doc_repo=_billing_doc_repo,
         xlsx_renderer=_billing_xlsx_renderer,
+        access_repo=_access_repo,  # company-admin may render company billing
     )
 
     # billing-template use-cases

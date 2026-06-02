@@ -53,6 +53,23 @@ class TestRedeemInviteTokenHappyPath:
         access = access_repo.find(user_id, seeded_company.id)
         assert access is not None
 
+    def test_redeem_default_role_is_member(
+        self, usecase, token_repo, access_repo, seeded_company, admin_id, user_id, clock, fake_session
+    ):
+        _seed_active_token(token_repo, seeded_company.id, admin_id, clock)
+        inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token="fake_token_0001")
+        usecase.execute(inp, fake_session)
+        assert access_repo.find(user_id, seeded_company.id).role == "member"
+
+    def test_redeem_applies_admin_role_from_token(
+        self, usecase, token_repo, access_repo, seeded_company, admin_id, user_id, clock, fake_session
+    ):
+        token, plaintext = _seed_active_token(token_repo, seeded_company.id, admin_id, clock)
+        token_repo.save(token.with_updates(role="admin"))  # admin invite
+        inp = RedeemInviteTokenInput(user_id=user_id, plaintext_token=plaintext)
+        usecase.execute(inp, fake_session)
+        assert access_repo.find(user_id, seeded_company.id).role == "admin"
+
     def test_first_redemption_sets_primary(
         self, usecase, token_repo, access_repo, seeded_company, admin_id, user_id, clock, fake_session
     ):
