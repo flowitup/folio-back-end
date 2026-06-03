@@ -78,8 +78,8 @@ class CreateInvitationUseCase:
         if project is None:
             raise ProjectNotFoundError(str(project_id))
 
-        # Verify permission: role-based OR project owner
-        if not self._can_invite(inviter, project.owner_id, inviter_id):
+        # Verify permission: role-based (global OR per-project membership) OR project owner
+        if not self._can_invite(inviter, project.owner_id, inviter_id, project_id):
             raise PermissionDeniedError(f"User {inviter_id} does not have 'project:invite' permission.")
 
         # 3. Load role; guard superadmin
@@ -181,16 +181,28 @@ class CreateInvitationUseCase:
     # Private helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _can_invite(user: Any, project_owner_id: UUID, inviter_id: UUID) -> bool:
-        """Return True if the user holds any invitation-granting permission or is the project owner."""
-        if user.has_permission("*", "*"):
-            return True
-        if user.has_permission("project", "invite"):
-            return True
+    def _can_invite(self, user: Any, project_owner_id: UUID, inviter_id: UUID, project_id: UUID) -> bool:
+        """Return True if the user may invite to this project.
+
+        Allowed when the inviter is the project owner, holds an invite-granting
+        GLOBAL permission, or whose project-membership role on this project grants
+        it (so a project manager/admin can invite even though their global role is
+        the read-only default).
+        """
         # Project owner may always invite — compare UUIDs directly
         if project_owner_id == inviter_id:
             return True
+        # Global-role permissions
+        if user.has_permission("*", "*") or user.has_permission("project", "invite"):
+            return True
+        # Per-project membership-role permissions
+        role_id = self._membership_repo.find_role_id(inviter_id, project_id)
+        if role_id is not None:
+            role = self._role_repo.find_by_id(role_id)
+            if role is not None:
+                names = {p.name for p in role.permissions}
+                if "*:*" in names or "project:invite" in names or "project:*" in names:
+                    return True
         return False
 
     def _enqueue_invite_email(

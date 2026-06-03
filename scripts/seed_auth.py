@@ -14,13 +14,12 @@ DEFAULT_PERMISSIONS = [
     {"name": "project:read", "resource": "project", "action": "read"},
     {"name": "project:update", "resource": "project", "action": "update"},
     {"name": "project:delete", "resource": "project", "action": "delete"},
+    {"name": "project:invite", "resource": "project", "action": "invite"},
     {"name": "project:manage_users", "resource": "project", "action": "manage_users"},
     {"name": "project:manage_labor", "resource": "project", "action": "manage_labor"},
     {"name": "project:manage_invoices", "resource": "project", "action": "manage_invoices"},
-    {"name": "user:create", "resource": "user", "action": "create"},
+    {"name": "bibliotheque:manage", "resource": "bibliotheque", "action": "manage"},
     {"name": "user:read", "resource": "user", "action": "read"},
-    {"name": "user:update", "resource": "user", "action": "update"},
-    {"name": "user:delete", "resource": "user", "action": "delete"},
 ]
 
 DEFAULT_ROLES = [
@@ -37,11 +36,18 @@ DEFAULT_ROLES = [
             "project:read",
             "project:update",
             "project:delete",
+            "project:invite",
             "project:manage_users",
             "project:manage_labor",
             "project:manage_invoices",
+            "bibliotheque:manage",
             "user:read",
         ],
+    },
+    {
+        "name": "member",
+        "description": "Default project member",
+        "permissions": ["project:read", "user:read"],
     },
     {
         "name": "user",

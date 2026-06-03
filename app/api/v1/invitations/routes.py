@@ -93,12 +93,14 @@ def create_invitation():
     except Exception:
         pass
 
-    from flask_jwt_extended import get_jwt
+    # Effective per-project permissions: global-role perms UNION the caller's
+    # membership-role perms on this project, so a project manager/admin (whose
+    # GLOBAL role is the read-only default) can still invite.
+    from app.api.v1.projects.decorators import _effective_perms_for
 
-    claims = get_jwt()
-    permissions = set(claims.get("permissions", []))
+    permissions = set(_effective_perms_for(data.project_id, user_id))
     is_superadmin = "*:*" in permissions
-    has_perm = "project:invite" in permissions
+    has_perm = "project:invite" in permissions or "project:*" in permissions
     is_owner = project is not None and project.owner_id == user_id
 
     if not (is_superadmin or has_perm or is_owner):
