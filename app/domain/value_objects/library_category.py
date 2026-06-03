@@ -9,12 +9,14 @@ Design notes
   because each slug folds to a synonym key for its own category.
 * None / empty / whitespace-only input returns None (genuinely un-categorised).
   Non-null text that maps to nothing returns "autre" (safe fallback).
-* Longest-keyword-wins is used for substring matching to guarantee determinism
-  when two synonym lists could both match (e.g. "parquet" is in revetement list,
-  not menuiserie list, but if both had overlapping keywords the longest match wins).
-  Tie-break example: "parquet" belongs to revetement_sol_mur_peinture, not
-  menuiserie — rely on the explicit curated synonym table (parquet is only in
-  the revetement list) rather than substring ordering.
+* Keyword matching is word-boundary aware: a synonym key matches only when it
+  appears as a whole token (or contiguous multi-word phrase) in the folded value,
+  never as a fragment inside a larger word. This prevents short keys like "sol",
+  "mur", "vis" from mis-matching "isolant", "console", "tournevis".
+* When two boundary-matching keywords are both present, the longest one wins
+  (deterministic tie-break). Each canonical concept lives in exactly one synonym
+  list (e.g. "parquet" only in revetement_sol_mur_peinture), so cross-category
+  ambiguity is curated away in the table rather than resolved by ordering.
 """
 
 from __future__ import annotations
@@ -74,23 +76,16 @@ CANONICAL_FR: dict[str, str] = {
 #    slug back normalises to itself (idempotency guarantee).
 #  - "terrasse_jardin" folds to "terrasse jardin" (underscores → spaces after
 #    fold, see _fold()), so it maps correctly.
-#  - Avoid over-broad short keywords that cause false positives:
-#    "sol" is kept because no other category has "sol" as a keyword and the
-#    shortest unique key is fine; risky short keys like single-letter words
-#    are not included.
+#  - Short keys like "sol"/"mur"/"vis" are safe because matching is word-boundary
+#    aware (see normalize_category step 3): they match only as standalone tokens,
+#    not inside "isolant"/"console"/"tournevis".
 #  - "parquet" maps ONLY to revetement_sol_mur_peinture; it is NOT in the
-#    menuiserie list. This is an intentional curated tie-break: parquet is a
-#    floor covering, not a carpentry element.
-#  - Short terms like "porte" or "fenetre" are included in menuiserie because
-#    they are strongly associated with joinery; consumers who worry about
-#    false positives (e.g. "porte-savon" → menuiserie) can widen the keyword
-#    to a longer phrase, but in practice "porte-savon" would be outcompeted
-#    by "salle de bains" / "lavabo" synonyms since those appear in the
-#    salle_de_bains list — substring match on the whole folded string means
-#    if the value is "porte-savon salle de bains" both keys match and the
-#    longer one ("salle de bains" = 12 chars) wins. For plain "porte-savon"
-#    the longest match is "porte" (5 chars) → menuiserie; that is acceptable
-#    and expected behaviour for the Leroy Merlin import context.
+#    menuiserie list — parquet is a floor covering, not a carpentry element.
+#  - Short terms like "porte"/"fenetre" are in menuiserie because they are strong
+#    joinery rayon names. Boundary matching means they fire only as whole tokens,
+#    so a category string like "salle de bains" never hits "porte"; a multi-token
+#    value containing both "porte" and a longer salle_de_bains phrase resolves to
+#    the longer keyword (longest-wins).
 # ---------------------------------------------------------------------------
 
 # fmt: off
@@ -298,9 +293,15 @@ def normalize_category(raw: Optional[str]) -> Optional[str]:
     if exact is not None:
         return exact
 
-    # Step 3: Substring match — longest keyword wins (deterministic tie-break)
+    # Step 3: Whole-word / phrase match — longest keyword wins (deterministic).
+    # The folded value is a space-separated token string; we match a keyword only
+    # when it occurs on word boundaries (as a standalone token or a contiguous
+    # multi-word phrase), NOT as a fragment inside a larger word. Padding both
+    # sides with spaces turns the substring test into a boundary-aware one:
+    # " vis " is NOT inside " tournevis ", but " sol " IS inside " revetement sol mur ".
+    padded = f" {folded} "
     for keyword, slug in _SORTED_KEYWORDS:
-        if keyword in folded:
+        if f" {keyword} " in padded:
             return slug
 
     # Step 4: Fallback

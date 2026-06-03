@@ -250,3 +250,36 @@ class TestLibraryCategorySlugs:
 
     def test_first_is_terrasse_jardin(self) -> None:
         assert LIBRARY_CATEGORY_SLUGS[0] == "terrasse_jardin"
+
+
+# ---------------------------------------------------------------------------
+# Word-boundary matching: short keys (sol/mur/vis) must NOT match inside words
+# ---------------------------------------------------------------------------
+
+
+class TestWordBoundaryMatching:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "Tournevis",  # 'vis' inside tourneVIS — must not → quincaillerie
+            "Visiere de protection",  # 'vis' inside VISiere
+            "Console murale",  # 'sol' inside conSOLe (and 'mur' is not token 'murale')
+            "Isolant mince",  # 'sol' inside iSOLant
+        ],
+    )
+    def test_short_key_not_matched_inside_word(self, raw: str) -> None:
+        # These have no legitimate whole-token keyword → safe fallback, never a mis-map.
+        assert normalize_category(raw) == "autre"
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("Revetement sol, mur et peinture", "revetement_sol_mur_peinture"),  # sol/mur as real tokens
+            ("Quincaillerie / Visserie", "quincaillerie"),
+            ("plan de travail", "cuisine"),  # multi-word phrase still matches
+            ("Salle de bains", "salle_de_bains"),  # multi-word phrase
+            ("Aerosol peinture", "revetement_sol_mur_peinture"),  # matches via real token 'peinture'
+        ],
+    )
+    def test_legitimate_token_and_phrase_matches_still_work(self, raw: str, expected: str) -> None:
+        assert normalize_category(raw) == expected

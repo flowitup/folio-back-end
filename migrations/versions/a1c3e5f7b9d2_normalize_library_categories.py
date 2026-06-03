@@ -8,7 +8,7 @@ Values that cannot be mapped become "autre". NULL values are left as NULL.
 No DDL change — the category column remains a plain VARCHAR.
 
 Revision ID: a1c3e5f7b9d2
-Revises: b7c1f2e3a4d5, c9a1b7e3d2f5, cea9f050672d, d4e5f6a7b8c9
+Revises: b7c1f2e3a4d5
 Create Date: 2026-06-03 00:00:00.000000
 """
 
@@ -16,8 +16,10 @@ from alembic import op
 from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
+# b7c1f2e3a4d5 is the single migration head on master; earlier divergent heads
+# were already consolidated by prior merge revisions and are its ancestors.
 revision = "a1c3e5f7b9d2"
-down_revision = ("b7c1f2e3a4d5", "c9a1b7e3d2f5", "cea9f050672d", "d4e5f6a7b8c9")
+down_revision = "b7c1f2e3a4d5"
 branch_labels = None
 depends_on = None
 
@@ -32,6 +34,10 @@ def upgrade() -> None:
 
     Idempotent: re-running after the migration is already applied is safe
     because every slug normalises to itself (no-op UPDATE when slug == raw).
+
+    Side effect: a non-null but whitespace-only category (e.g. '' or '   ')
+    folds to empty, so normalize_category returns None and the row is set to
+    NULL (treated as genuinely uncategorised). This is intentional.
     """
     # Import here — pure stdlib module, no Flask/SQLAlchemy infra deps.
     from app.domain.value_objects.library_category import normalize_category
