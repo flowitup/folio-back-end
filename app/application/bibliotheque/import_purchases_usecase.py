@@ -28,6 +28,7 @@ from app.application.bibliotheque.ports import (
 )
 from app.domain.entities.library_product import LibraryProduct
 from app.domain.entities.supplier import Supplier
+from app.domain.value_objects.library_category import normalize_category
 from app.domain.value_objects.library_purchase import LibraryPurchase
 
 _log = logging.getLogger(__name__)
@@ -127,6 +128,12 @@ class ImportPurchasesUseCase:
         created = updated = purchases_added = skipped = 0
 
         for rec in batch:
+            # Normalise category once per record before any DB access.
+            # Free-text from the import source (e.g. Leroy Merlin) is mapped to
+            # a canonical slug here; the schema intentionally leaves the transport
+            # field as free-text so the use-case is the single normalisation point.
+            cat = normalize_category(rec.category)
+
             # Step 2a: find or create product by supplier reference
             product = self._product_repo.find_by_reference(company_id, supplier_id, rec.supplier_reference)
             is_new = product is None
@@ -139,7 +146,7 @@ class ImportPurchasesUseCase:
                     name=rec.product_name,
                     description=rec.description,
                     size=rec.size,
-                    category=rec.category,
+                    category=cat,
                     product_url=rec.product_url,
                 )
                 product = self._product_repo.upsert(product)
@@ -150,7 +157,7 @@ class ImportPurchasesUseCase:
                     name=rec.product_name,
                     description=rec.description,
                     size=rec.size,
-                    category=rec.category,
+                    category=cat,
                     product_url=rec.product_url,
                 )
                 if enriched != product:

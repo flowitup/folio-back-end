@@ -1200,41 +1200,45 @@ class TestUpdateProductEndpoint:
 
     def test_200_overwrites_name_and_category(self, bib_client, manager_token, bibliotheque_app):
         cid = bibliotheque_app._test_company_id
+        # "OldCat" is free-text → normalized to "autre" by the import use-case
         self._seed_one(bib_client, manager_token, cid, "edit-co", "ED-1", "Old name", category="OldCat")
         p = self._product(bib_client, manager_token, cid, "ED-1")
-        assert p["category"] == "OldCat"
+        assert p["category"] == "autre"  # normalized from free-text "OldCat"
 
+        # PATCH now requires a canonical slug; "plomberie" is the valid slug
         resp = bib_client.patch(
             f"/api/v1/bibliotheque/products/{p['id']}",
-            json={"name": "New name", "category": "Plomberie", "description": "d", "size": "L"},
+            json={"name": "New name", "category": "plomberie", "description": "d", "size": "L"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
         out = resp.get_json()
         assert out["name"] == "New name"
-        assert out["category"] == "Plomberie"
+        assert out["category"] == "plomberie"
         assert out["description"] == "d"
         assert out["size"] == "L"
         # Persisted
         p2 = self._product(bib_client, manager_token, cid, "ED-1")
-        assert p2["category"] == "Plomberie" and p2["name"] == "New name"
+        assert p2["category"] == "plomberie" and p2["name"] == "New name"
 
     def test_200_partial_update_leaves_other_fields(self, bib_client, manager_token, bibliotheque_app):
         cid = bibliotheque_app._test_company_id
+        # "KeepCat" is free-text → normalized to "autre"
         self._seed_one(bib_client, manager_token, cid, "edit-partial", "EP-1", "Keep me", category="KeepCat")
         p = self._product(bib_client, manager_token, cid, "EP-1")
         resp = bib_client.patch(
             f"/api/v1/bibliotheque/products/{p['id']}",
-            json={"category": "Outillage"},  # only category
+            json={"category": "outillage"},  # canonical slug
             headers=_auth(manager_token),
         )
         assert resp.status_code == 200
         out = resp.get_json()
-        assert out["category"] == "Outillage"
+        assert out["category"] == "outillage"
         assert out["name"] == "Keep me"  # unchanged
 
     def test_200_explicit_null_clears_field(self, bib_client, manager_token, bibliotheque_app):
         cid = bibliotheque_app._test_company_id
+        # "SomeCat" → "autre" after normalization
         self._seed_one(bib_client, manager_token, cid, "edit-null", "EN-1", "Has cat", category="SomeCat")
         p = self._product(bib_client, manager_token, cid, "EN-1")
         resp = bib_client.patch(
@@ -1245,16 +1249,42 @@ class TestUpdateProductEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["category"] is None
 
+    def test_422_invalid_category_slug_rejected(self, bib_client, manager_token, bibliotheque_app):
+        """Non-slug free-text category in PATCH must return 422."""
+        cid = bibliotheque_app._test_company_id
+        self._seed_one(bib_client, manager_token, cid, "edit-slug-422", "SLG-1", "S")
+        p = self._product(bib_client, manager_token, cid, "SLG-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"category": "Plomberie"},  # capitalized — not a valid slug
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+
+    def test_200_autre_slug_accepted(self, bib_client, manager_token, bibliotheque_app):
+        """The 'autre' fallback slug must be accepted by PATCH."""
+        cid = bibliotheque_app._test_company_id
+        self._seed_one(bib_client, manager_token, cid, "edit-autre", "ATR-1", "A")
+        p = self._product(bib_client, manager_token, cid, "ATR-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"category": "autre"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["category"] == "autre"
+
     def test_404_product_not_found(self, bib_client, manager_token):
         resp = bib_client.patch(
             f"/api/v1/bibliotheque/products/{uuid4()}",
-            json={"category": "X"},
+            # Use a valid slug so we exercise the 404 path, not schema validation
+            json={"category": "outillage"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 404
 
     def test_401_unauthenticated(self, bib_client):
-        resp = bib_client.patch(f"/api/v1/bibliotheque/products/{uuid4()}", json={"category": "X"})
+        resp = bib_client.patch(f"/api/v1/bibliotheque/products/{uuid4()}", json={"category": "outillage"})
         assert resp.status_code == 401
 
     def test_403_missing_manage_permission(self, bib_client, manager_token, member_token, bibliotheque_app):
@@ -1263,7 +1293,7 @@ class TestUpdateProductEndpoint:
         p = self._product(bib_client, manager_token, cid, "PERM-1")
         resp = bib_client.patch(
             f"/api/v1/bibliotheque/products/{p['id']}",
-            json={"category": "X"},
+            json={"category": "outillage"},
             headers=_auth(member_token),
         )
         assert resp.status_code == 403
@@ -1274,7 +1304,7 @@ class TestUpdateProductEndpoint:
         p = self._product(bib_client, manager_token, cid, "OUT-1")
         resp = bib_client.patch(
             f"/api/v1/bibliotheque/products/{p['id']}",
-            json={"category": "X"},
+            json={"category": "outillage"},
             headers=_auth(outsider_token),
         )
         assert resp.status_code == 403

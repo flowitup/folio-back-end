@@ -123,7 +123,7 @@ class SqlAlchemyBibliothequeProductRepository:
         return [r.to_entity() for r in rows], total
 
     def distinct_categories(self, company_id: UUID) -> list[str]:
-        """Return sorted distinct non-null category values for the company."""
+        """Return sorted distinct non-null category values for the company. Values are canonical slugs after backfill."""
         rows = (
             self._session.execute(
                 select(BibliothequeProductModel.category)
