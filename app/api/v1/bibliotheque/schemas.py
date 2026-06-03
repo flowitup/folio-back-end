@@ -9,6 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
+from app.domain.value_objects.library_category import is_valid_category_slug
+
 
 class ImportRecordSchema(BaseModel):
     """One purchase line plus optional product enrichment fields."""
@@ -57,6 +59,10 @@ class UpdateProductSchema(BaseModel):
     (use model_fields_set / exclude_unset to distinguish omitted from null).
     Sending an explicit null clears the field. Image is edited via the
     dedicated image endpoints, not here.
+
+    category must be one of the 16 canonical slugs (see library_category.py)
+    or null to clear. Free-text is NOT accepted here; use the import endpoint
+    which normalises free-text automatically via normalize_category().
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -66,6 +72,18 @@ class UpdateProductSchema(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     size: Optional[str] = Field(default=None, max_length=200)
     product_url: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def validate_category_slug(cls, v: object) -> object:
+        """Reject non-null category values that are not valid canonical slugs."""
+        if v is not None and not is_valid_category_slug(str(v)):
+            raise ValueError(
+                f"Invalid category slug {v!r}. Must be one of the canonical slugs "
+                "(e.g. 'plomberie', 'outillage', 'autre'). "
+                "Use the import endpoint for free-text normalisation."
+            )
+        return v
 
 
 class ImageFromUrlSchema(BaseModel):
