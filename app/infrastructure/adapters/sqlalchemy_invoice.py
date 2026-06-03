@@ -131,6 +131,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model = self._session.query(InvoiceModel).filter_by(id=invoice.id).first()
         if not model:
             raise InvoiceNotFoundError(f"Invoice {invoice.id} not found")
+        model.type = invoice.type.value
         model.recipient_name = invoice.recipient_name
         model.recipient_address = invoice.recipient_address
         model.issue_date = invoice.issue_date
