@@ -393,3 +393,37 @@ class TestUpdateInvoiceTagGuard:
 
         tag_repo.get_by_id.assert_not_called()
         assert result is not None
+
+
+class TestUpdateInvoiceType:
+    """UpdateInvoiceUseCase must persist a changed invoice type."""
+
+    def test_update_invoice_changes_type(self):
+        """A provided type must be applied to the saved invoice."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)  # starts as RELEASED_FUNDS
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, type=InvoiceType.LABOR))
+
+        assert result.type == "labor"
+        saved = inv_repo.update.call_args[0][0]
+        assert saved.type == InvoiceType.LABOR
+
+    def test_update_invoice_omitting_type_keeps_original(self):
+        """type defaults to None (not provided) and must leave the existing type intact."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)  # RELEASED_FUNDS
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="New Name"))
+
+        assert result.type == "released_funds"

@@ -197,7 +197,7 @@ def get_invoice(project_id: str, invoice_id: str):
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["PUT"])
 @openapi_doc(
-    summary="Partially update an invoice (type is immutable after creation)",
+    summary="Partially update an invoice",
     request=UpdateInvoiceSchema,
     tags=["invoices"],
 )
@@ -206,7 +206,7 @@ def get_invoice(project_id: str, invoice_id: str):
 @require_permission("project:manage_invoices")
 @require_invoice_access(write=True)
 def update_invoice(project_id: str, invoice_id: str):
-    """Partially update an invoice (type is immutable after creation)."""
+    """Partially update an invoice."""
     try:
         data = UpdateInvoiceSchema(**request.get_json())
     except ValidationError as e:
@@ -220,6 +220,10 @@ def update_invoice(project_id: str, invoice_id: str):
     update_kwargs = {
         k: v for k, v in provided_fields.items() if k not in ("payment_method_id", "tag_id") and v is not None
     }
+    # type arrives as a validated string literal; the use case and domain entity
+    # operate on the InvoiceType enum, so promote it here (mirrors create flow).
+    if "type" in update_kwargs:
+        update_kwargs["type"] = InvoiceType(update_kwargs["type"])
 
     # Verify invoice belongs to the requested project before updating
     try:

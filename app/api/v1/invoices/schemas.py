@@ -36,7 +36,7 @@ class CreateInvoiceSchema(BaseModel):
 
 
 class UpdateInvoiceSchema(BaseModel):
-    """Request body for partially updating an invoice (type is immutable).
+    """Request body for partially updating an invoice.
 
     payment_method_id and tag_id use exclude_unset semantics to distinguish:
       - field absent  → do not touch that field
@@ -44,6 +44,7 @@ class UpdateInvoiceSchema(BaseModel):
       - field = UUID  → set to that UUID
     """
 
+    type: Optional[Literal["released_funds", "labor", "materials_services", "others"]] = None
     issue_date: Optional[date] = None  # Pydantic parses ISO date string automatically
     recipient_name: Optional[str] = Field(None, min_length=1, max_length=255)
     recipient_address: Optional[str] = None
