@@ -24,6 +24,7 @@ class CreateProjectResponse:
     address: Optional[str]
     owner_id: str
     created_at: str
+    invoice_prefix: Optional[str] = None
 
 
 class CreateProjectUseCase:
@@ -54,4 +55,6 @@ class CreateProjectUseCase:
             address=saved.address,
             owner_id=str(saved.owner_id),
             created_at=saved.created_at.isoformat(),
+            # New projects have no invoice prefix until set in project settings.
+            invoice_prefix=getattr(saved, "invoice_prefix", None),
         )

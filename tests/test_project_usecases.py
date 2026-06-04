@@ -41,6 +41,9 @@ class TestCreateProjectUseCase:
 
         assert result.name == "Test Project"
         assert result.address == "123 St"
+        # Response must carry invoice_prefix — the API route serializes it into
+        # ProjectResponse; a missing field here makes POST /projects raise and 500.
+        assert result.invoice_prefix is None
         mock_repo.create.assert_called_once()
 
     def test_create_project_empty_name_fails(self):

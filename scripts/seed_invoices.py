@@ -24,7 +24,7 @@ from app.infrastructure.database.models.invoice import InvoiceModel
 
 # Realistic mix of recipients per invoice type
 RECIPIENTS = {
-    "client": [
+    "released_funds": [
         ("Acme Holdings SARL", "12 Rue de la Paix\n75002 Paris"),
         ("BlueSky Investments", "8 Av. Victor Hugo\n69006 Lyon"),
         ("Coastal Properties Ltd", "23 Promenade des Anglais\n06000 Nice"),
@@ -34,7 +34,7 @@ RECIPIENTS = {
         ("Atelier Martin Frères", "Subcontractor — masonry"),
         ("EuroBat Workforce", "Agency — rotating crew"),
     ],
-    "supplier": [
+    "materials_services": [
         ("BTP Matériaux SA", "ZA Les Pinsons\n13100 Aix-en-Provence"),
         ("Lafarge Cement Distrib.", "Route Nationale 7\n38000 Grenoble"),
         ("ElectroPro Wholesale", "12 Rue du Cuivre\n92110 Clichy"),
@@ -43,7 +43,7 @@ RECIPIENTS = {
 
 # Line-item templates per invoice type (description, quantity, unit_price)
 ITEM_TEMPLATES = {
-    "client": [
+    "released_funds": [
         [
             ("Foundation works — phase 1", 1, 18500.00),
             ("Site preparation & excavation", 1, 4200.00),
@@ -74,7 +74,7 @@ ITEM_TEMPLATES = {
             ("Apprentice support", 15, 95.00),
         ],
     ],
-    "supplier": [
+    "materials_services": [
         [
             ("Cement bags 25kg", 120, 8.40),
             ("Rebar steel rods 12mm × 6m", 80, 14.20),
@@ -101,7 +101,7 @@ def _items_to_payload(items: list[tuple[str, float, float]]) -> list[dict]:
 def _seed_for_project(project: ProjectModel, creator: UserModel | None, per_project: int) -> int:
     """Seed up to `per_project` invoices for one project. Returns count actually created."""
     today = date.today()
-    types_cycle = ["client", "labor", "supplier"]
+    types_cycle = ["released_funds", "labor", "materials_services"]
     created = 0
 
     for i in range(per_project):
