@@ -110,6 +110,9 @@ class UpdateBillingDocumentInput:
     payment_terms: Optional[str] = None
     project_id: Optional[UUID] = None
     issue_date: Optional[date] = None
+    # Tri-state: True means caller explicitly set project_id (even if None to unlink).
+    # False means the field was omitted — do not touch project_id on the document.
+    update_project_id: bool = False
 
 
 @dataclass(frozen=True)
@@ -341,6 +344,43 @@ class BillingTemplateResponse:
             notes=tpl.notes,
             terms=tpl.terms,
             default_vat_rate=tpl.default_vat_rate,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped billing document summary DTO (read-only, project:read gated)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProjectBillingDocumentSummary:
+    """Lightweight billing document summary for the project billing-documents list.
+
+    Returned by ListProjectBillingDocumentsUseCase — access gated by project:read,
+    NOT billing ownership.
+    """
+
+    id: UUID
+    kind: str  # "devis" | "facture"
+    document_number: str
+    status: str
+    issue_date: date
+    recipient_name: str
+    total_ht: float
+    total_ttc: float
+
+    @staticmethod
+    def from_entity(doc: BillingDocument) -> "ProjectBillingDocumentSummary":
+        """Build summary DTO from a domain entity."""
+        return ProjectBillingDocumentSummary(
+            id=doc.id,
+            kind=doc.kind.value,
+            document_number=doc.document_number,
+            status=doc.status.value,
+            issue_date=doc.issue_date,
+            recipient_name=doc.recipient_name,
+            total_ht=float(doc.total_ht),
+            total_ttc=float(doc.total_ttc),
         )
 
 

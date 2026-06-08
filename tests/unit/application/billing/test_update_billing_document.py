@@ -115,11 +115,62 @@ class TestUpdateBillingDocumentHappyPath:
         assert result.payment_terms == "30 days"
 
     def test_update_project_id(self, usecase, fake_session, user_id, saved_doc):
-        """Covers project_id branch."""
+        """Covers project_id link branch — update_project_id=True required to apply change."""
         pid = uuid4()
-        inp = UpdateBillingDocumentInput(id=saved_doc.id, user_id=user_id, project_id=pid)
+        inp = UpdateBillingDocumentInput(
+            id=saved_doc.id,
+            user_id=user_id,
+            project_id=pid,
+            update_project_id=True,
+        )
         result = usecase.execute(inp, fake_session)
         assert result.project_id == pid
+
+    def test_update_project_id_omitted_does_not_clear(self, usecase, fake_session, user_id, saved_doc):
+        """project_id omitted (update_project_id=False) must NOT change the existing link."""
+        # saved_doc starts with project_id=None; set a link first
+        pid = uuid4()
+        inp_link = UpdateBillingDocumentInput(
+            id=saved_doc.id,
+            user_id=user_id,
+            project_id=pid,
+            update_project_id=True,
+        )
+        usecase.execute(inp_link, fake_session)
+
+        # Now update recipient_name without touching project_id
+        inp_no_touch = UpdateBillingDocumentInput(
+            id=saved_doc.id,
+            user_id=user_id,
+            recipient_name="New Name",
+        )
+        result = usecase.execute(inp_no_touch, fake_session)
+        assert result.project_id == pid  # unchanged
+
+    def test_update_project_id_null_unlinks(self, usecase, fake_session, user_id, saved_doc):
+        """update_project_id=True with project_id=None clears the link."""
+        pid = uuid4()
+        # Link first
+        usecase.execute(
+            UpdateBillingDocumentInput(
+                id=saved_doc.id,
+                user_id=user_id,
+                project_id=pid,
+                update_project_id=True,
+            ),
+            fake_session,
+        )
+        # Unlink
+        result = usecase.execute(
+            UpdateBillingDocumentInput(
+                id=saved_doc.id,
+                user_id=user_id,
+                project_id=None,
+                update_project_id=True,
+            ),
+            fake_session,
+        )
+        assert result.project_id is None
 
 
 class TestUpdateBillingDocumentErrors:

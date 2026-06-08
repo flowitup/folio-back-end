@@ -131,6 +131,22 @@ class SqlAlchemyBillingDocumentRepository:
         rows = self._session.execute(rows_stmt).scalars().all()
         return ([deserialize_orm_to_doc(r) for r in rows], total)
 
+    def list_by_project(self, project_id: UUID) -> list[BillingDocument]:
+        """Return documents linked to *project_id*, ordered by issue_date DESC.
+
+        Not owner-scoped — returns docs from any user attached to the project.
+        Capped to keep the project-summary response bounded; a project is not
+        expected to approach this many billing documents in practice.
+        """
+        stmt = (
+            select(BillingDocumentModel)
+            .where(BillingDocumentModel.project_id == project_id)
+            .order_by(BillingDocumentModel.issue_date.desc())
+            .limit(500)
+        )
+        rows = self._session.execute(stmt).scalars().all()
+        return [deserialize_orm_to_doc(r) for r in rows]
+
     def find_by_source_devis_id(self, devis_id: UUID) -> Optional[BillingDocument]:
         """Return the facture linked to a given source devis, or None.
 

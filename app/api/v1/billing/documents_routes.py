@@ -66,7 +66,6 @@ from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -283,6 +282,9 @@ def update_billing_document(doc_id: str, billing_doc):
         payment_terms=body.payment_terms,
         project_id=body.project_id,
         issue_date=body.issue_date,
+        # Tri-state: True when the caller explicitly included project_id in the body
+        # (even as null to unlink). model_fields_set tracks Pydantic-validated fields.
+        update_project_id="project_id" in body.model_fields_set,
     )
 
     from app import db
@@ -739,3 +741,56 @@ def create_document_from_template(template_id: str):
         return _err("ValidationError", str(exc), 400)
 
     return jsonify(_doc_to_json(result)), 201
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped billing document list
+# GET /projects/<project_id>/billing-documents
+# ---------------------------------------------------------------------------
+
+
+def _summary_to_json(s) -> dict:
+    """Convert a ProjectBillingDocumentSummary dataclass to a JSON-safe dict."""
+    return {
+        "id": str(s.id),
+        "kind": s.kind,
+        "document_number": s.document_number,
+        "status": s.status,
+        "issue_date": s.issue_date.isoformat(),
+        "recipient_name": s.recipient_name,
+        "total_ht": s.total_ht,
+        "total_ttc": s.total_ttc,
+    }
+
+
+@billing_documents_bp.route("/projects/<project_id>/billing-documents", methods=["GET"])
+@openapi_doc(
+    summary="List all billing documents linked to a project (project:read required)",
+    tags=["billing"],
+)
+@jwt_required()
+def list_project_billing_documents(project_id: str):
+    """List all billing documents linked to a project.
+
+    Access gated by project:read (owner or project member).
+    Returns docs of any kind, any status, and any owner as long as
+    they are linked to the specified project.
+    """
+    try:
+        project_uuid = UUID(project_id)
+    except ValueError:
+        return _err("ValidationError", f"Invalid project_id: {project_id!r}", 400)
+
+    user_id = UUID(get_jwt_identity())
+
+    try:
+        summaries = get_container().list_project_billing_documents_usecase.execute(
+            project_id=project_uuid,
+            user_id=user_id,
+        )
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have read access to this project", 403)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
+
+    return jsonify({"billing_documents": [_summary_to_json(s) for s in summaries]})

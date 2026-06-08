@@ -54,8 +54,10 @@ class UpdateBillingDocumentUseCase:
             if inp.validity_until is not None:
                 raise ValueError("validity_until is only valid on devis documents")
 
-        # H1: Verify project:read access when changing project_id
-        if inp.project_id is not None:
+        # H1: Verify project:read access when explicitly setting a new project_id.
+        # update_project_id=True means the caller included the field; project_id may be
+        # None to unlink, or a UUID to link. Only check access when linking (not None).
+        if inp.update_project_id and inp.project_id is not None:
             assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
@@ -98,8 +100,8 @@ class UpdateBillingDocumentUseCase:
         if inp.payment_terms is not None:
             updates["payment_terms"] = inp.payment_terms
 
-        if inp.project_id is not None:
-            updates["project_id"] = inp.project_id
+        if inp.update_project_id:
+            updates["project_id"] = inp.project_id  # may be None to unlink
 
         if inp.issue_date is not None:
             updates["issue_date"] = inp.issue_date

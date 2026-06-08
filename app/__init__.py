@@ -529,6 +529,7 @@ def _configure_di_container() -> None:
         GetTemplateUseCase,
         DeleteTemplateUseCase,
         ApplyTemplateToCreateDocumentUseCase,
+        ListProjectBillingDocumentsUseCase,
     )
 
     _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
@@ -635,6 +636,10 @@ def _configure_di_container() -> None:
         project_repo=_project_repo,  # H1 — project:read authorization
         company_repo=_company_repo,
         access_repo=_access_repo,
+    )
+    _c.list_project_billing_documents_usecase = ListProjectBillingDocumentsUseCase(
+        doc_repo=_billing_doc_repo,
+        project_repo=_project_repo,  # project:read authorization
     )
 
     # -----------------------------------------------------------------------
