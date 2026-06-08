@@ -33,6 +33,7 @@ from app.application.billing.get_template_usecase import GetTemplateUseCase
 from app.application.billing.delete_template_usecase import DeleteTemplateUseCase
 from app.application.billing.apply_template_to_create_document_usecase import ApplyTemplateToCreateDocumentUseCase
 from app.application.billing.list_activity_suggestions_usecase import ListActivitySuggestionsUseCase
+from app.application.billing.list_project_billing_documents_usecase import ListProjectBillingDocumentsUseCase
 
 # --- DTOs ---
 from app.application.billing.dtos import (
@@ -52,6 +53,7 @@ from app.application.billing.dtos import (
     ItemResponse,
     BillingDocumentResponse,
     BillingTemplateResponse,
+    ProjectBillingDocumentSummary,
 )
 
 # --- Ports ---
@@ -83,6 +85,7 @@ from app.domain.billing.exceptions import (
 
 __all__ = [
     # use-cases: documents
+    "ListProjectBillingDocumentsUseCase",
     "CreateBillingDocumentUseCase",
     "ImportBillingDocumentUseCase",
     "CloneBillingDocumentUseCase",
@@ -122,6 +125,7 @@ __all__ = [
     "ItemResponse",
     "BillingDocumentResponse",
     "BillingTemplateResponse",
+    "ProjectBillingDocumentSummary",
     # ports
     "BillingDocumentRepositoryPort",
     "BillingTemplateRepositoryPort",

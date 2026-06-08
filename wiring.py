@@ -360,6 +360,9 @@ class Container:
     import_billing_document_usecase: Optional[ImportBillingDocumentUseCase] = None
     list_activity_suggestions_usecase: Optional[ListActivitySuggestionsUseCase] = None
 
+    # project-scoped billing document list use-case
+    list_project_billing_documents_usecase: Optional[Any] = None  # ListProjectBillingDocumentsUseCase
+
     # -----------------------------------------------------------------------
     # Project documents repo + use-cases (phase 03)
     # -----------------------------------------------------------------------

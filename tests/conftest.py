@@ -488,6 +488,7 @@ def invitation_app():
             ApplyTemplateToCreateDocumentUseCase,
             ImportBillingDocumentUseCase,
             ListActivitySuggestionsUseCase,
+            ListProjectBillingDocumentsUseCase,
         )
 
         _billing_doc_repo = SqlAlchemyBillingDocumentRepository(db.session)
@@ -525,6 +526,7 @@ def invitation_app():
         )
         _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
+            project_repo=project_repo,  # needed for project_id link/unlink access checks
         )
         _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
             doc_repo=_billing_doc_repo,
@@ -579,6 +581,12 @@ def invitation_app():
         )
         _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
             doc_repo=_billing_doc_repo,
+        )
+
+        # Wire project-scoped billing document list use-case
+        _c.list_project_billing_documents_usecase = ListProjectBillingDocumentsUseCase(
+            doc_repo=_billing_doc_repo,
+            project_repo=project_repo,  # project:read authorization
         )
 
         # ------------------------------------------------------------------

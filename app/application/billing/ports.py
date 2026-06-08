@@ -101,6 +101,14 @@ class BillingDocumentRepositoryPort(Protocol):
         """
         ...
 
+    def list_by_project(self, project_id: UUID) -> list[BillingDocument]:
+        """Return all billing documents linked to *project_id*, newest first.
+
+        Used by ListProjectBillingDocumentsUseCase — not owner-scoped; returns
+        docs from any user as long as they are linked to the project.
+        """
+        ...
+
     def aggregate_item_suggestions(
         self,
         user_id: UUID,
