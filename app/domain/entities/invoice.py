@@ -16,6 +16,14 @@ class InvoiceType(str, Enum):
     OTHERS = "others"
 
 
+class RefundableStatus(str, Enum):
+    """Lifecycle states for company-scoped refund tracking on materials & services expenses."""
+
+    REFUNDABLE = "refundable"
+    REFUND_PENDING = "refund_pending"
+    REFUNDED = "refunded"
+
+
 @dataclass(slots=True)
 class Invoice:
     """Invoice domain entity. Immutable except for use-case-level updates via dataclasses.replace()."""
@@ -41,6 +49,9 @@ class Invoice:
     is_auto_generated: bool = False
     # Phase tag — optional; NULL when invoice has no tag assignment.
     tag_id: Optional[UUID] = None
+    # Refund tracking — optional; NULL means not marked refundable.
+    # Only applicable to materials_services invoices.
+    refundable_status: Optional[str] = None
 
     @property
     def total_amount(self) -> Decimal:

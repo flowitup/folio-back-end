@@ -66,6 +66,7 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         source_billing_document_id=m.source_billing_document_id,
         is_auto_generated=m.is_auto_generated or False,
         tag_id=m.tag_id,
+        refundable_status=m.refundable_status,
     )
 
 
@@ -94,6 +95,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             source_billing_document_id=invoice.source_billing_document_id,
             is_auto_generated=invoice.is_auto_generated,
             tag_id=invoice.tag_id,
+            refundable_status=invoice.refundable_status,
         )
         self._session.add(model)
         try:
@@ -141,6 +143,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.payment_method_id = invoice.payment_method_id
         model.payment_method_label = invoice.payment_method_label
         model.tag_id = invoice.tag_id
+        model.refundable_status = invoice.refundable_status
         self._session.commit()
         return _model_to_entity(model)
 
@@ -219,6 +222,68 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             for it in m.items or []:
                 total += Decimal(str(it.get("quantity", 0))) * Decimal(str(it.get("unit_price", 0)))
         return total
+
+    def list_materials_services_by_companies(
+        self,
+        company_ids: list[UUID],
+        refundable: Optional[bool],
+        limit: int,
+        offset: int,
+        all_companies: bool = False,
+    ) -> tuple[list[dict], int]:
+        """Return paginated materials_services invoices across all projects of given companies.
+
+        Single JOIN to projects avoids N+1 for project_name. Filters by company ownership
+        and invoice type; optionally filters by refundable_status presence.
+
+        all_companies=True bypasses the company_id filter (superadmin view).
+        """
+        from app.infrastructure.database.models.project import ProjectModel
+
+        query = (
+            self._session.query(InvoiceModel, ProjectModel.name.label("project_name"))
+            .join(ProjectModel, InvoiceModel.project_id == ProjectModel.id)
+            .filter(
+                InvoiceModel.type == InvoiceType.MATERIALS_SERVICES.value,
+                # Always require a company — projects with no company are excluded
+                # from cross-company expense tracking regardless of caller scope.
+                ProjectModel.company_id.isnot(None),
+            )
+        )
+
+        if not all_companies:
+            query = query.filter(ProjectModel.company_id.in_(company_ids))
+
+        if refundable is True:
+            query = query.filter(InvoiceModel.refundable_status.isnot(None))
+        elif refundable is False:
+            query = query.filter(InvoiceModel.refundable_status.is_(None))
+
+        total: int = query.count()
+
+        rows = (
+            query.order_by(InvoiceModel.issue_date.desc(), InvoiceModel.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        result = []
+        for inv_model, project_name in rows:
+            entity = _model_to_entity(inv_model)
+            result.append(
+                {
+                    "id": str(entity.id),
+                    "project_id": str(entity.project_id),
+                    "project_name": project_name,
+                    "invoice_number": entity.invoice_number,
+                    "recipient_name": entity.recipient_name,
+                    "issue_date": entity.issue_date.isoformat(),
+                    "total_amount": float(entity.total_amount),
+                    "refundable_status": entity.refundable_status,
+                }
+            )
+        return result, total
 
     def next_invoice_number(self, project_id: UUID) -> str:
         """Generate next sequential invoice number: PREFIX-YYYY-NNNN.

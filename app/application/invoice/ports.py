@@ -43,6 +43,30 @@ class IInvoiceRepository(ABC):
         optionally filtered by type. Returns [] if none."""
         ...
 
+    @abstractmethod
+    def list_materials_services_by_companies(
+        self,
+        company_ids: list[UUID],
+        refundable: Optional[bool],
+        limit: int,
+        offset: int,
+        all_companies: bool = False,
+    ) -> tuple[list[dict], int]:
+        """Return paginated materials_services invoices across projects of company_ids.
+
+        Each row dict includes all Invoice fields plus 'project_name' (string).
+        JOIN avoids N+1 — project name is fetched in a single query.
+
+        all_companies=True skips the company_ids filter (superadmin cross-company view).
+        refundable=True  → only rows where refundable_status IS NOT NULL
+        refundable=False → only rows where refundable_status IS NULL
+        refundable=None  → no status filter
+
+        Ordered by issue_date DESC, created_at DESC.
+        Returns (rows, total_count).
+        """
+        ...
+
 
 class IAttachmentStorage(ABC):
     """Port for binary file storage (S3 / MinIO / local FS)."""
