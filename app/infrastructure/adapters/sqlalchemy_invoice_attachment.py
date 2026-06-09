@@ -59,6 +59,14 @@ class SQLAlchemyInvoiceAttachmentRepository(IInvoiceAttachmentRepository):
         )
         return [_to_entity(m) for m in rows]
 
+    def update_filename(self, attachment_id: UUID, new_filename: str) -> bool:
+        m = self._session.query(InvoiceAttachmentModel).filter_by(id=attachment_id).first()
+        if not m:
+            return False
+        m.filename = new_filename
+        self._session.commit()
+        return True
+
     def delete(self, attachment_id: UUID) -> bool:
         m = self._session.query(InvoiceAttachmentModel).filter_by(id=attachment_id).first()
         if not m:

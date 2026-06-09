@@ -17,6 +17,7 @@ from app.application.invoice.upload_attachment import (
 from app.application.invoice.manage_attachments import (
     ListAttachmentsUseCase,
     GetAttachmentUseCase,
+    RenameAttachmentUseCase,
     DeleteAttachmentUseCase,
     AttachmentNotFoundError,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "UploadAttachmentUseCase",
     "ListAttachmentsUseCase",
     "GetAttachmentUseCase",
+    "RenameAttachmentUseCase",
     "DeleteAttachmentUseCase",
     # Export use case
     "ExportInvoicesUseCase",
