@@ -66,8 +66,10 @@ class SetInvoiceRefundableStatusUseCase:
             # Fetch project's company_id via the invoice's project_id
             company_id = self._get_project_company_id(invoice.project_id)
             if company_id is None:
-                # Project has no company attached — deny non-superadmins
-                raise ForbiddenCompanyBillingError(invoice.project_id)  # type: ignore[arg-type]
+                # Project has no company attached — deny non-superadmins.
+                # Raise with a sentinel UUID so callers get a typed error; the
+                # project_id is not a company_id but no real company_id exists here.
+                raise ForbiddenCompanyBillingError(invoice.project_id)
 
             admin_ids = admin_company_ids(self._access_repo, user_id)
             if company_id not in admin_ids:

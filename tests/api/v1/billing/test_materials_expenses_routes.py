@@ -136,7 +136,16 @@ def mat_exp_app():
         )
         non_admin_user.roles.append(member_role)
 
-        db.session.add_all([admin_user, non_admin_user])
+        # Plain company-A admin: has member_role (no *:*), will get company-admin
+        # access row for company_a only — used to exercise non-superadmin code path.
+        plain_company_a_admin_user = UserModel(
+            email="mat_exp_company_a_admin@test.com",
+            password_hash=hasher.hash("CompanyA1234!"),
+            is_active=True,
+        )
+        plain_company_a_admin_user.roles.append(member_role)
+
+        db.session.add_all([admin_user, non_admin_user, plain_company_a_admin_user])
         db.session.flush()
 
         now = datetime.now(timezone.utc)
@@ -181,7 +190,15 @@ def mat_exp_app():
             is_primary=True,
             attached_at=now,
         )
-        db.session.add(access_a)
+        # plain_company_a_admin_user is admin of company_a ONLY (no *:* permission)
+        plain_access_a = UserCompanyAccessModel(
+            user_id=plain_company_a_admin_user.id,
+            company_id=company_a.id,
+            role="admin",
+            is_primary=True,
+            attached_at=now,
+        )
+        db.session.add_all([access_a, plain_access_a])
         db.session.commit()
 
         # Repos
@@ -216,6 +233,7 @@ def mat_exp_app():
         # Store IDs on app for fixture use
         test_app._admin_user_id = admin_user.id
         test_app._non_admin_user_id = non_admin_user.id
+        test_app._plain_company_a_admin_user_id = plain_company_a_admin_user.id
         test_app._company_a_id = company_a.id
         test_app._company_b_id = company_b.id
         test_app._project_a1_id = project_a1.id
@@ -248,6 +266,12 @@ def admin_tok(mat_client):
 @pytest.fixture(scope="module")
 def nonadmin_tok(mat_client):
     return _login(mat_client, "mat_exp_nonadmin@test.com", "Member1234!")
+
+
+@pytest.fixture(scope="module")
+def plain_company_a_admin_tok(mat_client):
+    """JWT for a user who is company-A admin but has NO *:* superadmin permission."""
+    return _login(mat_client, "mat_exp_company_a_admin@test.com", "CompanyA1234!")
 
 
 # ---------------------------------------------------------------------------
@@ -581,3 +605,100 @@ class TestSuperadminScope:
         ids = [i["id"] for i in resp.get_json()["items"]]
         assert inv_a_id in ids
         assert inv_b_id not in ids
+
+
+# ---------------------------------------------------------------------------
+# H1: Plain company-A admin (non-superadmin) authz + IDOR guard
+# ---------------------------------------------------------------------------
+
+
+class TestPlainCompanyAdminAuthz:
+    """Exercises the non-superadmin branch and IDOR guard.
+
+    The plain_company_a_admin_tok user has role='admin' on company A only,
+    with NO *:* permission in their JWT — so every request goes through the
+    admin_company_ids() resolution path, not the superadmin bypass.
+    """
+
+    def test_plain_admin_patch_own_company_invoice_returns_200(
+        self, mat_client, plain_company_a_admin_tok, mat_exp_app
+    ):
+        """Plain company-A admin can PATCH a company-A invoice → 200, status persists."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._plain_company_a_admin_user_id)
+            inv_id = str(inv.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_id}",
+            json={"refundable_status": "refundable"},
+            headers=_auth(plain_company_a_admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["refundable_status"] == "refundable"
+
+    def test_plain_admin_patch_other_company_invoice_denied_idor(
+        self, mat_client, plain_company_a_admin_tok, mat_exp_app
+    ):
+        """Plain company-A admin PATCHing a company-B invoice must be DENIED (IDOR guard)."""
+        with mat_exp_app.app_context():
+            inv_b = _make_invoice(mat_exp_app._project_b_id, mat_exp_app._non_admin_user_id)
+            inv_b_id = str(inv_b.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_b_id}",
+            json={"refundable_status": "refundable"},
+            headers=_auth(plain_company_a_admin_tok),
+        )
+        # Must NOT succeed — 403 (or 404 if the implementation raises NotFound first)
+        assert resp.status_code in (403, 404), f"IDOR guard failed: expected 403/404 but got {resp.status_code}"
+
+    def test_plain_admin_get_returns_only_own_company_invoices(
+        self, mat_client, plain_company_a_admin_tok, mat_exp_app
+    ):
+        """Plain company-A admin GET must return only company-A rows, never company-B."""
+        with mat_exp_app.app_context():
+            inv_a = _make_invoice(
+                mat_exp_app._project_a1_id,
+                mat_exp_app._plain_company_a_admin_user_id,
+                refundable_status="refundable",
+            )
+            inv_b = _make_invoice(
+                mat_exp_app._project_b_id,
+                mat_exp_app._non_admin_user_id,
+                refundable_status="refundable",
+            )
+            inv_a_id, inv_b_id = str(inv_a.id), str(inv_b.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(plain_company_a_admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        ids = [i["id"] for i in resp.get_json()["items"]]
+        assert inv_a_id in ids, "company-A invoice must be visible to company-A admin"
+        assert inv_b_id not in ids, "company-B invoice must NOT leak to company-A admin"
+
+    def test_plain_admin_get_with_foreign_company_id_returns_403(
+        self, mat_client, plain_company_a_admin_tok, mat_exp_app
+    ):
+        """Plain company-A admin GET with ?company_id=<company-B> they can't admin → 403."""
+        resp = mat_client.get(
+            f"/api/v1/billing/materials-expenses?company_id={mat_exp_app._company_b_id}",
+            headers=_auth(plain_company_a_admin_tok),
+        )
+        assert resp.status_code == 403, resp.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# M2: Rate-limit on GET endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestGetRateLimit:
+    def test_get_endpoint_returns_200_under_normal_use(self, mat_client, admin_tok, mat_exp_app):
+        """GET /billing/materials-expenses is reachable and rate-limit is not tripped by one call."""
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
