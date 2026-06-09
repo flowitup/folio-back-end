@@ -62,6 +62,7 @@ class SetRefundableStatusSchema(BaseModel):
 
 @billing_documents_bp.route("/billing/materials-expenses", methods=["GET"])
 @jwt_required()
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_materials_expenses():
     """List materials & services invoices accessible to the caller.
 
