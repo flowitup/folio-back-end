@@ -70,6 +70,7 @@ from app.application.invoice import (
     UploadAttachmentUseCase,
     ListAttachmentsUseCase,
     GetAttachmentUseCase,
+    RenameAttachmentUseCase,
     DeleteAttachmentUseCase,
 )
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
@@ -236,6 +237,7 @@ class Container:
     upload_attachment_usecase: Optional[UploadAttachmentUseCase] = None
     list_attachments_usecase: Optional[ListAttachmentsUseCase] = None
     get_attachment_usecase: Optional[GetAttachmentUseCase] = None
+    rename_attachment_usecase: Optional[RenameAttachmentUseCase] = None
     delete_attachment_usecase: Optional[DeleteAttachmentUseCase] = None
 
     # Task (planning Kanban) ports + use cases
@@ -661,6 +663,7 @@ def configure_container(
         )
         container.list_attachments_usecase = ListAttachmentsUseCase(invoice_attachment_repository)
         container.get_attachment_usecase = GetAttachmentUseCase(invoice_attachment_repository, attachment_storage)
+        container.rename_attachment_usecase = RenameAttachmentUseCase(invoice_attachment_repository)
         container.delete_attachment_usecase = DeleteAttachmentUseCase(invoice_attachment_repository, attachment_storage)
 
     # Wire email port + renderer

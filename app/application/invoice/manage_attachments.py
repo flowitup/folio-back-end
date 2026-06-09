@@ -1,7 +1,8 @@
-"""Use cases for listing, downloading, and deleting invoice attachments."""
+"""Use cases for listing, downloading, renaming, and deleting invoice attachments."""
 
 from __future__ import annotations
 
+import os
 from typing import BinaryIO
 from uuid import UUID
 
@@ -38,6 +39,40 @@ class GetAttachmentUseCase:
             raise AttachmentNotFoundError(f"Attachment {attachment_id} not found")
         stream, length = self._storage.get_stream(att.storage_key)
         return att, stream, length
+
+
+class RenameAttachmentUseCase:
+    """Rename an attachment's display filename.
+
+    Only the ``filename`` metadata changes — the object-store ``storage_key`` is
+    untouched, so the file content and download URL stay valid. The new filename
+    must preserve the original extension (case-insensitive) so ``mime_type`` and
+    inline-preview behaviour remain consistent.
+    """
+
+    def __init__(self, attachment_repository: IInvoiceAttachmentRepository) -> None:
+        self._attachments = attachment_repository
+
+    def execute(self, attachment_id: UUID, new_filename: str) -> InvoiceAttachment:
+        att = self._attachments.find_by_id(attachment_id)
+        if att is None:
+            raise AttachmentNotFoundError(f"Attachment {attachment_id} not found")
+
+        new_filename = new_filename.strip()
+        if not new_filename:
+            raise ValueError("Filename cannot be empty")
+
+        original_ext = os.path.splitext(att.filename)[1].lower()
+        new_ext = os.path.splitext(new_filename)[1].lower()
+        if new_ext != original_ext:
+            raise ValueError(f"File extension must remain {original_ext}")
+
+        self._attachments.update_filename(attachment_id, new_filename)
+
+        updated = self._attachments.find_by_id(attachment_id)
+        if updated is None:  # pragma: no cover — row just updated in same txn
+            raise AttachmentNotFoundError(f"Attachment {attachment_id} not found")
+        return updated
 
 
 class DeleteAttachmentUseCase:

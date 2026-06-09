@@ -157,3 +157,33 @@ def delete_attachment(attachment_id: str):
         return _error_response("NOT_FOUND", str(e), 404)
 
     return "", 204
+
+
+@invoice_bp.route("/attachments/<attachment_id>/rename", methods=["PATCH"])
+@openapi_doc(summary="Rename an invoice attachment", tags=["invoices"])
+@jwt_required()
+@require_permission("project:manage_invoices")
+@require_attachment_access(write=True)
+def rename_attachment(attachment_id: str):
+    try:
+        att_uuid = UUID(attachment_id)
+    except ValueError:
+        return _error_response("INVALID_ID", "Invalid attachment id", 400)
+
+    body = request.get_json(silent=True)
+    if not body or "filename" not in body:
+        return _error_response("MISSING_FILENAME", "Request body must include 'filename'", 400)
+
+    new_filename = body["filename"]
+    if not isinstance(new_filename, str) or not new_filename.strip():
+        return _error_response("INVALID_FILENAME", "Filename must be a non-empty string", 400)
+
+    container = get_container()
+    try:
+        att = container.rename_attachment_usecase.execute(att_uuid, new_filename.strip())
+    except AttachmentNotFoundError as e:
+        return _error_response("NOT_FOUND", str(e), 404)
+    except ValueError as exc:
+        return _error_response("INVALID_FILENAME", str(exc), 400)
+
+    return jsonify(_serialize(att)), 200
