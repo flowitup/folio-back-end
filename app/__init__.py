@@ -642,6 +642,25 @@ def _configure_di_container() -> None:
         project_repo=_project_repo,  # project:read authorization
     )
 
+    # Re-wire materials-expenses use-cases with the now-available access_repo
+    # (configure_container wired them with access_repo=None as a placeholder)
+    from app.application.invoice.list_materials_expenses_usecase import (
+        ListMaterialsExpensesUseCase as _ListMaterialsExpensesUseCase,
+    )
+    from app.application.invoice.set_refundable_status_usecase import (
+        SetInvoiceRefundableStatusUseCase as _SetRefundableStatusUseCase,
+    )
+
+    if _c.invoice_repository is not None:
+        _c.list_materials_expenses_usecase = _ListMaterialsExpensesUseCase(
+            invoice_repo=_c.invoice_repository,
+            access_repo=_access_repo,
+        )
+        _c.set_refundable_status_usecase = _SetRefundableStatusUseCase(
+            invoice_repo=_c.invoice_repository,
+            access_repo=_access_repo,
+        )
+
     # -----------------------------------------------------------------------
     # Payment methods DI wiring (invoice-payment-method feature)
     # -----------------------------------------------------------------------

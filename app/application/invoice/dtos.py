@@ -34,6 +34,7 @@ class InvoiceResponse:
     source_billing_document_id: Optional[str] = None
     is_auto_generated: bool = False
     tag_id: Optional[str] = None
+    refundable_status: Optional[str] = None
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -66,4 +67,5 @@ class InvoiceResponse:
             ),
             is_auto_generated=inv.is_auto_generated,
             tag_id=str(inv.tag_id) if inv.tag_id is not None else None,
+            refundable_status=inv.refundable_status,
         )

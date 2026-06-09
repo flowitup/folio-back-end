@@ -74,6 +74,8 @@ from app.application.invoice import (
     DeleteAttachmentUseCase,
 )
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
+from app.application.invoice.list_materials_expenses_usecase import ListMaterialsExpensesUseCase
+from app.application.invoice.set_refundable_status_usecase import SetInvoiceRefundableStatusUseCase
 from app.application.task import (
     ITaskRepository,
     CreateTaskUseCase,
@@ -293,6 +295,10 @@ class Container:
 
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
+
+    # Company-scoped materials & services expense use-cases
+    list_materials_expenses_usecase: Optional[ListMaterialsExpensesUseCase] = None
+    set_refundable_status_usecase: Optional[SetInvoiceRefundableStatusUseCase] = None
 
     # -----------------------------------------------------------------------
     # Companies repos + use-cases (phase 03)
@@ -645,6 +651,19 @@ def configure_container(
         container.export_invoices_usecase = ExportInvoicesUseCase(
             invoice_repo=invoice_repository,
             project_repo=project_repository,
+        )
+
+    # Wire materials-expenses use-cases (company-scoped refund tracking)
+    # access_repo is wired later in app/__init__.py after company repos are built;
+    # these use-cases are re-wired there with the full access_repo attached.
+    if invoice_repository:
+        container.list_materials_expenses_usecase = ListMaterialsExpensesUseCase(
+            invoice_repo=invoice_repository,
+            access_repo=None,  # re-wired in _configure_di_container with access_repo
+        )
+        container.set_refundable_status_usecase = SetInvoiceRefundableStatusUseCase(
+            invoice_repo=invoice_repository,
+            access_repo=None,  # re-wired in _configure_di_container with access_repo
         )
 
     # Wire task (planning) use cases

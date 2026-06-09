@@ -75,6 +75,9 @@ class InvoiceModel(Base):
         nullable=True,
         index=True,
     )
+    # Refund tracking — optional; NULL means not marked refundable.
+    # Only applicable to materials_services invoices; other types must stay NULL.
+    refundable_status = Column(String(20), nullable=True)
 
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
