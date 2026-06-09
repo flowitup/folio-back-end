@@ -21,5 +21,6 @@ billing_templates_bp = Blueprint("billing_templates", __name__)
 # noqa comments suppress E402 (module-level import not at top) and F401 (unused import).
 from app.api.v1.billing import documents_routes  # noqa: E402, F401
 from app.api.v1.billing import templates_routes  # noqa: E402, F401
+from app.api.v1.billing import materials_expenses_routes  # noqa: E402, F401
 
 __all__ = ["billing_documents_bp", "billing_templates_bp"]
