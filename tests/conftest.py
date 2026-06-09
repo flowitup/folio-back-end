@@ -589,6 +589,32 @@ def invitation_app():
             project_repo=project_repo,  # project:read authorization
         )
 
+        # Wire materials-expenses use-cases (company-scoped refund tracking)
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        from app.application.invoice.list_materials_expenses_usecase import (
+            ListMaterialsExpensesUseCase as _ListMatExpUseCase,
+        )
+        from app.application.invoice.set_refundable_status_usecase import (
+            SetInvoiceRefundableStatusUseCase as _SetRefundStatusUseCase,
+        )
+
+        _inv_repo_for_expenses = _c.invoice_repository
+        if _inv_repo_for_expenses is None:
+            from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository as _FallbackInvRepo
+
+            _inv_repo_for_expenses = _FallbackInvRepo(db.session)
+            _c.invoice_repository = _inv_repo_for_expenses
+
+        _c.list_materials_expenses_usecase = _ListMatExpUseCase(
+            invoice_repo=_inv_repo_for_expenses,
+            access_repo=_access_repo,
+        )
+        _c.set_refundable_status_usecase = _SetRefundStatusUseCase(
+            invoice_repo=_inv_repo_for_expenses,
+            access_repo=_access_repo,
+        )
+
         # ------------------------------------------------------------------
         # Wire payment_methods use-cases (invoice-payment-method feature)
         # CRITICAL: any use-case added to _configure_di_container() MUST also
