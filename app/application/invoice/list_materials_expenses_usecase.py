@@ -12,6 +12,16 @@ from app.domain.billing.exceptions import ForbiddenCompanyBillingError
 
 
 @dataclass(frozen=True)
+class MaterialsExpenseAttachment:
+    """Inline attachment metadata embedded in a MaterialsExpenseItem row."""
+
+    id: str
+    filename: str
+    mime_type: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class MaterialsExpenseItem:
     """Single row returned by the listing use-case."""
 
@@ -23,6 +33,7 @@ class MaterialsExpenseItem:
     issue_date: str
     total_amount: float
     refundable_status: Optional[str]
+    attachments: list[MaterialsExpenseAttachment]
 
 
 @dataclass(frozen=True)
@@ -96,6 +107,15 @@ class ListMaterialsExpensesUseCase:
                 issue_date=r["issue_date"],
                 total_amount=r["total_amount"],
                 refundable_status=r["refundable_status"],
+                attachments=[
+                    MaterialsExpenseAttachment(
+                        id=a["id"],
+                        filename=a["filename"],
+                        mime_type=a["mime_type"],
+                        size_bytes=a["size_bytes"],
+                    )
+                    for a in r.get("attachments", [])
+                ],
             )
             for r in rows
         ]

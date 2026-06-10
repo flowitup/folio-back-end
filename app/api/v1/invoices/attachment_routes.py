@@ -47,7 +47,7 @@ def _serialize(att) -> dict:
 @openapi_doc(summary="List attachments for an invoice", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
-@require_invoice_access(write=False)
+@require_invoice_access(write=False, allow_company_admin=True)
 def list_attachments(project_id: str, invoice_id: str):
     try:
         inv_uuid = UUID(invoice_id)
@@ -109,7 +109,7 @@ def upload_attachment(project_id: str, invoice_id: str):
 @openapi_doc(summary="Download an invoice attachment", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
-@require_attachment_access(write=False)
+@require_attachment_access(write=False, allow_company_admin=True)
 def download_attachment(attachment_id: str):
     try:
         att_uuid = UUID(attachment_id)
