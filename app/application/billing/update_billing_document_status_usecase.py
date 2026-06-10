@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Optional
 
 from app.application.billing._helpers import _assert_billing_doc_access
@@ -86,29 +85,17 @@ class UpdateBillingDocumentStatusUseCase:
             return
 
         if new_status == BillingDocumentStatus.PAID:
+            # Each billing item carries its own vat_rate — the released-funds expense
+            # mirrors the per-line structure so that its TTC total matches the facture.
             items_dicts = [
                 {
                     "description": it.description,
                     "quantity": str(it.quantity),
                     "unit_price": str(it.unit_price),
+                    "vat_rate": str(it.vat_rate),
                 }
                 for it in doc.items
             ]
-            # Expense line items carry no VAT concept, so the facture's TVA must be
-            # materialized as explicit lines — otherwise the released-funds expense
-            # totals HT while the facture displays TTC. One line per VAT-rate bucket,
-            # quantized to cents like the rendered totals.
-            for rate, _base_ht, tva_amount in doc.vat_breakdown:
-                tva_rounded = tva_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                if tva_rounded == 0:
-                    continue
-                items_dicts.append(
-                    {
-                        "description": f"TVA {rate:f}%",
-                        "quantity": "1",
-                        "unit_price": str(tva_rounded),
-                    }
-                )
             self._funds_release.create_funds_release(
                 project_id=doc.project_id,
                 source_doc_id=doc.id,

@@ -12,6 +12,7 @@ class InvoiceItemResponse:
     quantity: float
     unit_price: float
     total: float
+    vat_rate: float = 0.0
 
 
 @dataclass
@@ -53,6 +54,7 @@ class InvoiceResponse:
                     quantity=float(item.quantity),
                     unit_price=float(item.unit_price),
                     total=float(item.total),
+                    vat_rate=float(item.vat_rate),
                 )
                 for item in inv.items
             ],

@@ -427,3 +427,50 @@ class TestUpdateInvoiceType:
         result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="New Name"))
 
         assert result.type == "released_funds"
+
+
+class TestUpdateInvoiceVatRate:
+    """Regression: updating items must preserve vat_rate (update use-case must not silently drop it)."""
+
+    def test_update_items_with_vat_rate_persisted(self):
+        """PATCH items=[{..., vat_rate: 20}] must result in InvoiceItem with vat_rate=20."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(
+            UpdateInvoiceRequest(
+                invoice_id=invoice.id,
+                items=[{"description": "Service", "quantity": 1, "unit_price": 100, "vat_rate": 20}],
+            )
+        )
+
+        assert len(result.items) == 1
+        item = result.items[0]
+        assert item.vat_rate == 20.0
+        # TTC = 100 × 1.20 = 120
+        assert item.total == 120.0
+
+    def test_update_items_without_vat_rate_defaults_to_zero(self):
+        """Items dict without vat_rate key must default to 0 (backward compat)."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(
+            UpdateInvoiceRequest(
+                invoice_id=invoice.id,
+                items=[{"description": "Work", "quantity": 2, "unit_price": 50}],
+            )
+        )
+
+        assert result.items[0].vat_rate == 0.0
+        assert result.items[0].total == 100.0

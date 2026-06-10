@@ -61,6 +61,7 @@ class CreateInvoiceUseCase:
         for raw in request.items:
             qty = Decimal(str(raw.get("quantity", 0)))
             price = Decimal(str(raw.get("unit_price", 0)))
+            vat = Decimal(str(raw.get("vat_rate", 0)))
             desc = str(raw.get("description", "")).strip()
             if not desc:
                 raise InvalidInvoiceDataError("Item description is required")
@@ -68,7 +69,7 @@ class CreateInvoiceUseCase:
                 raise InvalidInvoiceDataError("Item quantity must be greater than 0")
             if price < 0:
                 raise InvalidInvoiceDataError("Item unit_price cannot be negative")
-            invoice_items.append(InvoiceItem(description=desc, quantity=qty, unit_price=price))
+            invoice_items.append(InvoiceItem(description=desc, quantity=qty, unit_price=price, vat_rate=vat))
 
         # Resolve payment method if provided
         payment_method_id: Optional[UUID] = None

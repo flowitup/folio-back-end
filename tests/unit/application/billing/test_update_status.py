@@ -111,10 +111,14 @@ class TestUpdateStatusErrors:
 
 
 def _expense_total(amount_items: list) -> Decimal:
-    return sum(
-        (Decimal(it["quantity"]) * Decimal(it["unit_price"]) for it in amount_items),
-        Decimal("0"),
-    )
+    """Compute TTC total from structured items (quantity × unit_price × (1 + vat_rate/100))."""
+    total = Decimal("0")
+    for it in amount_items:
+        qty = Decimal(it["quantity"])
+        price = Decimal(it["unit_price"])
+        vat = Decimal(it.get("vat_rate", "0"))
+        total += qty * price * (1 + vat / Decimal("100"))
+    return total
 
 
 class TestFundsReleaseBridge:
@@ -132,9 +136,10 @@ class TestFundsReleaseBridge:
         usecase.execute(inp, fake_session)
         return doc
 
-    def test_paid_facture_creates_release_with_tva_line(
+    def test_paid_facture_copies_items_with_vat_rate(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
     ):
+        """Each billing line is copied verbatim with its vat_rate; no synthetic TVA lines."""
         doc = self._paid_facture(
             doc_repo,
             fake_session,
@@ -146,14 +151,15 @@ class TestFundsReleaseBridge:
         call = funds_release.created[0]
         assert call["source_doc_id"] == doc.id
         assert call["amount_items"] == [
-            {"description": "Acompte", "quantity": "1", "unit_price": "100"},
-            {"description": "TVA 20%", "quantity": "1", "unit_price": "20.00"},
+            {"description": "Acompte", "quantity": "1", "unit_price": "100", "vat_rate": "20"},
         ]
+        # No synthetic TVA lines should be present
+        assert not any(it["description"].startswith("TVA") for it in call["amount_items"])
 
     def test_expense_total_matches_facture_ttc(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
     ):
-        # Real-world regression: HT 66287.23 @ 20% → TTC 79544.68 (TVA 13257.446 → 13257.45)
+        # Real-world regression: HT 66287.23 @ 20% → TTC 79544.676 ≈ 79544.68
         doc = self._paid_facture(
             doc_repo,
             fake_session,
@@ -162,12 +168,14 @@ class TestFundsReleaseBridge:
             items=(make_item(desc="Acompte 3%", qty="1", price="66287.23", vat="20"),),
         )
         total = _expense_total(funds_release.created[0]["amount_items"])
-        assert total == Decimal("79544.68")
-        assert total == doc.total_ttc.quantize(Decimal("0.01"))
+        # Per-line TTC: 66287.23 × 1.20 = 79544.676 (exact, no rounding needed here)
+        assert total == Decimal("79544.676")
+        assert total == doc.total_ttc
 
-    def test_tva_lines_grouped_per_rate_sorted_desc(
+    def test_multiple_items_with_different_vat_rates(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
     ):
+        """Multiple items each carry their own vat_rate — no merging or TVA lines."""
         self._paid_facture(
             doc_repo,
             fake_session,
@@ -179,15 +187,19 @@ class TestFundsReleaseBridge:
                 make_item(desc="C", qty="1", price="100", vat="20"),
             ),
         )
-        tva_lines = [it for it in funds_release.created[0]["amount_items"] if it["description"].startswith("TVA")]
-        assert tva_lines == [
-            {"description": "TVA 20%", "quantity": "1", "unit_price": "40.00"},
-            {"description": "TVA 10%", "quantity": "1", "unit_price": "10.00"},
+        items = funds_release.created[0]["amount_items"]
+        assert items == [
+            {"description": "A", "quantity": "1", "unit_price": "100", "vat_rate": "10"},
+            {"description": "B", "quantity": "1", "unit_price": "100", "vat_rate": "20"},
+            {"description": "C", "quantity": "1", "unit_price": "100", "vat_rate": "20"},
         ]
+        # No TVA lines
+        assert not any(it["description"].startswith("TVA") for it in items)
 
-    def test_zero_vat_rate_produces_no_tva_line(
+    def test_zero_vat_rate_item_copied_with_zero_rate(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
     ):
+        """Items with 0% VAT are copied as-is; no TVA line generated."""
         self._paid_facture(
             doc_repo,
             fake_session,
@@ -195,8 +207,8 @@ class TestFundsReleaseBridge:
             user_id,
             items=(make_item(desc="Exonéré", qty="1", price="100", vat="0"),),
         )
-        descriptions = [it["description"] for it in funds_release.created[0]["amount_items"]]
-        assert descriptions == ["Exonéré"]
+        items = funds_release.created[0]["amount_items"]
+        assert items == [{"description": "Exonéré", "quantity": "1", "unit_price": "100", "vat_rate": "0"}]
 
     def test_no_project_id_skips_release(self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id):
         self._paid_facture(doc_repo, fake_session, usecase_with_funds, user_id, project_id=None)
