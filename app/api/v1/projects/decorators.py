@@ -228,7 +228,41 @@ def require_project_access(write: bool = False):
     return decorator
 
 
-def require_invoice_access(write: bool = False):
+def _get_project_company_id_from_orm(project_id: UUID) -> "UUID | None":
+    """Fetch company_id directly from the ORM model.
+
+    The domain Project entity intentionally omits company_id (kept in the
+    infrastructure layer). This helper queries the DB row so the decorator
+    can resolve company ownership without extending the domain entity.
+    """
+    from app import db
+    from app.infrastructure.database.models.project import ProjectModel
+
+    row = db.session.get(ProjectModel, project_id)
+    return row.company_id if row is not None else None
+
+
+def _is_company_admin_for_project(project, user_id: UUID) -> bool:
+    """Return True when the user is a company admin of the project's owning company.
+
+    This allows company admins to read invoice attachments for their company's projects
+    even when they are not a project member. Write paths are NOT widened by this check.
+    """
+    company_id = _get_project_company_id_from_orm(project.id)
+    if company_id is None:
+        return False
+    from wiring import get_container  # local to avoid circular imports at module load
+
+    container = get_container()
+    access_repo = getattr(container, "user_company_access_repo", None)
+    if access_repo is None:
+        return False
+    from app.application.billing.ports import admin_company_ids  # lazy to avoid circular imports
+
+    return company_id in admin_company_ids(access_repo, user_id)
+
+
+def require_invoice_access(write: bool = False, allow_company_admin: bool = False):
     """Decorator: load invoice → load project → check caller is a member (or admin).
 
     Apply to any route whose path includes `<invoice_id>`. The decorator runs AFTER
@@ -238,6 +272,9 @@ def require_invoice_access(write: bool = False):
     Args:
         write: when True, requires `can_mutate_project` (owner or admin only);
                when False, `can_read_project` (any project member).
+        allow_company_admin: when True and write=False, also grants access to users
+               who are admins of the project's owning company (even without membership).
+               Has no effect on write paths.
     """
 
     def decorator(fn):
@@ -263,6 +300,8 @@ def require_invoice_access(write: bool = False):
 
             user_id = UUID(get_jwt_identity())
             allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            if not allowed and not write and allow_company_admin:
+                allowed = _is_company_admin_for_project(project, user_id)
             if not allowed:
                 return _forbidden()
             return fn(*args, **kwargs)
@@ -311,11 +350,17 @@ def require_task_access(write: bool = False):
     return decorator
 
 
-def require_attachment_access(write: bool = False):
+def require_attachment_access(write: bool = False, allow_company_admin: bool = False):
     """Decorator: load attachment → invoice → project → check membership.
 
     Apply to routes whose path includes `<attachment_id>`. Same semantics as
     `require_invoice_access`.
+
+    Args:
+        write: when True, requires `can_mutate_project`; when False, `can_read_project`.
+        allow_company_admin: when True and write=False, also grants access to users
+               who are admins of the project's owning company (even without membership).
+               Has no effect on write paths.
     """
 
     def decorator(fn):
@@ -344,6 +389,8 @@ def require_attachment_access(write: bool = False):
 
             user_id = UUID(get_jwt_identity())
             allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            if not allowed and not write and allow_company_admin:
+                allowed = _is_company_admin_for_project(project, user_id)
             if not allowed:
                 return _forbidden()
             return fn(*args, **kwargs)

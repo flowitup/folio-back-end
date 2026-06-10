@@ -31,6 +31,7 @@ from app import db
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
+from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
 
 
 # ---------------------------------------------------------------------------
@@ -702,3 +703,103 @@ class TestGetRateLimit:
             headers=_auth(admin_tok),
         )
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Inline attachments in materials-expenses response
+# ---------------------------------------------------------------------------
+
+
+def _make_attachment(invoice_id: UUID, user_id: UUID, filename: str = "receipt.pdf") -> InvoiceAttachmentModel:
+    """Persist an InvoiceAttachmentModel row bypassing the upload use-case."""
+    from datetime import datetime, timezone
+
+    att = InvoiceAttachmentModel(
+        id=uuid4(),
+        # FK columns must be UUID objects (not strings) for SQLite PG_UUID compat
+        invoice_id=invoice_id,
+        filename=filename,
+        storage_key=f"test/{uuid4().hex}/{filename}",
+        mime_type="application/pdf",
+        size_bytes=1024,
+        uploaded_by=user_id,
+        uploaded_at=datetime.now(timezone.utc),
+    )
+    db.session.add(att)
+    db.session.commit()
+    return att
+
+
+class TestInlineAttachments:
+    """Inline attachments field in GET /billing/materials-expenses response."""
+
+    def test_attachments_empty_list_when_invoice_has_none(self, mat_client, admin_tok, mat_exp_app):
+        """An invoice with no attachments returns attachments=[] (not missing key)."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert inv_id in items
+        assert items[inv_id]["attachments"] == []
+
+    def test_attachments_populated_for_invoice_with_two_attachments(self, mat_client, admin_tok, mat_exp_app):
+        """An invoice with 2 attachments returns both with correct metadata fields."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            att1 = _make_attachment(inv.id, mat_exp_app._admin_user_id, "invoice_a.pdf")
+            att2 = _make_attachment(inv.id, mat_exp_app._admin_user_id, "receipt_b.pdf")
+            inv_id = str(inv.id)
+            att1_id, att2_id = str(att1.id), str(att2.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert inv_id in items
+        attachments = items[inv_id]["attachments"]
+        assert len(attachments) == 2
+        attachment_ids = {a["id"] for a in attachments}
+        assert att1_id in attachment_ids
+        assert att2_id in attachment_ids
+        # Every attachment must carry the required metadata fields
+        for a in attachments:
+            assert "id" in a
+            assert "filename" in a
+            assert "mime_type" in a
+            assert "size_bytes" in a
+
+    def test_attachments_of_other_invoices_not_leaked(self, mat_client, admin_tok, mat_exp_app):
+        """Attachments from other invoices must NOT appear on a different invoice's row."""
+        with mat_exp_app.app_context():
+            inv_a = _make_invoice(
+                mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable"
+            )
+            inv_b = _make_invoice(
+                mat_exp_app._project_a2_id, mat_exp_app._admin_user_id, refundable_status="refundable"
+            )
+            # Attach to inv_b only
+            att_b = _make_attachment(inv_b.id, mat_exp_app._admin_user_id, "only_b.pdf")
+            inv_a_id, inv_b_id = str(inv_a.id), str(inv_b.id)
+            att_b_id = str(att_b.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert inv_a_id in items
+        assert inv_b_id in items
+        # att_b must appear on inv_b, not on inv_a
+        inv_a_att_ids = {a["id"] for a in items[inv_a_id]["attachments"]}
+        inv_b_att_ids = {a["id"] for a in items[inv_b_id]["attachments"]}
+        assert att_b_id not in inv_a_att_ids
+        assert att_b_id in inv_b_att_ids

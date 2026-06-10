@@ -268,6 +268,37 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             .all()
         )
 
+        # Collect invoice ids from this page so we can batch-load their attachments
+        # in a single query, avoiding N+1 round-trips.
+        page_invoice_ids = [inv_model.id for inv_model, _ in rows]
+
+        # Build a {invoice_id -> [attachment dict, ...]} map. Newest-first with an
+        # id tiebreaker — mirrors the per-invoice attachments endpoint so the same
+        # invoice lists files in the same order on every surface.
+        from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
+
+        attachments_by_invoice: dict = {}
+        if page_invoice_ids:
+            att_rows = (
+                self._session.query(InvoiceAttachmentModel)
+                .filter(InvoiceAttachmentModel.invoice_id.in_(page_invoice_ids))
+                .order_by(
+                    InvoiceAttachmentModel.uploaded_at.desc(),
+                    InvoiceAttachmentModel.id.desc(),
+                )
+                .all()
+            )
+            for att in att_rows:
+                key = att.invoice_id
+                attachments_by_invoice.setdefault(key, []).append(
+                    {
+                        "id": str(att.id),
+                        "filename": att.filename,
+                        "mime_type": att.mime_type,
+                        "size_bytes": att.size_bytes,
+                    }
+                )
+
         result = []
         for inv_model, project_name in rows:
             entity = _model_to_entity(inv_model)
@@ -281,6 +312,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                     "issue_date": entity.issue_date.isoformat(),
                     "total_amount": float(entity.total_amount),
                     "refundable_status": entity.refundable_status,
+                    "attachments": attachments_by_invoice.get(inv_model.id, []),
                 }
             )
         return result, total

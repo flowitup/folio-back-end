@@ -54,8 +54,11 @@ class IInvoiceRepository(ABC):
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across projects of company_ids.
 
-        Each row dict includes all Invoice fields plus 'project_name' (string).
-        JOIN avoids N+1 — project name is fetched in a single query.
+        Each row dict includes all Invoice fields plus:
+          - 'project_name' (string): resolved via JOIN, no N+1.
+          - 'attachments' (list[dict]): each dict has id, filename, mime_type, size_bytes.
+            Loaded in a single batch query (one IN clause) over the page's invoice ids.
+            Empty list when no attachments exist for that invoice.
 
         all_companies=True skips the company_ids filter (superadmin cross-company view).
         refundable=True  → only rows where refundable_status IS NOT NULL
