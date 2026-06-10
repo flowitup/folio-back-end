@@ -61,15 +61,24 @@ class TestInvoiceTotalAmount:
 
 
 class TestInvoiceItemTotal:
-    """Tests for InvoiceItem.total property."""
+    """Tests for InvoiceItem.total (TTC), total_ht, total_tva, and vat_rate."""
 
-    def test_item_total_computed(self):
-        """Item total should be quantity * unit_price."""
+    def test_item_total_no_vat_defaults_to_ht(self):
+        """total == total_ht when vat_rate is 0 (the default)."""
         item = InvoiceItem(description="X", quantity=Decimal("3"), unit_price=Decimal("10"))
+        assert item.total_ht == Decimal("30")
+        assert item.total_tva == Decimal("0")
         assert item.total == Decimal("30")
 
+    def test_item_total_with_vat(self):
+        """total (TTC) = quantity × price × (1 + vat_rate/100)."""
+        item = InvoiceItem(description="Y", quantity=Decimal("1"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
+        assert item.total_ht == Decimal("100")
+        assert item.total_tva == Decimal("20")
+        assert item.total == Decimal("120")
+
     def test_item_total_decimal_precision(self):
-        """Item total preserves Decimal precision."""
+        """Item total preserves Decimal precision (no rounding at domain level)."""
         item = InvoiceItem(description="Y", quantity=Decimal("2.5"), unit_price=Decimal("12.40"))
         assert item.total == Decimal("31.00")
 
@@ -77,6 +86,42 @@ class TestInvoiceItemTotal:
         """Item total is 0 when quantity is 0."""
         item = InvoiceItem(description="Z", quantity=Decimal("0"), unit_price=Decimal("100"))
         assert item.total == Decimal("0")
+
+    def test_vat_rate_default_is_zero(self):
+        """vat_rate defaults to 0 when not provided."""
+        item = InvoiceItem(description="A", quantity=Decimal("1"), unit_price=Decimal("50"))
+        assert item.vat_rate == Decimal("0")
+
+    def test_vat_rate_bounds_valid(self):
+        """vat_rate of 0 and 100 are both valid boundary values."""
+        item_zero = InvoiceItem(description="A", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("0"))
+        item_full = InvoiceItem(
+            description="B", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("100")
+        )
+        assert item_zero.total == Decimal("10")
+        assert item_full.total == Decimal("20")
+
+    def test_vat_rate_below_zero_raises(self):
+        """vat_rate < 0 must raise ValueError."""
+        import pytest
+
+        with pytest.raises(ValueError):
+            InvoiceItem(description="X", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("-1"))
+
+    def test_vat_rate_above_100_raises(self):
+        """vat_rate > 100 must raise ValueError."""
+        import pytest
+
+        with pytest.raises(ValueError):
+            InvoiceItem(description="X", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("101"))
+
+    def test_regression_66287_at_20_percent(self):
+        """Real-world: HT 66287.23 @ 20% → TTC 79544.676 (no rounding at domain)."""
+        item = InvoiceItem(
+            description="A3%", quantity=Decimal("1"), unit_price=Decimal("66287.23"), vat_rate=Decimal("20")
+        )
+        assert item.total_ht == Decimal("66287.23")
+        assert item.total == Decimal("79544.676")
 
 
 class TestInvoiceEquality:

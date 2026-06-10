@@ -1,9 +1,20 @@
 """Shared response DTOs for the invoice application layer."""
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from app.domain.entities.invoice import Invoice
+
+
+def money(value: Decimal) -> float:
+    """Quantize a monetary Decimal to cents for serialization.
+
+    Domain totals keep full precision (TTC with per-line VAT can carry
+    sub-cent digits); money leaves the API rounded to 2 dp HALF_UP, matching
+    how billing documents display their totals.
+    """
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 @dataclass
@@ -12,6 +23,7 @@ class InvoiceItemResponse:
     quantity: float
     unit_price: float
     total: float
+    vat_rate: float = 0.0
 
 
 @dataclass
@@ -52,11 +64,12 @@ class InvoiceResponse:
                     description=item.description,
                     quantity=float(item.quantity),
                     unit_price=float(item.unit_price),
-                    total=float(item.total),
+                    total=money(item.total),
+                    vat_rate=float(item.vat_rate),
                 )
                 for item in inv.items
             ],
-            total_amount=float(inv.total_amount),
+            total_amount=money(inv.total_amount),
             created_by=str(inv.created_by),
             created_at=inv.created_at.isoformat(),
             updated_at=inv.updated_at.isoformat(),

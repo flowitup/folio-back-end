@@ -23,6 +23,7 @@ from app.application.invoice import (
     ListInvoicesRequest,
     UpdateInvoiceRequest,
 )
+from app.application.invoice.dtos import money
 from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.entities.invoice import InvoiceType
 from app.domain.exceptions.invoice_exceptions import (
@@ -107,7 +108,7 @@ def list_invoices(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    funds_released_total = float(container.invoice_repository.sum_funds_released(UUID(project_id)))
+    funds_released_total = money(container.invoice_repository.sum_funds_released(UUID(project_id)))
 
     return jsonify(
         {

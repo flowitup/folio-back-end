@@ -42,6 +42,7 @@ class FundsReleaseAdapter:
                 description=it.get("description", ""),
                 quantity=Decimal(str(it.get("quantity", 1))),
                 unit_price=Decimal(str(it.get("unit_price", 0))),
+                vat_rate=Decimal(str(it.get("vat_rate", 0))),
             )
             for it in amount_items
         ]

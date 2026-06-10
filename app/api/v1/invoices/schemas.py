@@ -20,6 +20,7 @@ class InvoiceItemSchema(BaseModel):
     description: str = Field(..., min_length=1, max_length=500)
     quantity: float = Field(..., gt=0)
     unit_price: float = Field(..., ge=0)
+    vat_rate: float = Field(default=0.0, ge=0, le=100)
 
 
 class CreateInvoiceSchema(BaseModel):

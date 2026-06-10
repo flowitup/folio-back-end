@@ -22,25 +22,32 @@ def _items_to_jsonb(items: list) -> list:
     """Serialize InvoiceItem list to JSONB-compatible dicts (floats, not Decimals).
 
     Note: 'total' is intentionally omitted — it is always computed from
-    quantity * unit_price at read time, so storing it wastes space and risks drift.
+    quantity * unit_price * (1 + vat_rate/100) at read time, so storing it
+    wastes space and risks drift.
     """
     return [
         {
             "description": item.description,
             "quantity": float(item.quantity),
             "unit_price": float(item.unit_price),
+            "vat_rate": float(item.vat_rate),
         }
         for item in items
     ]
 
 
 def _jsonb_to_items(raw: list) -> List[InvoiceItem]:
-    """Deserialize JSONB dicts back to InvoiceItem value objects."""
+    """Deserialize JSONB dicts back to InvoiceItem value objects.
+
+    Legacy rows without 'vat_rate' default to 0 (no VAT), preserving
+    backward compatibility for all pre-existing invoices.
+    """
     return [
         InvoiceItem(
             description=r["description"],
             quantity=Decimal(str(r["quantity"])),
             unit_price=Decimal(str(r["unit_price"])),
+            vat_rate=Decimal(str(r.get("vat_rate", 0))),
         )
         for r in (raw or [])
     ]
@@ -220,7 +227,10 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         total = Decimal("0")
         for m in rows:
             for it in m.items or []:
-                total += Decimal(str(it.get("quantity", 0))) * Decimal(str(it.get("unit_price", 0)))
+                qty = Decimal(str(it.get("quantity", 0)))
+                price = Decimal(str(it.get("unit_price", 0)))
+                vat = Decimal(str(it.get("vat_rate", 0)))
+                total += qty * price * (1 + vat / Decimal("100"))
         return total
 
     def list_materials_services_by_companies(
