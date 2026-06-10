@@ -272,8 +272,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         # in a single query, avoiding N+1 round-trips.
         page_invoice_ids = [inv_model.id for inv_model, _ in rows]
 
-        # Build a {invoice_id -> [attachment dict, ...]} map; ordered by uploaded_at ASC
-        # so the UI always receives attachments in upload order.
+        # Build a {invoice_id -> [attachment dict, ...]} map. Newest-first with an
+        # id tiebreaker — mirrors the per-invoice attachments endpoint so the same
+        # invoice lists files in the same order on every surface.
         from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
 
         attachments_by_invoice: dict = {}
@@ -281,7 +282,10 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             att_rows = (
                 self._session.query(InvoiceAttachmentModel)
                 .filter(InvoiceAttachmentModel.invoice_id.in_(page_invoice_ids))
-                .order_by(InvoiceAttachmentModel.uploaded_at.asc())
+                .order_by(
+                    InvoiceAttachmentModel.uploaded_at.desc(),
+                    InvoiceAttachmentModel.id.desc(),
+                )
                 .all()
             )
             for att in att_rows:
