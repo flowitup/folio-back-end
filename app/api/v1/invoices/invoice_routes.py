@@ -112,6 +112,21 @@ def _get_company_payment_method_ids(project_id: UUID) -> "set[UUID]":
     return {r[0] for r in rows}
 
 
+def _enrich_invoice_with_company_payment(
+    invoice_dict: dict,
+    payment_method_id_str: "str | None",
+    company_pm_id_strs: "set[str]",
+) -> dict:
+    """Inject paid_by_company into an invoice dict in-place and return it.
+
+    paid_by_company is True only when the invoice has a payment_method_id that
+    belongs to the project's company and is flagged is_company_payment.
+    False when payment_method_id is null or the project has no company.
+    """
+    invoice_dict["paid_by_company"] = payment_method_id_str is not None and payment_method_id_str in company_pm_id_strs
+    return invoice_dict
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -150,18 +165,40 @@ def list_invoices(project_id: str):
     project_uuid = UUID(project_id)
     funds_released_total = money(container.invoice_repository.sum_funds_released(project_uuid))
     company_spent_total = money(container.invoice_repository.sum_company_spent(project_uuid))
-    company_name = _get_project_company_name(project_uuid)
+
+    # Resolve company once; reuse for both company_name and paid_by_company enrichment.
+    from app import db
+    from app.infrastructure.database.models.company import CompanyModel
+
+    _company_id = _get_project_company_id(project_uuid)
+    if _company_id is not None:
+        _company_row = db.session.get(CompanyModel, _company_id)
+        company_name = _company_row.legal_name if _company_row is not None else None
+    else:
+        company_name = None
 
     # One query to get all company-payment method IDs; membership-test per invoice row.
     # IDs come back as UUIDs from the DB; compare as strings to match InvoiceResponse.payment_method_id.
-    company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    if _company_id is not None:
+        from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+        _pm_rows = (
+            db.session.query(PaymentMethodModel.id)
+            .filter(
+                PaymentMethodModel.company_id == _company_id,
+                PaymentMethodModel.is_company_payment.is_(True),
+            )
+            .all()
+        )
+        company_pm_id_strs: set[str] = {str(r[0]) for r in _pm_rows}
+    else:
+        company_pm_id_strs = set()
 
     invoice_dicts = []
     for r in results:
         d = dataclasses.asdict(r)
         # r.payment_method_id is a str (InvoiceResponse serialises it that way)
-        pm_id_str = r.payment_method_id
-        d["paid_by_company"] = pm_id_str is not None and pm_id_str in company_pm_id_strs
+        _enrich_invoice_with_company_payment(d, r.payment_method_id, company_pm_id_strs)
         invoice_dicts.append(d)
 
     return jsonify(
@@ -249,7 +286,11 @@ def get_invoice(project_id: str, invoice_id: str):
     if result.project_id != project_id:
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
 
-    return jsonify(dataclasses.asdict(result))
+    project_uuid = UUID(project_id)
+    company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    d = dataclasses.asdict(result)
+    _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    return jsonify(d)
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["PUT"])
@@ -330,7 +371,10 @@ def update_invoice(project_id: str, invoice_id: str):
     except (ValueError, InvalidInvoiceDataError) as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify(dataclasses.asdict(result))
+    company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    d = dataclasses.asdict(result)
+    _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    return jsonify(d)
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["DELETE"])

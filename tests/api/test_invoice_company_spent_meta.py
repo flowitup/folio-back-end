@@ -593,3 +593,85 @@ class TestInvoiceTypeChangeGuard:
             headers=_auth(admin_token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# Tests: paid_by_company on GET single and PUT responses
+# ---------------------------------------------------------------------------
+
+
+class TestPaidByCompanySingleAndPutResponses:
+    """Verify paid_by_company is present and correct in GET /invoices/{id} and PUT responses."""
+
+    def test_get_single_paid_by_company_true(self, cs_client, cs_app, admin_token):
+        """GET single invoice returns paid_by_company=true when using a company-payment method."""
+        project_id = cs_app._test_project_with_company_id
+        company_pm_id = cs_app._test_company_pm_id
+
+        inv_id = _seed_invoice(cs_app, project_id, "labor", payment_method_id=company_pm_id)
+
+        resp = cs_client.get(_invoice_url(project_id, inv_id), headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert "paid_by_company" in body, "paid_by_company missing from GET single response"
+        assert body["paid_by_company"] is True
+
+    def test_get_single_paid_by_company_false_for_regular_method(self, cs_client, cs_app, admin_token):
+        """GET single invoice returns paid_by_company=false when using a non-company method."""
+        project_id = cs_app._test_project_with_company_id
+        regular_pm_id = cs_app._test_regular_pm_id
+
+        inv_id = _seed_invoice(cs_app, project_id, "materials_services", payment_method_id=regular_pm_id)
+
+        resp = cs_client.get(_invoice_url(project_id, inv_id), headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert "paid_by_company" in body, "paid_by_company missing from GET single response"
+        assert body["paid_by_company"] is False
+
+    def test_get_single_paid_by_company_false_when_no_method(self, cs_client, cs_app, admin_token):
+        """GET single invoice returns paid_by_company=false when invoice has no payment method."""
+        project_id = cs_app._test_project_with_company_id
+
+        inv_id = _seed_invoice(cs_app, project_id, "labor", payment_method_id=None)
+
+        resp = cs_client.get(_invoice_url(project_id, inv_id), headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert "paid_by_company" in body, "paid_by_company missing from GET single response"
+        assert body["paid_by_company"] is False
+
+    def test_put_response_paid_by_company_true_for_company_method_invoice(self, cs_client, cs_app, admin_token):
+        """PUT response includes paid_by_company=true when invoice already uses a company-payment method."""
+        project_id = cs_app._test_project_with_company_id
+        company_pm_id = cs_app._test_company_pm_id
+
+        # Seed invoice with company PM already assigned; update a non-payment field
+        inv_id = _seed_invoice(cs_app, project_id, "labor", payment_method_id=company_pm_id)
+
+        resp = cs_client.put(
+            _invoice_url(project_id, inv_id),
+            json={"recipient_name": "Updated Recipient"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert "paid_by_company" in body, "paid_by_company missing from PUT response"
+        assert body["paid_by_company"] is True
+
+    def test_put_response_paid_by_company_false_after_clearing_method(self, cs_client, cs_app, admin_token):
+        """PUT response includes paid_by_company=false after clearing the payment method."""
+        project_id = cs_app._test_project_with_company_id
+        company_pm_id = cs_app._test_company_pm_id
+
+        inv_id = _seed_invoice(cs_app, project_id, "labor", payment_method_id=company_pm_id)
+
+        resp = cs_client.put(
+            _invoice_url(project_id, inv_id),
+            json={"payment_method_id": None},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert "paid_by_company" in body, "paid_by_company missing from PUT response"
+        assert body["paid_by_company"] is False
