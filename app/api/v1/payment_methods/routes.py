@@ -173,6 +173,7 @@ def update_payment_method(company_id: str, payment_method_id: str):
         payment_method_id=method_uuid,
         label=body.label,
         is_active=body.is_active,
+        is_company_payment=body.is_company_payment,
     )
 
     from app import db

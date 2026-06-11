@@ -233,24 +233,52 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 total += qty * price * (1 + vat / Decimal("100"))
         return total
 
-    def sum_company_refunded(self, project_id: UUID) -> Decimal:
-        """Sum total_amount for materials_services invoices the company has refunded.
+    def sum_company_spent(self, project_id: UUID) -> Decimal:
+        """Sum amounts the company spent directly on a project.
 
-        Only invoices with refundable_status == 'refunded' count — these represent
-        M&S expenses the construction company paid back out of released funds.
-        items is JSONB — we compute in Python to stay DB-agnostic (mirrors sum_funds_released).
+        Counts any non-released_funds invoice where either:
+          - refundable_status == 'refunded'  (company reimbursed the expense), OR
+          - payment_method_id belongs to a method flagged is_company_payment
+            (invoice was paid directly with company funds, any type except released_funds).
+
+        Soft-deleted (is_active=false) company-payment methods still count — the
+        expense occurred and should not vanish from the total if a method is later
+        deactivated.  items is JSONB — we compute in Python to stay DB-agnostic.
         """
+        from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+        # Collect IDs of all company-payment methods for this project's company
+        # in one query, ignoring is_active so deactivated methods still count.
+        company_paid_ids: set[UUID] = set()
+        from app.infrastructure.database.models.project import ProjectModel
+
+        project_row = self._session.query(ProjectModel.company_id).filter_by(id=project_id).first()
+        if project_row and project_row[0]:
+            company_id = project_row[0]
+            pm_rows = (
+                self._session.query(PaymentMethodModel.id)
+                .filter(
+                    PaymentMethodModel.company_id == company_id,
+                    PaymentMethodModel.is_company_payment.is_(True),
+                )
+                .all()
+            )
+            company_paid_ids = {r[0] for r in pm_rows}
+
         rows = (
             self._session.query(InvoiceModel)
             .filter(
                 InvoiceModel.project_id == project_id,
-                InvoiceModel.type == InvoiceType.MATERIALS_SERVICES.value,
-                InvoiceModel.refundable_status == "refunded",
+                InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
             )
             .all()
         )
         total = Decimal("0")
         for m in rows:
+            is_refunded = m.refundable_status == "refunded"
+            is_company_paid = m.payment_method_id is not None and m.payment_method_id in company_paid_ids
+            if not (is_refunded or is_company_paid):
+                continue
             for it in m.items or []:
                 qty = Decimal(str(it.get("quantity", 0)))
                 price = Decimal(str(it.get("unit_price", 0)))

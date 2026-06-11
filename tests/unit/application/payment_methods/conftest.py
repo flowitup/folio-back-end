@@ -152,6 +152,7 @@ def make_payment_method(
     label: str = "Cash",
     is_builtin: bool = False,
     is_active: bool = True,
+    is_company_payment: bool = False,
     created_by: Optional[UUID] = None,
     **overrides,
 ) -> PaymentMethod:
@@ -162,6 +163,7 @@ def make_payment_method(
         label=label,
         is_builtin=is_builtin,
         is_active=is_active,
+        is_company_payment=is_company_payment,
         created_by=created_by,
         created_at=now,
         updated_at=now,

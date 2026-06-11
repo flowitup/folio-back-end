@@ -29,13 +29,16 @@ class CreatePaymentMethodRequest(BaseModel):
 class UpdatePaymentMethodRequest(BaseModel):
     """Request body for PATCH /companies/<id>/payment-methods/<id>.
 
-    At least one of label or is_active must be provided.
+    At least one of label, is_active, or is_company_payment must be provided.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
     label: Optional[str] = Field(None, min_length=1, max_length=120)
     is_active: Optional[bool] = None
+    # Toggle whether invoices paid via this method count toward "spent by company".
+    # Applies to any method (including builtins); admin-only, same authz as other edits.
+    is_company_payment: Optional[bool] = None
 
     @field_validator("label", mode="before")
     @classmethod
@@ -46,6 +49,6 @@ class UpdatePaymentMethodRequest(BaseModel):
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> "UpdatePaymentMethodRequest":
-        if self.label is None and self.is_active is None:
-            raise ValueError("At least one of 'label' or 'is_active' must be provided")
+        if self.label is None and self.is_active is None and self.is_company_payment is None:
+            raise ValueError("At least one of 'label', 'is_active', or 'is_company_payment' must be provided")
         return self

@@ -50,8 +50,13 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
-    def sum_company_refunded(self, project_id: UUID) -> Decimal:
-        """Sum total_amount for materials_services invoices with refundable_status == 'refunded'."""
+    def sum_company_spent(self, project_id: UUID) -> Decimal:
+        """Sum amounts the company spent directly on a project.
+
+        Counts non-released_funds invoices where refundable_status == 'refunded'
+        OR payment_method_id is a company-flagged method.  Soft-deleted flagged
+        methods still count.
+        """
         ...
 
     @abstractmethod

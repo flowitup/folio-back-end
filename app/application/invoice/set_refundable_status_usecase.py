@@ -61,6 +61,13 @@ class SetInvoiceRefundableStatusUseCase:
                     f"Invalid refundable_status {refundable_status!r}. " f"Allowed: {sorted(valid_values)}"
                 )
 
+        # Company-payment guard: if the invoice was paid directly by the company,
+        # refund tracking does not apply — the expense is already attributed to
+        # the company via the payment method flag.  Clearing (null) stays allowed.
+        if refundable_status is not None and invoice.payment_method_id is not None:
+            if self._is_company_payment_method(invoice.payment_method_id):
+                raise InvalidInvoiceDataError("Expense already paid by the company — refund tracking does not apply")
+
         # Authorization: resolve the project's company and check admin access
         if not is_superadmin:
             # Fetch project's company_id via the invoice's project_id
@@ -91,3 +98,13 @@ class SetInvoiceRefundableStatusUseCase:
             return None
         row = session.query(ProjectModel.company_id).filter_by(id=project_id).first()
         return row[0] if row else None
+
+    def _is_company_payment_method(self, payment_method_id: UUID) -> bool:
+        """Return True if the payment method is flagged as a company-direct payment."""
+        from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+        session = getattr(self._invoice_repo, "_session", None)
+        if session is None:
+            return False
+        row = session.query(PaymentMethodModel.is_company_payment).filter_by(id=payment_method_id).first()
+        return bool(row[0]) if row else False

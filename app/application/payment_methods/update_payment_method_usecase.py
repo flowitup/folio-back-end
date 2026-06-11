@@ -92,6 +92,7 @@ class UpdatePaymentMethodUseCase:
         updated = method.with_updates(
             label=new_label,
             is_active=inp.is_active,
+            is_company_payment=inp.is_company_payment,
             updated_at=datetime.now(timezone.utc),
         )
 

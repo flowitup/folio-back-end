@@ -77,7 +77,7 @@ def _get_project_company_name(project_id: UUID) -> "str | None":
     """Return the legal_name of the company attached to a project, or None.
 
     Used to surface company identity on the invoices list response so the
-    frontend can display which company is responsible for refunds.
+    frontend can display which company is responsible for the expenses.
     """
     from app import db
     from app.infrastructure.database.models.company import CompanyModel
@@ -87,6 +87,29 @@ def _get_project_company_name(project_id: UUID) -> "str | None":
         return None
     company = db.session.get(CompanyModel, company_id)
     return company.legal_name if company is not None else None
+
+
+def _get_company_payment_method_ids(project_id: UUID) -> "set[UUID]":
+    """Return the set of payment_method IDs flagged is_company_payment for the project's company.
+
+    Fetched in one query; ignores is_active so soft-deleted methods are included.
+    Returns an empty set when the project has no company.
+    """
+    from app import db
+    from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+    company_id = _get_project_company_id(project_id)
+    if company_id is None:
+        return set()
+    rows = (
+        db.session.query(PaymentMethodModel.id)
+        .filter(
+            PaymentMethodModel.company_id == company_id,
+            PaymentMethodModel.is_company_payment.is_(True),
+        )
+        .all()
+    )
+    return {r[0] for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -126,15 +149,27 @@ def list_invoices(project_id: str):
 
     project_uuid = UUID(project_id)
     funds_released_total = money(container.invoice_repository.sum_funds_released(project_uuid))
-    company_refunded_total = money(container.invoice_repository.sum_company_refunded(project_uuid))
+    company_spent_total = money(container.invoice_repository.sum_company_spent(project_uuid))
     company_name = _get_project_company_name(project_uuid)
+
+    # One query to get all company-payment method IDs; membership-test per invoice row.
+    # IDs come back as UUIDs from the DB; compare as strings to match InvoiceResponse.payment_method_id.
+    company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+
+    invoice_dicts = []
+    for r in results:
+        d = dataclasses.asdict(r)
+        # r.payment_method_id is a str (InvoiceResponse serialises it that way)
+        pm_id_str = r.payment_method_id
+        d["paid_by_company"] = pm_id_str is not None and pm_id_str in company_pm_id_strs
+        invoice_dicts.append(d)
 
     return jsonify(
         {
-            "invoices": [dataclasses.asdict(r) for r in results],
-            "total": len(results),
+            "invoices": invoice_dicts,
+            "total": len(invoice_dicts),
             "funds_released_total": funds_released_total,
-            "company_refunded_total": company_refunded_total,
+            "company_spent_total": company_spent_total,
             "company_name": company_name,
         }
     )

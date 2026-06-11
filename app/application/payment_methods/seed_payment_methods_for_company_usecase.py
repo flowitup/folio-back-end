@@ -47,7 +47,7 @@ class SeedPaymentMethodsForCompanyUseCase:
         now = datetime.now(timezone.utc)
         methods_to_insert: list[PaymentMethod] = []
 
-        # 1. Cash — always builtin
+        # 1. Cash — always builtin; does NOT count as company-direct payment by default.
         methods_to_insert.append(
             PaymentMethod(
                 id=uuid4(),
@@ -55,13 +55,16 @@ class SeedPaymentMethodsForCompanyUseCase:
                 label="Cash",
                 is_builtin=True,
                 is_active=True,
+                is_company_payment=False,
                 created_by=created_by,
                 created_at=now,
                 updated_at=now,
             )
         )
 
-        # 2. Company legal name — only when distinct from "Cash"
+        # 2. Company legal name — only when distinct from "Cash".
+        # Flagged as company-payment because invoices settled via this method are
+        # funded directly by the company and count toward "spent by company".
         normalised_name = legal_name.strip() if legal_name else None
         if normalised_name and normalised_name.lower() != "cash":
             methods_to_insert.append(
@@ -71,6 +74,7 @@ class SeedPaymentMethodsForCompanyUseCase:
                     label=normalised_name,
                     is_builtin=True,
                     is_active=True,
+                    is_company_payment=True,
                     created_by=created_by,
                     created_at=now,
                     updated_at=now,
