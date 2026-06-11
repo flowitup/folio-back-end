@@ -1,15 +1,17 @@
 """Unit tests for CreateInvoiceUseCase."""
 
 from datetime import date, datetime, timezone
+from typing import Optional
 from unittest.mock import MagicMock, Mock
 from uuid import uuid4
 import pytest
 
 from app.application.invoice.create_invoice import CreateInvoiceUseCase, CreateInvoiceRequest
+from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.invoice.update_invoice import UpdateInvoiceUseCase, UpdateInvoiceRequest
 from app.application.tags.exceptions import InvalidProjectTagError
-from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus
 from app.domain.entities.project_tag import ProjectTag
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError
 
@@ -474,3 +476,164 @@ class TestUpdateInvoiceVatRate:
 
         assert result.items[0].vat_rate == 0.0
         assert result.items[0].total == 100.0
+
+
+def _make_ms_invoice(refundable_status: Optional[str] = None) -> Invoice:
+    """Build a materials_services Invoice entity for refund-lock tests."""
+    from app.domain.value_objects.invoice_item import InvoiceItem
+    from decimal import Decimal
+
+    return Invoice(
+        id=uuid4(),
+        project_id=uuid4(),
+        invoice_number="INV-2026-0099",
+        type=InvoiceType.MATERIALS_SERVICES,
+        issue_date=date.today(),
+        recipient_name="Supplier Co",
+        recipient_address=None,
+        notes=None,
+        items=[InvoiceItem(description="Material", quantity=Decimal("1"), unit_price=Decimal("200"))],
+        created_by=uuid4(),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        is_auto_generated=False,
+        refundable_status=refundable_status,
+    )
+
+
+class TestUpdateInvoiceRefundedLock:
+    """UpdateInvoiceUseCase must reject any edit on a fully-refunded invoice.
+
+    A refunded invoice's amounts are already reflected in company_refunded_total.
+    Mutating the invoice after the company has paid would silently corrupt that total.
+    The refund status must be cleared first before any further edits are allowed.
+    """
+
+    def test_update_refunded_invoice_raises(self):
+        """PATCH on a refunded invoice must raise InvalidInvoiceDataError with lock message."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUNDED.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        with pytest.raises(InvalidInvoiceDataError, match="Refunded expenses are locked"):
+            use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="New Name"))
+
+        inv_repo.update.assert_not_called()
+
+    def test_update_refunded_invoice_items_raises(self):
+        """PATCH items on a refunded invoice must also be blocked."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUNDED.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        with pytest.raises(InvalidInvoiceDataError, match="Refunded expenses are locked"):
+            use_case.execute(
+                UpdateInvoiceRequest(
+                    invoice_id=invoice.id,
+                    items=[{"description": "Changed", "quantity": 1, "unit_price": 999}],
+                )
+            )
+
+    def test_update_refundable_invoice_succeeds(self):
+        """PATCH on a refundable (not yet refunded) invoice must still be allowed."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUNDABLE.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="Updated"))
+
+        assert result is not None
+        inv_repo.update.assert_called_once()
+
+    def test_update_refund_pending_invoice_succeeds(self):
+        """PATCH on a refund_pending invoice must still be allowed."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUND_PENDING.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="Updated"))
+
+        assert result is not None
+        inv_repo.update.assert_called_once()
+
+    def test_update_no_refundable_status_invoice_succeeds(self):
+        """PATCH on an invoice with no refundable_status (None) must still be allowed."""
+        invoice = _make_ms_invoice(refundable_status=None)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="Updated"))
+
+        assert result is not None
+        inv_repo.update.assert_called_once()
+
+
+class TestDeleteInvoiceRefundedLock:
+    """DeleteInvoiceUseCase must reject deletion of a fully-refunded invoice.
+
+    A refunded invoice is the audit record for what the company paid back.
+    Deleting it would silently drop the record from company_refunded_total
+    with no recovery path. The refund status must be cleared before deletion.
+    """
+
+    def test_delete_refunded_invoice_raises(self):
+        """DELETE on a refunded invoice must raise InvalidInvoiceDataError with lock message."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUNDED.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        with pytest.raises(InvalidInvoiceDataError, match="Refunded expenses are locked"):
+            use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_not_called()
+
+    def test_delete_refundable_invoice_succeeds(self):
+        """DELETE on a refundable (not yet refunded) invoice must proceed normally."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUNDABLE.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_called_once_with(invoice.id)
+
+    def test_delete_refund_pending_invoice_succeeds(self):
+        """DELETE on a refund_pending invoice must proceed normally."""
+        invoice = _make_ms_invoice(refundable_status=RefundableStatus.REFUND_PENDING.value)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_called_once_with(invoice.id)
+
+    def test_delete_no_refundable_status_invoice_succeeds(self):
+        """DELETE on an invoice with no refundable_status (None) must proceed normally."""
+        invoice = _make_ms_invoice(refundable_status=None)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_called_once_with(invoice.id)

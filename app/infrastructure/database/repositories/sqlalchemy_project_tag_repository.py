@@ -144,7 +144,12 @@ class SqlAlchemyProjectTagRepository:
                 InvoiceModel.tag_id,
                 InvoiceModel.items,
             )
-            .filter(InvoiceModel.project_id == project_id)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                # Released funds are budget inflow, not construction expenses;
+                # exclude them so per-tag expense totals reflect only spending.
+                InvoiceModel.type != "released_funds",
+            )
             .all()
         )
 
