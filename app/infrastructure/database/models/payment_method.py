@@ -44,6 +44,10 @@ class PaymentMethodModel(Base):
 
     is_builtin = Column(Boolean, nullable=False, default=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    # True for methods funded directly by the company (e.g. the legal-name builtin).
+    # Invoices paid via a flagged method count toward "spent by company" regardless
+    # of refundable_status, matching expenditure the company bore out-of-pocket.
+    is_company_payment = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # NULL when the creating user has been hard-deleted (ON DELETE SET NULL)
     created_by = Column(

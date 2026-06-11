@@ -40,6 +40,11 @@ class PaymentMethod:
     created_at: datetime
     updated_at: datetime
 
+    # Default-valued flags must come after all non-default fields (dataclass ordering rule).
+    # True when money is paid directly by the company — counts toward project "spent by company"
+    # regardless of refundable_status.  Togglable on any method (including builtins) by admins.
+    is_company_payment: bool = False
+
     # ------------------------------------------------------------------
     # Mutation helper
     # ------------------------------------------------------------------
@@ -49,6 +54,7 @@ class PaymentMethod:
         *,
         label: Optional[str] = None,
         is_active: Optional[bool] = None,
+        is_company_payment: Optional[bool] = None,
         updated_at: Optional[datetime] = None,
     ) -> "PaymentMethod":
         """Return a new PaymentMethod with the given fields replaced.
@@ -61,6 +67,8 @@ class PaymentMethod:
             kwargs["label"] = label
         if is_active is not None:
             kwargs["is_active"] = is_active
+        if is_company_payment is not None:
+            kwargs["is_company_payment"] = is_company_payment
         if updated_at is not None:
             kwargs["updated_at"] = updated_at
         return dataclasses.replace(self, **kwargs)

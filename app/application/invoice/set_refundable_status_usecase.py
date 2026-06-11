@@ -20,11 +20,12 @@ class SetInvoiceRefundableStatusUseCase:
     caller holds the admin role (or caller is superadmin). This mirrors the
     company-admin gate used by billing document management.
 
-    Guards:
+    Guards (in order):
     - Invoice must exist (404 otherwise)
+    - Caller must be company-admin for the invoice's company (ForbiddenCompanyBillingError → 403)
     - Invoice type must be materials_services (InvalidInvoiceDataError → 400)
     - Non-null value must be a valid RefundableStatus (InvalidInvoiceDataError → 400)
-    - Caller must be company-admin for the invoice's company (ForbiddenCompanyBillingError → 403)
+    - Invoice must not be paid via a company-direct method (InvalidInvoiceDataError → 400)
     """
 
     def __init__(
@@ -46,6 +47,21 @@ class SetInvoiceRefundableStatusUseCase:
         if invoice is None:
             raise InvoiceNotFoundError(f"Invoice {invoice_id} not found")
 
+        # Authorization first: callers without company-admin rights receive 403
+        # regardless of invoice state, so no business detail leaks to non-admins.
+        if not is_superadmin:
+            # Fetch project's company_id via the invoice's project_id
+            company_id = self._get_project_company_id(invoice.project_id)
+            if company_id is None:
+                # Project has no company attached — deny non-superadmins.
+                # Raise with a sentinel UUID so callers get a typed error; the
+                # project_id is not a company_id but no real company_id exists here.
+                raise ForbiddenCompanyBillingError(invoice.project_id)
+
+            admin_ids = admin_company_ids(self._access_repo, user_id)
+            if company_id not in admin_ids:
+                raise ForbiddenCompanyBillingError(company_id)
+
         # Type guard: only materials_services invoices support refund tracking
         if invoice.type != InvoiceType.MATERIALS_SERVICES:
             raise InvalidInvoiceDataError(
@@ -61,19 +77,12 @@ class SetInvoiceRefundableStatusUseCase:
                     f"Invalid refundable_status {refundable_status!r}. " f"Allowed: {sorted(valid_values)}"
                 )
 
-        # Authorization: resolve the project's company and check admin access
-        if not is_superadmin:
-            # Fetch project's company_id via the invoice's project_id
-            company_id = self._get_project_company_id(invoice.project_id)
-            if company_id is None:
-                # Project has no company attached — deny non-superadmins.
-                # Raise with a sentinel UUID so callers get a typed error; the
-                # project_id is not a company_id but no real company_id exists here.
-                raise ForbiddenCompanyBillingError(invoice.project_id)
-
-            admin_ids = admin_company_ids(self._access_repo, user_id)
-            if company_id not in admin_ids:
-                raise ForbiddenCompanyBillingError(company_id)
+        # Company-payment guard: if the invoice was paid directly by the company,
+        # refund tracking does not apply — the expense is already attributed to
+        # the company via the payment method flag.  Clearing (null) stays allowed.
+        if refundable_status is not None and invoice.payment_method_id is not None:
+            if self._is_company_payment_method(invoice.payment_method_id, invoice.project_id):
+                raise InvalidInvoiceDataError("Expense already paid by the company — refund tracking does not apply")
 
         updated = invoice.with_updates(refundable_status=refundable_status)
         saved = self._invoice_repo.update(updated)
@@ -91,3 +100,30 @@ class SetInvoiceRefundableStatusUseCase:
             return None
         row = session.query(ProjectModel.company_id).filter_by(id=project_id).first()
         return row[0] if row else None
+
+    def _is_company_payment_method(self, payment_method_id: UUID, project_id: UUID) -> bool:
+        """Return True if payment_method_id is flagged is_company_payment for the project's company.
+
+        Scoped to the invoice project's company so a method from a different company
+        cannot accidentally match.  When the repo has no real session (test fakes that
+        omit _session), returns False — authorization still applies independently.
+        """
+        from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+        session = getattr(self._invoice_repo, "_session", None)
+        if session is None:
+            # Test fakes without a real session skip this guard; authz is enforced separately.
+            return False
+        company_id = self._get_project_company_id(project_id)
+        if company_id is None:
+            return False
+        row = (
+            session.query(PaymentMethodModel.is_company_payment)
+            .filter(
+                PaymentMethodModel.id == payment_method_id,
+                PaymentMethodModel.company_id == company_id,
+                PaymentMethodModel.is_company_payment.is_(True),
+            )
+            .first()
+        )
+        return row is not None

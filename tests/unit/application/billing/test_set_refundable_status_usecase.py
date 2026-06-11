@@ -36,6 +36,7 @@ def _make_invoice(
     project_id: Optional[UUID] = None,
     invoice_type: InvoiceType = InvoiceType.MATERIALS_SERVICES,
     refundable_status: Optional[str] = None,
+    payment_method_id: Optional[UUID] = None,
 ) -> Invoice:
     now = datetime.now(timezone.utc)
     return Invoice(
@@ -49,6 +50,7 @@ def _make_invoice(
         created_at=now,
         updated_at=now,
         refundable_status=refundable_status,
+        payment_method_id=payment_method_id,
     )
 
 
@@ -246,6 +248,63 @@ class TestWrongInvoiceType:
             uc.execute(
                 user_id=uuid4(),
                 is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refundable",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Guard order: authorization must fire before business guards
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorizationBeforeBusinessGuards:
+    """Non-admins must receive 403 even when invoice state would produce a 400.
+
+    This ensures no business detail (type, company-payment status) leaks to
+    callers who lack company-admin rights.
+    """
+
+    def test_non_admin_gets_403_for_labor_invoice(self, monkeypatch):
+        """Non-admin calling with a labor invoice gets 403, not 400 (type guard should not fire first)."""
+        user_id = uuid4()
+        company_id = uuid4()
+        inv = _make_invoice(invoice_type=InvoiceType.LABOR)
+
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        # User has NO admin access to any company
+        access_repo = _make_access_repo(user_id=user_id, company_ids_with_admin=[])
+
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo, access_repo=access_repo)
+        monkeypatch.setattr(uc, "_get_project_company_id", lambda pid: company_id)
+
+        with pytest.raises(ForbiddenCompanyBillingError):
+            uc.execute(
+                user_id=user_id,
+                is_superadmin=False,
+                invoice_id=inv.id,
+                refundable_status="refundable",
+            )
+
+    def test_non_admin_gets_403_for_company_paid_invoice(self, monkeypatch):
+        """Non-admin calling with a company-paid invoice gets 403, not 400 (company-payment guard must not fire first)."""
+        user_id = uuid4()
+        company_id = uuid4()
+        # Give the invoice a payment_method_id so the company-payment guard would fire if reached
+        inv = _make_invoice(invoice_type=InvoiceType.MATERIALS_SERVICES, payment_method_id=uuid4())
+
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        access_repo = _make_access_repo(user_id=user_id, company_ids_with_admin=[])
+
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo, access_repo=access_repo)
+        monkeypatch.setattr(uc, "_get_project_company_id", lambda pid: company_id)
+        # Even if the method would be flagged, authz must fire first
+        monkeypatch.setattr(uc, "_is_company_payment_method", lambda pm_id, proj_id: True)
+
+        with pytest.raises(ForbiddenCompanyBillingError):
+            uc.execute(
+                user_id=user_id,
+                is_superadmin=False,
                 invoice_id=inv.id,
                 refundable_status="refundable",
             )
