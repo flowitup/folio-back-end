@@ -73,6 +73,22 @@ def _get_project_company_id(project_id: UUID) -> "UUID | None":
     return row.company_id if row is not None else None
 
 
+def _get_project_company_name(project_id: UUID) -> "str | None":
+    """Return the legal_name of the company attached to a project, or None.
+
+    Used to surface company identity on the invoices list response so the
+    frontend can display which company is responsible for refunds.
+    """
+    from app import db
+    from app.infrastructure.database.models.company import CompanyModel
+
+    company_id = _get_project_company_id(project_id)
+    if company_id is None:
+        return None
+    company = db.session.get(CompanyModel, company_id)
+    return company.legal_name if company is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -108,13 +124,18 @@ def list_invoices(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    funds_released_total = money(container.invoice_repository.sum_funds_released(UUID(project_id)))
+    project_uuid = UUID(project_id)
+    funds_released_total = money(container.invoice_repository.sum_funds_released(project_uuid))
+    company_refunded_total = money(container.invoice_repository.sum_company_refunded(project_uuid))
+    company_name = _get_project_company_name(project_uuid)
 
     return jsonify(
         {
             "invoices": [dataclasses.asdict(r) for r in results],
             "total": len(results),
             "funds_released_total": funds_released_total,
+            "company_refunded_total": company_refunded_total,
+            "company_name": company_name,
         }
     )
 

@@ -233,6 +233,31 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 total += qty * price * (1 + vat / Decimal("100"))
         return total
 
+    def sum_company_refunded(self, project_id: UUID) -> Decimal:
+        """Sum total_amount for materials_services invoices the company has refunded.
+
+        Only invoices with refundable_status == 'refunded' count — these represent
+        M&S expenses the construction company paid back out of released funds.
+        items is JSONB — we compute in Python to stay DB-agnostic (mirrors sum_funds_released).
+        """
+        rows = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.type == InvoiceType.MATERIALS_SERVICES.value,
+                InvoiceModel.refundable_status == "refunded",
+            )
+            .all()
+        )
+        total = Decimal("0")
+        for m in rows:
+            for it in m.items or []:
+                qty = Decimal(str(it.get("quantity", 0)))
+                price = Decimal(str(it.get("unit_price", 0)))
+                vat = Decimal(str(it.get("vat_rate", 0)))
+                total += qty * price * (1 + vat / Decimal("100"))
+        return total
+
     def list_materials_services_by_companies(
         self,
         company_ids: list[UUID],

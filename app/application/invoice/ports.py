@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import date
+from decimal import Decimal
 from typing import BinaryIO, Optional
 from uuid import UUID
 
@@ -41,6 +42,16 @@ class IInvoiceRepository(ABC):
     ) -> list[Invoice]:
         """Return invoices for the project where issue_date ∈ [date_from, date_to],
         optionally filtered by type. Returns [] if none."""
+        ...
+
+    @abstractmethod
+    def sum_funds_released(self, project_id: UUID) -> Decimal:
+        """Sum total_amount for all released_funds invoices in a project."""
+        ...
+
+    @abstractmethod
+    def sum_company_refunded(self, project_id: UUID) -> Decimal:
+        """Sum total_amount for materials_services invoices with refundable_status == 'refunded'."""
         ...
 
     @abstractmethod

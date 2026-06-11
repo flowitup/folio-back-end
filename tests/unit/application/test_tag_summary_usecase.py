@@ -134,10 +134,12 @@ def _create_invoice(
     project_id: UUID,
     items: list[dict],
     tag_id: UUID | None = None,
+    inv_type: str = "materials_services",
 ) -> UUID:
     """Create an invoice with given items; return invoice_id.
 
     items: [{"quantity": int, "unit_price": float}, ...]
+    inv_type: invoice type string (default: materials_services)
     """
     from app.infrastructure.database.models import InvoiceModel
     from datetime import date
@@ -148,7 +150,7 @@ def _create_invoice(
     invoice = InvoiceModel(
         project_id=project_id,
         invoice_number=inv_number,
-        type="materials_services",
+        type=inv_type,
         issue_date=date.today(),
         recipient_name="Test Recipient",
         items=items,
@@ -765,3 +767,75 @@ class TestMixedLaborAndExpenses:
         assert tag1_row.expense_total == Decimal("50")
         assert tag2_row.labor_cost == Decimal("50")
         assert tag2_row.expense_total == Decimal("100")
+
+
+# ---------------------------------------------------------------------------
+# Test: released_funds invoices excluded from per-tag expense totals
+# ---------------------------------------------------------------------------
+
+
+class TestReleasedFundsExcludedFromTagExpenses:
+    def test_released_funds_invoice_not_counted_in_expense_total(self, summary_session):
+        """released_funds invoices are budget inflow and must not appear in per-tag expenses."""
+        project_id, owner_id = _create_project_and_users(summary_session, uuid4())
+
+        tag_repo = SqlAlchemyProjectTagRepository(summary_session)
+        tag = ProjectTag.create(project_id=project_id, name="Travaux", color="#AABBCC")
+        tag_repo.add(tag)
+
+        # M&S invoice: qty=1, price=50 → should count
+        _create_invoice(summary_session, project_id, [{"quantity": 1, "unit_price": 50.0}], tag_id=tag.id)
+        # released_funds invoice tagged to same tag → must NOT count in expenses
+        _create_invoice(
+            summary_session,
+            project_id,
+            [{"quantity": 1, "unit_price": 999.0}],
+            tag_id=tag.id,
+            inv_type="released_funds",
+        )
+        summary_session.commit()
+
+        membership_reader = SqlAlchemyProjectMembershipReader(summary_session)
+        usecase = TagSummaryUseCase(
+            tag_repo=tag_repo,
+            labor_reader=tag_repo,
+            expense_reader=tag_repo,
+            membership_reader=membership_reader,
+        )
+
+        rows = usecase.execute(actor_id=owner_id, project_id=project_id)
+        assert len(rows) == 1
+        # Only the M&S invoice counts; released_funds (999) is excluded
+        assert rows[0].expense_total == Decimal("50")
+        assert rows[0].invoice_count == 1
+
+    def test_only_released_funds_tag_shows_zero_expenses(self, summary_session):
+        """Tag with only a released_funds invoice has zero expense total."""
+        project_id, owner_id = _create_project_and_users(summary_session, uuid4())
+
+        tag_repo = SqlAlchemyProjectTagRepository(summary_session)
+        tag = ProjectTag.create(project_id=project_id, name="FundsOnly", color="#112233")
+        tag_repo.add(tag)
+
+        _create_invoice(
+            summary_session,
+            project_id,
+            [{"quantity": 3, "unit_price": 200.0}],
+            tag_id=tag.id,
+            inv_type="released_funds",
+        )
+        summary_session.commit()
+
+        membership_reader = SqlAlchemyProjectMembershipReader(summary_session)
+        usecase = TagSummaryUseCase(
+            tag_repo=tag_repo,
+            labor_reader=tag_repo,
+            expense_reader=tag_repo,
+            membership_reader=membership_reader,
+        )
+
+        rows = usecase.execute(actor_id=owner_id, project_id=project_id)
+        # Tag still appears (named tag with zero activity) but expense is 0
+        assert len(rows) == 1
+        assert rows[0].expense_total == Decimal("0")
+        assert rows[0].invoice_count == 0

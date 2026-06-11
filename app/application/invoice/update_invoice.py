@@ -66,6 +66,11 @@ class UpdateInvoiceUseCase:
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
 
         if request.type is not None:
+            # Reject type changes on invoices that carry a refund lifecycle status.
+            # Changing type would orphan the status field (only materials_services
+            # supports refundable tracking) and corrupt the refund audit trail.
+            if request.type != invoice.type and invoice.refundable_status is not None:
+                raise InvalidInvoiceDataError("Clear refundable status before changing invoice type")
             updates["type"] = request.type
 
         if request.recipient_name is not None:
