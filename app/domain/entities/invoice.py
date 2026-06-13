@@ -14,6 +14,12 @@ class InvoiceType(str, Enum):
     LABOR = "labor"
     MATERIALS_SERVICES = "materials_services"
     OTHERS = "others"
+    REFUND = "refund"
+
+
+# Invoice types that allow mixed-sign unit_price (negative = credit/refund line).
+# All other types require unit_price >= 0.
+MIXED_SIGN_TYPES: frozenset = frozenset({InvoiceType.MATERIALS_SERVICES, InvoiceType.REFUND})
 
 
 class RefundableStatus(str, Enum):
@@ -52,6 +58,9 @@ class Invoice:
     # Refund tracking — optional; NULL means not marked refundable.
     # Only applicable to materials_services invoices.
     refundable_status: Optional[str] = None
+    # Optional self-link: refund invoice → the materials_services invoice it refunds.
+    # SET NULL on deletion of the linked invoice so the refund survives as standalone.
+    refunds_invoice_id: Optional[UUID] = None
 
     @property
     def total_amount(self) -> Decimal:

@@ -60,6 +60,17 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def sum_refunds_for_source(self, source_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
+        """Sum total_amount of all refund invoices linked to source_id.
+
+        Only counts invoices of type 'refund' with refunds_invoice_id == source_id.
+        When exclude_invoice_id is provided, that invoice's own row is excluded
+        from the sum (used on update to avoid self-double-counting).
+        Returns Decimal("0") when no matching rows exist.
+        """
+        ...
+
+    @abstractmethod
     def list_materials_services_by_companies(
         self,
         company_ids: list[UUID],

@@ -33,6 +33,7 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNumberConflictError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
+from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -110,6 +111,23 @@ def _get_company_payment_method_ids(project_id: UUID) -> "set[UUID]":
         .all()
     )
     return {r[0] for r in rows}
+
+
+def _enrich_refunds_invoice_number(invoice_dict: dict, refunds_invoice_id_str: "str | None") -> None:
+    """Inject refunds_invoice_number into an invoice dict in-place.
+
+    When refunds_invoice_id is present, fetches the linked invoice's number in one
+    db.session.get call so the FE can display "Refund of INV-2026-0001" without
+    a separate round-trip.  Sets None when the link is absent or target not found.
+    """
+    if not refunds_invoice_id_str:
+        invoice_dict["refunds_invoice_number"] = None
+        return
+    from app import db
+    from uuid import UUID as _UUID
+
+    linked = db.session.get(InvoiceModel, _UUID(refunds_invoice_id_str))
+    invoice_dict["refunds_invoice_number"] = linked.invoice_number if linked is not None else None
 
 
 def _enrich_invoice_with_company_payment(
@@ -250,6 +268,7 @@ def create_invoice(project_id: str):
                 payment_method_id=data.payment_method_id,
                 company_id=company_id,
                 tag_id=data.tag_id,
+                refunds_invoice_id=data.refunds_invoice_id,
             )
         )
     except InvoiceNumberConflictError:
@@ -265,7 +284,9 @@ def create_invoice(project_id: str):
     except InvalidInvoiceDataError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify(dataclasses.asdict(result)), 201
+    d = dataclasses.asdict(result)
+    _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
+    return jsonify(d), 201
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>", methods=["GET"])
@@ -290,6 +311,7 @@ def get_invoice(project_id: str, invoice_id: str):
     company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
     d = dataclasses.asdict(result)
     _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     return jsonify(d)
 
 
@@ -312,11 +334,13 @@ def update_invoice(project_id: str, invoice_id: str):
 
     # Build kwargs — only pass fields the caller provided.
     # issue_date is already a date object from Pydantic (no manual conversion needed).
-    # payment_method_id and tag_id are handled separately: use exclude_unset so we can
-    # distinguish "not provided" (absent) from "explicitly null".
+    # payment_method_id, tag_id, and refunds_invoice_id are handled separately: use
+    # exclude_unset so we can distinguish "not provided" (absent) from "explicitly null".
     provided_fields = data.model_dump(exclude_unset=True)
     update_kwargs = {
-        k: v for k, v in provided_fields.items() if k not in ("payment_method_id", "tag_id") and v is not None
+        k: v
+        for k, v in provided_fields.items()
+        if k not in ("payment_method_id", "tag_id", "refunds_invoice_id") and v is not None
     }
     # type arrives as a validated string literal; the use case and domain entity
     # operate on the InvoiceType enum, so promote it here (mirrors create flow).
@@ -335,26 +359,24 @@ def update_invoice(project_id: str, invoice_id: str):
     invoice_uuid = UUID(invoice_id)
     project_uuid = UUID(project_id)
 
-    # Determine payment_method sentinel: _UNSET if not in request body, else the value.
+    # Determine payment_method, tag_id, and refunds_invoice_id sentinels:
+    # _UNSET if not in request body; else the provided value (which may be None = clear).
     from app.application.invoice.update_invoice import _UNSET
 
-    if "payment_method_id" in provided_fields:
-        pm_id = provided_fields["payment_method_id"]  # UUID or None
-        company_id = _get_project_company_id(project_uuid)
-        update_req = UpdateInvoiceRequest(
-            invoice_id=invoice_uuid,
-            payment_method_id=pm_id,
-            company_id=company_id,
-            tag_id=provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET,
-            **update_kwargs,
-        )
-    else:
-        update_req = UpdateInvoiceRequest(
-            invoice_id=invoice_uuid,
-            payment_method_id=_UNSET,
-            tag_id=provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET,
-            **update_kwargs,
-        )
+    pm_id = provided_fields["payment_method_id"] if "payment_method_id" in provided_fields else _UNSET
+    tag_id_val = provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET
+    refunds_id_val = provided_fields["refunds_invoice_id"] if "refunds_invoice_id" in provided_fields else _UNSET
+
+    company_id = _get_project_company_id(project_uuid) if pm_id is not _UNSET else None
+
+    update_req = UpdateInvoiceRequest(
+        invoice_id=invoice_uuid,
+        payment_method_id=pm_id,
+        company_id=company_id,
+        tag_id=tag_id_val,
+        refunds_invoice_id=refunds_id_val,
+        **update_kwargs,
+    )
 
     try:
         result = get_container().update_invoice_usecase.execute(update_req)
@@ -374,6 +396,7 @@ def update_invoice(project_id: str, invoice_id: str):
     company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
     d = dataclasses.asdict(result)
     _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     return jsonify(d)
 
 

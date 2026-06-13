@@ -27,7 +27,15 @@ class InvoiceModel(Base):
     )
     invoice_number = Column(String(20), nullable=False)
     type = Column(
-        Enum("released_funds", "labor", "materials_services", "others", name="invoicetype", create_type=False),
+        Enum(
+            "released_funds",
+            "labor",
+            "materials_services",
+            "others",
+            "refund",
+            name="invoicetype",
+            create_type=False,
+        ),
         nullable=False,
         index=True,
     )
@@ -79,11 +87,27 @@ class InvoiceModel(Base):
     # Only applicable to materials_services invoices; other types must stay NULL.
     refundable_status = Column(String(20), nullable=True)
 
+    # Supplier-refund self-link: a refund invoice may optionally reference the
+    # materials_services invoice it refunds. ON DELETE SET NULL so deleting the
+    # source invoice nulls the link rather than cascade-deleting the refund.
+    refunds_invoice_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="SET NULL", name="fk_invoices_refunds_invoice_id"),
+        nullable=True,
+        index=True,
+    )
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
     source_billing_document = relationship("BillingDocumentModel", foreign_keys=[source_billing_document_id])
     tag = relationship("ProjectTagModel", back_populates="invoices", foreign_keys=[tag_id])
+    # Self-referential: many refunds may link one source M&S invoice.
+    refunds_invoice = relationship(
+        "InvoiceModel",
+        foreign_keys=[refunds_invoice_id],
+        remote_side="InvoiceModel.id",
+    )
 
     __table_args__ = (UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),)
 
