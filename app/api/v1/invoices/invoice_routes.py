@@ -31,6 +31,7 @@ from app.domain.exceptions.invoice_exceptions import (
     InvalidInvoiceDataError,
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
+    RefundExceedsSourceError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.infrastructure.database.models.invoice import InvoiceModel
@@ -279,6 +280,9 @@ def create_invoice(project_id: str):
         return _error_response("Conflict", "Payment method is inactive and cannot be used", 409)
     except ForbiddenCompanyError:
         return _error_response("Forbidden", "Payment method belongs to a different company", 403)
+    except RefundExceedsSourceError as e:
+        # Distinct code so the frontend can show a localized "remaining refundable" message.
+        return _error_response("RefundExceedsSource", str(e), 400)
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except InvalidInvoiceDataError as e:
@@ -390,6 +394,9 @@ def update_invoice(project_id: str, invoice_id: str):
         return _error_response("Conflict", "Payment method is inactive and cannot be used", 409)
     except ForbiddenCompanyError:
         return _error_response("Forbidden", "Payment method belongs to a different company", 403)
+    except RefundExceedsSourceError as e:
+        # Distinct code so the frontend can show a localized "remaining refundable" message.
+        return _error_response("RefundExceedsSource", str(e), 400)
     except (ValueError, InvalidInvoiceDataError) as e:
         return _error_response("ValidationError", str(e), 400)
 
