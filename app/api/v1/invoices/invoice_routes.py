@@ -220,6 +220,20 @@ def list_invoices(project_id: str):
         _enrich_invoice_with_company_payment(d, r.payment_method_id, company_pm_id_strs)
         invoice_dicts.append(d)
 
+    # Batch-enrich refunds_invoice_number in one query (no N+1) so the list/mobile
+    # views can render "Refund of <number>" for linked refund invoices.
+    link_id_strs = {r.refunds_invoice_id for r in results if r.refunds_invoice_id}
+    number_by_id: dict[str, str] = {}
+    if link_id_strs:
+        rows = (
+            db.session.query(InvoiceModel.id, InvoiceModel.invoice_number)
+            .filter(InvoiceModel.id.in_([UUID(x) for x in link_id_strs]))
+            .all()
+        )
+        number_by_id = {str(_id): _num for _id, _num in rows}
+    for d, r in zip(invoice_dicts, results):
+        d["refunds_invoice_number"] = number_by_id.get(r.refunds_invoice_id) if r.refunds_invoice_id else None
+
     return jsonify(
         {
             "invoices": invoice_dicts,
