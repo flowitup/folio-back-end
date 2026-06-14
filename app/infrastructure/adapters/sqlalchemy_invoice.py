@@ -237,12 +237,23 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         return total
 
     def sum_company_spent(self, project_id: UUID) -> Decimal:
-        """Sum amounts the company spent directly on a project.
+        """Sum amounts the company spent (net) directly on a project.
 
         Counts any non-released_funds invoice where either:
           - refundable_status == 'refunded'  (company reimbursed the expense), OR
           - payment_method_id belongs to a method flagged is_company_payment
-            (invoice was paid directly with company funds, any type except released_funds).
+            (invoice was paid directly with company funds, any non-released_funds type).
+
+        Refund-type invoices follow the SAME company-payment rule: a refund the
+        company itself issues (paid via a company-flagged method) carries negative
+        line amounts, so it nets the total DOWN — the company got that money back.
+        A supplier refund (no company-flagged method) fails the is_company_paid
+        gate and is ignored here; it only affects the signed total-expenses figure
+        computed elsewhere.
+
+        The result is floored at 0: company refunds can exceed what the company
+        spent (e.g. a refund of a client-fronted expense that was never counted
+        here), but a negative "spent by company" is meaningless for the KPI.
 
         Soft-deleted (is_active=false) company-payment methods still count — the
         expense occurred and should not vanish from the total if a method is later
@@ -273,10 +284,6 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             .filter(
                 InvoiceModel.project_id == project_id,
                 InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
-                # Supplier-refund invoices are not company expenses — they are
-                # credit notes that reduce the expense total via signed sums.
-                # Excluding them prevents double-counting in company_spent_total.
-                InvoiceModel.type != InvoiceType.REFUND.value,
             )
             .all()
         )
@@ -284,6 +291,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         for m in rows:
             is_refunded = m.refundable_status == "refunded"
             is_company_paid = m.payment_method_id is not None and m.payment_method_id in company_paid_ids
+            # A company-issued refund is type=refund + paid via a company method:
+            # is_company_paid holds and its negative line amounts net the total down.
+            # A supplier refund has no company method, so it is skipped here.
             if not (is_refunded or is_company_paid):
                 continue
             for it in m.items or []:
@@ -291,7 +301,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 price = Decimal(str(it.get("unit_price", 0)))
                 vat = Decimal(str(it.get("vat_rate", 0)))
                 total += qty * price * (1 + vat / Decimal("100"))
-        return total
+        # Never report a negative spent-by-company; refunds can exceed spend.
+        return max(total, Decimal("0"))
 
     def sum_refunds_for_source(self, source_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
         """Sum total_amount of all refund invoices linked to source_id.

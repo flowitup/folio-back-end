@@ -253,3 +253,49 @@ class TestSumCompanySpent:
         total = repo.sum_company_spent(project_id)
 
         assert total == Decimal("0")
+
+    def test_company_issued_refund_reduces_total(self, session):
+        """A refund paid via a company method (negative lines) nets the total down."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        pm_id = _make_payment_method(session, company_id, is_company_payment=True)
+        # Company-paid expense of 100, then the company issues a 40 refund on the
+        # same company method (stored as a negative line).
+        _make_invoice(session, project_id, "materials_services", 100.0, payment_method_id=pm_id)
+        _make_invoice(session, project_id, "refund", -40.0, payment_method_id=pm_id)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        total = repo.sum_company_spent(project_id)
+
+        assert total == pytest.approx(Decimal("60.00"), abs=Decimal("0.01"))
+
+    def test_supplier_refund_without_company_method_not_counted(self, session):
+        """A refund NOT paid via a company method is ignored — total unchanged."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        company_pm = _make_payment_method(session, company_id, is_company_payment=True)
+        other_pm = _make_payment_method(session, company_id, is_company_payment=False)
+        _make_invoice(session, project_id, "materials_services", 100.0, payment_method_id=company_pm)
+        # Supplier refund on a non-company method must not touch company_spent.
+        _make_invoice(session, project_id, "refund", -40.0, payment_method_id=other_pm)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        total = repo.sum_company_spent(project_id)
+
+        assert total == pytest.approx(Decimal("100.00"), abs=Decimal("0.01"))
+
+    def test_company_spent_floored_at_zero(self, session):
+        """When company refunds exceed company spend, the total floors at 0, not negative."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        pm_id = _make_payment_method(session, company_id, is_company_payment=True)
+        _make_invoice(session, project_id, "materials_services", 40.0, payment_method_id=pm_id)
+        _make_invoice(session, project_id, "refund", -100.0, payment_method_id=pm_id)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        total = repo.sum_company_spent(project_id)
+
+        assert total == Decimal("0")
