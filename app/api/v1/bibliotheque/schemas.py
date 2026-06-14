@@ -67,11 +67,19 @@ class UpdateProductSchema(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=500)
     category: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, max_length=1000)
-    size: Optional[str] = Field(default=None, max_length=200)
+    size: Optional[str] = Field(default=None, max_length=100)
     product_url: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("product_url", mode="before")
+    @classmethod
+    def _http_scheme_only(cls, v: object) -> object:
+        """Reject non-null URL values that do not start with http:// or https://."""
+        if v and not str(v).lower().startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return v
 
     @field_validator("category", mode="before")
     @classmethod
@@ -97,15 +105,23 @@ class CreateProductSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     company_id: UUID
-    name: str = Field(min_length=1, max_length=1000)
+    name: str = Field(min_length=1, max_length=500)
     supplier_id: Optional[UUID] = None
     supplier_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     supplier_website_url: Optional[str] = Field(default=None, max_length=500)
     supplier_reference: Optional[str] = Field(default=None, min_length=1, max_length=200)
     category: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = Field(default=None, max_length=1000)
-    size: Optional[str] = Field(default=None, max_length=200)
+    size: Optional[str] = Field(default=None, max_length=100)
     product_url: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("product_url", "supplier_website_url", mode="before")
+    @classmethod
+    def _http_scheme_only(cls, v: object) -> object:
+        """Reject non-null URL values that do not start with http:// or https://."""
+        if v and not str(v).lower().startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return v
 
     @model_validator(mode="after")
     def _exactly_one_supplier(self) -> "CreateProductSchema":

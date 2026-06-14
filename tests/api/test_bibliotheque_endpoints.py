@@ -16,7 +16,6 @@ from app.infrastructure.database.models import PermissionModel, RoleModel, UserM
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
-
 # ---------------------------------------------------------------------------
 # App fixture — isolated Flask test app with bibliotheque use-cases wired
 # ---------------------------------------------------------------------------
@@ -1635,3 +1634,101 @@ class TestDeleteProductEndpoint:
         pid = self._create_product(bib_client, manager_token, cid, "Del Supplier D", "DEL-004")
         resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid}", headers=_auth(outsider_token))
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# URL scheme validation (XSS / stored-JS injection prevention)
+# ---------------------------------------------------------------------------
+
+
+class TestUrlSchemeValidation:
+    """FIX 1 — reject non-http(s) URLs in CreateProductSchema and UpdateProductSchema."""
+
+    def _create(self, client, token, payload):
+        return client.post("/api/v1/bibliotheque/products", json=payload, headers=_auth(token))
+
+    def _base_payload(self, cid):
+        return {
+            "company_id": cid,
+            "name": "URL Test Product",
+            "supplier_name": "URL Scheme Supplier",
+        }
+
+    def test_422_create_product_url_javascript_scheme(self, bib_client, manager_token, bibliotheque_app):
+        """POST with product_url = 'javascript:alert(1)' must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {**self._base_payload(cid), "product_url": "javascript:alert(1)"}
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422
+
+    def test_422_create_supplier_website_url_javascript_scheme(self, bib_client, manager_token, bibliotheque_app):
+        """POST with supplier_website_url = 'javascript:alert(1)' must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {**self._base_payload(cid), "supplier_website_url": "javascript:alert(1)"}
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422
+
+    def test_201_create_valid_https_product_url(self, bib_client, manager_token, bibliotheque_app):
+        """POST with a valid https:// product_url must return 201."""
+        cid = bibliotheque_app._test_company_id
+        payload = {**self._base_payload(cid), "product_url": "https://example.com/product"}
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_422_patch_product_url_javascript_scheme(self, bib_client, manager_token, bibliotheque_app):
+        """PATCH with product_url = 'javascript:alert(1)' must return 422."""
+        cid = bibliotheque_app._test_company_id
+        # Seed a product first
+        create_resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "Patch URL Test",
+                "supplier_name": "Patch URL Supplier",
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.get_data(as_text=True)
+        pid = create_resp.get_json()["id"]
+
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{pid}",
+            json={"product_url": "javascript:alert(1)"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Schema length limits aligned to DB columns
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaLengthLimits:
+    """FIX 2 — name max 500, size max 100 (match DB column sizes)."""
+
+    def _create(self, client, token, payload):
+        return client.post("/api/v1/bibliotheque/products", json=payload, headers=_auth(token))
+
+    def test_422_create_name_over_500_chars(self, bib_client, manager_token, bibliotheque_app):
+        """POST with name of 501 chars must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {
+            "company_id": cid,
+            "name": "x" * 501,
+            "supplier_name": "Length Supplier Name",
+        }
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422
+
+    def test_422_create_size_over_100_chars(self, bib_client, manager_token, bibliotheque_app):
+        """POST with size of 101 chars must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {
+            "company_id": cid,
+            "name": "Size Test Product",
+            "supplier_name": "Length Supplier Size",
+            "size": "x" * 101,
+        }
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422

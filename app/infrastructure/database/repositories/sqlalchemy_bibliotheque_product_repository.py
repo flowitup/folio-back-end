@@ -114,7 +114,10 @@ class SqlAlchemyBibliothequeProductRepository:
 
         rows = (
             self._session.execute(
-                base.order_by(BibliothequeProductModel.last_purchased_at.desc().nulls_last())
+                base.order_by(
+                    BibliothequeProductModel.last_purchased_at.desc().nulls_last(),
+                    BibliothequeProductModel.created_at.desc(),
+                )
                 .limit(limit)
                 .offset(offset)
             )
