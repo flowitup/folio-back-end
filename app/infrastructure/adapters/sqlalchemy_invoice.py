@@ -74,6 +74,7 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         is_auto_generated=m.is_auto_generated or False,
         tag_id=m.tag_id,
         refundable_status=m.refundable_status,
+        refunds_invoice_id=m.refunds_invoice_id,
     )
 
 
@@ -103,6 +104,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             is_auto_generated=invoice.is_auto_generated,
             tag_id=invoice.tag_id,
             refundable_status=invoice.refundable_status,
+            refunds_invoice_id=invoice.refunds_invoice_id,
         )
         self._session.add(model)
         try:
@@ -151,6 +153,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.payment_method_label = invoice.payment_method_label
         model.tag_id = invoice.tag_id
         model.refundable_status = invoice.refundable_status
+        model.refunds_invoice_id = invoice.refunds_invoice_id
         self._session.commit()
         return _model_to_entity(model)
 
@@ -270,6 +273,10 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             .filter(
                 InvoiceModel.project_id == project_id,
                 InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
+                # Supplier-refund invoices are not company expenses — they are
+                # credit notes that reduce the expense total via signed sums.
+                # Excluding them prevents double-counting in company_spent_total.
+                InvoiceModel.type != InvoiceType.REFUND.value,
             )
             .all()
         )
@@ -279,6 +286,30 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             is_company_paid = m.payment_method_id is not None and m.payment_method_id in company_paid_ids
             if not (is_refunded or is_company_paid):
                 continue
+            for it in m.items or []:
+                qty = Decimal(str(it.get("quantity", 0)))
+                price = Decimal(str(it.get("unit_price", 0)))
+                vat = Decimal(str(it.get("vat_rate", 0)))
+                total += qty * price * (1 + vat / Decimal("100"))
+        return total
+
+    def sum_refunds_for_source(self, source_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
+        """Sum total_amount of all refund invoices linked to source_id.
+
+        Only counts invoices of type 'refund' whose refunds_invoice_id == source_id.
+        When exclude_invoice_id is provided, that invoice's own row is excluded
+        from the sum — used on update to avoid self-double-counting.
+        items is JSONB — computed in Python to stay DB-agnostic.
+        """
+        query = self._session.query(InvoiceModel).filter(
+            InvoiceModel.type == InvoiceType.REFUND.value,
+            InvoiceModel.refunds_invoice_id == source_id,
+        )
+        if exclude_invoice_id is not None:
+            query = query.filter(InvoiceModel.id != exclude_invoice_id)
+        rows = query.all()
+        total = Decimal("0")
+        for m in rows:
             for it in m.items or []:
                 qty = Decimal(str(it.get("quantity", 0)))
                 price = Decimal(str(it.get("unit_price", 0)))

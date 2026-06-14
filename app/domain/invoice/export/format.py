@@ -13,4 +13,6 @@ TYPE_LABEL_EN = {
     "released_funds": "Released Funds",
     "labor": "Labor",
     "materials_services": "Materials & Services",
+    "others": "Others",
+    "refund": "Refund",
 }

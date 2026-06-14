@@ -15,18 +15,29 @@ from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error sche
 
 
 class InvoiceItemSchema(BaseModel):
-    """A single line item on an invoice."""
+    """A single line item on an invoice.
+
+    unit_price carries no ge=0 bound — sign validation is type-dependent and
+    enforced in the use-case (mixed-sign allowed for materials_services + refund).
+    quantity must be > 0; vat_rate is 0–100.
+    """
 
     description: str = Field(..., min_length=1, max_length=500)
     quantity: float = Field(..., gt=0)
-    unit_price: float = Field(..., ge=0)
+    unit_price: float  # sign enforcement is in the use-case, not here
     vat_rate: float = Field(default=0.0, ge=0, le=100)
 
 
 class CreateInvoiceSchema(BaseModel):
-    """Request body for creating an invoice."""
+    """Request body for creating an invoice.
 
-    type: Literal["released_funds", "labor", "materials_services", "others"]
+    refunds_invoice_id is optional; only valid when type='refund'. When provided,
+    the use-case validates that the target is a same-project materials_services invoice
+    and enforces the cap (cumulative refunds may not exceed the source total).
+    Mixed-sign unit_price is allowed for materials_services and refund types.
+    """
+
+    type: Literal["released_funds", "labor", "materials_services", "others", "refund"]
     issue_date: date  # Pydantic parses ISO date string (YYYY-MM-DD) automatically
     recipient_name: str = Field(..., min_length=1, max_length=255)
     recipient_address: Optional[str] = None
@@ -34,18 +45,20 @@ class CreateInvoiceSchema(BaseModel):
     items: List[InvoiceItemSchema] = Field(..., min_length=1)
     payment_method_id: Optional[UUID] = None
     tag_id: Optional[UUID] = None
+    refunds_invoice_id: Optional[UUID] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
     """Request body for partially updating an invoice.
 
-    payment_method_id and tag_id use exclude_unset semantics to distinguish:
+    payment_method_id, tag_id, and refunds_invoice_id use exclude_unset semantics:
       - field absent  → do not touch that field
       - field = null  → clear the field
       - field = UUID  → set to that UUID
+    Mixed-sign unit_price is allowed for materials_services and refund types.
     """
 
-    type: Optional[Literal["released_funds", "labor", "materials_services", "others"]] = None
+    type: Optional[Literal["released_funds", "labor", "materials_services", "others", "refund"]] = None
     issue_date: Optional[date] = None  # Pydantic parses ISO date string automatically
     recipient_name: Optional[str] = Field(None, min_length=1, max_length=255)
     recipient_address: Optional[str] = None
@@ -53,6 +66,7 @@ class UpdateInvoiceSchema(BaseModel):
     items: Optional[List[InvoiceItemSchema]] = None
     payment_method_id: Optional[UUID] = None
     tag_id: Optional[UUID] = None
+    refunds_invoice_id: Optional[UUID] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
@@ -64,7 +78,7 @@ class ExportInvoicesQuery(BaseModel):
     from_month: str = Field(alias="from")
     to_month: str = Field(alias="to")
     format: Literal["xlsx", "pdf"]
-    type: Optional[Literal["released_funds", "labor", "materials_services", "others"]] = None
+    type: Optional[Literal["released_funds", "labor", "materials_services", "others", "refund"]] = None
 
     model_config = {"populate_by_name": True}
 

@@ -47,6 +47,10 @@ class InvoiceResponse:
     is_auto_generated: bool = False
     tag_id: Optional[str] = None
     refundable_status: Optional[str] = None
+    # Supplier-refund link — present only on refund invoices.
+    # refunds_invoice_number is enriched at the route layer from a secondary lookup.
+    refunds_invoice_id: Optional[str] = None
+    refunds_invoice_number: Optional[str] = None
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -81,4 +85,7 @@ class InvoiceResponse:
             is_auto_generated=inv.is_auto_generated,
             tag_id=str(inv.tag_id) if inv.tag_id is not None else None,
             refundable_status=inv.refundable_status,
+            refunds_invoice_id=str(inv.refunds_invoice_id) if inv.refunds_invoice_id is not None else None,
+            # refunds_invoice_number is None here; the route enriches it via a lookup.
+            refunds_invoice_number=None,
         )

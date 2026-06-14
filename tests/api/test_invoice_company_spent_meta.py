@@ -675,3 +675,82 @@ class TestPaidByCompanySingleAndPutResponses:
         body = resp.get_json()
         assert "paid_by_company" in body, "paid_by_company missing from PUT response"
         assert body["paid_by_company"] is False
+
+
+def test_refund_over_cap_returns_distinct_error_code(cs_client, cs_app, admin_token):
+    """A refund linked beyond the source's remaining amount returns 400 with the
+    ``RefundExceedsSource`` discriminator (not the generic ``ValidationError``) so the
+    frontend can render a localized "remaining refundable" message."""
+    pid = cs_app._test_project_with_company_id
+
+    # Source materials_services invoice — total 300.
+    src = cs_client.post(
+        f"/api/v1/projects/{pid}/invoices",
+        headers=_auth(admin_token),
+        json={
+            "type": "materials_services",
+            "issue_date": "2026-06-14",
+            "recipient_name": "ACME",
+            "items": [{"description": "Cement", "quantity": 3, "unit_price": 100, "vat_rate": 0}],
+        },
+    )
+    assert src.status_code == 201, src.get_data(as_text=True)
+    src_id = src.get_json()["id"]
+
+    # A refund of 400 exceeds the 300 source total → capped.
+    resp = cs_client.post(
+        f"/api/v1/projects/{pid}/invoices",
+        headers=_auth(admin_token),
+        json={
+            "type": "refund",
+            "issue_date": "2026-06-14",
+            "recipient_name": "ACME",
+            "refunds_invoice_id": src_id,
+            "items": [{"description": "Over-refund", "quantity": 1, "unit_price": -400, "vat_rate": 0}],
+        },
+    )
+    assert resp.status_code == 400, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["error"] == "RefundExceedsSource", body
+    assert "300" in body["message"], body  # remaining surfaced for the UI
+
+
+def test_list_enriches_refunds_invoice_number(cs_client, cs_app, admin_token):
+    """The list endpoint batch-populates refunds_invoice_number for linked refunds so the
+    list/mobile views can render "Refund of <number>" without a per-row round-trip."""
+    pid = cs_app._test_project_with_company_id
+
+    src = cs_client.post(
+        f"/api/v1/projects/{pid}/invoices",
+        headers=_auth(admin_token),
+        json={
+            "type": "materials_services",
+            "issue_date": "2026-06-14",
+            "recipient_name": "ACME",
+            "items": [{"description": "X", "quantity": 1, "unit_price": 500, "vat_rate": 0}],
+        },
+    )
+    assert src.status_code == 201, src.get_data(as_text=True)
+    src_body = src.get_json()
+    src_id, src_number = src_body["id"], src_body["invoice_number"]
+
+    ref = cs_client.post(
+        f"/api/v1/projects/{pid}/invoices",
+        headers=_auth(admin_token),
+        json={
+            "type": "refund",
+            "issue_date": "2026-06-14",
+            "recipient_name": "ACME",
+            "refunds_invoice_id": src_id,
+            "items": [{"description": "Credit", "quantity": 1, "unit_price": -100, "vat_rate": 0}],
+        },
+    )
+    assert ref.status_code == 201, ref.get_data(as_text=True)
+    ref_id = ref.get_json()["id"]
+
+    listing = cs_client.get(f"/api/v1/projects/{pid}/invoices?type=refund", headers=_auth(admin_token))
+    assert listing.status_code == 200, listing.get_data(as_text=True)
+    rows = listing.get_json()["invoices"]
+    match = next((i for i in rows if i["id"] == ref_id), None)
+    assert match is not None, "refund invoice missing from list"
+    assert match["refunds_invoice_number"] == src_number
