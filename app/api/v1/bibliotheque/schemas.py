@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.domain.value_objects.library_category import is_valid_category_slug
 
@@ -72,6 +72,47 @@ class UpdateProductSchema(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     size: Optional[str] = Field(default=None, max_length=200)
     product_url: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def validate_category_slug(cls, v: object) -> object:
+        """Reject non-null category values that are not valid canonical slugs."""
+        if v is not None and not is_valid_category_slug(str(v)):
+            raise ValueError(
+                f"Invalid category slug {v!r}. Must be one of the canonical slugs "
+                "(e.g. 'plomberie', 'outillage', 'autre'). "
+                "Use the import endpoint for free-text normalisation."
+            )
+        return v
+
+
+class CreateProductSchema(BaseModel):
+    """Request body for POST /api/v1/bibliotheque/products.
+
+    Exactly one of supplier_id or supplier_name must be provided.
+    supplier_website_url is only meaningful when supplier_name is given.
+    category must be a canonical slug or null (same constraint as UpdateProductSchema).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    company_id: UUID
+    name: str = Field(min_length=1, max_length=1000)
+    supplier_id: Optional[UUID] = None
+    supplier_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    supplier_website_url: Optional[str] = Field(default=None, max_length=500)
+    supplier_reference: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    category: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    size: Optional[str] = Field(default=None, max_length=200)
+    product_url: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _exactly_one_supplier(self) -> "CreateProductSchema":
+        """Enforce that exactly one of supplier_id or supplier_name is provided."""
+        if bool(self.supplier_id) == bool(self.supplier_name):
+            raise ValueError("Provide exactly one of supplier_id or supplier_name.")
+        return self
 
     @field_validator("category", mode="before")
     @classmethod

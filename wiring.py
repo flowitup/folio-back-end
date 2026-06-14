@@ -442,6 +442,8 @@ class Container:
     bibliotheque_get_product_image_usecase: Optional[Any] = None  # GetProductImageUseCase
     bibliotheque_import_usecase: Optional[Any] = None  # ImportPurchasesUseCase
     bibliotheque_update_product_usecase: Optional[Any] = None  # UpdateProductUseCase
+    bibliotheque_create_product_usecase: Optional[Any] = None  # CreateProductUseCase
+    bibliotheque_delete_product_usecase: Optional[Any] = None  # DeleteProductUseCase
     bibliotheque_upload_image_usecase: Optional[Any] = None  # UploadProductImageUseCase
     bibliotheque_fetch_image_from_url_usecase: Optional[Any] = None  # FetchProductImageFromUrlUseCase
 

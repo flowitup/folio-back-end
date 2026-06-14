@@ -23,15 +23,23 @@ from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.bibliotheque import bibliotheque_bp
-from app.api.v1.bibliotheque.schemas import ImageFromUrlSchema, ImportRequestSchema, UpdateProductSchema
+from app.api.v1.bibliotheque.schemas import (
+    CreateProductSchema,
+    ImageFromUrlSchema,
+    ImportRequestSchema,
+    UpdateProductSchema,
+)
 from app.application.bibliotheque.dtos import ImportRecordDTO, LibraryProductResponse
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
     ImageAlreadyExistsError,
     ImageTooLargeError,
     InsufficientPermissionError,
+    InvalidProductInputError,
+    ProductAlreadyExistsError,
     ProductNotFoundError,
     SsrfBlockedError,
+    SupplierNotFoundError,
     UnsupportedImageTypeError,
 )
 from app.application.bibliotheque.update_product_usecase import UNSET
@@ -334,6 +342,84 @@ def update_product(product_id: UUID) -> Any:
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     return jsonify(dataclasses.asdict(LibraryProductResponse.from_entity(product))), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bibliotheque/products
+# ---------------------------------------------------------------------------
+
+
+@bibliotheque_bp.post("/bibliotheque/products")
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def create_product() -> Any:
+    """Create a new library product. Requires bibliotheque:manage."""
+    try:
+        body = CreateProductSchema.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        return _err(422, "ValidationError", str(exc))
+
+    requester_id = UUID(get_jwt_identity())
+    c = get_container()
+    try:
+        product = c.bibliotheque_create_product_usecase.execute(
+            requester_id=requester_id,
+            company_id=body.company_id,
+            name=body.name,
+            supplier_id=body.supplier_id,
+            supplier_name=body.supplier_name,
+            supplier_website_url=body.supplier_website_url,
+            supplier_reference=body.supplier_reference,
+            category=body.category,
+            description=body.description,
+            size=body.size,
+            product_url=body.product_url,
+        )
+    except InvalidProductInputError as exc:
+        return _err(422, "ValidationError", str(exc))
+    except SupplierNotFoundError:
+        return _err(404, "NotFound", "Supplier not found in this company.")
+    except ProductAlreadyExistsError:
+        return _err(409, "Conflict", "A product with this supplier reference already exists.")
+    except CompanyAccessDeniedError:
+        return _err(403, "Forbidden", "Not a member of this company.")
+    except InsufficientPermissionError:
+        return _err(403, "Forbidden", "bibliotheque:manage permission required.")
+    except Exception:
+        logger.exception("create_product error company_id=%s", body.company_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    return jsonify(dataclasses.asdict(LibraryProductResponse.from_entity(product))), 201
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/bibliotheque/products/<id>
+# ---------------------------------------------------------------------------
+
+
+@bibliotheque_bp.delete("/bibliotheque/products/<uuid:product_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def delete_product(product_id: UUID) -> Any:
+    """Delete a library product and its purchases. Requires bibliotheque:manage."""
+    requester_id = UUID(get_jwt_identity())
+    c = get_container()
+    try:
+        c.bibliotheque_delete_product_usecase.execute(
+            requester_id=requester_id,
+            product_id=product_id,
+        )
+    except ProductNotFoundError:
+        return _err(404, "NotFound", "Product not found.")
+    except CompanyAccessDeniedError:
+        return _err(403, "Forbidden", "Not a member of this company.")
+    except InsufficientPermissionError:
+        return _err(403, "Forbidden", "bibliotheque:manage permission required.")
+    except Exception:
+        logger.exception("delete_product error product_id=%s", product_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    return "", 204
 
 
 # ---------------------------------------------------------------------------

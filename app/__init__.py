@@ -851,6 +851,8 @@ def _configure_di_container() -> None:
     from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase as _GetProductImageUC
     from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase as _ImportPurchasesUC
     from app.application.bibliotheque.update_product_usecase import UpdateProductUseCase as _UpdateProductUC
+    from app.application.bibliotheque.create_product_usecase import CreateProductUseCase as _CreateProductUC
+    from app.application.bibliotheque.delete_product_usecase import DeleteProductUseCase as _DeleteProductUC
     from app.application.bibliotheque.upload_product_image_usecase import (
         UploadProductImageUseCase as _UploadProductImageUC,
     )
@@ -911,6 +913,20 @@ def _configure_di_container() -> None:
     )
     _c.bibliotheque_update_product_usecase = _UpdateProductUC(
         product_repo=_biblio_product_repo,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.bibliotheque_create_product_usecase = _CreateProductUC(
+        supplier_repo=_biblio_supplier_repo,
+        product_repo=_biblio_product_repo,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.bibliotheque_delete_product_usecase = _DeleteProductUC(
+        product_repo=_biblio_product_repo,
+        image_storage=_biblio_image_storage,
         membership_reader=_biblio_membership_reader,
         permission_checker=_biblio_permission_checker,
         db_session=db.session,
