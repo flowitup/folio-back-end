@@ -47,3 +47,21 @@ class ImageAlreadyExistsError(BibliothequeError):
     """Raised when the product already has an image and force=True was not requested."""
 
     pass
+
+
+class ProductAlreadyExistsError(BibliothequeError):
+    """Raised when a product with the same (company, supplier, reference) triple already exists. HTTP 409."""
+
+    pass
+
+
+class SupplierNotFoundError(BibliothequeError):
+    """Raised when supplier_id is provided but does not belong to the company. HTTP 404."""
+
+    pass
+
+
+class InvalidProductInputError(BibliothequeError):
+    """Raised when the product creation input is invalid (e.g. neither supplier_id nor supplier_name). HTTP 422."""
+
+    pass

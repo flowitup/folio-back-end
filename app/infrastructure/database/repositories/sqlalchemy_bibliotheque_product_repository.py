@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.entities.library_product import LibraryProduct
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
+from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
 
 
 class SqlAlchemyBibliothequeProductRepository:
@@ -113,7 +114,10 @@ class SqlAlchemyBibliothequeProductRepository:
 
         rows = (
             self._session.execute(
-                base.order_by(BibliothequeProductModel.last_purchased_at.desc().nulls_last())
+                base.order_by(
+                    BibliothequeProductModel.last_purchased_at.desc().nulls_last(),
+                    BibliothequeProductModel.created_at.desc(),
+                )
                 .limit(limit)
                 .offset(offset)
             )
@@ -138,3 +142,27 @@ class SqlAlchemyBibliothequeProductRepository:
             .all()
         )
         return list(rows)
+
+    def add(self, product: LibraryProduct) -> LibraryProduct:
+        """Insert a new product row. Returns the persisted instance.
+
+        Does NOT wrap in a savepoint — callers must NOT catch IntegrityError here;
+        the use-case layer maps it to ProductAlreadyExistsError (409).
+        """
+        row = BibliothequeProductModel.from_entity(product)
+        self._session.add(row)
+        self._session.flush()
+        return row.to_entity()
+
+    def delete(self, product_id: UUID) -> bool:
+        """Delete a product and its purchases (explicit cascade, DB-agnostic).
+
+        Deletes purchase rows first, then the product row. Returns True if the
+        product row existed and was deleted, False otherwise.
+        """
+        self._session.execute(
+            delete(BibliothequePurchaseModel).where(BibliothequePurchaseModel.product_id == product_id)
+        )
+        res = self._session.execute(delete(BibliothequeProductModel).where(BibliothequeProductModel.id == product_id))
+        self._session.flush()
+        return res.rowcount > 0

@@ -70,6 +70,18 @@ class ILibraryProductRepository(Protocol):
         """Return sorted distinct non-null category values for the company."""
         ...
 
+    def add(self, product: LibraryProduct) -> LibraryProduct:
+        """Insert a new product row. Returns the persisted instance.
+
+        IntegrityError propagates on duplicate (company_id, supplier_id, supplier_reference).
+        Use-case maps that to ProductAlreadyExistsError. Do NOT swallow here.
+        """
+        ...
+
+    def delete(self, product_id: UUID) -> bool:
+        """Delete a product and its purchases. Returns True if a row was deleted, False if not found."""
+        ...
+
 
 class ILibraryPurchaseRepository(Protocol):
     """Persistence contract for LibraryPurchase records."""

@@ -16,7 +16,6 @@ from app.infrastructure.database.models import PermissionModel, RoleModel, UserM
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
-
 # ---------------------------------------------------------------------------
 # App fixture — isolated Flask test app with bibliotheque use-cases wired
 # ---------------------------------------------------------------------------
@@ -55,6 +54,8 @@ def bibliotheque_app():
     from app.application.bibliotheque.get_product_image_usecase import GetProductImageUseCase
     from app.application.bibliotheque.import_purchases_usecase import ImportPurchasesUseCase
     from app.application.bibliotheque.update_product_usecase import UpdateProductUseCase
+    from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
+    from app.application.bibliotheque.delete_product_usecase import DeleteProductUseCase
     from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
     from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
     from config import TestingConfig
@@ -209,6 +210,20 @@ def bibliotheque_app():
         )
         _c.bibliotheque_update_product_usecase = UpdateProductUseCase(
             product_repo=_product_repo,
+            membership_reader=_membership_reader,
+            permission_checker=_role_checker,
+            db_session=db.session,
+        )
+        _c.bibliotheque_create_product_usecase = CreateProductUseCase(
+            supplier_repo=_supplier_repo,
+            product_repo=_product_repo,
+            membership_reader=_membership_reader,
+            permission_checker=_role_checker,
+            db_session=db.session,
+        )
+        _c.bibliotheque_delete_product_usecase = DeleteProductUseCase(
+            product_repo=_product_repo,
+            image_storage=_image_storage,
             membership_reader=_membership_reader,
             permission_checker=_role_checker,
             db_session=db.session,
@@ -1318,4 +1333,402 @@ class TestUpdateProductEndpoint:
             json={"bogus": "nope"},
             headers=_auth(manager_token),
         )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bibliotheque/products — create product
+# ---------------------------------------------------------------------------
+
+
+class TestCreateProductEndpoint:
+    """Endpoint tests for POST /api/v1/bibliotheque/products."""
+
+    def _create(self, client, token, payload):
+        return client.post(
+            "/api/v1/bibliotheque/products",
+            json=payload,
+            headers=_auth(token),
+        )
+
+    def _get_supplier_id(self, client, token, company_id, slug):
+        """Return the supplier id for the first supplier matching a name fragment."""
+        resp = client.get(
+            f"/api/v1/bibliotheque/suppliers?company_id={company_id}",
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        items = resp.get_json()["items"]
+        for s in items:
+            if slug in s["slug"]:
+                return s["id"]
+        return None
+
+    def test_201_existing_supplier_explicit_reference(self, bib_client, manager_token, bibliotheque_app):
+        """Manager + existing supplier_id + explicit supplier_reference → 201."""
+        cid = bibliotheque_app._test_company_id
+        # Seed a supplier via import first.
+        import_payload = {
+            "company_id": cid,
+            "supplier_name": "Acme Create",
+            "supplier_slug": "acme-create",
+            "records": [
+                {
+                    "supplier_reference": "SEED-REF-1",
+                    "product_name": "Seed Product",
+                    "quantity": "1.0",
+                    "unit_price": "1.00",
+                    "purchased_at": "2024-01-01T00:00:00Z",
+                    "source_document_ref": "SEED-DOC-1",
+                    "source_document_type": "ticket",
+                    "line_index": 0,
+                }
+            ],
+        }
+        resp = bib_client.post("/api/v1/bibliotheque/import", json=import_payload, headers=_auth(manager_token))
+        assert resp.status_code == 200
+        supplier_id = self._get_supplier_id(bib_client, manager_token, cid, "acme-create")
+        assert supplier_id is not None
+
+        resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "My New Widget",
+                "supplier_id": supplier_id,
+                "supplier_reference": "MANUAL-001",
+            },
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["supplier_id"] == supplier_id
+        assert body["supplier_reference"] == "MANUAL-001"
+        assert body["name"] == "My New Widget"
+        assert body["purchase_count"] == 0
+
+    def test_201_new_supplier_auto_reference(self, bib_client, manager_token, bibliotheque_app):
+        """Manager + supplier_name (new supplier) + no reference → 201 with auto manual- ref."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "Widget Auto Ref",
+                "supplier_name": "Brand New Supplier",
+            },
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["supplier_reference"].startswith("manual-")
+        assert body["name"] == "Widget Auto Ref"
+        assert body["purchase_count"] == 0
+
+    def test_409_duplicate_reference(self, bib_client, manager_token, bibliotheque_app):
+        """Duplicate (company, supplier, reference) → 409."""
+        cid = bibliotheque_app._test_company_id
+        payload = {
+            "company_id": cid,
+            "name": "Dupe Product",
+            "supplier_name": "Dupe Supplier",
+            "supplier_reference": "DUPE-REF-XYZ",
+        }
+        resp1 = self._create(bib_client, manager_token, payload)
+        assert resp1.status_code == 201
+        resp2 = self._create(bib_client, manager_token, payload)
+        assert resp2.status_code == 409
+        assert resp2.get_json()["error"] == "Conflict"
+
+    def test_422_both_supplier_fields(self, bib_client, manager_token, bibliotheque_app):
+        """Providing both supplier_id and supplier_name → 422."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "Bad Supplier",
+                "supplier_id": str(uuid4()),
+                "supplier_name": "Also A Name",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_422_neither_supplier_field(self, bib_client, manager_token, bibliotheque_app):
+        """Providing neither supplier_id nor supplier_name → 422."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            manager_token,
+            {"company_id": cid, "name": "No Supplier"},
+        )
+        assert resp.status_code == 422
+
+    def test_404_cross_company_supplier_id(self, bib_client, manager_token, bibliotheque_app):
+        """supplier_id from a different company → 404."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "Cross Company Product",
+                "supplier_id": str(uuid4()),  # random UUID not in this company
+            },
+        )
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "NotFound"
+
+    def test_422_invalid_category_slug(self, bib_client, manager_token, bibliotheque_app):
+        """Non-canonical category slug → 422."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "Widget Bad Cat",
+                "supplier_name": "Cat Supplier",
+                "category": "not_a_real_category",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_403_member_no_manage_permission(self, bib_client, member_token, bibliotheque_app):
+        """Member without bibliotheque:manage → 403."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            member_token,
+            {"company_id": cid, "name": "Widget", "supplier_name": "Someone"},
+        )
+        assert resp.status_code == 403
+
+    def test_403_outsider_not_member(self, bib_client, outsider_token, bibliotheque_app):
+        """Non-member → 403."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(
+            bib_client,
+            outsider_token,
+            {"company_id": cid, "name": "Widget", "supplier_name": "Someone"},
+        )
+        assert resp.status_code == 403
+
+    def test_401_unauthenticated(self, bib_client, bibliotheque_app):
+        """No JWT → 401."""
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/products",
+            json={"company_id": bibliotheque_app._test_company_id, "name": "Widget", "supplier_name": "Someone"},
+        )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/bibliotheque/products/<id> — delete product
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteProductEndpoint:
+    """Endpoint tests for DELETE /api/v1/bibliotheque/products/<id>."""
+
+    def _create_product(self, client, token, cid, supplier_name, ref):
+        """Helper: create a product via POST and return its id."""
+        resp = client.post(
+            "/api/v1/bibliotheque/products",
+            json={
+                "company_id": cid,
+                "name": f"Product {ref}",
+                "supplier_name": supplier_name,
+                "supplier_reference": ref,
+            },
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()["id"]
+
+    def _import_purchase(self, client, token, cid, supplier_slug, ref):
+        """Helper: import a purchase for an existing product reference."""
+        payload = {
+            "company_id": cid,
+            "supplier_name": supplier_slug,
+            "supplier_slug": supplier_slug,
+            "records": [
+                {
+                    "supplier_reference": ref,
+                    "product_name": f"Product {ref}",
+                    "quantity": "2.0",
+                    "unit_price": "5.00",
+                    "purchased_at": "2024-03-01T00:00:00Z",
+                    "source_document_ref": f"DOC-{ref}",
+                    "source_document_type": "ticket",
+                    "line_index": 0,
+                }
+            ],
+        }
+        resp = client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_204_delete_product(self, bib_client, manager_token, bibliotheque_app):
+        """Manager deletes a product → 204; subsequent GET → 404."""
+        cid = bibliotheque_app._test_company_id
+        pid = self._create_product(bib_client, manager_token, cid, "Del Supplier A", "DEL-001")
+
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid}", headers=_auth(manager_token))
+        assert resp.status_code == 204
+
+        get_resp = bib_client.get(f"/api/v1/bibliotheque/products/{pid}", headers=_auth(manager_token))
+        assert get_resp.status_code == 404
+
+    def test_204_cascade_deletes_purchases(self, bib_client, manager_token, bibliotheque_app):
+        """Deleting a product with purchases removes purchase rows (cascade test)."""
+        from uuid import UUID as _UUID
+
+        from app import db
+        from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
+
+        cid = bibliotheque_app._test_company_id
+
+        # Create product (supplier_name "Del-Cascade-Co" → slug "del-cascade-co").
+        # Import must use the SAME slug so the purchase attaches to that product.
+        pid_str = self._create_product(bib_client, manager_token, cid, "Del-Cascade-Co", "DEL-002-CASCADE")
+        self._import_purchase(bib_client, manager_token, cid, "del-cascade-co", "DEL-002-CASCADE")
+
+        # Convert string id to UUID so the PG_UUID column filter works on SQLite.
+        pid_uuid = _UUID(pid_str)
+
+        with bibliotheque_app.app_context():
+            count_before = (
+                db.session.query(BibliothequePurchaseModel)
+                .filter(BibliothequePurchaseModel.product_id == pid_uuid)
+                .count()
+            )
+        assert count_before >= 1, "Expected at least one purchase row before delete"
+
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid_str}", headers=_auth(manager_token))
+        assert resp.status_code == 204
+
+        with bibliotheque_app.app_context():
+            count_after = (
+                db.session.query(BibliothequePurchaseModel)
+                .filter(BibliothequePurchaseModel.product_id == pid_uuid)
+                .count()
+            )
+        assert count_after == 0, "Purchase rows must be deleted with the product"
+
+    def test_404_unknown_product(self, bib_client, manager_token):
+        """DELETE unknown product id → 404."""
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{uuid4()}", headers=_auth(manager_token))
+        assert resp.status_code == 404
+
+    def test_403_member_no_manage_permission(self, bib_client, manager_token, member_token, bibliotheque_app):
+        """Member without bibliotheque:manage → 403."""
+        cid = bibliotheque_app._test_company_id
+        pid = self._create_product(bib_client, manager_token, cid, "Del Supplier C", "DEL-003")
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid}", headers=_auth(member_token))
+        assert resp.status_code == 403
+
+    def test_403_outsider_not_member(self, bib_client, manager_token, outsider_token, bibliotheque_app):
+        """Non-member → 403."""
+        cid = bibliotheque_app._test_company_id
+        pid = self._create_product(bib_client, manager_token, cid, "Del Supplier D", "DEL-004")
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid}", headers=_auth(outsider_token))
+        assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# URL scheme validation (XSS / stored-JS injection prevention)
+# ---------------------------------------------------------------------------
+
+
+class TestUrlSchemeValidation:
+    """FIX 1 — reject non-http(s) URLs in CreateProductSchema and UpdateProductSchema."""
+
+    def _create(self, client, token, payload):
+        return client.post("/api/v1/bibliotheque/products", json=payload, headers=_auth(token))
+
+    def _base_payload(self, cid):
+        return {
+            "company_id": cid,
+            "name": "URL Test Product",
+            "supplier_name": "URL Scheme Supplier",
+        }
+
+    def test_422_create_product_url_javascript_scheme(self, bib_client, manager_token, bibliotheque_app):
+        """POST with product_url = 'javascript:alert(1)' must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {**self._base_payload(cid), "product_url": "javascript:alert(1)"}
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422
+
+    def test_422_create_supplier_website_url_javascript_scheme(self, bib_client, manager_token, bibliotheque_app):
+        """POST with supplier_website_url = 'javascript:alert(1)' must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {**self._base_payload(cid), "supplier_website_url": "javascript:alert(1)"}
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422
+
+    def test_201_create_valid_https_product_url(self, bib_client, manager_token, bibliotheque_app):
+        """POST with a valid https:// product_url must return 201."""
+        cid = bibliotheque_app._test_company_id
+        payload = {**self._base_payload(cid), "product_url": "https://example.com/product"}
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_422_patch_product_url_javascript_scheme(self, bib_client, manager_token, bibliotheque_app):
+        """PATCH with product_url = 'javascript:alert(1)' must return 422."""
+        cid = bibliotheque_app._test_company_id
+        # Seed a product first
+        create_resp = self._create(
+            bib_client,
+            manager_token,
+            {
+                "company_id": cid,
+                "name": "Patch URL Test",
+                "supplier_name": "Patch URL Supplier",
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.get_data(as_text=True)
+        pid = create_resp.get_json()["id"]
+
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{pid}",
+            json={"product_url": "javascript:alert(1)"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Schema length limits aligned to DB columns
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaLengthLimits:
+    """FIX 2 — name max 500, size max 100 (match DB column sizes)."""
+
+    def _create(self, client, token, payload):
+        return client.post("/api/v1/bibliotheque/products", json=payload, headers=_auth(token))
+
+    def test_422_create_name_over_500_chars(self, bib_client, manager_token, bibliotheque_app):
+        """POST with name of 501 chars must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {
+            "company_id": cid,
+            "name": "x" * 501,
+            "supplier_name": "Length Supplier Name",
+        }
+        resp = self._create(bib_client, manager_token, payload)
+        assert resp.status_code == 422
+
+    def test_422_create_size_over_100_chars(self, bib_client, manager_token, bibliotheque_app):
+        """POST with size of 101 chars must return 422."""
+        cid = bibliotheque_app._test_company_id
+        payload = {
+            "company_id": cid,
+            "name": "Size Test Product",
+            "supplier_name": "Length Supplier Size",
+            "size": "x" * 101,
+        }
+        resp = self._create(bib_client, manager_token, payload)
         assert resp.status_code == 422
