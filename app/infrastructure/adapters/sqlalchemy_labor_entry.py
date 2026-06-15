@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import case as sa_case, func
+from sqlalchemy import case as sa_case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -24,6 +24,7 @@ from app.infrastructure.database.models import (
     PersonModel,
     ProjectModel,
     WorkerModel,
+    WorkerRateChangeModel,
 )
 
 
@@ -113,7 +114,22 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         worker_id: Optional[UUID] = None,
     ) -> List[LaborSummaryRow]:
         # Effective cost: supplement-only rows (shift_type IS NULL) contribute 0.
-        # For shift rows: override wins; else daily_rate × shift multiplier.
+        # For shift rows: amount_override wins; else resolved_rate × shift multiplier.
+        #
+        # eff_rate: correlated scalar subquery returning the rate-change row with the
+        # greatest effective_date <= entry date, falling back to worker.daily_rate.
+        # Scalar subqueries are excluded from GROUP BY — SQLAlchemy handles them correctly.
+        eff_rate = func.coalesce(
+            select(WorkerRateChangeModel.daily_rate)
+            .where(WorkerRateChangeModel.worker_id == LaborEntryModel.worker_id)
+            .where(WorkerRateChangeModel.effective_date <= LaborEntryModel.date)
+            .order_by(WorkerRateChangeModel.effective_date.desc())
+            .limit(1)
+            .correlate(LaborEntryModel, WorkerModel)
+            .scalar_subquery(),
+            WorkerModel.daily_rate,
+        )
+
         shift_multiplier = sa_case(
             (LaborEntryModel.shift_type == "half", 0.5),
             (LaborEntryModel.shift_type == "overtime", 1.5),
@@ -121,7 +137,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            WorkerModel.daily_rate * shift_multiplier,
+            eff_rate * shift_multiplier,
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),
@@ -139,6 +155,10 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             else_=shift_multiplier,
         )
 
+        # bonus_rate: worker's latest effective rate as of date_to (or overall
+        # latest when date_to is not specified), coalesced to worker.daily_rate.
+        # Used by the caller to compute bonus-day cost.  Scalar subquery → not
+        # in GROUP BY, so group_by stays on (WorkerModel.id, display_name, daily_rate).
         display_name = func.coalesce(PersonModel.name, WorkerModel.name)
         query = (
             self._session.query(
@@ -181,6 +201,19 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         # (year, month, worker) so the response can carry the per-worker
         # breakdown inline alongside the month totals. Supplement-only rows
         # contribute 0 to days_worked and 0 to cost.
+        #
+        # eff_rate: correlated scalar subquery — same logic as get_summary.
+        eff_rate = func.coalesce(
+            select(WorkerRateChangeModel.daily_rate)
+            .where(WorkerRateChangeModel.worker_id == LaborEntryModel.worker_id)
+            .where(WorkerRateChangeModel.effective_date <= LaborEntryModel.date)
+            .order_by(WorkerRateChangeModel.effective_date.desc())
+            .limit(1)
+            .correlate(LaborEntryModel, WorkerModel)
+            .scalar_subquery(),
+            WorkerModel.daily_rate,
+        )
+
         shift_multiplier = sa_case(
             (LaborEntryModel.shift_type == "half", 0.5),
             (LaborEntryModel.shift_type == "overtime", 1.5),
@@ -188,7 +221,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            WorkerModel.daily_rate * shift_multiplier,
+            eff_rate * shift_multiplier,
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),

@@ -620,7 +620,11 @@ def configure_container(
     if worker_repository and labor_entry_repository:
         # log_attendance_usecase, update_attendance_usecase, and bulk_log_attendance_usecase
         # are wired in app/__init__.py after tag_repo is constructed, so they require tag_repo.
-        container.list_labor_entries_usecase = ListLaborEntriesUseCase(worker_repository, labor_entry_repository)
+        # rate_change_repo is None here; it is re-wired in app/__init__.py once the repo
+        # is constructed (same late-wiring pattern as other repos in _configure_di_container).
+        container.list_labor_entries_usecase = ListLaborEntriesUseCase(
+            worker_repository, labor_entry_repository, rate_change_repo=None
+        )
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository, worker_repository)
 
     # Wire rate-change use cases (requires only worker_repository at this point;

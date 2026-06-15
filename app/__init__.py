@@ -1059,3 +1059,14 @@ def _configure_di_container() -> None:
             worker_repo=_c.worker_repository,
             rate_change_repo=_rate_change_repo,
         )
+
+    # Re-wire list_labor_entries_usecase with the rate-change repo now that it exists.
+    # configure_container() wired it with rate_change_repo=None (repo not built yet).
+    if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+        from app.application.labor.list_labor_entries import ListLaborEntriesUseCase as _ListEntriesUC
+
+        _c.list_labor_entries_usecase = _ListEntriesUC(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            rate_change_repo=_rate_change_repo,
+        )
