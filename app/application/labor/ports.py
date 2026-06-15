@@ -4,12 +4,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.entities.labor_activity import LaborActivity
+from app.domain.entities.worker_rate_change import WorkerRateChange
 
 
 @dataclass
@@ -213,6 +214,45 @@ class ILaborEntryRepository(ABC):
         Ordered by ``person_name`` ASC then ``project_name`` ASC for
         deterministic output. Returns an empty list when no conflicts.
         """
+        ...
+
+
+class IWorkerRateChangeRepository(ABC):
+    """Port for worker rate-change persistence operations.
+
+    ``upsert`` inserts or updates by (worker_id, effective_date) so callers
+    can use the same endpoint to both create and correct a rate for a given date.
+    ``list_by_worker`` / ``list_by_workers`` always return rows ordered
+    effective_date DESC so the first match in a scan is the most recent.
+    """
+
+    @abstractmethod
+    def upsert(self, rc: WorkerRateChange) -> WorkerRateChange:
+        """Insert or update the rate change keyed by (worker_id, effective_date)."""
+        ...
+
+    @abstractmethod
+    def list_by_worker(self, worker_id: UUID) -> List[WorkerRateChange]:
+        """Return all rate changes for one worker, effective_date DESC."""
+        ...
+
+    @abstractmethod
+    def list_by_workers(self, worker_ids: List[UUID]) -> Dict[UUID, List[WorkerRateChange]]:
+        """Return rate changes for multiple workers in a single query.
+
+        Keys are worker_id; values are lists ordered effective_date DESC.
+        Workers with no rate changes are absent from the dict.
+        """
+        ...
+
+    @abstractmethod
+    def find_by_id(self, rc_id: UUID) -> Optional[WorkerRateChange]:
+        """Return the rate change by primary key, or None."""
+        ...
+
+    @abstractmethod
+    def delete(self, rc_id: UUID) -> bool:
+        """Delete the rate change. Returns True if deleted, False if not found."""
         ...
 
 
