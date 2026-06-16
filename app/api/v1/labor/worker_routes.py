@@ -35,12 +35,21 @@ from wiring import get_container
 
 
 def _worker_response(w) -> WorkerResponse:
-    """Convert worker entity to response schema.
+    """Convert worker entity/summary to response schema.
 
     person_id / person_name / person_phone surface the joined identity from
     cook 1d-ii-a. They are None for workers not yet linked (pre-backfill).
     role_id / role_name / role_color surface the joined LaborRole identity.
+
+    current_daily_rate is resolved by ListWorkersUseCase from the rate-change
+    timeline (latest change <= today, else base). On create/update responses
+    the use case is not invoked, so we fall back to daily_rate — the FE
+    re-fetches the list to display the resolved rate.
     """
+    # WorkerSummary (list path) carries current_daily_rate; Worker entity
+    # (create/update path) carries the transient field set to None until
+    # list_workers resolves it.
+    _current = getattr(w, "current_daily_rate", None)
     return WorkerResponse(
         id=w.id,
         project_id=w.project_id,
@@ -55,6 +64,7 @@ def _worker_response(w) -> WorkerResponse:
         role_id=str(w.role_id) if w.role_id else None,
         role_name=w.role_name,
         role_color=w.role_color,
+        current_daily_rate=float(_current) if _current is not None else float(w.daily_rate),
     )
 
 
@@ -138,11 +148,11 @@ def update_worker(project_id: str, worker_id: str):
     try:
         # Only forward role_id when the client explicitly sent the key
         # — distinguishes "clear" (sent: null) from "leave unchanged" (omitted).
+        # daily_rate is NOT forwarded: base rate is locked at creation time.
         update_kwargs = dict(
             worker_id=UUID(worker_id),
             name=data.name,
             phone=data.phone,
-            daily_rate=Decimal(str(data.daily_rate)) if data.daily_rate else None,
         )
         if "role_id" in data.model_fields_set:
             update_kwargs["role_id"] = UUID(data.role_id) if data.role_id else None

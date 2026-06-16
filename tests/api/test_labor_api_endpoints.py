@@ -306,22 +306,32 @@ class TestWorkerRoutes:
         )
         assert resp.status_code == 400
 
-    def test_update_worker_invalid_rate_raises_400(self, labor_client, admin_token, labor_app):
-        """daily_rate=0 → 400 (Pydantic gt=0 constraint)."""
+    def test_update_worker_daily_rate_ignored(self, labor_client, admin_token, labor_app):
+        """daily_rate on PUT is silently ignored — base rate is immutable after creation.
+
+        The field is no longer part of UpdateWorkerRequest. Sending it must NOT
+        cause a 400 or mutate the worker's base daily_rate.
+        """
         pid = labor_app._test_project_id
         create_resp = labor_client.post(
             _workers_url(pid),
-            json={"name": "Rate Validation Worker", "daily_rate": 80.0},
+            json={"name": "Rate Immutable Worker", "daily_rate": 80.0},
             headers=_auth(admin_token),
         )
         assert create_resp.status_code == 201
         worker_id = create_resp.get_json()["id"]
+
+        # Sending daily_rate on PUT must not raise 400 (field is ignored)
         resp = labor_client.put(
             _worker_url(pid, worker_id),
-            json={"daily_rate": 0},
+            json={"daily_rate": 999, "name": "Rate Immutable Worker Updated"},
             headers=_auth(admin_token),
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["name"] == "Rate Immutable Worker Updated"
+        # Base rate must not have changed
+        assert data["daily_rate"] == 80.0
 
 
 # ---------------------------------------------------------------------------

@@ -615,7 +615,9 @@ def configure_container(
         container.create_worker_usecase = CreateWorkerUseCase(worker_repository)
         container.update_worker_usecase = UpdateWorkerUseCase(worker_repository)
         container.delete_worker_usecase = DeleteWorkerUseCase(worker_repository)
-        container.list_workers_usecase = ListWorkersUseCase(worker_repository)
+        # rate_change_repo is None here; re-wired in app/__init__.py once the repo
+        # is constructed (same late-wiring pattern as list_labor_entries_usecase).
+        container.list_workers_usecase = ListWorkersUseCase(worker_repository, rate_change_repo=None)
 
     if worker_repository and labor_entry_repository:
         # log_attendance_usecase, update_attendance_usecase, and bulk_log_attendance_usecase

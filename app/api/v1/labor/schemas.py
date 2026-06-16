@@ -31,10 +31,14 @@ class CreateWorkerRequest(BaseModel):
 
 
 class UpdateWorkerRequest(BaseModel):
-    """Request body for updating a worker."""
+    """Request body for updating a worker.
+
+    ``daily_rate`` is intentionally excluded: the base rate is immutable after
+    worker creation. Use POST /workers/<id>/rate-changes to record pay-rate
+    changes with an effective date so history is preserved.
+    """
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    daily_rate: Optional[float] = Field(None, gt=0)
     phone: Optional[str] = Field(None, max_length=50)
     # Pydantic v2: distinguishing "unset" from "explicit None" needs model_fields_set.
     # The route layer reads model_fields_set to decide whether to forward role_id.
@@ -202,6 +206,10 @@ class WorkerResponse(BaseModel):
     role_id: Optional[str] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+
+    # Resolved current effective rate (latest rate change <= today, else base).
+    # Always present on list responses; may fall back to daily_rate on create/update.
+    current_daily_rate: float = 0.0
 
 
 class WorkerListResponse(BaseModel):
