@@ -28,7 +28,7 @@ def upgrade() -> None:
         ),
         sa.Column("effective_date", sa.Date(), nullable=False),
         sa.Column("daily_rate", sa.Numeric(10, 2), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
     )
     op.create_index(
         "ix_worker_rate_changes_worker_id",

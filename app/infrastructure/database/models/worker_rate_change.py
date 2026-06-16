@@ -9,7 +9,7 @@ if no row exists, callers fall back to ``workers.daily_rate``.
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Index, Numeric, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Index, Numeric, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -30,7 +30,7 @@ class WorkerRateChangeModel(Base):
     )
     effective_date = Column(Date, nullable=False)
     daily_rate = Column(Numeric(10, 2), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, nullable=False, server_default=func.now(), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("worker_id", "effective_date", name="uq_worker_rate_effective"),

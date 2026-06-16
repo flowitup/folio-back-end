@@ -25,7 +25,9 @@ class LaborSummaryRow:
     days_worked: Decimal
     total_cost: Decimal
     banked_hours: int = 0  # sum of supplement_hours for this worker over the period
-    daily_rate: Decimal = Decimal("0")  # worker's base rate; used for bonus-cost computation
+    daily_rate: Decimal = Decimal(
+        "0"
+    )  # resolved bonus rate — worker's latest effective rate as of date_to (base-rate fallback); used for bonus-day cost
 
 
 @dataclass

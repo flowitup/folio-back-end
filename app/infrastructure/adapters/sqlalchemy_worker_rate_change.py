@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.labor.ports import IWorkerRateChangeRepository
@@ -16,8 +17,9 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
 
     ``upsert`` always commits so the row is visible to subsequent queries
     inside the same request (same session / unit-of-work).  Without an
-    explicit commit the row would be rolled back at request end — same
-    class of bug as the labor-entry delete issue documented in PR #29.
+    explicit commit the row remains in the session identity map only and is
+    rolled back at request end, making it invisible to callers that read
+    after the write.
     """
 
     def __init__(self, session: Session) -> None:
@@ -28,7 +30,13 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
     # ------------------------------------------------------------------
 
     def upsert(self, rc: WorkerRateChange) -> WorkerRateChange:
-        """Insert or update the rate change keyed by (worker_id, effective_date)."""
+        """Insert or update the rate change keyed by (worker_id, effective_date).
+
+        Race-safe: if a concurrent request inserts the same (worker_id,
+        effective_date) between our SELECT and INSERT, the IntegrityError is
+        caught, the partial transaction is rolled back, and we re-SELECT the
+        now-existing row to update its daily_rate.
+        """
         existing = (
             self._session.query(WorkerRateChangeModel)
             .filter_by(worker_id=rc.worker_id, effective_date=rc.effective_date)
@@ -47,7 +55,20 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
             created_at=rc.created_at,
         )
         self._session.add(model)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError:
+            self._session.rollback()
+            # A concurrent request inserted the same (worker_id, effective_date).
+            # Re-select and update daily_rate so the caller's intent is honoured.
+            existing = (
+                self._session.query(WorkerRateChangeModel)
+                .filter_by(worker_id=rc.worker_id, effective_date=rc.effective_date)
+                .first()
+            )
+            existing.daily_rate = rc.daily_rate  # type: ignore[union-attr]
+            self._session.commit()
+            return self._to_entity(existing)  # type: ignore[arg-type]
         return self._to_entity(model)
 
     def list_by_worker(self, worker_id: UUID) -> List[WorkerRateChange]:
@@ -96,8 +117,9 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
         """Delete the rate change. Returns True if deleted, False if not found.
 
         Uses load-then-delete (not bulk delete) so the session unit-of-work
-        is cleanly closed — prevents the same stale-row bug class as
-        labor-entry bulk delete (PR #29).
+        is cleanly closed; a bulk ``query.delete()`` without commit leaves the
+        row alive past request end because the DELETE is never flushed to the
+        database.
         """
         model = self._session.query(WorkerRateChangeModel).filter_by(id=rc_id).first()
         if model is None:

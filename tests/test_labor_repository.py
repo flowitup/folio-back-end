@@ -13,6 +13,7 @@ from app.infrastructure.database.models import (
     ProjectModel,
     UserModel,
 )
+from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.domain.entities.worker import Worker
@@ -708,3 +709,101 @@ class TestSQLAlchemyLaborEntryRepository:
 
         all_rows = entry_repo.list_by_project(sample_project.id)
         assert len(all_rows) == 3
+
+
+class TestGetSummaryBonusRateResolution:
+    """Verify get_summary returns resolved bonus rate in the daily_rate field.
+
+    Decision D6: bonus-day cost uses the worker's latest effective rate as of
+    date_to, falling back to worker.daily_rate when no rate-change exists.
+    """
+
+    def test_bonus_rate_uses_resolved_rate_when_rate_change_exists(
+        self, entry_repo, worker_repo, sample_project, session
+    ):
+        """When a rate change is effective before date_to, daily_rate reflects
+        the changed rate — not the base rate — so bonus cost is priced correctly."""
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Rate Change Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        # Rate change effective 2026-03-01: base 100 → 200.
+        rc = WorkerRateChangeModel(
+            id=uuid4(),
+            worker_id=worker.id,
+            effective_date=date(2026, 3, 1),
+            daily_rate=Decimal("200.00"),
+        )
+        session.add(rc)
+        session.commit()
+
+        # 8 banked hours → 1 full bonus day; supplement-only row (shift_type=None).
+        session.add(
+            LaborEntryModel(
+                id=uuid4(),
+                worker_id=worker.id,
+                date=date(2026, 3, 15),
+                shift_type=None,
+                supplement_hours=8,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+
+        # date_to is after the rate change → resolved rate should be 200.
+        results = entry_repo.get_summary(
+            sample_project.id,
+            date_from=date(2026, 3, 1),
+            date_to=date(2026, 3, 31),
+        )
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.banked_hours == 8
+        # daily_rate carries the RESOLVED rate (200), not the base (100).
+        assert row.daily_rate == Decimal("200.00"), f"expected resolved rate 200 but got {row.daily_rate}"
+        # Verify the use-case layer would price the bonus at 200 (not 100).
+        bonus_full = row.banked_hours // 8  # == 1
+        bonus_cost = Decimal(bonus_full) * row.daily_rate
+        assert bonus_cost == Decimal("200.00")
+
+    def test_bonus_rate_falls_back_to_base_when_no_rate_change(self, entry_repo, worker_repo, sample_project):
+        """With no rate-change rows, daily_rate falls back to worker.daily_rate."""
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Base Rate Worker",
+            daily_rate=Decimal("150.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        entry_repo.create(
+            LaborEntry(
+                id=uuid4(),
+                worker_id=worker.id,
+                date=date(2026, 4, 10),
+                shift_type=None,
+                supplement_hours=8,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+        results = entry_repo.get_summary(
+            sample_project.id,
+            date_from=date(2026, 4, 1),
+            date_to=date(2026, 4, 30),
+        )
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.daily_rate == Decimal("150.00"), f"expected base rate 150 but got {row.daily_rate}"
+        bonus_cost = Decimal(row.banked_hours // 8) * row.daily_rate
+        assert bonus_cost == Decimal("150.00")

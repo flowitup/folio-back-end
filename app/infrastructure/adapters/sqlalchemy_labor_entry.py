@@ -98,7 +98,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
     def delete(self, entry_id: UUID) -> bool:
         # Load the entity then session.delete + commit. bulk-query .delete()
         # without commit() leaves the unit-of-work open and the row survives
-        # request end (same bug class as PR #29 on project repo).
+        # request end because the DELETE is never flushed to the database.
         entry = self._session.query(LaborEntryModel).filter_by(id=entry_id).first()
         if entry is None:
             return False
@@ -155,16 +155,27 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             else_=shift_multiplier,
         )
 
-        # bonus_rate: worker's latest effective rate as of date_to (or overall
-        # latest when date_to is not specified), coalesced to worker.daily_rate.
-        # Used by the caller to compute bonus-day cost.  Scalar subquery → not
-        # in GROUP BY, so group_by stays on (WorkerModel.id, display_name, daily_rate).
+        # bonus_rate: worker's latest effective rate as of date_to (or the
+        # overall latest change when date_to is not provided), coalesced to
+        # worker.daily_rate when no rate-change row exists.  This scalar
+        # subquery correlates on WorkerModel.id so it is excluded from GROUP BY
+        # — group_by stays on (WorkerModel.id, display_name, WorkerModel.daily_rate).
+        # The resolved rate is returned in the "daily_rate" column and consumed
+        # by the use-case layer to price bonus days (decision D6).
+        _br = select(WorkerRateChangeModel.daily_rate).where(WorkerRateChangeModel.worker_id == WorkerModel.id)
+        if date_to is not None:
+            _br = _br.where(WorkerRateChangeModel.effective_date <= date_to)
+        bonus_rate = func.coalesce(
+            _br.order_by(WorkerRateChangeModel.effective_date.desc()).limit(1).correlate(WorkerModel).scalar_subquery(),
+            WorkerModel.daily_rate,
+        )
+
         display_name = func.coalesce(PersonModel.name, WorkerModel.name)
         query = (
             self._session.query(
                 WorkerModel.id.label("worker_id"),
                 display_name.label("worker_name"),
-                WorkerModel.daily_rate.label("daily_rate"),
+                bonus_rate.label("daily_rate"),
                 func.sum(priced_days).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
                 func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
