@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
@@ -21,7 +20,9 @@ class UpdateWorkerRequest:
     worker_id: UUID
     name: Optional[str] = None
     phone: Optional[str] = None
-    daily_rate: Optional[Decimal] = None
+    # daily_rate is intentionally absent: base rate is immutable after creation.
+    # Use the rate-change timeline (POST /workers/<id>/rate-changes) to record
+    # pay increases or decreases with an effective date.
     # Use a sentinel so callers can explicitly clear the role assignment
     # (role_id=None means "clear"; omit the field to leave unchanged).
     role_id: object = _ROLE_SENTINEL
@@ -66,11 +67,6 @@ class UpdateWorkerUseCase:
 
         if request.phone is not None:
             worker.phone = request.phone.strip() if request.phone else None
-
-        if request.daily_rate is not None:
-            if request.daily_rate <= 0:
-                raise InvalidWorkerDataError("Daily rate must be greater than 0")
-            worker.daily_rate = request.daily_rate
 
         if request.role_id is not _ROLE_SENTINEL:
             worker.role_id = request.role_id  # type: ignore[assignment]

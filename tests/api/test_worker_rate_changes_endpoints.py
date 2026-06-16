@@ -126,6 +126,13 @@ def rate_app():
             entry_repo=entry_repo,
             rate_change_repo=rate_change_repo,
         )
+        # Re-wire list_workers_usecase so current_daily_rate is resolved from the timeline
+        from app.application.labor.list_workers import ListWorkersUseCase as _ListWorkersUC
+
+        _c.list_workers_usecase = _ListWorkersUC(
+            worker_repo=worker_repo,
+            rate_change_repo=rate_change_repo,
+        )
 
         # Wire attendance write use-cases (need tag_repo)
         _tag_repo = SqlAlchemyProjectTagRepository(db.session)
@@ -577,3 +584,76 @@ class TestRateResolutionInMonthlySummary:
         # 100 + 180 = 280 total for October for this worker
         oct_worker = next(w for w in oct_row["workers"] if w["worker_id"] == wid)
         assert oct_worker["total_cost"] == pytest.approx(280.0)
+
+
+# ---------------------------------------------------------------------------
+# current_daily_rate on worker list — resolves from rate-change timeline
+# ---------------------------------------------------------------------------
+
+
+class TestCurrentDailyRateOnWorkerList:
+    """GET /workers returns current_daily_rate = effective rate as of today."""
+
+    def _workers_url(self, pid: str) -> str:
+        return f"/api/v1/projects/{pid}/workers"
+
+    def test_no_rate_changes_current_equals_base(self, rc_client, admin_token, rate_app):
+        """Worker with no rate changes → current_daily_rate equals base daily_rate."""
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "No-Change Worker", rate=100.0)
+
+        resp = rc_client.get(self._workers_url(pid), headers=_auth(admin_token))
+        assert resp.status_code == 200
+        workers = resp.get_json()["workers"]
+        w = next(w for w in workers if w["id"] == worker["id"])
+        assert w["current_daily_rate"] == pytest.approx(100.0)
+        assert w["daily_rate"] == pytest.approx(100.0)
+
+    def test_past_rate_change_reflected_in_current(self, rc_client, admin_token, rate_app):
+        """A rate change with effective_date <= today → current_daily_rate = new rate."""
+        from datetime import date, timedelta
+
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "Past-Change Worker", rate=100.0)
+        wid = worker["id"]
+
+        # Past effective date (yesterday) — should be active today
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        resp = rc_client.post(
+            _rate_changes_url(pid, wid),
+            json={"effective_date": yesterday, "daily_rate": 200.0},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201
+
+        resp = rc_client.get(self._workers_url(pid), headers=_auth(admin_token))
+        workers = resp.get_json()["workers"]
+        w = next(w for w in workers if w["id"] == wid)
+        # current_daily_rate must reflect the pay increase
+        assert w["current_daily_rate"] == pytest.approx(200.0)
+        # base rate is unchanged
+        assert w["daily_rate"] == pytest.approx(100.0)
+
+    def test_future_rate_change_does_not_affect_current(self, rc_client, admin_token, rate_app):
+        """A rate change with effective_date > today → current_daily_rate stays at prior/base."""
+        from datetime import date, timedelta
+
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "Future-Change Worker", rate=100.0)
+        wid = worker["id"]
+
+        # Future effective date — must not influence today's displayed rate
+        future = (date.today() + timedelta(days=30)).isoformat()
+        resp = rc_client.post(
+            _rate_changes_url(pid, wid),
+            json={"effective_date": future, "daily_rate": 999.0},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201
+
+        resp = rc_client.get(self._workers_url(pid), headers=_auth(admin_token))
+        workers = resp.get_json()["workers"]
+        w = next(w for w in workers if w["id"] == wid)
+        # current_daily_rate must NOT jump to the future rate
+        assert w["current_daily_rate"] == pytest.approx(100.0)
+        assert w["daily_rate"] == pytest.approx(100.0)

@@ -926,6 +926,16 @@ def invitation_app():
                 rate_change_repo=_rate_change_repo,
             )
 
+        # Re-wire list_workers_usecase with the rate-change repo so the worker
+        # list returns current_daily_rate resolved from the effective-dated timeline.
+        if _c.worker_repository is not None:
+            from app.application.labor.list_workers import ListWorkersUseCase as _ListWorkersUC
+
+            _c.list_workers_usecase = _ListWorkersUC(
+                worker_repo=_c.worker_repository,
+                rate_change_repo=_rate_change_repo,
+            )
+
         yield test_app
 
         db.session.remove()
