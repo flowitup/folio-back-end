@@ -35,6 +35,7 @@ from app.application.projects import (
 from app.application.labor import (
     IWorkerRepository,
     ILaborEntryRepository,
+    IWorkerRateChangeRepository,
     CreateWorkerUseCase,
     UpdateWorkerUseCase,
     DeleteWorkerUseCase,
@@ -45,6 +46,9 @@ from app.application.labor import (
     ListLaborEntriesUseCase,
     GetLaborSummaryUseCase,
     GetMonthlyLaborSummaryUseCase,
+    SetWorkerRateChangeUseCase,
+    ListWorkerRateChangesUseCase,
+    DeleteWorkerRateChangeUseCase,
 )
 from app.application.labor.export_labor_usecase import ExportLaborUseCase
 from app.application.labor.labor_role_ports import ILaborRoleRepository
@@ -224,6 +228,7 @@ class Container:
     labor_entry_repository: Optional[ILaborEntryRepository] = None
     labor_role_repository: Optional[ILaborRoleRepository] = None
     labor_activity_repository: Optional[ILaborActivityRepository] = None
+    worker_rate_change_repository: Optional[IWorkerRateChangeRepository] = None
 
     # Invoice ports and use cases
     invoice_repository: Optional[IInvoiceRepository] = None
@@ -418,6 +423,11 @@ class Container:
     update_labor_activity_usecase: Optional[UpdateLaborActivityUseCase] = None
     delete_labor_activity_usecase: Optional[DeleteLaborActivityUseCase] = None
 
+    # Worker rate-change use cases (effective-dated pay-rate timeline)
+    set_worker_rate_change_usecase: Optional[SetWorkerRateChangeUseCase] = None
+    list_worker_rate_changes_usecase: Optional[ListWorkerRateChangesUseCase] = None
+    delete_worker_rate_change_usecase: Optional[DeleteWorkerRateChangeUseCase] = None
+
     # -----------------------------------------------------------------------
     # Tags repo + use-cases (project-scoped phase tags)
     # -----------------------------------------------------------------------
@@ -610,8 +620,16 @@ def configure_container(
     if worker_repository and labor_entry_repository:
         # log_attendance_usecase, update_attendance_usecase, and bulk_log_attendance_usecase
         # are wired in app/__init__.py after tag_repo is constructed, so they require tag_repo.
-        container.list_labor_entries_usecase = ListLaborEntriesUseCase(worker_repository, labor_entry_repository)
+        # rate_change_repo is None here; it is re-wired in app/__init__.py once the repo
+        # is constructed (same late-wiring pattern as other repos in _configure_di_container).
+        container.list_labor_entries_usecase = ListLaborEntriesUseCase(
+            worker_repository, labor_entry_repository, rate_change_repo=None
+        )
         container.delete_attendance_usecase = DeleteAttendanceUseCase(labor_entry_repository, worker_repository)
+
+    # Wire rate-change use cases (requires only worker_repository at this point;
+    # rate_change_repo is instantiated in app/__init__.py and set on the container there).
+    # Use cases are wired in app/__init__.py after the repo is built.
 
     if labor_entry_repository:
         container.get_labor_summary_usecase = GetLaborSummaryUseCase(labor_entry_repository)

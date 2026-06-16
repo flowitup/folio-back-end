@@ -51,6 +51,7 @@ class WorkerModel(Base):
     person = relationship("PersonModel", back_populates="workers")
     role = relationship("LaborRoleModel")
     labor_entries = relationship("LaborEntryModel", back_populates="worker", cascade="all, delete-orphan")
+    rate_changes = relationship("WorkerRateChangeModel", back_populates="worker", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Worker {self.name}>"

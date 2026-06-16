@@ -1030,3 +1030,43 @@ def _configure_di_container() -> None:
             payment_method_repo=_pm,
             tag_repo=_tag_repo,
         )
+
+    # -----------------------------------------------------------------------
+    # Worker rate-change repo + use-cases (effective-dated pay-rate timeline)
+    # CRITICAL: any use-case added here MUST also appear in the invitation_app
+    # fixture in tests/conftest.py or the fixture will drift from prod wiring.
+    # -----------------------------------------------------------------------
+    from app.infrastructure.adapters.sqlalchemy_worker_rate_change import (
+        SQLAlchemyWorkerRateChangeRepository as _WorkerRateChangeRepo,
+    )
+    from app.application.labor.set_worker_rate_change import SetWorkerRateChangeUseCase as _SetRateUC
+    from app.application.labor.list_worker_rate_changes import ListWorkerRateChangesUseCase as _ListRateUC
+    from app.application.labor.delete_worker_rate_change import DeleteWorkerRateChangeUseCase as _DelRateUC
+
+    _rate_change_repo = _WorkerRateChangeRepo(db.session)
+    _c.worker_rate_change_repository = _rate_change_repo
+
+    if _c.worker_repository is not None:
+        _c.set_worker_rate_change_usecase = _SetRateUC(
+            worker_repo=_c.worker_repository,
+            rate_change_repo=_rate_change_repo,
+        )
+        _c.list_worker_rate_changes_usecase = _ListRateUC(
+            worker_repo=_c.worker_repository,
+            rate_change_repo=_rate_change_repo,
+        )
+        _c.delete_worker_rate_change_usecase = _DelRateUC(
+            worker_repo=_c.worker_repository,
+            rate_change_repo=_rate_change_repo,
+        )
+
+    # Re-wire list_labor_entries_usecase with the rate-change repo now that it exists.
+    # configure_container() wired it with rate_change_repo=None (repo not built yet).
+    if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+        from app.application.labor.list_labor_entries import ListLaborEntriesUseCase as _ListEntriesUC
+
+        _c.list_labor_entries_usecase = _ListEntriesUC(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            rate_change_repo=_rate_change_repo,
+        )

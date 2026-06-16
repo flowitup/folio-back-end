@@ -2,10 +2,13 @@
 
 from dataclasses import dataclass
 from datetime import date
-from typing import List, Optional
+from decimal import Decimal
+from typing import Dict, List, Optional
 from uuid import UUID
 
-from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
+from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
+from app.domain.entities.worker import Worker
+from app.domain.entities.worker_rate_change import WorkerRateChange
 
 
 @dataclass
@@ -38,21 +41,47 @@ class ListLaborEntriesRequest:
     tag_id: Optional[UUID] = None
 
 
+def _resolve_rate(worker: Worker, entry_date: date, rate_changes: List[WorkerRateChange]) -> Decimal:
+    """Return the effective daily rate for worker on entry_date.
+
+    ``rate_changes`` must be ordered effective_date DESC (as returned by the
+    repository).  The first change whose effective_date <= entry_date is the
+    winner; if no change qualifies, fall back to worker.daily_rate.
+    """
+    for rc in rate_changes:
+        if rc.effective_date <= entry_date:
+            return rc.daily_rate
+    return worker.daily_rate
+
+
 class ListLaborEntriesUseCase:
-    """List labor entries for a project with optional filters."""
+    """List labor entries for a project with optional filters.
+
+    Injects IWorkerRateChangeRepository to resolve the effective daily rate per
+    entry date rather than using the single current worker.daily_rate.  This
+    prevents retroactive repricing when the worker's base rate is edited.
+    """
 
     def __init__(
         self,
         worker_repo: IWorkerRepository,
         entry_repo: ILaborEntryRepository,
+        rate_change_repo: Optional[IWorkerRateChangeRepository] = None,
     ):
         self._worker_repo = worker_repo
         self._entry_repo = entry_repo
+        self._rate_repo = rate_change_repo
 
     def execute(self, request: ListLaborEntriesRequest) -> List[LaborEntryDetail]:
         # Get all workers for lookup (including inactive for historical entries)
         workers = self._worker_repo.list_by_project(request.project_id, active_only=False)
         worker_map = {w.id: w for w in workers}
+
+        # Fetch rate timelines for all workers in one query; fall back to empty
+        # dict when no rate-change repo is wired (backward-compat path).
+        rate_map: Dict[UUID, List[WorkerRateChange]] = {}
+        if self._rate_repo is not None and worker_map:
+            rate_map = self._rate_repo.list_by_workers(list(worker_map.keys()))
 
         entries = self._entry_repo.list_by_project(
             project_id=request.project_id,
@@ -69,8 +98,10 @@ class ListLaborEntriesUseCase:
             if not worker:
                 continue  # Skip orphaned entries
 
-            # Delegate effective cost to the domain entity
-            effective_cost = float(entry.effective_cost(worker.daily_rate))
+            # Resolve effective rate for this entry's date, then delegate cost
+            # computation to the domain entity (amount_override still wins there).
+            resolved_rate = _resolve_rate(worker, entry.date, rate_map.get(entry.worker_id, []))
+            effective_cost = float(entry.effective_cost(resolved_rate))
 
             result.append(
                 LaborEntryDetail(

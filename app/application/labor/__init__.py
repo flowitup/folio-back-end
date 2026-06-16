@@ -3,6 +3,7 @@
 from app.application.labor.ports import (
     IWorkerRepository,
     ILaborEntryRepository,
+    IWorkerRateChangeRepository,
     LaborSummaryRow,
     MonthlyLaborSummaryRow,
     MonthlyWorkerSubRow,
@@ -72,6 +73,19 @@ from app.application.labor.get_monthly_labor_summary import (
     MonthlySummaryRow,
     MonthlyWorkerSubRow as MonthlyWorkerSubRowDTO,
 )
+from app.application.labor.set_worker_rate_change import (
+    SetWorkerRateChangeUseCase,
+    SetWorkerRateChangeRequest,
+    RateChangeDTO,
+)
+from app.application.labor.list_worker_rate_changes import (
+    ListWorkerRateChangesUseCase,
+    ListWorkerRateChangesRequest,
+)
+from app.application.labor.delete_worker_rate_change import (
+    DeleteWorkerRateChangeUseCase,
+    DeleteWorkerRateChangeRequest,
+)
 
 __all__ = [
     # Ports
@@ -124,4 +138,13 @@ __all__ = [
     "FindCrossProjectConflictsUseCase",
     "FindCrossProjectConflictsRequest",
     "FindCrossProjectConflictsResponse",
+    # Rate-change use cases + port
+    "IWorkerRateChangeRepository",
+    "SetWorkerRateChangeUseCase",
+    "SetWorkerRateChangeRequest",
+    "RateChangeDTO",
+    "ListWorkerRateChangesUseCase",
+    "ListWorkerRateChangesRequest",
+    "DeleteWorkerRateChangeUseCase",
+    "DeleteWorkerRateChangeRequest",
 ]

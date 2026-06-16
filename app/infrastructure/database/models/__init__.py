@@ -39,6 +39,7 @@ from app.infrastructure.database.models.labor_activity import LaborActivityModel
 from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
+from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 
 __all__ = [
     "Base",
@@ -73,4 +74,5 @@ __all__ = [
     "BibliothequeSupplierModel",
     "BibliothequeProductModel",
     "BibliothequePurchaseModel",
+    "WorkerRateChangeModel",
 ]

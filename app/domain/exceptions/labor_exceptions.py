@@ -88,3 +88,18 @@ class LaborActivityNotFoundError(LaborError):
     def __init__(self, activity_id: object) -> None:
         self.activity_id = activity_id
         super().__init__(f"Labor activity not found: {activity_id}")
+
+
+class InvalidRateChangeError(LaborError):
+    """Raised when worker rate-change data validation fails (e.g. rate <= 0)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class RateChangeNotFoundError(LaborError):
+    """Raised when a worker rate-change record does not exist."""
+
+    def __init__(self, rc_id: object) -> None:
+        self.rc_id = rc_id
+        super().__init__(f"Rate change not found: {rc_id}")
