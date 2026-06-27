@@ -9,19 +9,26 @@ Layout (A4 portrait, 15mm margins)
   3. Per-worker breakdown table — aggregated across all months
      Columns: Worker | Days | Banked hrs | Bonus full | Bonus half |
               Priced cost | Bonus cost | Total (priced + bonus)
-  4. Page-X footer on every page (Page X only — two-pass X/Y is future work)
+  4. Activity log section — one block per month that has activities
+     Columns: Date | Activity | Description
+     (independent of labor entries — rendered even when summary.rows is empty)
+  5. Page-X footer on every page (Page X only — two-pass X/Y is future work)
 
 Currency rule (LOCKED)
 -----------------------
 All monetary values formatted via format_eur_fr(Decimal) → "200,00 €"
 (matches xlsx number_format + FE Intl.NumberFormat fr-FR).
 
-No daily detail — lives only in xlsx (locked decision).
+No daily per-charge-row detail — individual attendance rows live only in xlsx (locked
+decision). The project activity log (date · title · description) IS included in the PDF
+as a separate section (see step 4 above).
 
 Empty-range case
 -----------------
-If all buckets have empty summary.rows:
+If all buckets have empty summary.rows AND no bucket has activities:
   header + "No labor entries in range …" paragraph, no KPI table, no breakdown table.
+If activities exist but summary.rows are empty, the activity section still renders
+(activities are independent of labor charge data).
 """
 
 from __future__ import annotations
@@ -410,6 +417,113 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
 
 
 # ---------------------------------------------------------------------------
+# Activity log section
+# ---------------------------------------------------------------------------
+
+# Column weight ratios for the activity table: Date (narrow), Activity/title, Description (widest)
+_ACTIVITY_COL_WEIGHTS = [2, 3, 5]
+
+# Heading style for each per-month activity sub-section
+_ACTIVITY_SECTION_HEADER_STYLE_NAME = "h2"
+
+
+def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_width: float) -> list:
+    """Build the project activity log section — one block per month that has activities.
+
+    For each bucket with at least one activity, renders:
+      - A sub-heading paragraph: "Activity log — <Mon YYYY>"
+      - A table with header row [Date, Activity, Description] and one data row
+        per activity. Date cells use dd/mm/YYYY format (consistent with the rest
+        of the PDF). Description cells wrap via Paragraph so long text flows naturally.
+
+    Styling follows the same idiom as _render_breakdown_table: DejaVu-Bold header
+    on light-grey, 0.5 BOX, 0.25 INNERGRID, alternate row shading #F7F9FC.
+
+    Args:
+        buckets: All month buckets in the export range (chronological order preserved).
+        styles:  Style dict from _make_styles().
+        usable_width: Printable page width in points (A4 minus margins).
+
+    Returns:
+        List of ReportLab flowable elements to extend onto the story.
+    """
+    total_weight = sum(_ACTIVITY_COL_WEIGHTS)
+    col_widths = [usable_width * (w / total_weight) for w in _ACTIVITY_COL_WEIGHTS]
+
+    elements: list = []
+
+    for bucket in buckets:
+        if not bucket.activities:
+            continue
+
+        # Per-month sub-heading
+        month_label = bucket.month.strftime("%b %Y")
+        elements.append(Spacer(1, 4 * mm))
+        elements.append(
+            Paragraph(f"Activity log — {_xml_escape(month_label)}", styles[_ACTIVITY_SECTION_HEADER_STYLE_NAME])
+        )
+
+        # Table header + data rows
+        header_row = ["Date", "Activity", "Description"]
+        table_data = [header_row]
+
+        for idx, activity in enumerate(bucket.activities):
+            # activity.date is an ISO string 'YYYY-MM-DD'; reformat to dd/mm/YYYY
+            # for visual consistency with the rest of the PDF (generated_at uses %d/%m/%Y).
+            try:
+                iso_parts = activity.date.split("-")
+                formatted_date = f"{iso_parts[2]}/{iso_parts[1]}/{iso_parts[0]}"
+            except Exception:
+                # Fallback: render the ISO string as-is if parsing fails
+                formatted_date = activity.date
+
+            description_text = activity.description or ""
+            table_data.append(
+                [
+                    _xml_escape(formatted_date),
+                    _xml_escape(activity.title),
+                    # Wrap description in a Paragraph so long text reflows within the cell
+                    Paragraph(_xml_escape(description_text), styles["body"]),
+                ]
+            )
+
+        style_cmds = [
+            # Header row
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("FONTNAME", (0, 0), (-1, 0), "DejaVu-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 8),
+            # Body font
+            ("FONTNAME", (0, 1), (-1, -1), "DejaVu"),
+            ("FONTSIZE", (0, 1), (-1, -1), 8),
+            # Borders
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+            # Padding
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            # Left-align all columns (date and text)
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            # Centre header row
+            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+            # Top-align cell content so multi-line description aligns with date/title
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]
+
+        # Alternate row shading for readability
+        for i in range(len(bucket.activities)):
+            if i % 2 == 1:
+                style_cmds.append(("BACKGROUND", (0, i + 1), (-1, i + 1), colors.HexColor("#F7F9FC")))
+
+        table = Table(table_data, colWidths=col_widths, repeatRows=1)
+        table.setStyle(TableStyle(style_cmds))
+        elements.append(table)
+
+    return elements
+
+
+# ---------------------------------------------------------------------------
 # Footer callback
 # ---------------------------------------------------------------------------
 
@@ -480,12 +594,33 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
 
     # Determine empty-range case — summary.rows already scoped to worker by use-case
     all_empty = all(not bucket.summary.rows for bucket in buckets) if buckets else True
+    # Activities are independent of labor charge data — check separately using getattr
+    # so this code stays compatible with MonthBucket instances that predate the field.
+    has_activities = any(getattr(b, "activities", None) for b in buckets)
 
     story: list = []
     story.extend(_render_header(context, styles))
     story.append(Spacer(1, 6 * mm))
 
-    if all_empty:
+    if not all_empty:
+        # KPI and breakdown tables work identically for both single-worker and
+        # project-wide modes because the buckets are already pre-filtered by
+        # worker_id in the use-case. The breakdown table will therefore contain
+        # exactly one worker row in single-worker mode.
+        story.extend(_render_kpi_table(buckets, styles))
+        story.append(Spacer(1, 6 * mm))
+        story.extend(_render_breakdown_table(buckets, styles, usable_width))
+
+    if has_activities:
+        # Activity log section is rendered regardless of whether labor entries exist.
+        # A leading spacer separates it visually from the header (empty-entries case)
+        # or from the breakdown table (normal case).
+        story.append(Spacer(1, 6 * mm))
+        story.extend(_render_activity_section(buckets, styles, usable_width))
+
+    if all_empty and not has_activities:
+        # Nothing meaningful to show — emit a human-readable placeholder instead of
+        # leaving the PDF completely blank after the header.
         from_label = context.range.from_month.strftime("%b %Y")
         to_label = context.range.to_month.strftime("%b %Y")
         story.append(
@@ -494,14 +629,6 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
                 styles["body_italic"],
             )
         )
-    else:
-        # KPI and breakdown tables work identically for both single-worker and
-        # project-wide modes because the buckets are already pre-filtered by
-        # worker_id in the use-case. The breakdown table will therefore contain
-        # exactly one worker row in single-worker mode.
-        story.extend(_render_kpi_table(buckets, styles))
-        story.append(Spacer(1, 6 * mm))
-        story.extend(_render_breakdown_table(buckets, styles, usable_width))
 
     doc.build(story, onFirstPage=footer_cb, onLaterPages=footer_cb)
     return buf.getvalue()

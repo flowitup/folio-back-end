@@ -652,6 +652,9 @@ def configure_container(
             summary_usecase=GetLaborSummaryUseCase(labor_entry_repository),
             list_entries_usecase=ListLaborEntriesUseCase(worker_repository, labor_entry_repository),
             project_repo=project_repository,
+            # list_activities_usecase is wired later in app/__init__.py once
+            # SQLAlchemyLaborActivityRepository is constructed (post-configure_container).
+            # Default None is safe — PDF renders without activity section until re-wired.
         )
 
     # Wire invoice use cases

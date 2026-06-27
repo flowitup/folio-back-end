@@ -9,6 +9,7 @@ Covers:
 - filename slug fallback: CJK/emoji project name → short ID prefix slug
 - ProjectNotFoundError propagation when project does not exist
 - cross-month aggregation: same worker in 2 months → days_worked correctly reflected in export
+- activities use-case: MonthBucket.activities populated when use-case provided; empty when not
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from app.application.labor.get_labor_summary import (
     LaborSummaryResponse,
     WorkerCostSummary,
 )
+from app.application.labor.labor_activity_usecases import LaborActivityDetail, ListLaborActivitiesUseCase
 from app.application.labor.list_labor_entries import LaborEntryDetail, ListLaborEntriesRequest, ListLaborEntriesUseCase
 from app.domain.entities.project import Project
 from app.domain.entities.worker import Worker
@@ -906,3 +908,233 @@ class TestInactiveWorkerBlocked:
         )
         result = uc.execute(req)
         assert result.content[:4] == b"PK\x03\x04"
+
+
+# ---------------------------------------------------------------------------
+# Activity use-case integration
+# ---------------------------------------------------------------------------
+
+
+def _make_activity_detail(
+    *,
+    title: str = "Daily activity",
+    description: str = "Work done",
+    activity_date: str = "2026-01-10",
+) -> LaborActivityDetail:
+    return LaborActivityDetail(
+        id=uuid4(),
+        project_id=uuid4(),
+        date=activity_date,
+        title=title,
+        description=description,
+        created_by=None,
+        created_at="2026-01-10T07:00:00+00:00",
+        updated_at="2026-01-10T07:00:00+00:00",
+    )
+
+
+def _build_usecase_with_activities(
+    project: Optional[Project],
+    activities_return: list,
+) -> ExportLaborUseCase:
+    """Construct use-case with a stub ListLaborActivitiesUseCase returning activities_return."""
+    project_repo = MagicMock()
+    project_repo.find_by_id.return_value = project
+
+    summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+    summary_uc.execute.return_value = _empty_summary()
+
+    entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+    entries_uc.execute.return_value = []
+
+    activities_uc = MagicMock(spec=ListLaborActivitiesUseCase)
+    activities_uc.execute.return_value = activities_return
+
+    return ExportLaborUseCase(
+        worker_repo=MagicMock(),
+        entry_repo=MagicMock(),
+        summary_usecase=summary_uc,
+        list_entries_usecase=entries_uc,
+        project_repo=project_repo,
+        list_activities_usecase=activities_uc,
+    )
+
+
+class TestActivitiesUseCase:
+    def test_buckets_populated_with_activities_when_use_case_provided(self):
+        """When list_activities_usecase is provided, MonthBucket.activities is non-empty."""
+        project = _make_project()
+        activity = _make_activity_detail(title="Concrete pour", description="East wall")
+        uc = _build_usecase_with_activities(project, activities_return=[activity])
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="pdf",
+            acting_user_email="user@example.com",
+        )
+        # We can't inspect buckets directly from the returned bytes — use the use-case
+        # internals by monkey-patching _build_pdf to capture buckets instead.
+        captured: list = []
+        original_execute = uc.execute
+
+        def _capturing_execute(r):
+            # Patch build_pdf import within the use-case's dispatch to capture buckets
+            import app.domain.labor.export.pdf_builder as _pdf_mod
+
+            orig_build = _pdf_mod.build_pdf
+
+            def _fake_build(ctx, bkts):
+                captured.extend(bkts)
+                return orig_build(ctx, bkts)
+
+            _pdf_mod.build_pdf = _fake_build
+            try:
+                return original_execute(r)
+            finally:
+                _pdf_mod.build_pdf = orig_build
+
+        result = _capturing_execute(req)
+        assert result.content[:5] == b"%PDF-"
+        assert len(captured) == 1
+        assert len(captured[0].activities) == 1
+        assert captured[0].activities[0].title == "Concrete pour"
+
+    def test_buckets_have_empty_activities_when_use_case_is_none(self):
+        """When list_activities_usecase=None (default), MonthBucket.activities is empty."""
+        project = _make_project()
+        uc = _build_usecase(project)  # uses default _build_usecase which omits the activities uc
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="pdf",
+            acting_user_email="user@example.com",
+        )
+        captured: list = []
+        original_execute = uc.execute
+
+        def _capturing_execute(r):
+            import app.domain.labor.export.pdf_builder as _pdf_mod
+
+            orig_build = _pdf_mod.build_pdf
+
+            def _fake_build(ctx, bkts):
+                captured.extend(bkts)
+                return orig_build(ctx, bkts)
+
+            _pdf_mod.build_pdf = _fake_build
+            try:
+                return original_execute(r)
+            finally:
+                _pdf_mod.build_pdf = orig_build
+
+        _capturing_execute(req)
+        assert len(captured) == 1
+        assert captured[0].activities == []
+
+    def test_activities_use_case_called_once_per_month(self):
+        """ListLaborActivitiesUseCase.execute called once per month in the range."""
+        project = _make_project()
+        activities_uc = MagicMock(spec=ListLaborActivitiesUseCase)
+        activities_uc.execute.return_value = []
+
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+        summary_uc.execute.return_value = _empty_summary()
+        entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+        entries_uc.execute.return_value = []
+
+        uc = ExportLaborUseCase(
+            worker_repo=MagicMock(),
+            entry_repo=MagicMock(),
+            summary_usecase=summary_uc,
+            list_entries_usecase=entries_uc,
+            project_repo=project_repo,
+            list_activities_usecase=activities_uc,
+        )
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-03",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        uc.execute(req)
+        assert (
+            activities_uc.execute.call_count == 3
+        ), f"Expected 3 calls for 3-month range, got {activities_uc.execute.call_count}"
+
+    def test_activities_sorted_by_date_then_created_at(self):
+        """Activities attached to MonthBucket are sorted by (date, created_at)."""
+        project = _make_project()
+        # Two activities on the same date; second created earlier — order should swap
+        a1 = LaborActivityDetail(
+            id=uuid4(),
+            project_id=project.id,
+            date="2026-01-15",
+            title="LaterCreated",
+            description=None,
+            created_by=None,
+            created_at="2026-01-15T10:00:00+00:00",
+            updated_at="2026-01-15T10:00:00+00:00",
+        )
+        a2 = LaborActivityDetail(
+            id=uuid4(),
+            project_id=project.id,
+            date="2026-01-15",
+            title="EarlierCreated",
+            description=None,
+            created_by=None,
+            created_at="2026-01-15T08:00:00+00:00",
+            updated_at="2026-01-15T08:00:00+00:00",
+        )
+        activities_uc = MagicMock(spec=ListLaborActivitiesUseCase)
+        activities_uc.execute.return_value = [a1, a2]  # unsorted (later first)
+
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        summary_uc = MagicMock(spec=GetLaborSummaryUseCase)
+        summary_uc.execute.return_value = _empty_summary()
+        entries_uc = MagicMock(spec=ListLaborEntriesUseCase)
+        entries_uc.execute.return_value = []
+
+        uc = ExportLaborUseCase(
+            worker_repo=MagicMock(),
+            entry_repo=MagicMock(),
+            summary_usecase=summary_uc,
+            list_entries_usecase=entries_uc,
+            project_repo=project_repo,
+            list_activities_usecase=activities_uc,
+        )
+        req = ExportLaborRequest(
+            project_id=project.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        captured: list = []
+        original_execute = uc.execute
+
+        def _capturing_execute(r):
+            import app.domain.labor.export.xlsx_builder as _xlsx_mod
+
+            orig_build = _xlsx_mod.build_xlsx
+
+            def _fake_build(ctx, bkts):
+                captured.extend(bkts)
+                return orig_build(ctx, bkts)
+
+            _xlsx_mod.build_xlsx = _fake_build
+            try:
+                return original_execute(r)
+            finally:
+                _xlsx_mod.build_xlsx = orig_build
+
+        _capturing_execute(req)
+        assert len(captured) == 1
+        sorted_activities = captured[0].activities
+        assert sorted_activities[0].title == "EarlierCreated"
+        assert sorted_activities[1].title == "LaterCreated"
