@@ -304,6 +304,18 @@ def invitation_app():
         from wiring import get_container as _get_container
 
         _c = _get_container()
+
+        # ------------------------------------------------------------------
+        # Wire project spent reader — mirrors app/__init__.py wiring.
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_project_spent_reader import (
+            SqlAlchemyProjectSpentReader as _ProjectSpentReader,
+        )
+
+        _c.project_spent_reader = _ProjectSpentReader(db.session)
+
         _note_repo = SqlAlchemyNoteRepository(db.session)
         _dismissal_repo = SqlAlchemyNoteDismissalRepository(db.session)
         _membership_reader = SqlAlchemyProjectMembershipReader(db.session)

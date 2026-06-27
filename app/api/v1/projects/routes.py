@@ -42,6 +42,31 @@ def list_projects():
 
     projects = container.list_projects_usecase.execute(UUID(user_id), is_admin=is_admin)
 
+    # Batch-load budget+source from project entities (carried via repo→entity)
+    # and spent via a single aggregation call (no N+1).
+    from app.infrastructure.database.models.project import ProjectModel
+    from app import db
+
+    project_ids = [UUID(str(p.id)) for p in projects]
+    spent_map = {}
+    if project_ids and container.project_spent_reader is not None:
+        spent_map = container.project_spent_reader.sum_spent_by_projects(project_ids)
+
+    # Fetch budget fields from the DB models (not exposed via ProjectSummary DTO).
+    budget_map: dict = {}
+    if project_ids:
+        rows = (
+            db.session.query(
+                ProjectModel.id,
+                ProjectModel.budget,
+                ProjectModel.budget_source,
+            )
+            .filter(ProjectModel.id.in_(project_ids))
+            .all()
+        )
+        for row in rows:
+            budget_map[row.id] = (row.budget, row.budget_source)
+
     user_uuid = UUID(user_id)
     return jsonify(
         ProjectListResponse(
@@ -54,6 +79,13 @@ def list_projects():
                     user_count=p.user_count,
                     created_at="",
                     my_permissions=sorted(_effective_perms_for(UUID(str(p.id)), user_uuid)),
+                    budget=(
+                        float(budget_map[UUID(str(p.id))][0])
+                        if budget_map.get(UUID(str(p.id)), (None,))[0] is not None
+                        else None
+                    ),
+                    budget_source=budget_map.get(UUID(str(p.id)), (None, None))[1],
+                    spent=float(spent_map.get(UUID(str(p.id)), 0)),
                 )
                 for p in projects
             ],
@@ -94,7 +126,13 @@ def create_project():
 
     try:
         result = container.create_project_usecase.execute(
-            CreateDTO(name=data.name, address=data.address, owner_id=UUID(user_id))
+            CreateDTO(
+                name=data.name,
+                address=data.address,
+                owner_id=UUID(user_id),
+                budget=data.budget,
+                budget_source=data.budget_source,
+            )
         )
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
@@ -109,6 +147,9 @@ def create_project():
                 user_count=0,
                 created_at=result.created_at,
                 invoice_prefix=result.invoice_prefix,
+                budget=float(result.budget) if result.budget is not None else None,
+                budget_source=result.budget_source,
+                spent=0,
             ).model_dump()
         ),
         201,
@@ -144,6 +185,13 @@ def get_project(project_id: str):
     db_row = db.session.get(ProjectModel, project.id)
     company_id_str = str(db_row.company_id) if db_row and db_row.company_id else None
 
+    # Compute spent for this single project.
+    container = get_container()
+    spent_val = 0.0
+    if container.project_spent_reader is not None:
+        spent_map = container.project_spent_reader.sum_spent_by_projects([project.id])
+        spent_val = float(spent_map.get(project.id, 0))
+
     return jsonify(
         ProjectResponse(
             id=str(project.id),
@@ -155,6 +203,9 @@ def get_project(project_id: str):
             company_id=company_id_str,
             invoice_prefix=project.invoice_prefix,
             my_permissions=sorted(_effective_perms_for(project.id, user_id)),
+            budget=float(project.budget) if project.budget is not None else None,
+            budget_source=project.budget_source,
+            spent=spent_val,
         ).model_dump()
     )
 
@@ -205,10 +256,22 @@ def update_project(project_id: str):
 
     try:
         result = container.update_project_usecase.execute(
-            UUID(project_id), name=data.name, address=data.address, invoice_prefix=data.invoice_prefix
+            UUID(project_id),
+            name=data.name,
+            address=data.address,
+            invoice_prefix=data.invoice_prefix,
+            budget=data.budget,
+            budget_source=data.budget_source,
+            provided_fields=data.model_fields_set,
         )
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
+
+    # Compute spent for the updated project.
+    spent_val = 0.0
+    if container.project_spent_reader is not None:
+        spent_map = container.project_spent_reader.sum_spent_by_projects([result.id])
+        spent_val = float(spent_map.get(result.id, 0))
 
     return jsonify(
         ProjectResponse(
@@ -219,6 +282,9 @@ def update_project(project_id: str):
             user_count=len(result.user_ids),
             created_at=result.created_at.isoformat(),
             invoice_prefix=result.invoice_prefix,
+            budget=float(result.budget) if result.budget is not None else None,
+            budget_source=result.budget_source,
+            spent=spent_val,
         ).model_dump()
     )
 
