@@ -5,6 +5,8 @@ Covers:
 - Header includes 'Worker: {name}' line
 - KPI table reflects worker totals
 - Empty range → header + empty message; no KPI / no breakdown table
+- Day log section [Date | Activity | Description] renders when bucket has activities or day descriptions
+- No day log section when all buckets have empty activities and day descriptions
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from uuid import uuid4
 from pypdf import PdfReader
 
 from app.application.labor.get_labor_summary import LaborSummaryResponse, WorkerCostSummary
+from app.application.labor.labor_activity_usecases import LaborActivityDetail
 from app.domain.labor.export.models import ExportContext, ExportRange, MonthBucket
 from app.domain.labor.export.pdf_builder import build_pdf
 
@@ -296,3 +299,131 @@ class TestSingleWorkerPdfDiacritics:
         else:
             # Relaxed: pypdf CMap limitation — visual rendering is still correct
             assert "Nguy" in text, f"Even relaxed prefix 'Nguy' not found.\nExtracted: {text[:600]}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for activity tests
+# ---------------------------------------------------------------------------
+
+
+def _make_activity(
+    *,
+    title: str = "Site preparation",
+    activity_date: str = "2026-04-10",
+    activity_id: str | None = None,
+) -> LaborActivityDetail:
+    return LaborActivityDetail(
+        id=uuid4(),
+        project_id=uuid4(),
+        date=activity_date,
+        title=title,
+        created_by=None,
+        created_at="2026-04-10T08:00:00+00:00",
+        updated_at="2026-04-10T08:00:00+00:00",
+    )
+
+
+def _make_bucket_with_activities(
+    month: date = date(2026, 4, 1),
+    *workers: WorkerCostSummary,
+    activities: list[LaborActivityDetail] | None = None,
+) -> MonthBucket:
+    return MonthBucket(
+        month=month,
+        summary=_make_summary_response(*workers),
+        daily_entries=[],
+        activities=activities or [],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Day log section — [Date | Activity | Description]
+# ---------------------------------------------------------------------------
+
+
+class TestDayLogSection:
+    def test_day_log_heading_present_when_activities_exist(self):
+        """'Day log' heading appears when bucket has activities."""
+        ctx = _make_worker_context()
+        w = _make_worker_summary(days_worked=5, total_cost=1000.0)
+        activity = _make_activity(title="Foundation pour")
+        bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Day log" in text, f"'Day log' heading missing.\nExtracted: {text[:800]}"
+
+    def test_activity_title_appears_in_pdf(self):
+        """Activity title substring renders in the PDF."""
+        ctx = _make_worker_context()
+        w = _make_worker_summary()
+        activity = _make_activity(title="Foundation pour")
+        bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Foundation" in text, f"Activity title 'Foundation' missing.\nExtracted: {text[:800]}"
+
+    def test_activity_title_token_appears_in_pdf(self):
+        """Distinctive title token renders in the PDF."""
+        ctx = _make_worker_context()
+        w = _make_worker_summary()
+        activity = _make_activity(title="Uniquetoken123 steel erection")
+        bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Uniquetoken123" in text, f"Activity title token missing.\nExtracted: {text[:800]}"
+
+    def test_no_day_log_section_when_activities_and_descriptions_empty(self):
+        """'Day log' heading must NOT appear when bucket has no activities or descriptions."""
+        ctx = _make_worker_context()
+        w = _make_worker_summary()
+        bucket = _make_bucket(date(2026, 4, 1), w)
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Day log" not in text, f"'Day log' should not appear.\nExtracted: {text[:800]}"
+
+    def test_day_log_renders_even_when_no_labor_entries(self):
+        """Day log section appears even when summary.rows is empty (independent data)."""
+        ctx = _make_worker_context()
+        activity = _make_activity(title="Site survey")
+        empty_bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary_response(),
+            daily_entries=[],
+            activities=[activity],
+        )
+        text = _extract_text(build_pdf(ctx, [empty_bucket]))
+        assert "Day log" in text, f"Day log heading missing when no labor entries.\nExtracted: {text[:800]}"
+        assert "Site" in text, f"Activity title token missing.\nExtracted: {text[:800]}"
+
+    def test_no_entries_message_absent_when_only_activities_present(self):
+        """When entries are empty but activities exist, 'No labor entries' message is suppressed."""
+        ctx = _make_worker_context()
+        activity = _make_activity(title="Planning meeting")
+        empty_bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary_response(),
+            daily_entries=[],
+            activities=[activity],
+        )
+        text = _extract_text(build_pdf(ctx, [empty_bucket]))
+        assert (
+            "No labor entries in range" not in text
+        ), f"'No labor entries' should not appear when activities exist.\nExtracted: {text[:800]}"
+
+    def test_month_label_appears_in_day_log_heading(self):
+        """Day log heading includes the short month label 'Apr 2026'."""
+        ctx = _make_worker_context()
+        w = _make_worker_summary()
+        activity = _make_activity(title="Inspection")
+        bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Apr" in text or "2026" in text, f"Month label not found.\nExtracted: {text[:800]}"
+
+    def test_multiple_activities_all_titles_present(self):
+        """All activity titles render when a bucket has multiple activities."""
+        ctx = _make_worker_context()
+        w = _make_worker_summary()
+        activities = [
+            _make_activity(title="MorningTaskAlpha", activity_date="2026-04-01"),
+            _make_activity(title="AfternoonTaskBeta", activity_date="2026-04-02"),
+        ]
+        bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=activities)
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "MorningTaskAlpha" in text, f"First activity title missing.\nExtracted: {text[:1000]}"
+        assert "AfternoonTaskBeta" in text, f"Second activity title missing.\nExtracted: {text[:1000]}"

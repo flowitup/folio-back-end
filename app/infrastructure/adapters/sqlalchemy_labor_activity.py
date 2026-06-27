@@ -4,6 +4,7 @@ from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.labor.ports import ILaborActivityRepository
@@ -23,17 +24,39 @@ class SQLAlchemyLaborActivityRepository(ILaborActivityRepository):
             project_id=activity.project_id,
             date=activity.date,
             title=activity.title,
-            description=activity.description,
             created_by=activity.created_by,
             created_at=activity.created_at,
             updated_at=activity.updated_at,
         )
         self._session.add(model)
-        self._session.commit()
-        return self._to_entity(model)
+        try:
+            self._session.commit()
+            return self._to_entity(model)
+        except IntegrityError:
+            # Concurrent insert for the same (project_id, date) won the race and
+            # the unique constraint rejected this row. Converge to an update of
+            # the existing row instead of surfacing a 500 (create() is only
+            # reached after the upsert use-case saw no existing row).
+            self._session.rollback()
+            existing = (
+                self._session.query(LaborActivityModel)
+                .filter_by(project_id=activity.project_id, date=activity.date)
+                .first()
+            )
+            if existing is not None:
+                existing.title = activity.title
+                existing.updated_at = activity.updated_at
+                self._session.commit()
+                return self._to_entity(existing)
+            raise
 
     def find_by_id(self, activity_id: UUID) -> Optional[LaborActivity]:
         model = self._session.query(LaborActivityModel).filter_by(id=activity_id).first()
+        return self._to_entity(model) if model else None
+
+    def find_by_project_and_date(self, project_id: UUID, activity_date: date) -> Optional[LaborActivity]:
+        """Return the single activity for (project_id, date), or None if absent."""
+        model = self._session.query(LaborActivityModel).filter_by(project_id=project_id, date=activity_date).first()
         return self._to_entity(model) if model else None
 
     def list_by_project(
@@ -56,7 +79,6 @@ class SQLAlchemyLaborActivityRepository(ILaborActivityRepository):
         model = self._session.query(LaborActivityModel).filter_by(id=activity.id).first()
         if model:
             model.title = activity.title
-            model.description = activity.description
             model.updated_at = activity.updated_at
             self._session.commit()
             return self._to_entity(model)
@@ -76,7 +98,6 @@ class SQLAlchemyLaborActivityRepository(ILaborActivityRepository):
             project_id=model.project_id,
             date=model.date,
             title=model.title,
-            description=model.description,
             created_by=model.created_by,
             created_at=model.created_at,
             updated_at=model.updated_at,

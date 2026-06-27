@@ -10,8 +10,9 @@ from uuid import UUID
 class LaborActivity:
     """Project-level daily activity log entry.
 
-    Free-form text (title + optional description) anchored to a project
-    and a date. Multiple activities per day are allowed.
+    One entry per (project_id, date). The single required text field ``title``
+    captures what happened that day. Upsert semantics: saving twice on the
+    same date updates the existing entry rather than creating a duplicate.
     """
 
     id: UUID
@@ -20,7 +21,6 @@ class LaborActivity:
     title: str
     created_at: datetime
     updated_at: datetime
-    description: Optional[str] = None
     created_by: Optional[UUID] = None
 
     def __post_init__(self) -> None:

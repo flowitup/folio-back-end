@@ -283,6 +283,33 @@ def _configure_di_container() -> None:
     _c.update_labor_activity_usecase = UpdateLaborActivityUseCase(_activity_repo)
     _c.delete_labor_activity_usecase = DeleteLaborActivityUseCase(_activity_repo)
 
+    # Re-wire export_labor_usecase to inject the activity use-case now that the
+    # activity repository is available. The use-case was constructed in configure_container
+    # with list_activities_usecase=None (default); we patch it here so the PDF activity
+    # log section is populated in production without changing the configure_container
+    # signature (activity repo is constructed after configure_container returns).
+    if _c.export_labor_usecase is not None:
+        _c.export_labor_usecase._list_activities_usecase = ListLaborActivitiesUseCase(_activity_repo)
+
+    # Wire labor day description use-cases (same late-injection pattern as activities above).
+    from app.infrastructure.adapters.sqlalchemy_labor_day_description import (
+        SQLAlchemyLaborDayDescriptionRepository,
+    )
+    from app.application.labor.labor_day_description_usecases import (
+        SetLaborDayDescriptionUseCase,
+        ListLaborDayDescriptionsUseCase,
+    )
+
+    _day_desc_repo = SQLAlchemyLaborDayDescriptionRepository(db.session)
+    _c.labor_day_description_repository = _day_desc_repo
+    _c.set_labor_day_description_usecase = SetLaborDayDescriptionUseCase(_day_desc_repo)
+    _c.list_labor_day_descriptions_usecase = ListLaborDayDescriptionsUseCase(_day_desc_repo)
+
+    # Inject day-descriptions use-case into export_labor_usecase so the PDF
+    # combined Day log section is populated (mirrors _list_activities_usecase injection above).
+    if _c.export_labor_usecase is not None:
+        _c.export_labor_usecase._list_day_descriptions_usecase = ListLaborDayDescriptionsUseCase(_day_desc_repo)
+
     # Wire notes use-cases — done post-configure_container so we can pass db.session
     # directly without adding more params to configure_container's signature.
     _note_repo = SqlAlchemyNoteRepository(db.session)

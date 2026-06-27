@@ -9,6 +9,8 @@ from typing import List, Literal, Optional
 from uuid import UUID
 
 from app.application.labor.get_labor_summary import LaborSummaryResponse
+from app.application.labor.labor_activity_usecases import LaborActivityDetail
+from app.application.labor.labor_day_description_usecases import LaborDayDescriptionDetail
 from app.application.labor.list_labor_entries import LaborEntryDetail
 
 # Literal type alias — not a class, so no instantiation
@@ -48,3 +50,10 @@ class MonthBucket:
     month: date  # first day of the month
     summary: LaborSummaryResponse
     daily_entries: List[LaborEntryDetail]
+    # Project-level activity log for this month (date · title).
+    # Default empty list keeps existing callers (wiring, tests) constructing MonthBucket
+    # without this field still valid — frozen dataclass requires field(default_factory=...).
+    activities: List[LaborActivityDetail] = field(default_factory=list)
+    # Per-day free-text descriptions for this month (separate from activity title).
+    # Default empty list keeps existing callers backward-compatible.
+    day_descriptions: List[LaborDayDescriptionDetail] = field(default_factory=list)

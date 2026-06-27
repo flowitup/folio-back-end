@@ -10,6 +10,7 @@ from uuid import UUID
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.entities.labor_activity import LaborActivity
+from app.domain.entities.labor_day_description import LaborDayDescription
 from app.domain.entities.worker_rate_change import WorkerRateChange
 
 
@@ -268,6 +269,11 @@ class ILaborActivityRepository(ABC):
     def find_by_id(self, activity_id: UUID) -> Optional[LaborActivity]: ...
 
     @abstractmethod
+    def find_by_project_and_date(self, project_id: UUID, activity_date: date) -> Optional[LaborActivity]:
+        """Return the activity for (project_id, date), or None if absent."""
+        ...
+
+    @abstractmethod
     def list_by_project(
         self,
         project_id: UUID,
@@ -282,3 +288,44 @@ class ILaborActivityRepository(ABC):
 
     @abstractmethod
     def delete(self, activity_id: UUID) -> bool: ...
+
+
+class ILaborDayDescriptionRepository(ABC):
+    """Port for labor day description persistence operations.
+
+    One description per (project_id, date). Upsert semantics: blank description
+    is handled at the use-case layer by calling delete_by_date instead of upsert.
+    """
+
+    @abstractmethod
+    def find_by_project_and_date(self, project_id: UUID, description_date: date) -> Optional[LaborDayDescription]:
+        """Return the description for (project_id, date), or None if absent."""
+        ...
+
+    @abstractmethod
+    def upsert(self, entity: LaborDayDescription) -> LaborDayDescription:
+        """Insert or update the description keyed by (project_id, date).
+
+        If a row exists for (project_id, date), update its description, updated_at.
+        Otherwise insert a new row.
+        """
+        ...
+
+    @abstractmethod
+    def list_by_range(
+        self,
+        project_id: UUID,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ) -> List[LaborDayDescription]:
+        """Return descriptions for a project, optionally bounded by an inclusive
+        date range. When a bound is None it is not applied (all history).
+
+        Ordered by date ASC for deterministic export output.
+        """
+        ...
+
+    @abstractmethod
+    def delete_by_date(self, project_id: UUID, description_date: date) -> bool:
+        """Delete the description for (project_id, date). Returns True if deleted."""
+        ...
