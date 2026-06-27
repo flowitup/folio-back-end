@@ -131,6 +131,22 @@ def _enrich_refunds_invoice_number(invoice_dict: dict, refunds_invoice_id_str: "
     invoice_dict["refunds_invoice_number"] = linked.invoice_number if linked is not None else None
 
 
+def _enrich_has_bank_refund(invoice_dict: dict, invoice_id_str: str, invoice_type: str) -> None:
+    """Inject has_bank_refund into an invoice dict in-place.
+
+    True only when this materials_services expense has ≥1 linked refund invoice
+    (i.e. a supplier/vendor sent money back — "refunded by bank"). The company
+    signal rides on refundable_status == 'refunded'. False for all other types.
+    """
+    if invoice_type != InvoiceType.MATERIALS_SERVICES.value:
+        invoice_dict["has_bank_refund"] = False
+        return
+    from uuid import UUID as _UUID
+
+    sources = get_container().invoice_repository.refund_source_ids([_UUID(invoice_id_str)])
+    invoice_dict["has_bank_refund"] = _UUID(invoice_id_str) in sources
+
+
 def _enrich_invoice_with_company_payment(
     invoice_dict: dict,
     payment_method_id_str: "str | None",
@@ -234,6 +250,13 @@ def list_invoices(project_id: str):
     for d, r in zip(invoice_dicts, results):
         d["refunds_invoice_number"] = number_by_id.get(r.refunds_invoice_id) if r.refunds_invoice_id else None
 
+    # Batch-enrich has_bank_refund (one query) for the materials_services rows so the
+    # list/mobile views can show the company-vs-bank refund-source indicator.
+    ms_ids = [UUID(r.id) for r in results if r.type == InvoiceType.MATERIALS_SERVICES.value]
+    bank_refunded = container.invoice_repository.refund_source_ids(ms_ids) if ms_ids else set()
+    for d, r in zip(invoice_dicts, results):
+        d["has_bank_refund"] = r.type == InvoiceType.MATERIALS_SERVICES.value and UUID(r.id) in bank_refunded
+
     return jsonify(
         {
             "invoices": invoice_dicts,
@@ -304,6 +327,7 @@ def create_invoice(project_id: str):
 
     d = dataclasses.asdict(result)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
+    _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d), 201
 
 
@@ -330,6 +354,7 @@ def get_invoice(project_id: str, invoice_id: str):
     d = dataclasses.asdict(result)
     _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
+    _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d)
 
 
@@ -418,6 +443,7 @@ def update_invoice(project_id: str, invoice_id: str):
     d = dataclasses.asdict(result)
     _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
+    _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d)
 
 

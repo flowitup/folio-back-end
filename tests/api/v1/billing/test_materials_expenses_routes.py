@@ -803,3 +803,58 @@ class TestInlineAttachments:
         inv_b_att_ids = {a["id"] for a in items[inv_b_id]["attachments"]}
         assert att_b_id not in inv_a_att_ids
         assert att_b_id in inv_b_att_ids
+
+
+# ---------------------------------------------------------------------------
+# has_bank_refund flag (refunded by bank = ≥1 linked refund invoice)
+# ---------------------------------------------------------------------------
+
+
+def _make_linked_refund(source_id: UUID, project_id: UUID, user_id: UUID) -> InvoiceModel:
+    """Persist a type='refund' invoice linked to source_id via refunds_invoice_id."""
+    now = datetime.now(timezone.utc)
+    inv = InvoiceModel(
+        id=uuid4(),
+        project_id=project_id,
+        invoice_number=f"REF-{uuid4().hex[:8]}",
+        type="refund",
+        issue_date=date.today(),
+        recipient_name="Refund",
+        items=[{"description": "Refund", "quantity": 1.0, "unit_price": -100.0}],
+        created_by=user_id,
+        created_at=now,
+        updated_at=now,
+        refunds_invoice_id=source_id,
+    )
+    db.session.add(inv)
+    db.session.commit()
+    return inv
+
+
+class TestHasBankRefundFlag:
+    def test_expense_with_linked_refund_has_bank_refund_true(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refunded")
+            _make_linked_refund(inv.id, mat_exp_app._project_a1_id, mat_exp_app._admin_user_id)
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert items[inv_id]["has_bank_refund"] is True
+
+    def test_expense_without_linked_refund_has_bank_refund_false(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert items[inv_id]["has_bank_refund"] is False
