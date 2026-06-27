@@ -20,6 +20,7 @@ from pypdf import PdfReader
 
 from app.application.labor.get_labor_summary import LaborSummaryResponse, WorkerCostSummary
 from app.application.labor.labor_activity_usecases import LaborActivityDetail
+from app.application.labor.list_labor_entries import LaborEntryDetail
 from app.domain.labor.export.models import ExportContext, ExportRange, MonthBucket
 from app.domain.labor.export.pdf_builder import build_pdf
 
@@ -323,16 +324,35 @@ def _make_activity(
     )
 
 
+def _make_entry(entry_date: str) -> LaborEntryDetail:
+    """Minimal worker labor entry on a given ISO date (only `date` matters here)."""
+    return LaborEntryDetail(
+        id=str(uuid4()),
+        worker_id=str(uuid4()),
+        worker_name="Worker",
+        date=entry_date,
+        amount_override=None,
+        effective_cost=100.0,
+        note=None,
+        shift_type="full",
+        supplement_hours=0,
+        created_at="2026-04-01T08:00:00+00:00",
+    )
+
+
 def _make_bucket_with_activities(
     month: date = date(2026, 4, 1),
     *workers: WorkerCostSummary,
     activities: list[LaborActivityDetail] | None = None,
 ) -> MonthBucket:
+    # In single-worker mode the day log is filtered to dates the worker worked,
+    # so seed daily_entries on each activity date (the worker "was on site").
+    acts = activities or []
     return MonthBucket(
         month=month,
         summary=_make_summary_response(*workers),
-        daily_entries=[],
-        activities=activities or [],
+        daily_entries=[_make_entry(a.date) for a in acts],
+        activities=acts,
     )
 
 
@@ -377,9 +397,10 @@ class TestDayLogSection:
         text = _extract_text(build_pdf(ctx, [bucket]))
         assert "Day log" not in text, f"'Day log' should not appear.\nExtracted: {text[:800]}"
 
-    def test_day_log_renders_even_when_no_labor_entries(self):
-        """Day log section appears even when summary.rows is empty (independent data)."""
-        ctx = _make_worker_context()
+    def test_day_log_renders_even_when_no_labor_entries_project_wide(self):
+        """Project-wide export: the day log is independent of labor charges and
+        renders even when there are no entries (no per-worker filtering applies)."""
+        ctx = _make_worker_context(worker_name=None)  # project-wide
         activity = _make_activity(title="Site survey")
         empty_bucket = MonthBucket(
             month=date(2026, 4, 1),
@@ -391,9 +412,28 @@ class TestDayLogSection:
         assert "Day log" in text, f"Day log heading missing when no labor entries.\nExtracted: {text[:800]}"
         assert "Site" in text, f"Activity title token missing.\nExtracted: {text[:800]}"
 
+    def test_single_worker_day_log_excludes_non_worked_days(self):
+        """Single-worker export: an activity on a day the worker did NOT work must
+        NOT appear; one on a worked day must appear. (Regression for the bug where
+        the day log showed project activities for days the person wasn't on site.)"""
+        ctx = _make_worker_context()  # single-worker mode
+        w = _make_worker_summary(days_worked=1)
+        worked = _make_activity(title="WorkedDayTask", activity_date="2026-04-05")
+        not_worked = _make_activity(title="OffDayTask", activity_date="2026-04-20")
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary_response(w),
+            daily_entries=[_make_entry("2026-04-05")],  # worker only on 04-05
+            activities=[worked, not_worked],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "WorkedDayTask" in text, f"Worked-day activity missing.\nExtracted: {text[:900]}"
+        assert "OffDayTask" not in text, f"Off-day activity should be excluded.\nExtracted: {text[:900]}"
+
     def test_no_entries_message_absent_when_only_activities_present(self):
-        """When entries are empty but activities exist, 'No labor entries' message is suppressed."""
-        ctx = _make_worker_context()
+        """Project-wide: when entries are empty but activities exist, the
+        'No labor entries' message is suppressed by the day log."""
+        ctx = _make_worker_context(worker_name=None)  # project-wide
         activity = _make_activity(title="Planning meeting")
         empty_bucket = MonthBucket(
             month=date(2026, 4, 1),
