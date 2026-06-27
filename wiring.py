@@ -56,12 +56,16 @@ from app.application.labor.create_labor_role_usecase import CreateLaborRoleUseCa
 from app.application.labor.update_labor_role_usecase import UpdateLaborRoleUseCase
 from app.application.labor.delete_labor_role_usecase import DeleteLaborRoleUseCase
 from app.application.labor.list_labor_roles_usecase import ListLaborRolesUseCase
-from app.application.labor.ports import ILaborActivityRepository
+from app.application.labor.ports import ILaborActivityRepository, ILaborDayDescriptionRepository
 from app.application.labor.labor_activity_usecases import (
     CreateLaborActivityUseCase,
     ListLaborActivitiesUseCase,
     UpdateLaborActivityUseCase,
     DeleteLaborActivityUseCase,
+)
+from app.application.labor.labor_day_description_usecases import (
+    SetLaborDayDescriptionUseCase,
+    ListLaborDayDescriptionsUseCase,
 )
 from app.application.invoice.export_invoices_usecase import ExportInvoicesUseCase
 from app.application.invoice import (
@@ -228,6 +232,7 @@ class Container:
     labor_entry_repository: Optional[ILaborEntryRepository] = None
     labor_role_repository: Optional[ILaborRoleRepository] = None
     labor_activity_repository: Optional[ILaborActivityRepository] = None
+    labor_day_description_repository: Optional[ILaborDayDescriptionRepository] = None
     worker_rate_change_repository: Optional[IWorkerRateChangeRepository] = None
 
     # Invoice ports and use cases
@@ -422,6 +427,10 @@ class Container:
     list_labor_activities_usecase: Optional[ListLaborActivitiesUseCase] = None
     update_labor_activity_usecase: Optional[UpdateLaborActivityUseCase] = None
     delete_labor_activity_usecase: Optional[DeleteLaborActivityUseCase] = None
+
+    # Labor day description use cases
+    set_labor_day_description_usecase: Optional[SetLaborDayDescriptionUseCase] = None
+    list_labor_day_descriptions_usecase: Optional[ListLaborDayDescriptionsUseCase] = None
 
     # Worker rate-change use cases (effective-dated pay-rate timeline)
     set_worker_rate_change_usecase: Optional[SetWorkerRateChangeUseCase] = None

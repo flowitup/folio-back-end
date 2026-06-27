@@ -10,6 +10,10 @@ from uuid import UUID
 
 from app.application.labor.get_labor_summary import GetLaborSummaryUseCase, GetLaborSummaryRequest
 from app.application.labor.labor_activity_usecases import ListLaborActivitiesUseCase, ListLaborActivitiesRequest
+from app.application.labor.labor_day_description_usecases import (
+    ListLaborDayDescriptionsUseCase,
+    ListLaborDayDescriptionsRequest,
+)
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
 from app.application.projects.ports import IProjectRepository
@@ -84,10 +88,14 @@ class ExportLaborUseCase:
         list_entries_usecase: ListLaborEntriesUseCase,
         project_repo: IProjectRepository,
         # Optional: when set, fetches the project activity log per month and
-        # attaches it to MonthBucket.activities for the PDF activity section.
+        # attaches it to MonthBucket.activities for the PDF Day log section.
         # Default None → no activities fetched → empty list; keeps existing
         # wiring and tests green without modification.
         list_activities_usecase: Optional[ListLaborActivitiesUseCase] = None,
+        # Optional: when set, fetches per-day descriptions per month and
+        # attaches to MonthBucket.day_descriptions for the PDF Day log section.
+        # Default None → no descriptions fetched → empty list; keeps backward compat.
+        list_day_descriptions_usecase: Optional[ListLaborDayDescriptionsUseCase] = None,
     ) -> None:
         self._worker_repo = worker_repo
         self._entry_repo = entry_repo
@@ -95,6 +103,7 @@ class ExportLaborUseCase:
         self._list_entries_usecase = list_entries_usecase
         self._project_repo = project_repo
         self._list_activities_usecase = list_activities_usecase
+        self._list_day_descriptions_usecase = list_day_descriptions_usecase
 
     def execute(self, req: ExportLaborRequest) -> ExportLaborResult:
         """Generate export file.
@@ -171,12 +180,25 @@ class ExportLaborUseCase:
                 )
                 activities.sort(key=lambda a: (a.date, a.created_at))
 
+            # Fetch per-day descriptions for this month when the use-case is wired in.
+            # Descriptions are project-level and sorted by date ASC.
+            day_descriptions = []
+            if self._list_day_descriptions_usecase is not None:
+                day_descriptions = self._list_day_descriptions_usecase.execute(
+                    ListLaborDayDescriptionsRequest(
+                        project_id=req.project_id,
+                        date_from=month_start,
+                        date_to=month_end,
+                    )
+                )
+
             buckets.append(
                 MonthBucket(
                     month=month_first,
                     summary=summary,
                     daily_entries=daily_entries,
                     activities=activities,
+                    day_descriptions=day_descriptions,
                 )
             )
 

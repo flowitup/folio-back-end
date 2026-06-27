@@ -9,8 +9,11 @@ Layout (A4 portrait, 15mm margins)
   3. Per-worker breakdown table — aggregated across all months
      Columns: Worker | Days | Banked hrs | Bonus full | Bonus half |
               Priced cost | Bonus cost | Total (priced + bonus)
-  4. Activity log section — one block per month that has activities
-     Columns: Date | Activity
+  4. Day log section — one block per month that has activities OR day descriptions
+     Columns: Date | Activity | Description
+     For each date in the sorted union of (activity dates ∪ day-description dates)
+     within the bucket one row is emitted. Either column may be empty when that
+     date only has the other kind of data.
      (independent of labor entries — rendered even when summary.rows is empty)
   5. Page-X footer on every page (Page X only — two-pass X/Y is future work)
 
@@ -20,15 +23,15 @@ All monetary values formatted via format_eur_fr(Decimal) → "200,00 €"
 (matches xlsx number_format + FE Intl.NumberFormat fr-FR).
 
 No daily per-charge-row detail — individual attendance rows live only in xlsx (locked
-decision). The project activity log (date · title) IS included in the PDF as a separate
-section (see step 4 above). One activity per (project, date) — no description column.
+decision). The project day log (date · activity · description) IS included in the PDF
+(see step 4 above). One activity and/or description per (project, date).
 
 Empty-range case
 -----------------
-If all buckets have empty summary.rows AND no bucket has activities:
+If all buckets have empty summary.rows AND no bucket has activities or day descriptions:
   header + "No labor entries in range …" paragraph, no KPI table, no breakdown table.
-If activities exist but summary.rows are empty, the activity section still renders
-(activities are independent of labor charge data).
+If day-log data exists but summary.rows are empty, the day-log section still renders
+(day-log is independent of labor charge data).
 """
 
 from __future__ import annotations
@@ -417,73 +420,82 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
 
 
 # ---------------------------------------------------------------------------
-# Activity log section
+# Day log section — combined [Date | Activity | Description] per day
 # ---------------------------------------------------------------------------
 
-# Column weight ratios for the activity table: Date (narrow), Activity/title (wide)
-_ACTIVITY_COL_WEIGHTS = [2, 8]
+# Column weight ratios: Date (narrow), Activity/title (medium), Description (wide)
+_DAY_LOG_COL_WEIGHTS = [2, 4, 6]
 
-# Heading style for each per-month activity sub-section
-_ACTIVITY_SECTION_HEADER_STYLE_NAME = "h2"
+# Heading style for each per-month day-log sub-section
+_DAY_LOG_SECTION_HEADER_STYLE_NAME = "h2"
 
 
-def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_width: float) -> list:
-    """Build the project activity log section — one block per month that has activities.
+def _render_day_log_section(buckets: List[MonthBucket], styles: dict, usable_width: float) -> list:
+    """Build the combined day-log section — one block per month with activities or descriptions.
 
-    One activity per (project, date). For each bucket with at least one activity, renders:
-      - A sub-heading paragraph: "Activity log — <Mon YYYY>"
-      - A table with header row [Date, Activity] and one data row per activity.
-        Date cells use dd/mm/YYYY format (consistent with generated_at formatting).
-        Title cells wrap via Paragraph so long text reflows naturally.
+    For each bucket that has at least one activity OR day description, renders:
+      - A sub-heading: "Day log — <Mon YYYY>"
+      - A table [Date | Activity | Description] with one row per date in the
+        sorted union of (activity dates ∪ day-description dates). Either the
+        Activity or Description column may be empty for a given date.
 
-    Styling follows the same idiom as _render_breakdown_table: DejaVu-Bold header
-    on light-grey, 0.5 BOX, 0.25 INNERGRID, alternate row shading #F7F9FC.
+    Date cells use dd/mm/YYYY format (consistent with generated_at formatting).
+    Text cells wrap via Paragraph so long content reflows naturally.
+
+    Styling mirrors _render_breakdown_table: DejaVu-Bold header on light-grey,
+    0.5 BOX, 0.25 INNERGRID, alternate row shading #F7F9FC.
 
     Args:
-        buckets: All month buckets in the export range (chronological order preserved).
+        buckets: All month buckets (chronological order preserved).
         styles:  Style dict from _make_styles().
         usable_width: Printable page width in points (A4 minus margins).
 
     Returns:
         List of ReportLab flowable elements to extend onto the story.
     """
-    total_weight = sum(_ACTIVITY_COL_WEIGHTS)
-    col_widths = [usable_width * (w / total_weight) for w in _ACTIVITY_COL_WEIGHTS]
+    total_weight = sum(_DAY_LOG_COL_WEIGHTS)
+    col_widths = [usable_width * (w / total_weight) for w in _DAY_LOG_COL_WEIGHTS]
 
     elements: list = []
 
     for bucket in buckets:
-        if not bucket.activities:
+        activities = getattr(bucket, "activities", None) or []
+        day_descriptions = getattr(bucket, "day_descriptions", None) or []
+
+        if not activities and not day_descriptions:
             continue
+
+        # Build lookup maps keyed by ISO date string for O(1) access
+        activity_by_date: dict = {a.date: a for a in activities}
+        description_by_date: dict = {d.date: d for d in day_descriptions}
+
+        # Sorted union of all dates that have either kind of data
+        all_dates = sorted(set(activity_by_date) | set(description_by_date))
 
         # Per-month sub-heading
         month_label = bucket.month.strftime("%b %Y")
         elements.append(Spacer(1, 4 * mm))
-        elements.append(
-            Paragraph(f"Activity log — {_xml_escape(month_label)}", styles[_ACTIVITY_SECTION_HEADER_STYLE_NAME])
-        )
+        elements.append(Paragraph(f"Day log — {_xml_escape(month_label)}", styles[_DAY_LOG_SECTION_HEADER_STYLE_NAME]))
 
         # Table header + data rows
-        header_row = ["Date", "Activity"]
+        header_row = ["Date", "Activity", "Description"]
         table_data = [header_row]
 
-        for activity in bucket.activities:
-            # activity.date is an ISO string 'YYYY-MM-DD'; reformat to dd/mm/YYYY
-            # for visual consistency with the rest of the PDF (generated_at uses %d/%m/%Y).
+        for iso_date in all_dates:
+            # Reformat ISO 'YYYY-MM-DD' → 'dd/mm/YYYY' for visual consistency
             try:
-                iso_parts = activity.date.split("-")
-                formatted_date = f"{iso_parts[2]}/{iso_parts[1]}/{iso_parts[0]}"
+                parts = iso_date.split("-")
+                formatted_date = f"{parts[2]}/{parts[1]}/{parts[0]}"
             except Exception:
-                # Fallback: render the ISO string as-is if parsing fails
-                formatted_date = activity.date
+                formatted_date = iso_date
 
-            table_data.append(
-                [
-                    _xml_escape(formatted_date),
-                    # Wrap title in a Paragraph so long text reflows within the cell
-                    Paragraph(_xml_escape(activity.title), styles["body"]),
-                ]
-            )
+            activity = activity_by_date.get(iso_date)
+            description = description_by_date.get(iso_date)
+
+            activity_cell = Paragraph(_xml_escape(activity.title), styles["body"]) if activity else ""
+            description_cell = Paragraph(_xml_escape(description.description), styles["body"]) if description else ""
+
+            table_data.append([_xml_escape(formatted_date), activity_cell, description_cell])
 
         style_cmds = [
             # Header row
@@ -501,16 +513,16 @@ def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_wi
             ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            # Left-align all columns (date and text)
+            # Left-align all columns
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
             # Centre header row
             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-            # Top-align cell content so multi-line title aligns with the date
+            # Top-align cell content so multi-line text aligns with the date
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]
 
         # Alternate row shading for readability
-        for i in range(len(bucket.activities)):
+        for i in range(len(all_dates)):
             if i % 2 == 1:
                 style_cmds.append(("BACKGROUND", (0, i + 1), (-1, i + 1), colors.HexColor("#F7F9FC")))
 
@@ -592,9 +604,10 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
 
     # Determine empty-range case — summary.rows already scoped to worker by use-case
     all_empty = all(not bucket.summary.rows for bucket in buckets) if buckets else True
-    # Activities are independent of labor charge data — check separately using getattr
-    # so this code stays compatible with MonthBucket instances that predate the field.
-    has_activities = any(getattr(b, "activities", None) for b in buckets)
+    # Day-log data (activities and/or day descriptions) is independent of labor charge
+    # data — check separately using getattr so this code stays compatible with MonthBucket
+    # instances that predate either field.
+    has_day_log = any(getattr(b, "activities", None) or getattr(b, "day_descriptions", None) for b in buckets)
 
     story: list = []
     story.extend(_render_header(context, styles))
@@ -609,14 +622,14 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
         story.append(Spacer(1, 6 * mm))
         story.extend(_render_breakdown_table(buckets, styles, usable_width))
 
-    if has_activities:
-        # Activity log section is rendered regardless of whether labor entries exist.
+    if has_day_log:
+        # Day log section is rendered regardless of whether labor entries exist.
         # A leading spacer separates it visually from the header (empty-entries case)
         # or from the breakdown table (normal case).
         story.append(Spacer(1, 6 * mm))
-        story.extend(_render_activity_section(buckets, styles, usable_width))
+        story.extend(_render_day_log_section(buckets, styles, usable_width))
 
-    if all_empty and not has_activities:
+    if all_empty and not has_day_log:
         # Nothing meaningful to show — emit a human-readable placeholder instead of
         # leaving the PDF completely blank after the header.
         from_label = context.range.from_month.strftime("%b %Y")

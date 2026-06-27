@@ -9,5 +9,6 @@ from app.api.v1.labor import (  # noqa: E402, F401
     entry_routes,
     labor_role_routes,
     activity_routes,
+    day_description_routes,
     rate_change_routes,
 )

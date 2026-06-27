@@ -36,6 +36,7 @@ from app.infrastructure.database.models.project_document import ProjectDocumentM
 from app.infrastructure.database.models.project_photo import ProjectPhotoRow
 from app.infrastructure.database.models.project_tag import ProjectTagModel
 from app.infrastructure.database.models.labor_activity import LaborActivityModel
+from app.infrastructure.database.models.labor_day_description import LaborDayDescriptionModel
 from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
@@ -70,6 +71,7 @@ __all__ = [
     "ProjectPhotoRow",
     "LaborRoleModel",
     "LaborActivityModel",
+    "LaborDayDescriptionModel",
     "ProjectTagModel",
     "BibliothequeSupplierModel",
     "BibliothequeProductModel",

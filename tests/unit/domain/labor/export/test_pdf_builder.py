@@ -23,6 +23,8 @@ from uuid import uuid4
 from pypdf import PdfReader
 
 from app.application.labor.get_labor_summary import LaborSummaryResponse, WorkerCostSummary
+from app.application.labor.labor_activity_usecases import LaborActivityDetail
+from app.application.labor.labor_day_description_usecases import LaborDayDescriptionDetail
 from app.domain.labor.export.format import format_eur_fr
 from app.domain.labor.export.models import ExportContext, ExportRange, MonthBucket
 from app.domain.labor.export.pdf_builder import build_pdf
@@ -282,3 +284,153 @@ class TestEmptyRange:
         text = _extract_text(build_pdf(ctx, []))
         # KPI labels only appear when there is data
         assert "Worker-days" not in text, "KPI table should not be rendered for empty range"
+
+
+# ---------------------------------------------------------------------------
+# Day log section — [Date | Activity | Description]
+# ---------------------------------------------------------------------------
+
+
+def _make_activity_detail(
+    title: str = "Site inspection",
+    activity_date: str = "2026-04-10",
+) -> LaborActivityDetail:
+    return LaborActivityDetail(
+        id=uuid4(),
+        project_id=uuid4(),
+        date=activity_date,
+        title=title,
+        created_by=None,
+        created_at="2026-04-10T08:00:00+00:00",
+        updated_at="2026-04-10T08:00:00+00:00",
+    )
+
+
+def _make_day_description_detail(
+    description: str = "Heavy rain, partial crew",
+    description_date: str = "2026-04-10",
+) -> LaborDayDescriptionDetail:
+    return LaborDayDescriptionDetail(
+        id=uuid4(),
+        project_id=uuid4(),
+        date=description_date,
+        description=description,
+        created_by=None,
+        created_at="2026-04-10T08:00:00+00:00",
+        updated_at="2026-04-10T08:00:00+00:00",
+    )
+
+
+class TestDayLogSection:
+    def test_day_log_heading_present_when_activities_exist(self):
+        """'Day log' heading appears when bucket has activities."""
+        ctx, _ = _make_default_buckets()
+        w = _make_worker()
+        activity = _make_activity_detail(title="Concrete pour")
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(w),
+            daily_entries=[],
+            activities=[activity],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Day log" in text, f"'Day log' heading missing.\nExtracted: {text[:800]}"
+
+    def test_day_log_heading_present_when_only_descriptions_exist(self):
+        """'Day log' heading appears even when only day descriptions (no activities) are present."""
+        ctx, _ = _make_default_buckets()
+        w = _make_worker()
+        desc = _make_day_description_detail(description="DescriptionOnlyDay999")
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(w),
+            daily_entries=[],
+            day_descriptions=[desc],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Day log" in text, f"'Day log' heading missing.\nExtracted: {text[:800]}"
+        assert "DescriptionOnlyDay999" in text, f"Description text missing.\nExtracted: {text[:800]}"
+
+    def test_activity_column_header_present(self):
+        """'Activity' column header appears in the day log table."""
+        ctx, _ = _make_default_buckets()
+        w = _make_worker()
+        activity = _make_activity_detail(title="Test activity")
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(w),
+            daily_entries=[],
+            activities=[activity],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Activity" in text, f"'Activity' column header missing.\nExtracted: {text[:800]}"
+
+    def test_description_column_header_present(self):
+        """'Description' column header appears in the day log table."""
+        ctx, _ = _make_default_buckets()
+        w = _make_worker()
+        desc = _make_day_description_detail()
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(w),
+            daily_entries=[],
+            day_descriptions=[desc],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "Description" in text, f"'Description' column header missing.\nExtracted: {text[:800]}"
+
+    def test_combined_row_has_both_activity_and_description(self):
+        """When same date has both activity and description, both texts appear."""
+        ctx, _ = _make_default_buckets()
+        w = _make_worker()
+        same_date = "2026-04-15"
+        activity = _make_activity_detail(title="UniqueActivityXYZ", activity_date=same_date)
+        desc = _make_day_description_detail(description="UniqueDescABC", description_date=same_date)
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(w),
+            daily_entries=[],
+            activities=[activity],
+            day_descriptions=[desc],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "UniqueActivityXYZ" in text, f"Activity text missing.\nExtracted: {text[:800]}"
+        assert "UniqueDescABC" in text, f"Description text missing.\nExtracted: {text[:800]}"
+
+    def test_union_of_dates_different_days(self):
+        """Activity on day-1 and description on day-2 both appear (union of dates)."""
+        ctx, _ = _make_default_buckets()
+        w = _make_worker()
+        activity = _make_activity_detail(title="ActivityDay1Token", activity_date="2026-04-10")
+        desc = _make_day_description_detail(description="DescriptionDay2Token", description_date="2026-04-11")
+        bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(w),
+            daily_entries=[],
+            activities=[activity],
+            day_descriptions=[desc],
+        )
+        text = _extract_text(build_pdf(ctx, [bucket]))
+        assert "ActivityDay1Token" in text, f"Activity text missing.\nExtracted: {text[:1000]}"
+        assert "DescriptionDay2Token" in text, f"Description text missing.\nExtracted: {text[:1000]}"
+
+    def test_no_day_log_section_when_both_empty(self):
+        """'Day log' heading must NOT appear when bucket has no activities or descriptions."""
+        ctx, buckets = _make_default_buckets()
+        text = _extract_text(build_pdf(ctx, buckets))
+        assert "Day log" not in text, f"'Day log' should not appear.\nExtracted: {text[:800]}"
+
+    def test_no_entries_message_suppressed_when_descriptions_present(self):
+        """'No labor entries in range' must be suppressed when day descriptions exist."""
+        ctx = _make_context(from_month=date(2026, 4, 1), to_month=date(2026, 4, 30))
+        desc = _make_day_description_detail(description="Rainy day")
+        empty_bucket = MonthBucket(
+            month=date(2026, 4, 1),
+            summary=_make_summary(),  # no workers
+            daily_entries=[],
+            day_descriptions=[desc],
+        )
+        text = _extract_text(build_pdf(ctx, [empty_bucket]))
+        assert "No labor entries in range" not in text, (
+            "'No labor entries' must not appear when day descriptions exist.\n" f"Extracted: {text[:400]}"
+        )
