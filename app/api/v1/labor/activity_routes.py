@@ -38,11 +38,13 @@ from wiring import get_container
 
 class CreateActivitySchema(BaseModel):
     date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    title: str = Field(..., min_length=1, max_length=255)
+    # Title is the day's single free-text note (description was folded in); the
+    # column is Text, so allow up to 2000 chars (matches the day-description cap).
+    title: str = Field(..., min_length=1, max_length=2000)
 
 
 class UpdateActivitySchema(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    title: Optional[str] = Field(None, min_length=1, max_length=2000)
 
 
 class ActivityResponse(BaseModel):

@@ -22,6 +22,19 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Step 0 — Widen title to Text BEFORE folding. The dropped description was
+    # Text (API allowed up to 2000 chars) and the merge below concatenates
+    # several titles; either can exceed the old VARCHAR(255) and abort the
+    # upgrade on real data. Title is now the only free-text field, so Text is
+    # the honest type.
+    op.alter_column(
+        "labor_activities",
+        "title",
+        existing_type=sa.String(length=255),
+        type_=sa.Text(),
+        existing_nullable=False,
+    )
+
     # Step 1 — Fold description into title where description is non-empty.
     op.execute(
         sa.text(

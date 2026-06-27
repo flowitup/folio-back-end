@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.labor.ports import ILaborDayDescriptionRepository
@@ -54,8 +55,25 @@ class SQLAlchemyLaborDayDescriptionRepository(ILaborDayDescriptionRepository):
             updated_at=entity.updated_at,
         )
         self._session.add(model)
-        self._session.commit()
-        return self._to_entity(model)
+        try:
+            self._session.commit()
+            return self._to_entity(model)
+        except IntegrityError:
+            # A concurrent request inserted the same (project_id, date) first and
+            # the unique constraint rejected this row. Converge to an update
+            # instead of surfacing a 500 on a benign double-submit.
+            self._session.rollback()
+            existing = (
+                self._session.query(LaborDayDescriptionModel)
+                .filter_by(project_id=entity.project_id, date=entity.date)
+                .first()
+            )
+            if existing is not None:
+                existing.description = entity.description
+                existing.updated_at = datetime.now(timezone.utc)
+                self._session.commit()
+                return self._to_entity(existing)
+            raise
 
     def list_by_range(
         self,

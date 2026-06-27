@@ -120,6 +120,7 @@ def list_labor_day_descriptions(project_id: str):
     date_to_str = request.args.get("to")
 
     try:
+        project_uuid = UUID(project_id)
         date_from = _parse_date(date_from_str) if date_from_str else None
         date_to = _parse_date(date_to_str) if date_to_str else None
     except ValueError as e:
@@ -127,7 +128,7 @@ def list_labor_day_descriptions(project_id: str):
 
     descriptions = get_container().list_labor_day_descriptions_usecase.execute(
         ListLaborDayDescriptionsRequest(
-            project_id=UUID(project_id),
+            project_id=project_uuid,
             date_from=date_from,
             date_to=date_to,
         )
