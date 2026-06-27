@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of project repository."""
 
+from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 
@@ -24,6 +25,8 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             invoice_prefix=project.invoice_prefix,
             owner_id=project.owner_id,
             created_at=project.created_at,
+            budget=project.budget,
+            budget_source=project.budget_source,
         )
         self._session.add(model)
         self._session.commit()
@@ -55,6 +58,8 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             model.name = project.name
             model.address = project.address
             model.invoice_prefix = project.invoice_prefix
+            model.budget = project.budget
+            model.budget_source = project.budget_source
             self._session.commit()
             return self._to_entity(model)
         return project
@@ -107,4 +112,6 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             created_at=model.created_at,
             updated_at=model.updated_at,
             user_ids=[u.id for u in model.users] if model.users else [],
+            budget=Decimal(str(model.budget)) if model.budget is not None else None,
+            budget_source=model.budget_source,
         )
