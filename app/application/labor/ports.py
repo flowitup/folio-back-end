@@ -315,10 +315,11 @@ class ILaborDayDescriptionRepository(ABC):
     def list_by_range(
         self,
         project_id: UUID,
-        date_from: date,
-        date_to: date,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
     ) -> List[LaborDayDescription]:
-        """Return all descriptions for a project within the inclusive date range.
+        """Return descriptions for a project, optionally bounded by an inclusive
+        date range. When a bound is None it is not applied (all history).
 
         Ordered by date ASC for deterministic export output.
         """

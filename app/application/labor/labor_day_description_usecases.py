@@ -67,8 +67,8 @@ class SetLaborDayDescriptionRequest:
 @dataclass
 class ListLaborDayDescriptionsRequest:
     project_id: UUID
-    date_from: date
-    date_to: date
+    date_from: Optional[date] = None
+    date_to: Optional[date] = None
 
 
 # ---------------------------------------------------------------------------

@@ -110,19 +110,18 @@ def _detail_to_response(d: LaborDayDescriptionDetail) -> DayDescriptionResponse:
 @jwt_required()
 @require_permission("project:read")
 def list_labor_day_descriptions(project_id: str):
-    """List labor day descriptions for a project within a date range.
+    """List labor day descriptions for a project.
 
-    Query params ``from`` and ``to`` (YYYY-MM-DD) are both required.
+    Query params ``from`` and ``to`` (YYYY-MM-DD) are optional; when omitted the
+    full history is returned (mirrors the labor-activities endpoint, so the
+    attendance "all history" view can load without a month filter).
     """
     date_from_str = request.args.get("from")
     date_to_str = request.args.get("to")
 
-    if not date_from_str or not date_to_str:
-        return _error_response("ValidationError", "Query params 'from' and 'to' (YYYY-MM-DD) are required", 400)
-
     try:
-        date_from = _parse_date(date_from_str)
-        date_to = _parse_date(date_to_str)
+        date_from = _parse_date(date_from_str) if date_from_str else None
+        date_to = _parse_date(date_to_str) if date_to_str else None
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 

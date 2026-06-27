@@ -60,19 +60,20 @@ class SQLAlchemyLaborDayDescriptionRepository(ILaborDayDescriptionRepository):
     def list_by_range(
         self,
         project_id: UUID,
-        date_from: date,
-        date_to: date,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
     ) -> List[LaborDayDescription]:
-        """List descriptions for a project within the inclusive date range, ordered by date ASC."""
-        query = (
-            self._session.query(LaborDayDescriptionModel)
-            .filter(
-                LaborDayDescriptionModel.project_id == project_id,
-                LaborDayDescriptionModel.date >= date_from,
-                LaborDayDescriptionModel.date <= date_to,
-            )
-            .order_by(LaborDayDescriptionModel.date.asc())
+        """List descriptions for a project, optionally bounded by an inclusive
+        date range, ordered by date ASC. When ``date_from``/``date_to`` are None
+        the corresponding bound is not applied (returns all history)."""
+        query = self._session.query(LaborDayDescriptionModel).filter(
+            LaborDayDescriptionModel.project_id == project_id,
         )
+        if date_from is not None:
+            query = query.filter(LaborDayDescriptionModel.date >= date_from)
+        if date_to is not None:
+            query = query.filter(LaborDayDescriptionModel.date <= date_to)
+        query = query.order_by(LaborDayDescriptionModel.date.asc())
         return [self._to_entity(m) for m in query.all()]
 
     def delete_by_date(self, project_id: UUID, description_date: date) -> bool:
