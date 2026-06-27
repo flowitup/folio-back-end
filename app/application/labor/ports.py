@@ -268,6 +268,11 @@ class ILaborActivityRepository(ABC):
     def find_by_id(self, activity_id: UUID) -> Optional[LaborActivity]: ...
 
     @abstractmethod
+    def find_by_project_and_date(self, project_id: UUID, activity_date: date) -> Optional[LaborActivity]:
+        """Return the activity for (project_id, date), or None if absent."""
+        ...
+
+    @abstractmethod
     def list_by_project(
         self,
         project_id: UUID,

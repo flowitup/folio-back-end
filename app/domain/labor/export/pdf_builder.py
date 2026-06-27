@@ -10,7 +10,7 @@ Layout (A4 portrait, 15mm margins)
      Columns: Worker | Days | Banked hrs | Bonus full | Bonus half |
               Priced cost | Bonus cost | Total (priced + bonus)
   4. Activity log section — one block per month that has activities
-     Columns: Date | Activity | Description
+     Columns: Date | Activity
      (independent of labor entries — rendered even when summary.rows is empty)
   5. Page-X footer on every page (Page X only — two-pass X/Y is future work)
 
@@ -20,8 +20,8 @@ All monetary values formatted via format_eur_fr(Decimal) → "200,00 €"
 (matches xlsx number_format + FE Intl.NumberFormat fr-FR).
 
 No daily per-charge-row detail — individual attendance rows live only in xlsx (locked
-decision). The project activity log (date · title · description) IS included in the PDF
-as a separate section (see step 4 above).
+decision). The project activity log (date · title) IS included in the PDF as a separate
+section (see step 4 above). One activity per (project, date) — no description column.
 
 Empty-range case
 -----------------
@@ -420,8 +420,8 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
 # Activity log section
 # ---------------------------------------------------------------------------
 
-# Column weight ratios for the activity table: Date (narrow), Activity/title, Description (widest)
-_ACTIVITY_COL_WEIGHTS = [2, 3, 5]
+# Column weight ratios for the activity table: Date (narrow), Activity/title (wide)
+_ACTIVITY_COL_WEIGHTS = [2, 8]
 
 # Heading style for each per-month activity sub-section
 _ACTIVITY_SECTION_HEADER_STYLE_NAME = "h2"
@@ -430,11 +430,11 @@ _ACTIVITY_SECTION_HEADER_STYLE_NAME = "h2"
 def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_width: float) -> list:
     """Build the project activity log section — one block per month that has activities.
 
-    For each bucket with at least one activity, renders:
+    One activity per (project, date). For each bucket with at least one activity, renders:
       - A sub-heading paragraph: "Activity log — <Mon YYYY>"
-      - A table with header row [Date, Activity, Description] and one data row
-        per activity. Date cells use dd/mm/YYYY format (consistent with the rest
-        of the PDF). Description cells wrap via Paragraph so long text flows naturally.
+      - A table with header row [Date, Activity] and one data row per activity.
+        Date cells use dd/mm/YYYY format (consistent with generated_at formatting).
+        Title cells wrap via Paragraph so long text reflows naturally.
 
     Styling follows the same idiom as _render_breakdown_table: DejaVu-Bold header
     on light-grey, 0.5 BOX, 0.25 INNERGRID, alternate row shading #F7F9FC.
@@ -464,10 +464,10 @@ def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_wi
         )
 
         # Table header + data rows
-        header_row = ["Date", "Activity", "Description"]
+        header_row = ["Date", "Activity"]
         table_data = [header_row]
 
-        for idx, activity in enumerate(bucket.activities):
+        for activity in bucket.activities:
             # activity.date is an ISO string 'YYYY-MM-DD'; reformat to dd/mm/YYYY
             # for visual consistency with the rest of the PDF (generated_at uses %d/%m/%Y).
             try:
@@ -477,13 +477,11 @@ def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_wi
                 # Fallback: render the ISO string as-is if parsing fails
                 formatted_date = activity.date
 
-            description_text = activity.description or ""
             table_data.append(
                 [
                     _xml_escape(formatted_date),
-                    _xml_escape(activity.title),
-                    # Wrap description in a Paragraph so long text reflows within the cell
-                    Paragraph(_xml_escape(description_text), styles["body"]),
+                    # Wrap title in a Paragraph so long text reflows within the cell
+                    Paragraph(_xml_escape(activity.title), styles["body"]),
                 ]
             )
 
@@ -507,7 +505,7 @@ def _render_activity_section(buckets: List[MonthBucket], styles: dict, usable_wi
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
             # Centre header row
             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-            # Top-align cell content so multi-line description aligns with date/title
+            # Top-align cell content so multi-line title aligns with the date
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]
 

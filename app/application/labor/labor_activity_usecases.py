@@ -1,4 +1,9 @@
-"""CRUD use cases for labor activities."""
+"""CRUD use cases for labor activities.
+
+One activity per (project_id, date). CreateLaborActivityUseCase upserts:
+  - If an entry already exists for the given (project_id, date), update its title.
+  - Otherwise create a new entry.
+"""
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -20,7 +25,6 @@ class CreateLaborActivityRequest:
     project_id: UUID
     date: date
     title: str
-    description: Optional[str] = None
     created_by: Optional[UUID] = None
 
 
@@ -30,7 +34,6 @@ class CreateLaborActivityResponse:
     project_id: UUID
     date: str
     title: str
-    description: Optional[str]
     created_by: Optional[str]
     created_at: str
     updated_at: str
@@ -40,7 +43,6 @@ class CreateLaborActivityResponse:
 class UpdateLaborActivityRequest:
     activity_id: UUID
     title: Optional[str] = None
-    description: Optional[str] = None
 
 
 @dataclass
@@ -56,7 +58,6 @@ class LaborActivityDetail:
     project_id: UUID
     date: str
     title: str
-    description: Optional[str]
     created_by: Optional[str]
     created_at: str
     updated_at: str
@@ -78,7 +79,6 @@ def _to_detail(a: LaborActivity) -> LaborActivityDetail:
         project_id=a.project_id,
         date=a.date.isoformat(),
         title=a.title,
-        description=a.description,
         created_by=str(a.created_by) if a.created_by else None,
         created_at=a.created_at.isoformat() if a.created_at else "",
         updated_at=a.updated_at.isoformat() if a.updated_at else "",
@@ -86,17 +86,33 @@ def _to_detail(a: LaborActivity) -> LaborActivityDetail:
 
 
 class CreateLaborActivityUseCase:
+    """Upsert the day's single activity entry.
+
+    If an activity already exists for (project_id, date), update its title.
+    Otherwise create a new entry. Maintains the one-per-day invariant at the
+    application layer in addition to the DB unique constraint.
+    """
+
     def __init__(self, repo: ILaborActivityRepository):
         self._repo = repo
 
     def execute(self, req: CreateLaborActivityRequest) -> LaborActivityDetail:
         now = datetime.now(timezone.utc)
+        title = req.title.strip()
+
+        existing = self._repo.find_by_project_and_date(req.project_id, req.date)
+        if existing is not None:
+            # Update in place — keep original creator and created_at.
+            existing.title = title
+            existing.updated_at = now
+            updated = self._repo.update(existing)
+            return _to_detail(updated)
+
         activity = LaborActivity(
             id=uuid4(),
             project_id=req.project_id,
             date=req.date,
-            title=req.title.strip(),
-            description=req.description.strip() if req.description else None,
+            title=title,
             created_by=req.created_by,
             created_at=now,
             updated_at=now,
@@ -119,6 +135,8 @@ class ListLaborActivitiesUseCase:
 
 
 class UpdateLaborActivityUseCase:
+    """Update a specific activity by ID (title only)."""
+
     def __init__(self, repo: ILaborActivityRepository):
         self._repo = repo
 
@@ -128,8 +146,6 @@ class UpdateLaborActivityUseCase:
             raise LaborActivityNotFoundError(req.activity_id)
         if req.title is not None:
             activity.title = req.title.strip()
-        if req.description is not None:
-            activity.description = req.description.strip() if req.description else None
         activity.updated_at = datetime.now(timezone.utc)
         updated = self._repo.update(activity)
         return _to_detail(updated)

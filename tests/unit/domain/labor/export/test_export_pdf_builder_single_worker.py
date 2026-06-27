@@ -309,7 +309,6 @@ class TestSingleWorkerPdfDiacritics:
 def _make_activity(
     *,
     title: str = "Site preparation",
-    description: str = "Cleared rubble and levelled ground",
     activity_date: str = "2026-04-10",
     activity_id: str | None = None,
 ) -> LaborActivityDetail:
@@ -318,7 +317,6 @@ def _make_activity(
         project_id=uuid4(),
         date=activity_date,
         title=title,
-        description=description,
         created_by=None,
         created_at="2026-04-10T08:00:00+00:00",
         updated_at="2026-04-10T08:00:00+00:00",
@@ -348,7 +346,7 @@ class TestActivityLogSection:
         """'Activity log' heading appears when bucket has activities."""
         ctx = _make_worker_context()
         w = _make_worker_summary(days_worked=5, total_cost=1000.0)
-        activity = _make_activity(title="Foundation pour", description="Poured concrete for foundation")
+        activity = _make_activity(title="Foundation pour")
         bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
         text = _extract_text(build_pdf(ctx, [bucket]))
         assert "Activity log" in text, f"'Activity log' heading missing.\nExtracted: {text[:800]}"
@@ -357,20 +355,20 @@ class TestActivityLogSection:
         """Activity title substring renders in the PDF."""
         ctx = _make_worker_context()
         w = _make_worker_summary()
-        activity = _make_activity(title="Foundation pour", description="Poured concrete")
+        activity = _make_activity(title="Foundation pour")
         bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
         text = _extract_text(build_pdf(ctx, [bucket]))
         # Assert on a distinctive short token in case pypdf splits multi-word strings
         assert "Foundation" in text, f"Activity title 'Foundation' missing.\nExtracted: {text[:800]}"
 
-    def test_activity_description_appears_in_pdf(self):
-        """Activity description substring renders in the PDF."""
+    def test_activity_title_token_appears_in_pdf(self):
+        """Distinctive title token renders in the PDF (replaces description test)."""
         ctx = _make_worker_context()
         w = _make_worker_summary()
-        activity = _make_activity(title="Steel erection", description="Uniquetoken123 steel columns set")
+        activity = _make_activity(title="Uniquetoken123 steel erection")
         bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=[activity])
         text = _extract_text(build_pdf(ctx, [bucket]))
-        assert "Uniquetoken123" in text, f"Activity description token missing.\nExtracted: {text[:800]}"
+        assert "Uniquetoken123" in text, f"Activity title token missing.\nExtracted: {text[:800]}"
 
     def test_no_activity_section_when_activities_empty(self):
         """'Activity log' heading must NOT appear when all buckets have empty activities."""
@@ -384,7 +382,7 @@ class TestActivityLogSection:
     def test_activity_section_renders_even_when_no_labor_entries(self):
         """Activity section appears even when summary.rows is empty (independent data)."""
         ctx = _make_worker_context()
-        activity = _make_activity(title="Site survey", description="Measured boundaries")
+        activity = _make_activity(title="Site survey")
         # Empty bucket — no workers, but has an activity
         empty_bucket = MonthBucket(
             month=date(2026, 4, 1),
@@ -427,8 +425,8 @@ class TestActivityLogSection:
         ctx = _make_worker_context()
         w = _make_worker_summary()
         activities = [
-            _make_activity(title="MorningTaskAlpha", description="desc1", activity_date="2026-04-01"),
-            _make_activity(title="AfternoonTaskBeta", description="desc2", activity_date="2026-04-02"),
+            _make_activity(title="MorningTaskAlpha", activity_date="2026-04-01"),
+            _make_activity(title="AfternoonTaskBeta", activity_date="2026-04-02"),
         ]
         bucket = _make_bucket_with_activities(date(2026, 4, 1), w, activities=activities)
         text = _extract_text(build_pdf(ctx, [bucket]))

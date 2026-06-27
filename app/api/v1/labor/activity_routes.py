@@ -1,4 +1,8 @@
-"""Labor activity API routes."""
+"""Labor activity API routes.
+
+One activity per (project, date). POST /projects/<id>/labor-activities upserts
+the day's entry — creating it on first call, updating the title on repeat calls.
+"""
 
 from datetime import datetime
 from uuid import UUID
@@ -35,12 +39,10 @@ from wiring import get_container
 class CreateActivitySchema(BaseModel):
     date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     title: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=2000)
 
 
 class UpdateActivitySchema(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=2000)
 
 
 class ActivityResponse(BaseModel):
@@ -48,7 +50,6 @@ class ActivityResponse(BaseModel):
     project_id: str
     date: str
     title: str
-    description: Optional[str]
     created_by: Optional[str]
     created_at: str
     updated_at: str
@@ -77,7 +78,6 @@ def _detail_to_response(d: LaborActivityDetail) -> ActivityResponse:
         project_id=str(d.project_id),
         date=d.date,
         title=d.title,
-        description=d.description,
         created_by=d.created_by,
         created_at=d.created_at,
         updated_at=d.updated_at,
@@ -119,7 +119,7 @@ def list_labor_activities(project_id: str):
 
 @labor_bp.route("/projects/<project_id>/labor-activities", methods=["POST"])
 @openapi_doc(
-    summary="Create a new labor activity for a project day",
+    summary="Upsert the labor activity for a project day (one entry per day)",
     request=CreateActivitySchema,
     tags=["labor"],
 )
@@ -127,7 +127,11 @@ def list_labor_activities(project_id: str):
 @limiter.limit("30 per minute")
 @require_permission("project:manage_labor")
 def create_labor_activity(project_id: str):
-    """Create a new labor activity for a project day."""
+    """Upsert the day's single labor activity.
+
+    If an entry already exists for (project_id, date), its title is updated.
+    Otherwise a new entry is created. Returns 201 on first create, 200 on update.
+    """
     try:
         data = CreateActivitySchema(**(request.get_json() or {}))
     except ValidationError as e:
@@ -135,24 +139,28 @@ def create_labor_activity(project_id: str):
 
     try:
         user_id = get_jwt_identity()
-        result = get_container().create_labor_activity_usecase.execute(
+        # Check whether an entry already exists so we can return the right status code.
+        container = get_container()
+        activity_date = _parse_date(data.date)
+        existing = container.labor_activity_repository.find_by_project_and_date(UUID(project_id), activity_date)
+        result = container.create_labor_activity_usecase.execute(
             CreateLaborActivityRequest(
                 project_id=UUID(project_id),
-                date=_parse_date(data.date),
+                date=activity_date,
                 title=data.title,
-                description=data.description,
                 created_by=UUID(user_id) if user_id else None,
             )
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify(_detail_to_response(result).model_dump()), 201
+    status_code = 200 if existing is not None else 201
+    return jsonify(_detail_to_response(result).model_dump()), status_code
 
 
 @labor_bp.route("/projects/<project_id>/labor-activities/<activity_id>", methods=["PUT"])
 @openapi_doc(
-    summary="Update an existing labor activity",
+    summary="Update an existing labor activity by ID",
     request=UpdateActivitySchema,
     tags=["labor"],
 )
@@ -160,7 +168,7 @@ def create_labor_activity(project_id: str):
 @limiter.limit("30 per minute")
 @require_permission("project:manage_labor")
 def update_labor_activity(project_id: str, activity_id: str):
-    """Update an existing labor activity."""
+    """Update the title of an existing labor activity by its ID."""
     try:
         data = UpdateActivitySchema(**(request.get_json() or {}))
     except ValidationError as e:
@@ -171,7 +179,6 @@ def update_labor_activity(project_id: str, activity_id: str):
             UpdateLaborActivityRequest(
                 activity_id=UUID(activity_id),
                 title=data.title,
-                description=data.description,
             )
         )
     except ValueError as e:

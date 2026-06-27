@@ -918,7 +918,6 @@ class TestInactiveWorkerBlocked:
 def _make_activity_detail(
     *,
     title: str = "Daily activity",
-    description: str = "Work done",
     activity_date: str = "2026-01-10",
 ) -> LaborActivityDetail:
     return LaborActivityDetail(
@@ -926,7 +925,6 @@ def _make_activity_detail(
         project_id=uuid4(),
         date=activity_date,
         title=title,
-        description=description,
         created_by=None,
         created_at="2026-01-10T07:00:00+00:00",
         updated_at="2026-01-10T07:00:00+00:00",
@@ -964,7 +962,7 @@ class TestActivitiesUseCase:
     def test_buckets_populated_with_activities_when_use_case_provided(self):
         """When list_activities_usecase is provided, MonthBucket.activities is non-empty."""
         project = _make_project()
-        activity = _make_activity_detail(title="Concrete pour", description="East wall")
+        activity = _make_activity_detail(title="Concrete pour")
         uc = _build_usecase_with_activities(project, activities_return=[activity])
         req = ExportLaborRequest(
             project_id=project.id,
@@ -1075,7 +1073,6 @@ class TestActivitiesUseCase:
             project_id=project.id,
             date="2026-01-15",
             title="LaterCreated",
-            description=None,
             created_by=None,
             created_at="2026-01-15T10:00:00+00:00",
             updated_at="2026-01-15T10:00:00+00:00",
@@ -1085,7 +1082,6 @@ class TestActivitiesUseCase:
             project_id=project.id,
             date="2026-01-15",
             title="EarlierCreated",
-            description=None,
             created_by=None,
             created_at="2026-01-15T08:00:00+00:00",
             updated_at="2026-01-15T08:00:00+00:00",
