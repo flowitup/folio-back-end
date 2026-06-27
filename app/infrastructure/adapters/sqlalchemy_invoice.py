@@ -328,6 +328,25 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 total += qty * price * (1 + vat / Decimal("100"))
         return total
 
+    def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
+        """Return the subset of source_ids that have ≥1 linked refund invoice.
+
+        Single DISTINCT query over refunds_invoice_id; short-circuits on empty
+        input to avoid emitting an invalid ``IN ()`` clause.
+        """
+        if not source_ids:
+            return set()
+        rows = (
+            self._session.query(InvoiceModel.refunds_invoice_id)
+            .filter(
+                InvoiceModel.type == InvoiceType.REFUND.value,
+                InvoiceModel.refunds_invoice_id.in_(source_ids),
+            )
+            .distinct()
+            .all()
+        )
+        return {r[0] for r in rows if r[0] is not None}
+
     def list_materials_services_by_companies(
         self,
         company_ids: list[UUID],

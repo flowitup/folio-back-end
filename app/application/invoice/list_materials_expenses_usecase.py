@@ -33,6 +33,9 @@ class MaterialsExpenseItem:
     issue_date: str
     total_amount: float
     refundable_status: Optional[str]
+    # True when ≥1 refund invoice links back to this expense (refunded by bank).
+    # The company-refund signal rides on refundable_status == 'refunded'.
+    has_bank_refund: bool
     attachments: list[MaterialsExpenseAttachment]
 
 
@@ -97,6 +100,10 @@ class ListMaterialsExpensesUseCase:
             all_companies=is_superadmin and company_id is None,
         )
 
+        # Batch reverse-lookup: which of this page's expenses have a linked refund
+        # invoice (refunded by bank). One query for the whole page — no N+1.
+        bank_refunded = self._invoice_repo.refund_source_ids([UUID(r["id"]) for r in rows])
+
         items = [
             MaterialsExpenseItem(
                 id=r["id"],
@@ -107,6 +114,7 @@ class ListMaterialsExpensesUseCase:
                 issue_date=r["issue_date"],
                 total_amount=r["total_amount"],
                 refundable_status=r["refundable_status"],
+                has_bank_refund=UUID(r["id"]) in bank_refunded,
                 attachments=[
                     MaterialsExpenseAttachment(
                         id=a["id"],

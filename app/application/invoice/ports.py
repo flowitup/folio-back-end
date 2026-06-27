@@ -71,6 +71,19 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
+        """Return the subset of source_ids that have ≥1 linked refund invoice.
+
+        A source qualifies when at least one invoice exists with type 'refund'
+        and refunds_invoice_id == source_id. Used to flag "refunded by bank"
+        (a supplier/vendor sent money back) on materials_services expenses.
+
+        Batch reverse-lookup — one query regardless of input size. Empty input
+        returns an empty set without issuing a query.
+        """
+        ...
+
+    @abstractmethod
     def list_materials_services_by_companies(
         self,
         company_ids: list[UUID],
