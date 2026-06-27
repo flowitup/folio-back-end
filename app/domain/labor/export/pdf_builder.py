@@ -430,7 +430,9 @@ _DAY_LOG_COL_WEIGHTS = [2, 4, 6]
 _DAY_LOG_SECTION_HEADER_STYLE_NAME = "h2"
 
 
-def _render_day_log_section(buckets: List[MonthBucket], styles: dict, usable_width: float) -> list:
+def _render_day_log_section(
+    buckets: List[MonthBucket], styles: dict, usable_width: float, worker_scoped: bool = False
+) -> list:
     """Build the combined day-log section — one block per month with activities or descriptions.
 
     For each bucket that has at least one activity OR day description, renders:
@@ -471,6 +473,17 @@ def _render_day_log_section(buckets: List[MonthBucket], styles: dict, usable_wid
 
         # Sorted union of all dates that have either kind of data
         all_dates = sorted(set(activity_by_date) | set(description_by_date))
+
+        # Single-worker export: restrict the day log to dates the worker actually
+        # worked (has a labor entry that month). Activities/descriptions are
+        # project-level, so without this a per-person PDF would list site days the
+        # person wasn't on. daily_entries is already worker-scoped by the use-case.
+        if worker_scoped:
+            worked_dates = {e.date for e in (getattr(bucket, "daily_entries", None) or [])}
+            all_dates = [d for d in all_dates if d in worked_dates]
+
+        if not all_dates:
+            continue
 
         # Per-month sub-heading
         month_label = bucket.month.strftime("%b %Y")
@@ -622,14 +635,22 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
         story.append(Spacer(1, 6 * mm))
         story.extend(_render_breakdown_table(buckets, styles, usable_width))
 
-    if has_day_log:
-        # Day log section is rendered regardless of whether labor entries exist.
-        # A leading spacer separates it visually from the header (empty-entries case)
-        # or from the breakdown table (normal case).
+    # Render the day-log first so we can tell whether it actually produced rows.
+    # In single-worker mode it is filtered to the worker's worked days, which can
+    # legitimately leave it empty even when the project has activities — in that
+    # case we must NOT emit a leading spacer (stray gap).
+    day_log_elements = (
+        _render_day_log_section(buckets, styles, usable_width, worker_scoped=context.worker_name is not None)
+        if has_day_log
+        else []
+    )
+    if day_log_elements:
+        # A leading spacer separates it from the header (empty-entries case) or
+        # from the breakdown table (normal case).
         story.append(Spacer(1, 6 * mm))
-        story.extend(_render_day_log_section(buckets, styles, usable_width))
+        story.extend(day_log_elements)
 
-    if all_empty and not has_day_log:
+    if all_empty and not day_log_elements:
         # Nothing meaningful to show — emit a human-readable placeholder instead of
         # leaving the PDF completely blank after the header.
         from_label = context.range.from_month.strftime("%b %Y")
