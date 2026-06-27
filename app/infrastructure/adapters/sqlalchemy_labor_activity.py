@@ -4,7 +4,6 @@ from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.labor.ports import ILaborActivityRepository
@@ -29,34 +28,11 @@ class SQLAlchemyLaborActivityRepository(ILaborActivityRepository):
             updated_at=activity.updated_at,
         )
         self._session.add(model)
-        try:
-            self._session.commit()
-            return self._to_entity(model)
-        except IntegrityError:
-            # Concurrent insert for the same (project_id, date) won the race and
-            # the unique constraint rejected this row. Converge to an update of
-            # the existing row instead of surfacing a 500 (create() is only
-            # reached after the upsert use-case saw no existing row).
-            self._session.rollback()
-            existing = (
-                self._session.query(LaborActivityModel)
-                .filter_by(project_id=activity.project_id, date=activity.date)
-                .first()
-            )
-            if existing is not None:
-                existing.title = activity.title
-                existing.updated_at = activity.updated_at
-                self._session.commit()
-                return self._to_entity(existing)
-            raise
+        self._session.commit()
+        return self._to_entity(model)
 
     def find_by_id(self, activity_id: UUID) -> Optional[LaborActivity]:
         model = self._session.query(LaborActivityModel).filter_by(id=activity_id).first()
-        return self._to_entity(model) if model else None
-
-    def find_by_project_and_date(self, project_id: UUID, activity_date: date) -> Optional[LaborActivity]:
-        """Return the single activity for (project_id, date), or None if absent."""
-        model = self._session.query(LaborActivityModel).filter_by(project_id=project_id, date=activity_date).first()
         return self._to_entity(model) if model else None
 
     def list_by_project(

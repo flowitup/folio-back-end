@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -11,12 +11,9 @@ from app.infrastructure.database.models.base import Base
 
 
 class LaborActivityModel(Base):
-    """Labor activity database model — one entry per (project, date)."""
+    """Labor activity database model — multiple entries per (project, date) allowed."""
 
     __tablename__ = "labor_activities"
-
-    # One activity per project per day — enforced by unique constraint.
-    __table_args__ = (UniqueConstraint("project_id", "date", name="uq_labor_activities_project_date"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
