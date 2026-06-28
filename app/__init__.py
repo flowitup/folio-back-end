@@ -276,6 +276,15 @@ def _configure_di_container() -> None:
 
     _c = _get_container()
 
+    # -----------------------------------------------------------------------
+    # Project spent reader (labor + non-released_funds invoices)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_project_spent_reader import (
+        SqlAlchemyProjectSpentReader as _ProjectSpentReader,
+    )
+
+    _c.project_spent_reader = _ProjectSpentReader(db.session)
+
     _activity_repo = SQLAlchemyLaborActivityRepository(db.session)
     _c.labor_activity_repository = _activity_repo
     _c.create_labor_activity_usecase = CreateLaborActivityUseCase(_activity_repo)

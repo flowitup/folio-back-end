@@ -447,6 +447,11 @@ class Container:
     tag_summary_usecase: Optional[Any] = None  # TagSummaryUseCase
 
     # -----------------------------------------------------------------------
+    # Project spent reader (labor + non-released_funds invoices)
+    # -----------------------------------------------------------------------
+    project_spent_reader: Optional[Any] = None  # SqlAlchemyProjectSpentReader
+
+    # -----------------------------------------------------------------------
     # Bibliotheque repos + use-cases
     # -----------------------------------------------------------------------
     bibliotheque_supplier_repo: Optional[Any] = None  # SqlAlchemyBibliothequeSupplierRepository

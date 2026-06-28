@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, String
+from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -32,6 +32,9 @@ class ProjectModel(Base):
         index=True,
     )
     invoice_prefix = Column(String(8), nullable=True)
+    # Budget fields — both nullable; a project may have no budget set.
+    budget = Column(Numeric(14, 2), nullable=True)
+    budget_source = Column(String(120), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,

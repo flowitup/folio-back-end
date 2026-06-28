@@ -1,10 +1,24 @@
 """Project repository port."""
 
 from abc import ABC, abstractmethod
+from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 
 from app.domain.entities.project import Project
+
+
+class ProjectSpentReaderPort(ABC):
+    """Port for reading aggregated project spend (labor + non-released_funds invoices)."""
+
+    @abstractmethod
+    def sum_spent_by_projects(self, project_ids: list[UUID]) -> dict[UUID, Decimal]:
+        """Return {project_id: total_spent} for each id.
+
+        IDs with no labor entries or qualifying invoices map to Decimal("0").
+        Refund invoices carry negative line items and naturally net down the total.
+        """
+        ...
 
 
 class IProjectRepository(ABC):

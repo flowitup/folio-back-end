@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -15,6 +16,8 @@ class CreateProjectRequest:
     name: str
     owner_id: UUID
     address: Optional[str] = None
+    budget: Optional[Decimal] = None
+    budget_source: Optional[str] = None
 
 
 @dataclass
@@ -25,6 +28,8 @@ class CreateProjectResponse:
     owner_id: str
     created_at: str
     invoice_prefix: Optional[str] = None
+    budget: Optional[Decimal] = None
+    budget_source: Optional[str] = None
 
 
 class CreateProjectUseCase:
@@ -45,6 +50,8 @@ class CreateProjectUseCase:
             address=request.address.strip() if request.address else None,
             owner_id=request.owner_id,
             created_at=datetime.now(timezone.utc),
+            budget=request.budget,
+            budget_source=request.budget_source.strip() if request.budget_source else None,
         )
 
         saved = self._repo.create(project)
@@ -57,4 +64,6 @@ class CreateProjectUseCase:
             created_at=saved.created_at.isoformat(),
             # New projects have no invoice prefix until set in project settings.
             invoice_prefix=getattr(saved, "invoice_prefix", None),
+            budget=saved.budget,
+            budget_source=saved.budget_source,
         )
