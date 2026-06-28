@@ -1,7 +1,8 @@
 """Labor activity API routes.
 
-One activity per (project, date). POST /projects/<id>/labor-activities upserts
-the day's entry — creating it on first call, updating the title on repeat calls.
+Multiple activities per (project, date) are allowed. POST
+/projects/<id>/labor-activities creates a new entry on every call; PUT and
+DELETE target a specific activity by id.
 """
 
 from datetime import datetime
@@ -38,8 +39,8 @@ from wiring import get_container
 
 class CreateActivitySchema(BaseModel):
     date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    # Title is the day's single free-text note (description was folded in); the
-    # column is Text, so allow up to 2000 chars (matches the day-description cap).
+    # Title is the activity's free-text note; the column is Text, so allow up to
+    # 2000 chars (legacy single-activity titles could grow that long).
     title: str = Field(..., min_length=1, max_length=2000)
 
 
@@ -121,7 +122,7 @@ def list_labor_activities(project_id: str):
 
 @labor_bp.route("/projects/<project_id>/labor-activities", methods=["POST"])
 @openapi_doc(
-    summary="Upsert the labor activity for a project day (one entry per day)",
+    summary="Create a labor activity for a project day (multiple entries per day allowed)",
     request=CreateActivitySchema,
     tags=["labor"],
 )
@@ -129,10 +130,10 @@ def list_labor_activities(project_id: str):
 @limiter.limit("30 per minute")
 @require_permission("project:manage_labor")
 def create_labor_activity(project_id: str):
-    """Upsert the day's single labor activity.
+    """Create a new labor activity for the given (project, date).
 
-    If an entry already exists for (project_id, date), its title is updated.
-    Otherwise a new entry is created. Returns 201 on first create, 200 on update.
+    Multiple activities per day are allowed — each call inserts a distinct
+    entry. Returns 201 with the created activity.
     """
     try:
         data = CreateActivitySchema(**(request.get_json() or {}))
@@ -141,14 +142,10 @@ def create_labor_activity(project_id: str):
 
     try:
         user_id = get_jwt_identity()
-        # Check whether an entry already exists so we can return the right status code.
-        container = get_container()
-        activity_date = _parse_date(data.date)
-        existing = container.labor_activity_repository.find_by_project_and_date(UUID(project_id), activity_date)
-        result = container.create_labor_activity_usecase.execute(
+        result = get_container().create_labor_activity_usecase.execute(
             CreateLaborActivityRequest(
                 project_id=UUID(project_id),
-                date=activity_date,
+                date=_parse_date(data.date),
                 title=data.title,
                 created_by=UUID(user_id) if user_id else None,
             )
@@ -156,8 +153,7 @@ def create_labor_activity(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    status_code = 200 if existing is not None else 201
-    return jsonify(_detail_to_response(result).model_dump()), status_code
+    return jsonify(_detail_to_response(result).model_dump()), 201
 
 
 @labor_bp.route("/projects/<project_id>/labor-activities/<activity_id>", methods=["PUT"])

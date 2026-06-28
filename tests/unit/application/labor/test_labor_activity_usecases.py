@@ -1,9 +1,9 @@
-"""Unit tests for labor activity use-cases (one-per-day upsert model).
+"""Unit tests for labor activity use-cases (multiple-per-day model).
 
 All external collaborators are replaced with in-memory fakes — no DB, no Flask.
 
 Covers:
-- CreateLaborActivityUseCase: create on first call, update (upsert) on repeat same day
+- CreateLaborActivityUseCase: each call inserts a distinct entry (many per day)
 - ListLaborActivitiesUseCase: returns DTO list
 - UpdateLaborActivityUseCase: updates title by id, raises on missing id
 - DeleteLaborActivityUseCase: deletes, raises on missing id
@@ -52,12 +52,6 @@ class _InMemoryActivityRepo(ILaborActivityRepository):
 
     def find_by_id(self, activity_id: UUID) -> Optional[LaborActivity]:
         return self._store.get(activity_id)
-
-    def find_by_project_and_date(self, project_id: UUID, activity_date: date) -> Optional[LaborActivity]:
-        for a in self._store.values():
-            if a.project_id == project_id and a.date == activity_date:
-                return a
-        return None
 
     def list_by_project(
         self,
@@ -143,27 +137,28 @@ class TestCreateActivityFirstCall:
 
 
 # ---------------------------------------------------------------------------
-# CreateLaborActivityUseCase — upsert (same day)
+# CreateLaborActivityUseCase — multiple per day
 # ---------------------------------------------------------------------------
 
 
-class TestCreateActivityUpsert:
-    def test_second_call_same_day_updates_title(self):
-        """Calling create twice with the same (project, date) updates the existing entry."""
+class TestCreateActivityMultiplePerDay:
+    def test_second_call_same_day_creates_new_entry(self):
+        """Calling create twice with the same (project, date) yields two distinct entries."""
         repo = _make_repo()
         uc = CreateLaborActivityUseCase(repo)
         pid = uuid4()
         day = date(2026, 2, 15)
 
         first = uc.execute(_req(pid, day, "Initial title"))
-        second = uc.execute(_req(pid, day, "Updated title"))
+        second = uc.execute(_req(pid, day, "Another activity"))
 
-        # Same id — no new row
-        assert first.id == second.id
-        assert second.title == "Updated title"
+        # Distinct ids — a new row, not an in-place update.
+        assert first.id != second.id
+        assert first.title == "Initial title"
+        assert second.title == "Another activity"
 
-    def test_only_one_entry_after_two_calls(self):
-        """After two calls for the same day, exactly one row exists in the store."""
+    def test_two_entries_after_two_calls(self):
+        """After two calls for the same day, two rows exist in the store."""
         repo = _make_repo()
         uc = CreateLaborActivityUseCase(repo)
         list_uc = ListLaborActivitiesUseCase(repo)
@@ -174,8 +169,8 @@ class TestCreateActivityUpsert:
         uc.execute(_req(pid, day, "Afternoon update"))
 
         results = list_uc.execute(ListLaborActivitiesRequest(project_id=pid))
-        assert len(results) == 1
-        assert results[0].title == "Afternoon update"
+        assert len(results) == 2
+        assert {r.title for r in results} == {"Morning brief", "Afternoon update"}
 
     def test_different_days_creates_separate_entries(self):
         """Same project, different dates → two distinct entries."""
@@ -208,8 +203,8 @@ class TestCreateActivityUpsert:
         assert a_results[0].title == "Project A work"
         assert b_results[0].title == "Project B work"
 
-    def test_upsert_preserves_original_created_at(self):
-        """Upsert must not change created_at of the original entry."""
+    def test_each_entry_keeps_its_own_id_on_same_day(self):
+        """Several activities on one day are independent rows, each retrievable by id."""
         repo = _make_repo()
         uc = CreateLaborActivityUseCase(repo)
         pid = uuid4()
@@ -217,21 +212,12 @@ class TestCreateActivityUpsert:
 
         first = uc.execute(_req(pid, day, "First"))
         second = uc.execute(_req(pid, day, "Second"))
+        third = uc.execute(_req(pid, day, "Third"))
 
-        assert first.created_at == second.created_at
-
-    def test_upsert_updates_updated_at(self):
-        """updated_at must be more recent after an upsert."""
-        repo = _make_repo()
-        uc = CreateLaborActivityUseCase(repo)
-        pid = uuid4()
-        day = date(2026, 6, 2)
-
-        first = uc.execute(_req(pid, day, "Initial"))
-        second = uc.execute(_req(pid, day, "Updated"))
-
-        # updated_at on second should be >= first (could be equal in fast runs)
-        assert second.updated_at >= first.updated_at
+        ids = {first.id, second.id, third.id}
+        assert len(ids) == 3
+        for created in (first, second, third):
+            assert repo.find_by_id(created.id) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -246,8 +232,8 @@ class TestListLaborActivities:
         results = uc.execute(ListLaborActivitiesRequest(project_id=uuid4()))
         assert results == []
 
-    def test_returns_at_most_one_per_day(self):
-        """After upsert, list returns ≤ 1 per day."""
+    def test_returns_multiple_entries_for_one_day(self):
+        """Multiple activities on the same day are all returned."""
         repo = _make_repo()
         create_uc = CreateLaborActivityUseCase(repo)
         list_uc = ListLaborActivitiesUseCase(repo)
@@ -258,8 +244,9 @@ class TestListLaborActivities:
         create_uc.execute(_req(pid, day, "v2"))
 
         results = list_uc.execute(ListLaborActivitiesRequest(project_id=pid))
-        dates = [r.date for r in results]
-        assert len(dates) == len(set(dates)), "Duplicate dates found in list result"
+        assert len(results) == 2
+        assert all(r.date == "2026-07-04" for r in results)
+        assert {r.title for r in results} == {"v1", "v2"}
 
 
 # ---------------------------------------------------------------------------

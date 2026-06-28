@@ -1,8 +1,7 @@
 """CRUD use cases for labor activities.
 
-One activity per (project_id, date). CreateLaborActivityUseCase upserts:
-  - If an entry already exists for the given (project_id, date), update its title.
-  - Otherwise create a new entry.
+Multiple activities per (project_id, date) are allowed. Each create inserts a
+distinct entry; edits and deletes target a specific activity by id.
 """
 
 from dataclasses import dataclass
@@ -86,11 +85,10 @@ def _to_detail(a: LaborActivity) -> LaborActivityDetail:
 
 
 class CreateLaborActivityUseCase:
-    """Upsert the day's single activity entry.
+    """Create a new activity entry for the day.
 
-    If an activity already exists for (project_id, date), update its title.
-    Otherwise create a new entry. Maintains the one-per-day invariant at the
-    application layer in addition to the DB unique constraint.
+    Multiple activities per (project_id, date) are allowed — every call inserts
+    a distinct entry rather than replacing an existing one.
     """
 
     def __init__(self, repo: ILaborActivityRepository):
@@ -98,21 +96,11 @@ class CreateLaborActivityUseCase:
 
     def execute(self, req: CreateLaborActivityRequest) -> LaborActivityDetail:
         now = datetime.now(timezone.utc)
-        title = req.title.strip()
-
-        existing = self._repo.find_by_project_and_date(req.project_id, req.date)
-        if existing is not None:
-            # Update in place — keep original creator and created_at.
-            existing.title = title
-            existing.updated_at = now
-            updated = self._repo.update(existing)
-            return _to_detail(updated)
-
         activity = LaborActivity(
             id=uuid4(),
             project_id=req.project_id,
             date=req.date,
-            title=title,
+            title=req.title.strip(),
             created_by=req.created_by,
             created_at=now,
             updated_at=now,

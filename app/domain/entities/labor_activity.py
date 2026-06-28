@@ -10,9 +10,9 @@ from uuid import UUID
 class LaborActivity:
     """Project-level daily activity log entry.
 
-    One entry per (project_id, date). The single required text field ``title``
-    captures what happened that day. Upsert semantics: saving twice on the
-    same date updates the existing entry rather than creating a duplicate.
+    Multiple entries per (project_id, date) are allowed. The single required
+    text field ``title`` captures one logged activity for that day; each save
+    creates a distinct entry.
     """
 
     id: UUID
