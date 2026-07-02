@@ -2,7 +2,6 @@
 
 import dataclasses
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
@@ -11,9 +10,13 @@ from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.exceptions.labor_exceptions import LaborEntryNotFoundError
 
 
-# Sentinel for "tag_id not provided in the PUT body" — distinct from None
-# (which means "explicitly clear the tag").
-_TAG_UNSET: object = object()
+# Sentinel for "field not provided in the PUT body" — distinct from None
+# (which means "explicitly clear the field"). Shared by tag_id,
+# amount_override, note and shift_type so each nullable field can be
+# cleared without dropping the others' patch-if-provided semantics.
+_UNSET: object = object()
+# Back-compat alias — the API route imports this name.
+_TAG_UNSET: object = _UNSET
 
 
 @dataclass
@@ -22,12 +25,13 @@ class UpdateAttendanceRequest:
     # project_id from the URL path scopes the lookup so callers cannot
     # mutate an entry whose worker belongs to a different project.
     project_id: UUID
-    amount_override: Optional[Decimal] = None
-    note: Optional[str] = None
-    shift_type: Optional[str] = None
+    # Nullable fields use the sentinel: _UNSET = not provided (leave as-is),
+    # None = clear, value = assign.
+    amount_override: object = dataclasses.field(default_factory=lambda: _UNSET)
+    note: object = dataclasses.field(default_factory=lambda: _UNSET)
+    shift_type: object = dataclasses.field(default_factory=lambda: _UNSET)
     supplement_hours: Optional[int] = None
-    # tag_id uses sentinel: _TAG_UNSET = not provided, None = clear, UUID = assign.
-    tag_id: object = dataclasses.field(default_factory=lambda: _TAG_UNSET)
+    tag_id: object = dataclasses.field(default_factory=lambda: _UNSET)
 
 
 @dataclass
@@ -76,18 +80,29 @@ class UpdateAttendanceUseCase:
             if tag is None or tag.project_id != worker.project_id:
                 raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
 
-        # All fields use PATCH semantics: None means "do not touch" (except tag_id
-        # which uses the _TAG_UNSET sentinel to distinguish "not provided" from "clear").
-        if request.amount_override is not None:
-            entry.amount_override = request.amount_override
-        if request.note is not None:
-            entry.note = request.note.strip() or None
-        if request.shift_type is not None:
-            entry.shift_type = request.shift_type
+        # PATCH semantics via sentinel: a field absent from the PUT body
+        # (_UNSET) is left untouched; an explicit null clears it. This is
+        # what lets the FE remove an amount override / note / shift after
+        # the fact — previously None doubled as "do not touch" and those
+        # fields could never be cleared.
+        if request.amount_override is not _UNSET:
+            entry.amount_override = request.amount_override  # type: ignore[assignment]  # None or Decimal
+        if request.note is not _UNSET:
+            note = request.note
+            entry.note = (note.strip() or None) if isinstance(note, str) else None
+        if request.shift_type is not _UNSET:
+            entry.shift_type = request.shift_type  # type: ignore[assignment]  # None or str
         if request.supplement_hours is not None:
             entry.supplement_hours = request.supplement_hours
-        if request.tag_id is not _TAG_UNSET:
+        if request.tag_id is not _UNSET:
             entry.tag_id = request.tag_id  # type: ignore[assignment]  # None or UUID
+
+        # Reject update combinations that would leave the entry invalid —
+        # same invariants the create path enforces.
+        if entry.shift_type is None and (entry.supplement_hours or 0) == 0:
+            raise ValueError("Empty entry: must keep a shift_type or supplement_hours > 0")
+        if entry.shift_type is None and entry.amount_override is not None:
+            raise ValueError("amount_override requires a shift_type")
 
         saved = self._repo.update(entry)
 
@@ -95,7 +110,7 @@ class UpdateAttendanceUseCase:
             id=str(saved.id),
             worker_id=str(saved.worker_id),
             date=saved.date.isoformat(),
-            amount_override=float(saved.amount_override) if saved.amount_override else None,
+            amount_override=float(saved.amount_override) if saved.amount_override is not None else None,
             note=saved.note,
             shift_type=saved.shift_type,
             supplement_hours=saved.supplement_hours,

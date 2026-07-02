@@ -162,8 +162,12 @@ class UpdateAttendanceRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_override_consistency(self) -> "UpdateAttendanceRequest":
-        # Only reject when caller explicitly clears shift_type AND sets override
-        if self.shift_type is None and self.amount_override is not None:
+        # Only reject when the caller EXPLICITLY clears shift_type while
+        # setting an override in the same body. An absent shift_type means
+        # "leave unchanged" — the use case re-validates the resulting entry
+        # against the entry's stored shift, so a lone amount_override patch
+        # stays legal.
+        if "shift_type" in self.model_fields_set and self.shift_type is None and self.amount_override is not None:
             raise ValueError("amount_override requires a shift_type")
         return self
 
