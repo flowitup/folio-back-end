@@ -323,6 +323,86 @@ class TestUpdateAttendanceUseCase:
         assert result.note == "original note"
         assert result.shift_type == "full"
 
+    def test_update_attendance_explicit_none_clears_override_and_note(self, mock_entry_repo, mock_worker_repo):
+        """Explicit None (JSON null) clears amount_override and note — the
+        sentinel keeps absent fields untouched while null means clear."""
+        worker_id = uuid4()
+        project_id = uuid4()
+        entry = LaborEntry(
+            id=uuid4(),
+            worker_id=worker_id,
+            date=date.today(),
+            shift_type="full",
+            amount_override=Decimal("150.00"),
+            note="stale note",
+            supplement_hours=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker = Worker(
+            id=worker_id,
+            project_id=project_id,
+            name="W",
+            daily_rate=Decimal("100"),
+            phone=None,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_entry_repo.find_by_id.return_value = entry
+        mock_entry_repo.update.side_effect = lambda e: e
+        mock_worker_repo.find_by_id.return_value = worker
+
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
+        result = usecase.execute(
+            UpdateAttendanceRequest(
+                entry_id=entry.id,
+                project_id=project_id,
+                amount_override=None,
+                note=None,
+            )
+        )
+
+        assert result.amount_override is None
+        assert result.note is None
+        assert result.shift_type == "full"
+
+    def test_update_attendance_clear_shift_without_supplement_raises(self, mock_entry_repo, mock_worker_repo):
+        """Clearing shift_type on an entry with no supplement hours would
+        leave an empty row — the use case rejects it."""
+        worker_id = uuid4()
+        project_id = uuid4()
+        entry = LaborEntry(
+            id=uuid4(),
+            worker_id=worker_id,
+            date=date.today(),
+            shift_type="full",
+            amount_override=None,
+            note=None,
+            supplement_hours=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker = Worker(
+            id=worker_id,
+            project_id=project_id,
+            name="W",
+            daily_rate=Decimal("100"),
+            phone=None,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_entry_repo.find_by_id.return_value = entry
+        mock_worker_repo.find_by_id.return_value = worker
+
+        usecase = UpdateAttendanceUseCase(mock_entry_repo, mock_worker_repo, Mock())
+        with pytest.raises(ValueError):
+            usecase.execute(
+                UpdateAttendanceRequest(
+                    entry_id=entry.id,
+                    project_id=project_id,
+                    shift_type=None,
+                )
+            )
+        mock_entry_repo.update.assert_not_called()
+
 
 class TestDeleteAttendanceUseCase:
     """Tests for DeleteAttendanceUseCase."""

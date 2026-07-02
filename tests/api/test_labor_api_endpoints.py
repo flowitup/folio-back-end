@@ -484,6 +484,137 @@ class TestLaborEntryRoutes:
         assert resp.status_code == 200
         assert resp.get_json()["supplement_hours"] == 4
 
+    def test_update_attendance_clear_override_and_note(self, labor_client, admin_token, labor_app):
+        """Explicit nulls clear amount_override and note (previously impossible)."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Clear Fields Worker")
+        create_resp = labor_client.post(
+            _entries_url(pid),
+            json={
+                "worker_id": worker_id,
+                "date": "2026-03-02",
+                "shift_type": "full",
+                "amount_override": 120.0,
+                "note": "temp premium",
+            },
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        entry_id = create_resp.get_json()["id"]
+
+        resp = labor_client.put(
+            _entry_url(pid, entry_id),
+            json={"amount_override": None, "note": None},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["amount_override"] is None
+        assert body["note"] is None
+
+    def test_update_attendance_absent_fields_left_unchanged(self, labor_client, admin_token, labor_app):
+        """Fields absent from the PUT body keep their stored values."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Patch Keep Worker")
+        create_resp = labor_client.post(
+            _entries_url(pid),
+            json={
+                "worker_id": worker_id,
+                "date": "2026-03-03",
+                "shift_type": "full",
+                "amount_override": 95.0,
+                "note": "keep me",
+            },
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        entry_id = create_resp.get_json()["id"]
+
+        resp = labor_client.put(
+            _entry_url(pid, entry_id),
+            json={"supplement_hours": 4},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["supplement_hours"] == 4
+        assert body["amount_override"] == 95.0
+        assert body["note"] == "keep me"
+
+    def test_update_attendance_clear_shift_keeps_supplement_only_row(self, labor_client, admin_token, labor_app):
+        """Explicit shift_type null converts the entry to supplement-only."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Clear Shift Worker")
+        create_resp = labor_client.post(
+            _entries_url(pid),
+            json={
+                "worker_id": worker_id,
+                "date": "2026-03-04",
+                "shift_type": "full",
+                "supplement_hours": 3,
+            },
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        entry_id = create_resp.get_json()["id"]
+
+        resp = labor_client.put(
+            _entry_url(pid, entry_id),
+            json={"shift_type": None},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["shift_type"] is None
+
+    def test_update_attendance_clear_shift_empty_row_400(self, labor_client, admin_token, labor_app):
+        """Clearing the shift on an entry without supplement hours would leave
+        an empty row — rejected."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Empty Row Worker")
+        create_resp = labor_client.post(
+            _entries_url(pid),
+            json={
+                "worker_id": worker_id,
+                "date": "2026-03-05",
+                "shift_type": "full",
+            },
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        entry_id = create_resp.get_json()["id"]
+
+        resp = labor_client.put(
+            _entry_url(pid, entry_id),
+            json={"shift_type": None},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_update_attendance_clear_shift_with_stored_override_400(self, labor_client, admin_token, labor_app):
+        """Clearing the shift while the entry still has an override is invalid."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Shift Override Worker")
+        create_resp = labor_client.post(
+            _entries_url(pid),
+            json={
+                "worker_id": worker_id,
+                "date": "2026-03-06",
+                "shift_type": "full",
+                "supplement_hours": 2,
+                "amount_override": 80.0,
+            },
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        entry_id = create_resp.get_json()["id"]
+
+        resp = labor_client.put(
+            _entry_url(pid, entry_id),
+            json={"shift_type": None},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
     def test_update_attendance_not_found(self, labor_client, admin_token, labor_app):
         pid = labor_app._test_project_id
         resp = labor_client.put(

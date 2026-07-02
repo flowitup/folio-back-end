@@ -356,23 +356,31 @@ def update_attendance(project_id: str, entry_id: str):
     except ValidationError as e:
         return _validation_error_response(e)
 
-    # Use exclude_unset to distinguish "field absent" (_TAG_UNSET) from
-    # "field=null (clear)" and "field=uuid (assign)". Mirrors invoice route.
-    from app.application.labor.update_attendance import _TAG_UNSET
+    # Use exclude_unset to distinguish "field absent" (_UNSET → leave
+    # unchanged) from "field=null (clear)" and "field=value (assign)" for
+    # every nullable field, so overrides / notes / shift can be removed.
+    # Mirrors invoice route.
+    from app.application.labor.update_attendance import _UNSET
 
     provided_fields = data.model_dump(exclude_unset=True)
-    tag_id_arg: object = provided_fields["tag_id"] if "tag_id" in provided_fields else _TAG_UNSET
+
+    def _provided_or_unset(field: str) -> object:
+        return provided_fields[field] if field in provided_fields else _UNSET
+
+    amount_override_arg = _provided_or_unset("amount_override")
+    if amount_override_arg is not _UNSET and amount_override_arg is not None:
+        amount_override_arg = Decimal(str(amount_override_arg))
 
     try:
         result = get_container().update_attendance_usecase.execute(
             UpdateAttendanceDTO(
                 entry_id=UUID(entry_id),
                 project_id=UUID(project_id),
-                amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
-                note=data.note,
-                shift_type=data.shift_type,
+                amount_override=amount_override_arg,
+                note=_provided_or_unset("note"),
+                shift_type=_provided_or_unset("shift_type"),
                 supplement_hours=data.supplement_hours,
-                tag_id=tag_id_arg,
+                tag_id=_provided_or_unset("tag_id"),
             )
         )
     except ValueError as e:

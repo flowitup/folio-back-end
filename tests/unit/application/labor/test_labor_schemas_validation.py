@@ -135,6 +135,14 @@ class TestUpdateAttendanceModelValidator:
         assert req.shift_type is None
         assert req.amount_override is None
 
+    def test_override_without_explicit_shift_is_allowed(self):
+        """A lone amount_override patch must NOT be rejected: shift_type is
+        absent (leave-unchanged), so validity depends on the stored entry
+        and is checked in the use case."""
+        req = UpdateAttendanceRequest(amount_override=100.0)
+        assert req.amount_override == 100.0
+        assert "shift_type" not in req.model_fields_set
+
     def test_supplement_hours_at_boundary_ok(self):
         req = UpdateAttendanceRequest(supplement_hours=12)
         assert req.supplement_hours == 12
