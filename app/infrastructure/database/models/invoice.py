@@ -97,6 +97,11 @@ class InvoiceModel(Base):
         index=True,
     )
 
+    # Payment month for labor invoices — optional; the calendar month this payment
+    # covers. Always normalized to the first day of the month. Only settable when
+    # type == 'labor'; NULL for all other invoice types.
+    service_month = Column(Date, nullable=True)
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])

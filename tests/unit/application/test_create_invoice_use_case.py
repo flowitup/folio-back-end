@@ -13,7 +13,7 @@ from app.application.invoice.update_invoice import UpdateInvoiceUseCase, UpdateI
 from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus
 from app.domain.entities.project_tag import ProjectTag
-from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError
+from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, ServiceMonthNotAllowedError
 
 
 def make_mock_repo():
@@ -258,12 +258,12 @@ def _make_tag_repo(tag):
     return repo
 
 
-def _make_invoice(project_id) -> Invoice:
+def _make_invoice(project_id, **overrides) -> Invoice:
     """Build a minimal Invoice entity for update tests."""
     from app.domain.value_objects.invoice_item import InvoiceItem
     from decimal import Decimal
 
-    return Invoice(
+    defaults = dict(
         id=uuid4(),
         project_id=project_id,
         invoice_number="INV-2026-0001",
@@ -278,6 +278,8 @@ def _make_invoice(project_id) -> Invoice:
         updated_at=datetime.now(timezone.utc),
         is_auto_generated=False,
     )
+    defaults.update(overrides)
+    return Invoice(**defaults)
 
 
 class TestCreateInvoiceTagGuard:
@@ -637,3 +639,138 @@ class TestDeleteInvoiceRefundedLock:
         use_case.execute(invoice.id)
 
         inv_repo.delete.assert_called_once_with(invoice.id)
+
+
+# ---------------------------------------------------------------------------
+# service_month — CreateInvoice / UpdateInvoice
+# ---------------------------------------------------------------------------
+
+
+class TestCreateInvoiceServiceMonth:
+    """CreateInvoiceUseCase must normalize service_month and gate it to labor invoices."""
+
+    def test_labor_invoice_service_month_normalized_to_first_of_month(self):
+        repo = make_mock_repo()
+        use_case = CreateInvoiceUseCase(repo)
+
+        result = use_case.execute(make_request(type=InvoiceType.LABOR, service_month=date(2026, 6, 15)))
+
+        assert result.service_month == "2026-06-01"
+
+    def test_labor_invoice_without_service_month_is_none(self):
+        repo = make_mock_repo()
+        use_case = CreateInvoiceUseCase(repo)
+
+        result = use_case.execute(make_request(type=InvoiceType.LABOR))
+
+        assert result.service_month is None
+
+    def test_non_labor_invoice_with_service_month_raises(self):
+        repo = make_mock_repo()
+        use_case = CreateInvoiceUseCase(repo)
+
+        with pytest.raises(ServiceMonthNotAllowedError):
+            use_case.execute(make_request(type=InvoiceType.MATERIALS_SERVICES, service_month=date(2026, 6, 1)))
+
+        repo.create.assert_not_called()
+
+
+class TestUpdateInvoiceServiceMonth:
+    """UpdateInvoiceUseCase must thread service_month through with_updates correctly."""
+
+    def test_patch_only_service_month_leaves_other_fields_untouched(self):
+        project_id = uuid4()
+        invoice = _make_invoice(
+            project_id,
+            type=InvoiceType.LABOR,
+            recipient_name="Untouched Recipient",
+            notes="Untouched notes",
+        )
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, service_month=date(2026, 3, 10)))
+
+        assert result.service_month == "2026-03-01"
+        assert result.recipient_name == "Untouched Recipient"
+        assert result.notes == "Untouched notes"
+        assert result.items[0].description == "Work"
+
+    def test_patch_service_month_null_clears_it(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR, service_month=date(2026, 5, 1))
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, service_month=None))
+
+        assert result.service_month is None
+
+    def test_patch_unset_service_month_leaves_it_unchanged(self):
+        """service_month not provided (_UNSET) must not touch the stored value."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR, service_month=date(2026, 5, 1))
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, recipient_name="New Name"))
+
+        assert result.service_month == "2026-05-01"
+
+    def test_patch_type_away_from_labor_clears_stored_service_month(self):
+        """Changing type away from labor without touching service_month must clear it server-side."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR, service_month=date(2026, 4, 1))
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, type=InvoiceType.OTHERS))
+
+        assert result.type == "others"
+        assert result.service_month is None
+
+    def test_patch_setting_service_month_on_non_labor_invoice_raises(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.MATERIALS_SERVICES)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        with pytest.raises(ServiceMonthNotAllowedError):
+            use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, service_month=date(2026, 6, 1)))
+
+        inv_repo.update.assert_not_called()
+
+    def test_patch_type_to_labor_and_service_month_together_succeeds(self):
+        """Setting type=labor and service_month in the same PATCH must succeed (effective_type)."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.OTHERS)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(
+            UpdateInvoiceRequest(
+                invoice_id=invoice.id,
+                type=InvoiceType.LABOR,
+                service_month=date(2026, 7, 5),
+            )
+        )
+
+        assert result.type == "labor"
+        assert result.service_month == "2026-07-01"

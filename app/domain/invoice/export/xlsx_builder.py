@@ -43,6 +43,11 @@ _INVOICE_COL_WIDTHS = [6, 14, 12, 30, 8, 18]
 _TYPE_SHEET_HEADERS = ["#", "Date", "Recipient", "Items", "Total"]
 _TYPE_SHEET_COL_WIDTHS = [6, 14, 30, 8, 18]
 
+# Labor sheet gets an extra "Payment month" column so payroll periods are visible
+# alongside the invoice issue date.
+_LABOR_TYPE_SHEET_HEADERS = ["#", "Date", "Recipient", "Items", "Payment month", "Total"]
+_LABOR_TYPE_SHEET_COL_WIDTHS = [6, 14, 30, 8, 16, 18]
+
 _SUBTYPE_HEADERS = ["Type", "Invoice count", "Total"]
 _SUBTYPE_COL_WIDTHS = [16, 16, 18]
 
@@ -286,11 +291,20 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
 def _write_type_sheet(
     ws: Worksheet, context: InvoiceExportContext, invoice_type: InvoiceType, invoices: List[Invoice]
 ) -> None:
-    """Write header band + invoice table + footer total for a single type sheet."""
+    """Write header band + invoice table + footer total for a single type sheet.
+
+    The labor sheet carries an extra "Payment month" column (service_month) so
+    payroll periods are visible alongside the invoice issue date.
+    """
     thin = _thin_border()
     thick = _thick_top_border()
     fill = _header_fill()
     type_label = TYPE_LABEL_EN.get(invoice_type.value, invoice_type.value.title())
+
+    is_labor = invoice_type == InvoiceType.LABOR
+    headers = _LABOR_TYPE_SHEET_HEADERS if is_labor else _TYPE_SHEET_HEADERS
+    col_widths = _LABOR_TYPE_SHEET_COL_WIDTHS if is_labor else _TYPE_SHEET_COL_WIDTHS
+    total_col_idx = len(headers) - 1  # 0-based index of the Total column
 
     from_label = context.range.from_month.strftime("%Y-%m")
     to_label = context.range.to_month.strftime("%Y-%m")
@@ -311,7 +325,7 @@ def _write_type_sheet(
 
     # Row 3 blank → header at row 4
     hdr_row = 4
-    for i, label in enumerate(_TYPE_SHEET_HEADERS):
+    for i, label in enumerate(headers):
         cell = ws.cell(row=hdr_row, column=i + 1, value=label)
         cell.font = _bold_font()
         cell.border = thin
@@ -323,23 +337,26 @@ def _write_type_sheet(
     data_row = hdr_row + 1
     for idx, inv in enumerate(sorted_invoices, start=1):
         item_count = len(inv.items)
-        values = [idx, inv.issue_date, inv.recipient_name, item_count, float(inv.total_amount)]
+        values = [idx, inv.issue_date, inv.recipient_name, item_count]
+        if is_labor:
+            values.append(inv.service_month)
+        values.append(float(inv.total_amount))
         for col_idx, val in enumerate(values):
             cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
             cell.border = thin
-            if col_idx == 4:  # Total
+            if col_idx == total_col_idx:  # Total
                 cell.number_format = EUR_FR_FORMAT
                 cell.alignment = Alignment(horizontal="right")
             elif col_idx in (0, 3):
                 cell.alignment = Alignment(horizontal="center")
-            elif col_idx == 1:
+            elif col_idx == 1 or (is_labor and col_idx == 4):
                 cell.number_format = "YYYY-MM-DD"
         data_row += 1
 
     # Footer total row
     footer_row = data_row
     type_total = sum((inv.total_amount for inv in invoices), Decimal("0"))
-    for col in range(1, len(_TYPE_SHEET_HEADERS) + 1):
+    for col in range(1, len(headers) + 1):
         cell = ws.cell(row=footer_row, column=col)
         cell.border = thick
         cell.font = _bold_font()
@@ -347,13 +364,13 @@ def _write_type_sheet(
     ws.cell(row=footer_row, column=1, value="TOTAL").font = _bold_font()
     ws.cell(row=footer_row, column=1).border = thick
 
-    total_cell = ws.cell(row=footer_row, column=len(_TYPE_SHEET_HEADERS), value=float(type_total))
+    total_cell = ws.cell(row=footer_row, column=len(headers), value=float(type_total))
     total_cell.number_format = EUR_FR_FORMAT
     total_cell.font = _bold_font()
     total_cell.border = thick
     total_cell.alignment = Alignment(horizontal="right")
 
-    _set_col_widths(ws, _TYPE_SHEET_COL_WIDTHS)
+    _set_col_widths(ws, col_widths)
 
 
 # ---------------------------------------------------------------------------

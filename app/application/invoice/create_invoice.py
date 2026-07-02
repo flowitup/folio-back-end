@@ -10,7 +10,11 @@ from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import Invoice, InvoiceType, MIXED_SIGN_TYPES
-from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, RefundExceedsSourceError
+from app.domain.exceptions.invoice_exceptions import (
+    InvalidInvoiceDataError,
+    RefundExceedsSourceError,
+    ServiceMonthNotAllowedError,
+)
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.domain.value_objects.invoice_item import InvoiceItem
 
@@ -34,6 +38,9 @@ class CreateInvoiceRequest:
     tag_id: Optional[UUID] = None
     # Supplier-refund link — optional; only valid when type == REFUND.
     refunds_invoice_id: Optional[UUID] = None
+    # Payment month for labor invoices — optional; only valid when type == LABOR.
+    # Normalized to day=1 by the use-case.
+    service_month: Optional[date] = None
 
 
 class CreateInvoiceUseCase:
@@ -127,6 +134,13 @@ class CreateInvoiceUseCase:
                 )
             refunds_invoice_id = request.refunds_invoice_id
 
+        # service_month is only valid on labor invoices; normalize any day to day=1.
+        service_month: Optional[date] = None
+        if request.service_month is not None:
+            if request.type != InvoiceType.LABOR:
+                raise ServiceMonthNotAllowedError("service_month may only be set on invoices of type 'labor'")
+            service_month = request.service_month.replace(day=1)
+
         # Generate invoice number via repo
         invoice_number = self._repo.next_invoice_number(request.project_id)
 
@@ -148,6 +162,7 @@ class CreateInvoiceUseCase:
             payment_method_label=payment_method_label,
             tag_id=request.tag_id,
             refunds_invoice_id=refunds_invoice_id,
+            service_month=service_month,
         )
 
         saved = self._repo.create(invoice)

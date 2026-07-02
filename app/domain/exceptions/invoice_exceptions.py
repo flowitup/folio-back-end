@@ -37,3 +37,9 @@ class RefundExceedsSourceError(InvalidInvoiceDataError):
     """
 
     pass
+
+
+class ServiceMonthNotAllowedError(InvalidInvoiceDataError):
+    """Raised when service_month is set on an invoice whose type is not 'labor'."""
+
+    pass

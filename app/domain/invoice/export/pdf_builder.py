@@ -68,7 +68,7 @@ from reportlab.platypus import (
 from app.domain.labor.export.format import format_eur_fr
 from app.domain.invoice.export.format import TYPE_LABEL_EN
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext
-from app.domain.entities.invoice import Invoice
+from app.domain.entities.invoice import Invoice, InvoiceType
 
 # ---------------------------------------------------------------------------
 # Cross-package font reuse (see module docstring)
@@ -425,6 +425,10 @@ def _render_invoice_page(inv: Invoice, context: InvoiceExportContext, styles: di
         ["Issue date", inv.issue_date.strftime("%d/%m/%Y")],
         ["Recipient", recipient_lines],
     ]
+    # Payment month is only meaningful for labor invoices; omit the row entirely
+    # rather than showing a blank value for non-labor / untracked-month invoices.
+    if inv.type == InvoiceType.LABOR and inv.service_month is not None:
+        meta_rows.insert(3, ["Payment month", inv.service_month.strftime("%m/%Y")])
 
     meta_para_rows = []
     for label, value in meta_rows:

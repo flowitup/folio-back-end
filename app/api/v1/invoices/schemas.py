@@ -35,6 +35,8 @@ class CreateInvoiceSchema(BaseModel):
     the use-case validates that the target is a same-project materials_services invoice
     and enforces the cap (cumulative refunds may not exceed the source total).
     Mixed-sign unit_price is allowed for materials_services and refund types.
+    service_month is optional; only valid when type='labor'. The use-case normalizes
+    any day-of-month to day=1.
     """
 
     type: Literal["released_funds", "labor", "materials_services", "others", "refund"]
@@ -46,15 +48,17 @@ class CreateInvoiceSchema(BaseModel):
     payment_method_id: Optional[UUID] = None
     tag_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
+    service_month: Optional[date] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
     """Request body for partially updating an invoice.
 
-    payment_method_id, tag_id, and refunds_invoice_id use exclude_unset semantics:
+    payment_method_id, tag_id, refunds_invoice_id, and service_month use
+    exclude_unset semantics:
       - field absent  → do not touch that field
       - field = null  → clear the field
-      - field = UUID  → set to that UUID
+      - field = value → set to that value
     Mixed-sign unit_price is allowed for materials_services and refund types.
     """
 
@@ -67,6 +71,7 @@ class UpdateInvoiceSchema(BaseModel):
     payment_method_id: Optional[UUID] = None
     tag_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
+    service_month: Optional[date] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
