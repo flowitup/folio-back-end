@@ -16,6 +16,7 @@ from app.domain.exceptions.invoice_exceptions import (
     InvalidInvoiceDataError,
     InvoiceNotFoundError,
     RefundExceedsSourceError,
+    ServiceMonthNotAllowedError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.domain.value_objects.invoice_item import InvoiceItem
@@ -44,6 +45,8 @@ class UpdateInvoiceRequest:
     tag_id: object = dataclasses.field(default_factory=lambda: _UNSET)
     # refunds_invoice_id uses sentinel: _UNSET = keep existing, None = clear link, UUID = set link.
     refunds_invoice_id: object = dataclasses.field(default_factory=lambda: _UNSET)
+    # service_month uses sentinel: _UNSET = not provided, None = clear, date = set (normalized to day=1).
+    service_month: object = dataclasses.field(default_factory=lambda: _UNSET)
 
 
 class UpdateInvoiceUseCase:
@@ -161,6 +164,21 @@ class UpdateInvoiceUseCase:
                 if tag is None or tag.project_id != invoice.project_id:
                     raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
             updates["tag_id"] = request.tag_id  # None = clear, UUID = assign
+
+        # service_month sentinel: absent = keep existing (unless cleared below), None = clear,
+        # date = set (normalized to day=1, only valid when effective_type is labor).
+        if request.service_month is not _UNSET:
+            if request.service_month is None:
+                updates["service_month"] = None
+            else:
+                if effective_type != InvoiceType.LABOR:
+                    raise ServiceMonthNotAllowedError("service_month may only be set on invoices of type 'labor'")
+                updates["service_month"] = request.service_month.replace(day=1)
+        elif effective_type != InvoiceType.LABOR and invoice.service_month is not None:
+            # Type is changing away from labor (or already isn't labor) while a
+            # service_month is still stored and the PATCH didn't touch it — clear
+            # it server-side so no non-labor invoice ever carries a stale month.
+            updates["service_month"] = None
 
         # refunds_invoice_id sentinel: absent = keep existing, None = clear, UUID = set+validate.
         if request.refunds_invoice_id is not _UNSET:

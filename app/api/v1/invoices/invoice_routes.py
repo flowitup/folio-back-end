@@ -32,6 +32,7 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
     RefundExceedsSourceError,
+    ServiceMonthNotAllowedError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.infrastructure.database.models.invoice import InvoiceModel
@@ -307,6 +308,7 @@ def create_invoice(project_id: str):
                 company_id=company_id,
                 tag_id=data.tag_id,
                 refunds_invoice_id=data.refunds_invoice_id,
+                service_month=data.service_month,
             )
         )
     except InvoiceNumberConflictError:
@@ -320,6 +322,8 @@ def create_invoice(project_id: str):
     except RefundExceedsSourceError as e:
         # Distinct code so the frontend can show a localized "remaining refundable" message.
         return _error_response("RefundExceedsSource", str(e), 400)
+    except ServiceMonthNotAllowedError:
+        return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except InvalidInvoiceDataError as e:
@@ -377,13 +381,14 @@ def update_invoice(project_id: str, invoice_id: str):
 
     # Build kwargs — only pass fields the caller provided.
     # issue_date is already a date object from Pydantic (no manual conversion needed).
-    # payment_method_id, tag_id, and refunds_invoice_id are handled separately: use
-    # exclude_unset so we can distinguish "not provided" (absent) from "explicitly null".
+    # payment_method_id, tag_id, refunds_invoice_id, and service_month are handled
+    # separately: use exclude_unset so we can distinguish "not provided" (absent)
+    # from "explicitly null".
     provided_fields = data.model_dump(exclude_unset=True)
     update_kwargs = {
         k: v
         for k, v in provided_fields.items()
-        if k not in ("payment_method_id", "tag_id", "refunds_invoice_id") and v is not None
+        if k not in ("payment_method_id", "tag_id", "refunds_invoice_id", "service_month") and v is not None
     }
     # type arrives as a validated string literal; the use case and domain entity
     # operate on the InvoiceType enum, so promote it here (mirrors create flow).
@@ -402,13 +407,14 @@ def update_invoice(project_id: str, invoice_id: str):
     invoice_uuid = UUID(invoice_id)
     project_uuid = UUID(project_id)
 
-    # Determine payment_method, tag_id, and refunds_invoice_id sentinels:
+    # Determine payment_method, tag_id, refunds_invoice_id, and service_month sentinels:
     # _UNSET if not in request body; else the provided value (which may be None = clear).
     from app.application.invoice.update_invoice import _UNSET
 
     pm_id = provided_fields["payment_method_id"] if "payment_method_id" in provided_fields else _UNSET
     tag_id_val = provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET
     refunds_id_val = provided_fields["refunds_invoice_id"] if "refunds_invoice_id" in provided_fields else _UNSET
+    service_month_val = provided_fields["service_month"] if "service_month" in provided_fields else _UNSET
 
     company_id = _get_project_company_id(project_uuid) if pm_id is not _UNSET else None
 
@@ -418,6 +424,7 @@ def update_invoice(project_id: str, invoice_id: str):
         company_id=company_id,
         tag_id=tag_id_val,
         refunds_invoice_id=refunds_id_val,
+        service_month=service_month_val,
         **update_kwargs,
     )
 
@@ -436,6 +443,8 @@ def update_invoice(project_id: str, invoice_id: str):
     except RefundExceedsSourceError as e:
         # Distinct code so the frontend can show a localized "remaining refundable" message.
         return _error_response("RefundExceedsSource", str(e), 400)
+    except ServiceMonthNotAllowedError:
+        return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
     except (ValueError, InvalidInvoiceDataError) as e:
         return _error_response("ValidationError", str(e), 400)
 

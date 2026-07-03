@@ -7,6 +7,11 @@ from typing import Optional
 from app.domain.entities.invoice import Invoice
 
 
+def _isoformat_or_none(value: object) -> Optional[str]:
+    """Render a date-like value as an ISO string, or None if unset."""
+    return value.isoformat() if value is not None else None
+
+
 def money(value: Decimal) -> float:
     """Quantize a monetary Decimal to cents for serialization.
 
@@ -51,6 +56,9 @@ class InvoiceResponse:
     # refunds_invoice_number is enriched at the route layer from a secondary lookup.
     refunds_invoice_id: Optional[str] = None
     refunds_invoice_number: Optional[str] = None
+    # Payment month for labor invoices — "YYYY-MM-01" or null. Only settable
+    # when the invoice type is 'labor'; always first-of-month.
+    service_month: Optional[str] = None
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -88,4 +96,5 @@ class InvoiceResponse:
             refunds_invoice_id=str(inv.refunds_invoice_id) if inv.refunds_invoice_id is not None else None,
             # refunds_invoice_number is None here; the route enriches it via a lookup.
             refunds_invoice_number=None,
+            service_month=_isoformat_or_none(inv.service_month),
         )

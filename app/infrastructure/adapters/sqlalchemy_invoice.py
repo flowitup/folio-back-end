@@ -75,6 +75,7 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         tag_id=m.tag_id,
         refundable_status=m.refundable_status,
         refunds_invoice_id=m.refunds_invoice_id,
+        service_month=m.service_month,
     )
 
 
@@ -105,6 +106,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             tag_id=invoice.tag_id,
             refundable_status=invoice.refundable_status,
             refunds_invoice_id=invoice.refunds_invoice_id,
+            service_month=invoice.service_month,
         )
         self._session.add(model)
         try:
@@ -154,6 +156,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.tag_id = invoice.tag_id
         model.refundable_status = invoice.refundable_status
         model.refunds_invoice_id = invoice.refunds_invoice_id
+        model.service_month = invoice.service_month
         self._session.commit()
         return _model_to_entity(model)
 

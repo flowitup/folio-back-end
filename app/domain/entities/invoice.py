@@ -61,6 +61,9 @@ class Invoice:
     # Optional self-link: refund invoice → the materials_services invoice it refunds.
     # SET NULL on deletion of the linked invoice so the refund survives as standalone.
     refunds_invoice_id: Optional[UUID] = None
+    # Payment month for labor invoices — optional, first-of-month, labor type only.
+    # NULL for non-labor invoices and for labor invoices where the month is not tracked.
+    service_month: Optional[date] = None
 
     @property
     def total_amount(self) -> Decimal:

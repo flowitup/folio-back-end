@@ -189,3 +189,33 @@ def test_xss_safe_recipient_name():
     # Verify workbook is loadable (XML is well-formed)
     wb = openpyxl.load_workbook(BytesIO(raw))
     assert "Summary" in wb.sheetnames
+
+
+def test_labor_sheet_has_payment_month_column_and_shifted_total():
+    """Labor sheet carries the extra 'Payment month' column; Total stays right-aligned EUR in the last column."""
+    ctx = _make_context()
+    inv_with_month = _make_invoice(
+        invoice_type=InvoiceType.LABOR, amount=Decimal("1500.00"), invoice_number="INV-L1"
+    ).with_updates(service_month=date(2026, 6, 1))
+    inv_without_month = _make_invoice(
+        invoice_type=InvoiceType.LABOR, amount=Decimal("300.00"), invoice_number="INV-L2", issue_date=date(2026, 2, 1)
+    )
+    bundle = _make_bundle([inv_with_month, inv_without_month])
+
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, bundle)))
+    ws = wb["Labor invoices"]
+
+    header = [ws.cell(row=4, column=c).value for c in range(1, 7)]
+    assert header == ["#", "Date", "Recipient", "Items", "Payment month", "Total"]
+
+    # Rows are sorted by issue date: INV-L2 (Feb, no month) first, INV-L1 (June month) second.
+    # openpyxl round-trips DATE cells as datetime at midnight.
+    month_cells = {ws.cell(row=r, column=5).value: ws.cell(row=r, column=5) for r in (5, 6)}
+    assert None in month_cells and datetime(2026, 6, 1) in month_cells
+    assert month_cells[datetime(2026, 6, 1)].number_format == "MM/YYYY"
+
+    for r in (5, 6):
+        total_cell = ws.cell(row=r, column=6)
+        # openpyxl reads integral floats back as int.
+        assert isinstance(total_cell.value, (int, float))
+        assert total_cell.number_format == EUR_FR_FORMAT

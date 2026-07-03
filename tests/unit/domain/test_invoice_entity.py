@@ -239,3 +239,26 @@ class TestInvoiceCreation:
         invoice = make_invoice()
         assert invoice.recipient_address is None
         assert invoice.notes is None
+
+
+class TestInvoiceServiceMonth:
+    """Tests for the optional service_month field."""
+
+    def test_defaults_to_none(self):
+        """service_month must default to None when not supplied."""
+        invoice = make_invoice()
+        assert invoice.service_month is None
+
+    def test_accepts_a_date_value(self):
+        """service_month can be set directly on construction."""
+        month = date(2026, 6, 1)
+        invoice = make_invoice(type=InvoiceType.LABOR, service_month=month)
+        assert invoice.service_month == month
+
+    def test_with_updates_replaces_service_month(self):
+        """with_updates must be able to set service_month like any other field."""
+        invoice = make_invoice(type=InvoiceType.LABOR)
+        updated = invoice.with_updates(service_month=date(2026, 3, 1))
+        assert updated.service_month == date(2026, 3, 1)
+        # Original instance must remain unchanged (dataclasses.replace semantics).
+        assert invoice.service_month is None
