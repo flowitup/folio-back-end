@@ -307,6 +307,46 @@ class TestUpdateInvoiceServiceMonth:
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "service_month_not_allowed"
 
+    def test_patch_type_away_from_labor_with_service_month_in_payload_returns_400(
+        self, inv_sm_client, inv_sm_app, admin_token
+    ):
+        created = self._create_labor_invoice(inv_sm_client, inv_sm_app, admin_token, service_month="2026-03-01")
+        invoice_id = created["id"]
+
+        # Switching away from labor while explicitly supplying a month must be rejected:
+        # the resulting invoice would be non-labor with a payment month.
+        resp = inv_sm_client.put(
+            _invoice_url(inv_sm_app._test_project_id, invoice_id),
+            json={"type": "others", "service_month": "2026-03-01"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "service_month_not_allowed"
+
+        # Invoice unchanged by the rejected PATCH.
+        resp_get = inv_sm_client.get(
+            _invoice_url(inv_sm_app._test_project_id, invoice_id),
+            headers=_auth(admin_token),
+        )
+        assert resp_get.get_json()["type"] == "labor"
+        assert resp_get.get_json()["service_month"] == "2026-03-01"
+
+    def test_patch_type_away_from_labor_with_explicit_null_service_month_clears_it(
+        self, inv_sm_client, inv_sm_app, admin_token
+    ):
+        created = self._create_labor_invoice(inv_sm_client, inv_sm_app, admin_token, service_month="2026-03-01")
+        invoice_id = created["id"]
+
+        resp = inv_sm_client.put(
+            _invoice_url(inv_sm_app._test_project_id, invoice_id),
+            json={"type": "others", "service_month": None},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["type"] == "others"
+        assert data["service_month"] is None
+
 
 # ---------------------------------------------------------------------------
 # List / Get

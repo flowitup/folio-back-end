@@ -349,8 +349,11 @@ def _write_type_sheet(
                 cell.alignment = Alignment(horizontal="right")
             elif col_idx in (0, 3):
                 cell.alignment = Alignment(horizontal="center")
-            elif col_idx == 1 or (is_labor and col_idx == 4):
+            elif col_idx == 1:
                 cell.number_format = "YYYY-MM-DD"
+            elif is_labor and col_idx == 4:
+                # Payment month is month-granular; render as MM/YYYY to match the PDF export.
+                cell.number_format = "MM/YYYY"
         data_row += 1
 
     # Footer total row
