@@ -53,6 +53,22 @@ def _jsonb_to_items(raw: list) -> List[InvoiceItem]:
     ]
 
 
+def _items_total(items: list | None) -> Decimal:
+    """TTC total of a raw JSONB items list: Σ qty × unit_price × (1 + vat/100).
+
+    Mirrors InvoiceItem.total / Invoice.total_amount exactly — every Python-side
+    aggregation over raw JSONB rows must go through this single helper so the
+    math can never drift between KPIs.
+    """
+    total = Decimal("0")
+    for it in items or []:
+        qty = Decimal(str(it.get("quantity", 0)))
+        price = Decimal(str(it.get("unit_price", 0)))
+        vat = Decimal(str(it.get("vat_rate", 0)))
+        total += qty * price * (1 + vat / Decimal("100"))
+    return total
+
+
 def _model_to_entity(m: InvoiceModel) -> Invoice:
     """Map ORM model to domain entity."""
     return Invoice(
@@ -235,18 +251,17 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         total = Decimal("0")
         for m in rows:
-            for it in m.items or []:
-                qty = Decimal(str(it.get("quantity", 0)))
-                price = Decimal(str(it.get("unit_price", 0)))
-                vat = Decimal(str(it.get("vat_rate", 0)))
-                total += qty * price * (1 + vat / Decimal("100"))
+            total += _items_total(m.items)
         return total
 
     def sum_company_spent(self, project_id: UUID) -> Decimal:
         """Sum amounts the company spent (net) directly on a project.
 
         Counts any non-released_funds invoice where either:
-          - refundable_status == 'refunded'  (company reimbursed the expense), OR
+          - refundable_status == 'refunded' AND refunded_by != 'bank'
+            (the company itself reimbursed the expense — bank-refunded rows are
+            the bank's money, not company spend; NULL refunded_by is legacy and
+            counts as company), OR
           - payment_method_id belongs to a method flagged is_company_payment
             (invoice was paid directly with company funds, any non-released_funds type).
 
@@ -295,18 +310,17 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         total = Decimal("0")
         for m in rows:
-            is_refunded = m.refundable_status == "refunded"
+            # Bank-refunded expenses are NOT company spend: the supplier/bank sent
+            # the money back, the company never reimbursed anyone. NULL refunded_by
+            # on a refunded row is legacy data and keeps counting as company.
+            is_refunded = m.refundable_status == "refunded" and m.refunded_by != "bank"
             is_company_paid = m.payment_method_id is not None and m.payment_method_id in company_paid_ids
             # A company-issued refund is type=refund + paid via a company method:
             # is_company_paid holds and its negative line amounts net the total down.
             # A supplier refund has no company method, so it is skipped here.
             if not (is_refunded or is_company_paid):
                 continue
-            for it in m.items or []:
-                qty = Decimal(str(it.get("quantity", 0)))
-                price = Decimal(str(it.get("unit_price", 0)))
-                vat = Decimal(str(it.get("vat_rate", 0)))
-                total += qty * price * (1 + vat / Decimal("100"))
+            total += _items_total(m.items)
         # Never report a negative spent-by-company; refunds can exceed spend.
         return max(total, Decimal("0"))
 
@@ -327,11 +341,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         rows = query.all()
         total = Decimal("0")
         for m in rows:
-            for it in m.items or []:
-                qty = Decimal(str(it.get("quantity", 0)))
-                price = Decimal(str(it.get("unit_price", 0)))
-                vat = Decimal(str(it.get("vat_rate", 0)))
-                total += qty * price * (1 + vat / Decimal("100"))
+            total += _items_total(m.items)
         return total
 
     def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
@@ -494,12 +504,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         refunded_by_bank = Decimal("0")
 
         for status, refunded_by, items in query.all():
-            row_total = Decimal("0")
-            for it in items or []:
-                qty = Decimal(str(it.get("quantity", 0)))
-                price = Decimal(str(it.get("unit_price", 0)))
-                vat = Decimal(str(it.get("vat_rate", 0)))
-                row_total += qty * price * (1 + vat / Decimal("100"))
+            row_total = _items_total(items)
 
             if status in (RefundableStatus.REFUNDABLE.value, RefundableStatus.REFUND_PENDING.value):
                 refundable_amount += row_total

@@ -758,6 +758,45 @@ class TestPlainCompanyAdminAuthz:
         )
         assert resp.status_code == 403, resp.get_data(as_text=True)
 
+    def test_plain_admin_summary_excludes_other_company_amounts(
+        self, mat_client, plain_company_a_admin_tok, mat_exp_app
+    ):
+        """Summary for a plain company-A admin must aggregate ONLY company-A rows.
+
+        A company-B refunded expense must not inflate any summary figure —
+        amounts are as sensitive as row visibility (leak-proof aggregation).
+        Delta-based: shared fixture state may already hold company-A rows.
+        """
+        url = "/api/v1/billing/materials-expenses?refundable=true"
+        before = mat_client.get(url, headers=_auth(plain_company_a_admin_tok)).get_json()["summary"]
+
+        with mat_exp_app.app_context():
+            _make_invoice(
+                mat_exp_app._project_a1_id,
+                mat_exp_app._plain_company_a_admin_user_id,
+                refundable_status="refundable",
+                quantity=1.0,
+                unit_price=100.0,
+            )
+            _make_invoice(
+                mat_exp_app._project_b_id,
+                mat_exp_app._non_admin_user_id,
+                refundable_status="refunded",
+                refunded_by="bank",
+                quantity=1.0,
+                unit_price=999.0,
+            )
+
+        resp = mat_client.get(url, headers=_auth(plain_company_a_admin_tok))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        summary = resp.get_json()["summary"]
+        # Own company-A row moves the refundable figure by exactly +100…
+        assert summary["refundable_amount"] == pytest.approx(before["refundable_amount"] + 100.0)
+        # …while the company-B bank-refunded 999 must not move ANY refunded figure.
+        assert summary["refunded_total"] == pytest.approx(before["refunded_total"])
+        assert summary["refunded_by_company"] == pytest.approx(before["refunded_by_company"])
+        assert summary["refunded_by_bank"] == pytest.approx(before["refunded_by_bank"])
+
 
 # ---------------------------------------------------------------------------
 # M2: Rate-limit on GET endpoint
