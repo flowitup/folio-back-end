@@ -312,7 +312,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         for m in rows:
             # Bank-refunded expenses are NOT company spend: the supplier/bank sent
             # the money back, the company never reimbursed anyone. NULL refunded_by
-            # on a refunded row is legacy data and keeps counting as company.
+            # on a refunded row is legacy data and keeps counting as company;
+            # 'both' counts too (the company did reimburse — split unknown).
             is_refunded = m.refundable_status == "refunded" and m.refunded_by != "bank"
             is_company_paid = m.payment_method_id is not None and m.payment_method_id in company_paid_ids
             # A company-issued refund is type=refund + paid via a company method:
@@ -477,8 +478,13 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         Returns floats keyed:
           refundable_amount    — status in ('refundable', 'refund_pending')
           refunded_total       — status == 'refunded'
-          refunded_by_company  — refunded AND (refunded_by IS NULL OR 'company')
-          refunded_by_bank     — refunded AND refunded_by == 'bank'
+          refunded_by_company  — refunded AND company involved (refunded_by IS NULL,
+                                 'company' or 'both'); 'both' rows count in full here
+                                 AND in refunded_by_bank, so the two can exceed
+                                 refunded_total — subtract refunded_by_both for
+                                 exclusive figures.
+          refunded_by_bank     — refunded AND bank involved ('bank' or 'both')
+          refunded_by_both     — refunded AND refunded_by == 'both' (the overlap)
         """
         from app.infrastructure.database.models.project import ProjectModel
 
@@ -502,6 +508,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         refunded_total = Decimal("0")
         refunded_by_company = Decimal("0")
         refunded_by_bank = Decimal("0")
+        refunded_by_both = Decimal("0")
 
         for status, refunded_by, items in query.all():
             row_total = _items_total(items)
@@ -510,17 +517,21 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 refundable_amount += row_total
             elif status == RefundableStatus.REFUNDED.value:
                 refunded_total += row_total
-                if refunded_by == "bank":
+                # Involvement buckets: 'both' rows land in company AND bank
+                # (per-source amounts are not tracked), plus the overlap bucket.
+                if refunded_by in ("bank", "both"):
                     refunded_by_bank += row_total
-                else:
-                    # NULL or 'company' both count as company-refunded.
+                if refunded_by in (None, "company", "both"):
                     refunded_by_company += row_total
+                if refunded_by == "both":
+                    refunded_by_both += row_total
 
         return {
             "refundable_amount": float(refundable_amount),
             "refunded_total": float(refunded_total),
             "refunded_by_company": float(refunded_by_company),
             "refunded_by_bank": float(refunded_by_bank),
+            "refunded_by_both": float(refunded_by_both),
         }
 
     def next_invoice_number(self, project_id: UUID) -> str:

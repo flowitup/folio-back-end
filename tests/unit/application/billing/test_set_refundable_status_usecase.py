@@ -292,6 +292,23 @@ class TestRefundedBySemantics:
         assert result.refundable_status == "refunded"
         assert result.refunded_by == "bank"
 
+    def test_refunded_by_both_is_persisted(self):
+        """'both' is a valid source: partial reimbursement from each side."""
+        inv = _make_invoice()
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)
+
+        result = uc.execute(
+            user_id=uuid4(),
+            is_superadmin=True,
+            invoice_id=inv.id,
+            refundable_status="refunded",
+            refunded_by="both",
+        )
+
+        assert result.refundable_status == "refunded"
+        assert result.refunded_by == "both"
+
     def test_refunded_by_cleared_on_non_refunded_status(self):
         """Moving to 'refundable' silently drops any provided refunded_by (forced to None)."""
         inv = _make_invoice(refundable_status="refunded")

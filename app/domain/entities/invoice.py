@@ -31,10 +31,15 @@ class RefundableStatus(str, Enum):
 
 
 class RefundedBy(str, Enum):
-    """Who issued the refund — only meaningful when refundable_status == 'refunded'."""
+    """Who issued the refund — only meaningful when refundable_status == 'refunded'.
+
+    'both' covers partial reimbursements from each side (per-source amounts are
+    not tracked — the flag records involvement, not a split).
+    """
 
     COMPANY = "company"
     BANK = "bank"
+    BOTH = "both"
 
 
 @dataclass(slots=True)
