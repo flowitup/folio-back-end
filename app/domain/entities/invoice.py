@@ -30,6 +30,13 @@ class RefundableStatus(str, Enum):
     REFUNDED = "refunded"
 
 
+class RefundedBy(str, Enum):
+    """Who issued the refund — only meaningful when refundable_status == 'refunded'."""
+
+    COMPANY = "company"
+    BANK = "bank"
+
+
 @dataclass(slots=True)
 class Invoice:
     """Invoice domain entity. Immutable except for use-case-level updates via dataclasses.replace()."""
@@ -58,6 +65,10 @@ class Invoice:
     # Refund tracking — optional; NULL means not marked refundable.
     # Only applicable to materials_services invoices.
     refundable_status: Optional[str] = None
+    # Who issued the refund ('company' | 'bank') — only meaningful when
+    # refundable_status == 'refunded'. Must be NULL whenever refundable_status
+    # is anything else; enforced at the use-case layer, not here.
+    refunded_by: Optional[str] = None
     # Optional self-link: refund invoice → the materials_services invoice it refunds.
     # SET NULL on deletion of the linked invoice so the refund survives as standalone.
     refunds_invoice_id: Optional[UUID] = None

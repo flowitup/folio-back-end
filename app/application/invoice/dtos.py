@@ -52,6 +52,9 @@ class InvoiceResponse:
     is_auto_generated: bool = False
     tag_id: Optional[str] = None
     refundable_status: Optional[str] = None
+    # Who issued the refund ('company' | 'bank') — only meaningful when
+    # refundable_status == 'refunded'; NULL otherwise.
+    refunded_by: Optional[str] = None
     # Supplier-refund link — present only on refund invoices.
     # refunds_invoice_number is enriched at the route layer from a secondary lookup.
     refunds_invoice_id: Optional[str] = None
@@ -93,6 +96,7 @@ class InvoiceResponse:
             is_auto_generated=inv.is_auto_generated,
             tag_id=str(inv.tag_id) if inv.tag_id is not None else None,
             refundable_status=inv.refundable_status,
+            refunded_by=inv.refunded_by,
             refunds_invoice_id=str(inv.refunds_invoice_id) if inv.refunds_invoice_id is not None else None,
             # refunds_invoice_number is None here; the route enriches it via a lookup.
             refunds_invoice_number=None,

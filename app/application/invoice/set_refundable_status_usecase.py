@@ -9,7 +9,7 @@ from app.application.billing.ports import UserCompanyAccessRepositoryPort, admin
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
-from app.domain.entities.invoice import InvoiceType, RefundableStatus
+from app.domain.entities.invoice import InvoiceType, RefundableStatus, RefundedBy
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, InvoiceNotFoundError
 
 
@@ -26,6 +26,12 @@ class SetInvoiceRefundableStatusUseCase:
     - Invoice type must be materials_services (InvalidInvoiceDataError → 400)
     - Non-null value must be a valid RefundableStatus (InvalidInvoiceDataError → 400)
     - Invoice must not be paid via a company-direct method (InvalidInvoiceDataError → 400)
+
+    refunded_by ('company' | 'bank') is only meaningful when refundable_status ==
+    'refunded': setting any other status (including null) forces refunded_by to NULL,
+    silently ignoring any provided value. Setting 'refunded' with refunded_by omitted
+    or null defaults to 'company' (legacy-compatible). An invalid refunded_by value
+    while transitioning to 'refunded' raises InvalidInvoiceDataError.
     """
 
     def __init__(
@@ -42,6 +48,7 @@ class SetInvoiceRefundableStatusUseCase:
         is_superadmin: bool,
         invoice_id: UUID,
         refundable_status: Optional[str],
+        refunded_by: Optional[str] = None,
     ) -> InvoiceResponse:
         invoice = self._invoice_repo.find_by_id(invoice_id)
         if invoice is None:
@@ -84,7 +91,23 @@ class SetInvoiceRefundableStatusUseCase:
             if self._is_company_payment_method(invoice.payment_method_id, invoice.project_id):
                 raise InvalidInvoiceDataError("Expense already paid by the company — refund tracking does not apply")
 
-        updated = invoice.with_updates(refundable_status=refundable_status)
+        # refunded_by is only meaningful when transitioning to 'refunded'. Any other
+        # status (including null) forces it to NULL, silently dropping whatever the
+        # caller sent — it is not a valid state outside of 'refunded'.
+        if refundable_status == RefundableStatus.REFUNDED.value:
+            if refunded_by is None:
+                effective_refunded_by: Optional[str] = RefundedBy.COMPANY.value
+            else:
+                valid_refunded_by = {b.value for b in RefundedBy}
+                if refunded_by not in valid_refunded_by:
+                    raise InvalidInvoiceDataError(
+                        f"Invalid refunded_by {refunded_by!r}. Allowed: {sorted(valid_refunded_by)}"
+                    )
+                effective_refunded_by = refunded_by
+        else:
+            effective_refunded_by = None
+
+        updated = invoice.with_updates(refundable_status=refundable_status, refunded_by=effective_refunded_by)
         saved = self._invoice_repo.update(updated)
         return InvoiceResponse.from_entity(saved)
 

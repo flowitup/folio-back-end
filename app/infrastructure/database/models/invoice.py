@@ -87,6 +87,10 @@ class InvoiceModel(Base):
     # Only applicable to materials_services invoices; other types must stay NULL.
     refundable_status = Column(String(20), nullable=True)
 
+    # Who issued the refund ('company' | 'bank') — only meaningful when
+    # refundable_status == 'refunded'. NULL whenever refundable_status is not 'refunded'.
+    refunded_by = Column(String(10), nullable=True)
+
     # Supplier-refund self-link: a refund invoice may optionally reference the
     # materials_services invoice it refunds. ON DELETE SET NULL so deleting the
     # source invoice nulls the link rather than cascade-deleting the refund.
