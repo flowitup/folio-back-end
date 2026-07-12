@@ -490,6 +490,47 @@ class TestPatchRefundableStatus:
         assert body["refundable_status"] == "refunded"
         assert body["refunded_by"] == "bank"
 
+    def test_refunded_with_both_persists_refunded_by(self, mat_client, admin_tok, mat_exp_app):
+        """PATCH {refundable_status:'refunded', refunded_by:'both'} → 200 + persisted."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv_id = str(inv.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_id}",
+            json={"refundable_status": "refunded", "refunded_by": "both"},
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["refundable_status"] == "refunded"
+        assert body["refunded_by"] == "both"
+
+    def test_summary_both_row_counts_in_company_and_bank_and_overlap(self, mat_client, admin_tok, mat_exp_app):
+        """A 'both' row lands in refunded_by_company AND refunded_by_bank AND refunded_by_both.
+
+        Delta-based against the pre-existing fixture state.
+        """
+        url = "/api/v1/billing/materials-expenses?refundable=true"
+        before = mat_client.get(url, headers=_auth(admin_tok)).get_json()["summary"]
+
+        with mat_exp_app.app_context():
+            _make_invoice(
+                mat_exp_app._project_a1_id,
+                mat_exp_app._admin_user_id,
+                refundable_status="refunded",
+                refunded_by="both",
+                quantity=1.0,
+                unit_price=300.0,
+            )
+
+        after = mat_client.get(url, headers=_auth(admin_tok)).get_json()["summary"]
+        assert after["refunded_total"] == pytest.approx(before["refunded_total"] + 300.0)
+        assert after["refunded_by_company"] == pytest.approx(before["refunded_by_company"] + 300.0)
+        assert after["refunded_by_bank"] == pytest.approx(before["refunded_by_bank"] + 300.0)
+        assert after["refunded_by_both"] == pytest.approx(before["refunded_by_both"] + 300.0)
+        assert after["refundable_amount"] == pytest.approx(before["refundable_amount"])
+
     def test_refunded_without_refunded_by_defaults_to_company(self, mat_client, admin_tok, mat_exp_app):
         """PATCH {refundable_status:'refunded'} with refunded_by omitted → defaults to 'company'."""
         with mat_exp_app.app_context():
@@ -1074,4 +1115,5 @@ class TestRefundSummary:
             "refunded_total": 0.0,
             "refunded_by_company": 0.0,
             "refunded_by_bank": 0.0,
+            "refunded_by_both": 0.0,
         }

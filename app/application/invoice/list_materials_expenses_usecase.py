@@ -50,6 +50,8 @@ class MaterialsExpensesSummary:
     refunded_total: float
     refunded_by_company: float
     refunded_by_bank: float
+    # Overlap: rows refunded by 'both' (already included in company AND bank).
+    refunded_by_both: float
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,7 @@ class ListMaterialsExpensesUseCase:
                     refunded_total=0.0,
                     refunded_by_company=0.0,
                     refunded_by_bank=0.0,
+                    refunded_by_both=0.0,
                 )
                 if refundable is True
                 else None
@@ -167,6 +170,7 @@ class ListMaterialsExpensesUseCase:
                 refunded_total=agg["refunded_total"],
                 refunded_by_company=agg["refunded_by_company"],
                 refunded_by_bank=agg["refunded_by_bank"],
+                refunded_by_both=agg["refunded_by_both"],
             )
 
         return MaterialsExpensesResult(items=items, total=total, limit=limit, offset=offset, summary=summary)

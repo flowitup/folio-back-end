@@ -145,6 +145,25 @@ class TestSumCompanySpent:
 
         assert repo.sum_company_spent(project_id) == Decimal("0")
 
+    def test_both_refunded_ms_invoice_counts_as_company_spend(self, session):
+        """'both' keeps counting: the company did reimburse (split unknown)."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        _make_invoice(
+            session,
+            project_id,
+            "materials_services",
+            200.0,
+            refundable_status="refunded",
+            refunded_by="both",
+        )
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        total = repo.sum_company_spent(project_id)
+
+        assert total == pytest.approx(Decimal("200.00"), abs=Decimal("0.01"))
+
     def test_explicit_company_refunded_by_counts(self, session):
         """refunded_by='company' counts, same as legacy NULL."""
         user_id = _make_user(session)
