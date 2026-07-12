@@ -48,6 +48,9 @@ def _make_invoice(
     user_id: UUID,
     invoice_type: str = "materials_services",
     refundable_status: str | None = None,
+    refunded_by: str | None = None,
+    quantity: float = 2.0,
+    unit_price: float = 500.0,
 ) -> InvoiceModel:
     """Build and persist an InvoiceModel row directly (bypasses use-case)."""
     now = datetime.now(timezone.utc)
@@ -58,11 +61,12 @@ def _make_invoice(
         type=invoice_type,
         issue_date=date.today(),
         recipient_name="Test Supplier",
-        items=[{"description": "Materials", "quantity": 2.0, "unit_price": 500.0}],
+        items=[{"description": "Materials", "quantity": quantity, "unit_price": unit_price}],
         created_by=user_id,
         created_at=now,
         updated_at=now,
         refundable_status=refundable_status,
+        refunded_by=refunded_by,
     )
     db.session.add(inv)
     db.session.commit()
@@ -470,6 +474,59 @@ class TestPatchRefundableStatus:
         assert resp.status_code == 200
         assert resp.get_json()["refundable_status"] == "refund_pending"
 
+    def test_refunded_with_bank_persists_refunded_by(self, mat_client, admin_tok, mat_exp_app):
+        """PATCH {refundable_status:'refunded', refunded_by:'bank'} → 200 + refunded_by in response."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv_id = str(inv.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_id}",
+            json={"refundable_status": "refunded", "refunded_by": "bank"},
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["refundable_status"] == "refunded"
+        assert body["refunded_by"] == "bank"
+
+    def test_refunded_without_refunded_by_defaults_to_company(self, mat_client, admin_tok, mat_exp_app):
+        """PATCH {refundable_status:'refunded'} with refunded_by omitted → defaults to 'company'."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv_id = str(inv.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_id}",
+            json={"refundable_status": "refunded"},
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["refundable_status"] == "refunded"
+        assert body["refunded_by"] == "company"
+
+    def test_refunded_by_cleared_when_status_moves_off_refunded(self, mat_client, admin_tok, mat_exp_app):
+        """Moving off 'refunded' forces refunded_by back to null even if a value is sent."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(
+                mat_exp_app._project_a1_id,
+                mat_exp_app._admin_user_id,
+                refundable_status="refunded",
+                refunded_by="bank",
+            )
+            inv_id = str(inv.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_id}",
+            json={"refundable_status": "refundable", "refunded_by": "bank"},
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["refundable_status"] == "refundable"
+        assert body["refunded_by"] is None
+
 
 # ---------------------------------------------------------------------------
 # Error cases
@@ -485,6 +542,18 @@ class TestErrorCases:
         resp = mat_client.patch(
             f"/api/v1/billing/materials-expenses/{inv_id}",
             json={"refundable_status": "totally_invalid"},
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_refunded_by_value_returns_400(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id)
+            inv_id = str(inv.id)
+
+        resp = mat_client.patch(
+            f"/api/v1/billing/materials-expenses/{inv_id}",
+            json={"refundable_status": "refunded", "refunded_by": "cash"},
             headers=_auth(admin_tok),
         )
         assert resp.status_code == 400
@@ -689,6 +758,45 @@ class TestPlainCompanyAdminAuthz:
         )
         assert resp.status_code == 403, resp.get_data(as_text=True)
 
+    def test_plain_admin_summary_excludes_other_company_amounts(
+        self, mat_client, plain_company_a_admin_tok, mat_exp_app
+    ):
+        """Summary for a plain company-A admin must aggregate ONLY company-A rows.
+
+        A company-B refunded expense must not inflate any summary figure —
+        amounts are as sensitive as row visibility (leak-proof aggregation).
+        Delta-based: shared fixture state may already hold company-A rows.
+        """
+        url = "/api/v1/billing/materials-expenses?refundable=true"
+        before = mat_client.get(url, headers=_auth(plain_company_a_admin_tok)).get_json()["summary"]
+
+        with mat_exp_app.app_context():
+            _make_invoice(
+                mat_exp_app._project_a1_id,
+                mat_exp_app._plain_company_a_admin_user_id,
+                refundable_status="refundable",
+                quantity=1.0,
+                unit_price=100.0,
+            )
+            _make_invoice(
+                mat_exp_app._project_b_id,
+                mat_exp_app._non_admin_user_id,
+                refundable_status="refunded",
+                refunded_by="bank",
+                quantity=1.0,
+                unit_price=999.0,
+            )
+
+        resp = mat_client.get(url, headers=_auth(plain_company_a_admin_tok))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        summary = resp.get_json()["summary"]
+        # Own company-A row moves the refundable figure by exactly +100…
+        assert summary["refundable_amount"] == pytest.approx(before["refundable_amount"] + 100.0)
+        # …while the company-B bank-refunded 999 must not move ANY refunded figure.
+        assert summary["refunded_total"] == pytest.approx(before["refunded_total"])
+        assert summary["refunded_by_company"] == pytest.approx(before["refunded_by_company"])
+        assert summary["refunded_by_bank"] == pytest.approx(before["refunded_by_bank"])
+
 
 # ---------------------------------------------------------------------------
 # M2: Rate-limit on GET endpoint
@@ -858,3 +966,112 @@ class TestHasBankRefundFlag:
         assert resp.status_code == 200
         items = {i["id"]: i for i in resp.get_json()["items"]}
         assert items[inv_id]["has_bank_refund"] is False
+
+
+# ---------------------------------------------------------------------------
+# GET summary aggregate (refundable_amount / refunded_total / refunded_by_*)
+# ---------------------------------------------------------------------------
+
+
+class TestRefundSummary:
+    """Summary is aggregated over the FULL filter set (company scope), not the page.
+
+    Each test creates its own company + project so seeded totals aren't polluted
+    by invoices created in other test classes within this module-scoped fixture.
+    admin_tok is superadmin, so ?company_id=<new company> scopes the query exactly
+    to that company without needing a UserCompanyAccess row.
+    """
+
+    def _make_summary_company_and_project(self, mat_exp_app):
+        from uuid import uuid4 as _uuid4
+
+        now = datetime.now(timezone.utc)
+        company = CompanyModel(
+            id=_uuid4(),
+            legal_name="Summary Test Co",
+            address="3 rue de la Paix",
+            created_by=mat_exp_app._admin_user_id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(company)
+        db.session.flush()
+        project = ProjectModel(name="Summary Project", owner_id=mat_exp_app._admin_user_id, company_id=company.id)
+        db.session.add(project)
+        db.session.commit()
+        return company, project
+
+    def test_summary_matches_seeded_mix(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company, project = self._make_summary_company_and_project(mat_exp_app)
+            # refundable: 1 x 100 = 100
+            _make_invoice(
+                project.id, mat_exp_app._admin_user_id, refundable_status="refundable", quantity=1, unit_price=100
+            )
+            # refund_pending: 1 x 50 = 50
+            _make_invoice(
+                project.id,
+                mat_exp_app._admin_user_id,
+                refundable_status="refund_pending",
+                quantity=1,
+                unit_price=50,
+            )
+            # refunded, refunded_by=None → counts as company: 1 x 200 = 200
+            _make_invoice(
+                project.id,
+                mat_exp_app._admin_user_id,
+                refundable_status="refunded",
+                refunded_by=None,
+                quantity=1,
+                unit_price=200,
+            )
+            # refunded, refunded_by='bank': 1 x 75 = 75
+            _make_invoice(
+                project.id,
+                mat_exp_app._admin_user_id,
+                refundable_status="refunded",
+                refunded_by="bank",
+                quantity=1,
+                unit_price=75,
+            )
+            company_id = str(company.id)
+
+        resp = mat_client.get(
+            f"/api/v1/billing/materials-expenses?refundable=true&company_id={company_id}",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        summary = resp.get_json()["summary"]
+        assert summary is not None
+        assert summary["refundable_amount"] == pytest.approx(150.0)
+        assert summary["refunded_total"] == pytest.approx(275.0)
+        assert summary["refunded_by_company"] == pytest.approx(200.0)
+        assert summary["refunded_by_bank"] == pytest.approx(75.0)
+
+    def test_summary_null_when_refundable_false(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company, project = self._make_summary_company_and_project(mat_exp_app)
+            _make_invoice(project.id, mat_exp_app._admin_user_id, refundable_status=None)
+            company_id = str(company.id)
+
+        resp = mat_client.get(
+            f"/api/v1/billing/materials-expenses?refundable=false&company_id={company_id}",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["summary"] is None
+
+    def test_summary_zeroed_for_non_admin_with_no_admin_companies(self, mat_client, nonadmin_tok):
+        """Non-admin with zero admin companies gets a zeroed summary on refundable=true."""
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(nonadmin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        summary = resp.get_json()["summary"]
+        assert summary == {
+            "refundable_amount": 0.0,
+            "refunded_total": 0.0,
+            "refunded_by_company": 0.0,
+            "refunded_by_bank": 0.0,
+        }

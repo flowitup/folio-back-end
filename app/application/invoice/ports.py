@@ -110,6 +110,26 @@ class IInvoiceRepository(ABC):
         """
         ...
 
+    @abstractmethod
+    def materials_services_refund_summary(
+        self,
+        company_ids: list[UUID],
+        all_companies: bool = False,
+    ) -> dict:
+        """Aggregate refund totals over the FULL materials_services filter set (not paginated).
+
+        Same scope filters as list_materials_services_by_companies with refundable=True
+        (type=materials_services, ProjectModel.company_id.isnot(None), company scope,
+        refundable_status.isnot(None)).
+
+        Returns a dict of floats:
+          refundable_amount    — sum of totals where status in ('refundable', 'refund_pending')
+          refunded_total       — sum of totals where status == 'refunded'
+          refunded_by_company  — refunded_total subset where refunded_by is NULL or 'company'
+          refunded_by_bank     — refunded_total subset where refunded_by == 'bank'
+        """
+        ...
+
 
 class IAttachmentStorage(ABC):
     """Port for binary file storage (S3 / MinIO / local FS)."""

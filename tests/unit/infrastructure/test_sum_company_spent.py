@@ -89,6 +89,7 @@ def _make_invoice(
     inv_type: str,
     amount: float,
     refundable_status=None,
+    refunded_by=None,
     payment_method_id: UUID | None = None,
 ) -> UUID:
     inv = InvoiceModel(
@@ -100,6 +101,7 @@ def _make_invoice(
         recipient_name="Recipient",
         items=[{"description": "Line", "quantity": 1, "unit_price": amount, "vat_rate": 0}],
         refundable_status=refundable_status,
+        refunded_by=refunded_by,
         payment_method_id=payment_method_id,
     )
     session.add(inv)
@@ -119,6 +121,43 @@ class TestSumCompanySpent:
         company_id = _make_company(session, user_id)
         project_id = _make_project(session, user_id, company_id)
         _make_invoice(session, project_id, "materials_services", 200.0, refundable_status="refunded")
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        total = repo.sum_company_spent(project_id)
+
+        assert total == pytest.approx(Decimal("200.00"), abs=Decimal("0.01"))
+
+    def test_bank_refunded_ms_invoice_not_counted(self, session):
+        """Bank-refunded expense is the bank's money, not company spend."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        _make_invoice(
+            session,
+            project_id,
+            "materials_services",
+            200.0,
+            refundable_status="refunded",
+            refunded_by="bank",
+        )
+
+        repo = SQLAlchemyInvoiceRepository(session)
+
+        assert repo.sum_company_spent(project_id) == Decimal("0")
+
+    def test_explicit_company_refunded_by_counts(self, session):
+        """refunded_by='company' counts, same as legacy NULL."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        _make_invoice(
+            session,
+            project_id,
+            "materials_services",
+            200.0,
+            refundable_status="refunded",
+            refunded_by="company",
+        )
 
         repo = SQLAlchemyInvoiceRepository(session)
         total = repo.sum_company_spent(project_id)

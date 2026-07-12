@@ -33,10 +33,23 @@ class MaterialsExpenseItem:
     issue_date: str
     total_amount: float
     refundable_status: Optional[str]
+    # Who issued the refund ('company' | 'bank') — only meaningful when
+    # refundable_status == 'refunded'; NULL otherwise.
+    refunded_by: Optional[str]
     # True when ≥1 refund invoice links back to this expense (refunded by bank).
     # The company-refund signal rides on refundable_status == 'refunded'.
     has_bank_refund: bool
     attachments: list[MaterialsExpenseAttachment]
+
+
+@dataclass(frozen=True)
+class MaterialsExpensesSummary:
+    """Aggregates over the FULL filter set (company scope), not just the current page."""
+
+    refundable_amount: float
+    refunded_total: float
+    refunded_by_company: float
+    refunded_by_bank: float
 
 
 @dataclass(frozen=True)
@@ -47,6 +60,8 @@ class MaterialsExpensesResult:
     total: int
     limit: int
     offset: int
+    # Present only when refundable=True; null when refundable=False.
+    summary: Optional[MaterialsExpensesSummary] = None
 
 
 class ListMaterialsExpensesUseCase:
@@ -89,8 +104,20 @@ class ListMaterialsExpensesUseCase:
                 effective_ids = accessible
 
         if not is_superadmin and not effective_ids:
-            # Non-admin with no admin companies → empty result, not an error
-            return MaterialsExpensesResult(items=[], total=0, limit=limit, offset=offset)
+            # Non-admin with no admin companies → empty result, not an error.
+            # Summary is zeroed (not None) on the refundable=true path so callers
+            # get a consistent shape rather than having to special-case "no access".
+            zeroed_summary = (
+                MaterialsExpensesSummary(
+                    refundable_amount=0.0,
+                    refunded_total=0.0,
+                    refunded_by_company=0.0,
+                    refunded_by_bank=0.0,
+                )
+                if refundable is True
+                else None
+            )
+            return MaterialsExpensesResult(items=[], total=0, limit=limit, offset=offset, summary=zeroed_summary)
 
         rows, total = self._invoice_repo.list_materials_services_by_companies(
             company_ids=effective_ids or [],
@@ -114,6 +141,7 @@ class ListMaterialsExpensesUseCase:
                 issue_date=r["issue_date"],
                 total_amount=r["total_amount"],
                 refundable_status=r["refundable_status"],
+                refunded_by=r.get("refunded_by"),
                 has_bank_refund=UUID(r["id"]) in bank_refunded,
                 attachments=[
                     MaterialsExpenseAttachment(
@@ -127,4 +155,18 @@ class ListMaterialsExpensesUseCase:
             )
             for r in rows
         ]
-        return MaterialsExpensesResult(items=items, total=total, limit=limit, offset=offset)
+
+        summary: Optional[MaterialsExpensesSummary] = None
+        if refundable is True:
+            agg = self._invoice_repo.materials_services_refund_summary(
+                company_ids=effective_ids or [],
+                all_companies=is_superadmin and company_id is None,
+            )
+            summary = MaterialsExpensesSummary(
+                refundable_amount=agg["refundable_amount"],
+                refunded_total=agg["refunded_total"],
+                refunded_by_company=agg["refunded_by_company"],
+                refunded_by_bank=agg["refunded_by_bank"],
+            )
+
+        return MaterialsExpensesResult(items=items, total=total, limit=limit, offset=offset, summary=summary)

@@ -254,6 +254,95 @@ class TestWrongInvoiceType:
 
 
 # ---------------------------------------------------------------------------
+# refunded_by semantics
+# ---------------------------------------------------------------------------
+
+
+class TestRefundedBySemantics:
+    def test_refunded_defaults_to_company_when_omitted(self):
+        """refundable_status='refunded' with refunded_by omitted → defaults to 'company'."""
+        inv = _make_invoice()
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)
+
+        result = uc.execute(
+            user_id=uuid4(),
+            is_superadmin=True,
+            invoice_id=inv.id,
+            refundable_status="refunded",
+        )
+
+        assert result.refundable_status == "refunded"
+        assert result.refunded_by == "company"
+
+    def test_refunded_by_bank_is_persisted(self):
+        """refundable_status='refunded' with refunded_by='bank' is honored as-is."""
+        inv = _make_invoice()
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)
+
+        result = uc.execute(
+            user_id=uuid4(),
+            is_superadmin=True,
+            invoice_id=inv.id,
+            refundable_status="refunded",
+            refunded_by="bank",
+        )
+
+        assert result.refundable_status == "refunded"
+        assert result.refunded_by == "bank"
+
+    def test_refunded_by_cleared_on_non_refunded_status(self):
+        """Moving to 'refundable' silently drops any provided refunded_by (forced to None)."""
+        inv = _make_invoice(refundable_status="refunded")
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)
+
+        result = uc.execute(
+            user_id=uuid4(),
+            is_superadmin=True,
+            invoice_id=inv.id,
+            refundable_status="refundable",
+            refunded_by="bank",
+        )
+
+        assert result.refundable_status == "refundable"
+        assert result.refunded_by is None
+
+    def test_refunded_by_cleared_on_null_status(self):
+        """Clearing refundable_status (null) also forces refunded_by to None."""
+        inv = _make_invoice(refundable_status="refunded")
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)
+
+        result = uc.execute(
+            user_id=uuid4(),
+            is_superadmin=True,
+            invoice_id=inv.id,
+            refundable_status=None,
+            refunded_by="company",
+        )
+
+        assert result.refundable_status is None
+        assert result.refunded_by is None
+
+    def test_invalid_refunded_by_raises(self):
+        """An unrecognised refunded_by value while transitioning to 'refunded' raises 400."""
+        inv = _make_invoice()
+        invoice_repo = _make_invoice_repo(invoice=inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)
+
+        with pytest.raises(InvalidInvoiceDataError):
+            uc.execute(
+                user_id=uuid4(),
+                is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refunded",
+                refunded_by="cash",
+            )
+
+
+# ---------------------------------------------------------------------------
 # Guard order: authorization must fire before business guards
 # ---------------------------------------------------------------------------
 

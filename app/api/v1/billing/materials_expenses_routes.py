@@ -21,7 +21,7 @@ from pydantic import BaseModel, field_validator
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.billing import billing_documents_bp
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
-from app.domain.entities.invoice import RefundableStatus
+from app.domain.entities.invoice import RefundableStatus, RefundedBy
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, InvoiceNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -40,9 +40,12 @@ class SetRefundableStatusSchema(BaseModel):
     """Body for PATCH /billing/materials-expenses/<invoice_id>.
 
     refundable_status=null clears the field (moves to not-refundable).
+    refunded_by ('company' | 'bank') is only meaningful when refundable_status ==
+    'refunded'; the use-case silently forces it to NULL for any other status.
     """
 
     refundable_status: Optional[str] = None
+    refunded_by: Optional[str] = None
 
     @field_validator("refundable_status")
     @classmethod
@@ -52,6 +55,16 @@ class SetRefundableStatusSchema(BaseModel):
         valid = {s.value for s in RefundableStatus}
         if v not in valid:
             raise ValueError(f"Invalid refundable_status {v!r}. Allowed: {sorted(valid)}")
+        return v
+
+    @field_validator("refunded_by")
+    @classmethod
+    def validate_refunded_by(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        valid = {b.value for b in RefundedBy}
+        if v not in valid:
+            raise ValueError(f"Invalid refunded_by {v!r}. Allowed: {sorted(valid)}")
         return v
 
 
@@ -72,7 +85,10 @@ def list_materials_expenses():
       limit       : int (default 50, max 200)
       offset      : int (default 0)
 
-    Response: { items: [...], total, limit, offset }
+    Response: { items: [...], total, limit, offset, summary }
+    summary is { refundable_amount, refunded_total, refunded_by_company, refunded_by_bank }
+    (aggregated over the full filter set, not just the page) when refundable=true,
+    else null.
     """
     # Parse refundable param — default True
     refundable_str = request.args.get("refundable", "true").strip().lower()
@@ -118,6 +134,7 @@ def list_materials_expenses():
             "total": result.total,
             "limit": result.limit,
             "offset": result.offset,
+            "summary": dataclasses.asdict(result.summary) if result.summary is not None else None,
         }
     )
 
@@ -133,7 +150,13 @@ def list_materials_expenses():
 def set_materials_expense_refundable_status(invoice_id: str):
     """Set or clear the refundable_status on a materials_services invoice.
 
-    Body: { "refundable_status": "refundable" | "refund_pending" | "refunded" | null }
+    Body: {
+      "refundable_status": "refundable" | "refund_pending" | "refunded" | null,
+      "refunded_by": "company" | "bank" | null
+    }
+    refunded_by is only meaningful when refundable_status == "refunded": any other
+    status forces it to NULL server-side. Omitted/null with "refunded" defaults to
+    "company".
 
     Error mapping:
       400 — invalid invoice_id UUID, wrong invoice type, invalid status value
@@ -162,6 +185,7 @@ def set_materials_expense_refundable_status(invoice_id: str):
             is_superadmin=is_superadmin,
             invoice_id=invoice_uuid,
             refundable_status=body.refundable_status,
+            refunded_by=body.refunded_by,
         )
     except InvoiceNotFoundError:
         return _err("NotFound", f"Invoice {invoice_id} not found", 404)
