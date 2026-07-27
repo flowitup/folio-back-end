@@ -1,6 +1,7 @@
 """Project repository port."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
@@ -8,15 +9,28 @@ from uuid import UUID
 from app.domain.entities.project import Project
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectSpent:
+    """Spend rollup for a single project.
+
+    ``by_credits`` is the subset of ``total`` funded with company money (credit line);
+    whatever remains is out-of-pocket personal spend. Labor entries are never
+    company-funded, so they only ever contribute to ``total``.
+    """
+
+    total: Decimal
+    by_credits: Decimal
+
+
 class ProjectSpentReaderPort(ABC):
     """Port for reading aggregated project spend (labor + non-released_funds invoices)."""
 
     @abstractmethod
-    def sum_spent_by_projects(self, project_ids: list[UUID]) -> dict[UUID, Decimal]:
-        """Return {project_id: total_spent} for each id.
+    def sum_spent_by_projects(self, project_ids: list[UUID]) -> dict[UUID, ProjectSpent]:
+        """Return {project_id: ProjectSpent} for each id.
 
-        IDs with no labor entries or qualifying invoices map to Decimal("0").
-        Refund invoices carry negative line items and naturally net down the total.
+        IDs with no labor entries or qualifying invoices map to zero on both figures.
+        Refund invoices carry negative line items and naturally net down the totals.
         """
         ...
 

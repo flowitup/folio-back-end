@@ -15,6 +15,11 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNumberConflictError,
 )
 from app.domain.value_objects.invoice_item import InvoiceItem
+from app.infrastructure.database.invoice_spend_rules import (
+    is_company_paid,
+    items_total,
+    load_company_paid_method_ids,
+)
 from app.infrastructure.database.models.invoice import InvoiceModel
 
 
@@ -53,20 +58,10 @@ def _jsonb_to_items(raw: list) -> List[InvoiceItem]:
     ]
 
 
-def _items_total(items: list | None) -> Decimal:
-    """TTC total of a raw JSONB items list: Σ qty × unit_price × (1 + vat/100).
-
-    Mirrors InvoiceItem.total / Invoice.total_amount exactly — every Python-side
-    aggregation over raw JSONB rows must go through this single helper so the
-    math can never drift between KPIs.
-    """
-    total = Decimal("0")
-    for it in items or []:
-        qty = Decimal(str(it.get("quantity", 0)))
-        price = Decimal(str(it.get("unit_price", 0)))
-        vat = Decimal(str(it.get("vat_rate", 0)))
-        total += qty * price * (1 + vat / Decimal("100"))
-    return total
+# TTC line-total math lives in the shared rules module so the projects-list spend
+# breakdown computes invoice worth identically. Aliased to keep the private name
+# used throughout this adapter.
+_items_total = items_total
 
 
 def _model_to_entity(m: InvoiceModel) -> Invoice:
@@ -280,25 +275,15 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         expense occurred and should not vanish from the total if a method is later
         deactivated.  items is JSONB — we compute in Python to stay DB-agnostic.
         """
-        from app.infrastructure.database.models.payment_method import PaymentMethodModel
-
         # Collect IDs of all company-payment methods for this project's company
         # in one query, ignoring is_active so deactivated methods still count.
-        company_paid_ids: set[UUID] = set()
         from app.infrastructure.database.models.project import ProjectModel
 
+        company_paid_ids: set[UUID] = set()
         project_row = self._session.query(ProjectModel.company_id).filter_by(id=project_id).first()
         if project_row and project_row[0]:
             company_id = project_row[0]
-            pm_rows = (
-                self._session.query(PaymentMethodModel.id)
-                .filter(
-                    PaymentMethodModel.company_id == company_id,
-                    PaymentMethodModel.is_company_payment.is_(True),
-                )
-                .all()
-            )
-            company_paid_ids = {r[0] for r in pm_rows}
+            company_paid_ids = load_company_paid_method_ids(self._session, [company_id]).get(company_id, set())
 
         rows = (
             self._session.query(InvoiceModel)
@@ -310,16 +295,15 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         total = Decimal("0")
         for m in rows:
-            # Bank-refunded expenses are NOT company spend: the supplier/bank sent
-            # the money back, the company never reimbursed anyone. NULL refunded_by
-            # on a refunded row is legacy data and keeps counting as company;
-            # 'both' counts too (the company did reimburse — split unknown).
-            is_refunded = m.refundable_status == "refunded" and m.refunded_by != "bank"
-            is_company_paid = m.payment_method_id is not None and m.payment_method_id in company_paid_ids
-            # A company-issued refund is type=refund + paid via a company method:
-            # is_company_paid holds and its negative line amounts net the total down.
-            # A supplier refund has no company method, so it is skipped here.
-            if not (is_refunded or is_company_paid):
+            # A company-issued refund is type=refund + paid via a company method: the
+            # predicate holds and its negative line amounts net the total down. A supplier
+            # refund has no company method, so it is skipped here.
+            if not is_company_paid(
+                payment_method_id=m.payment_method_id,
+                refundable_status=m.refundable_status,
+                refunded_by=m.refunded_by,
+                company_paid_ids=company_paid_ids,
+            ):
                 continue
             total += _items_total(m.items)
         # Never report a negative spent-by-company; refunds can exceed spend.

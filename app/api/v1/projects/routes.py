@@ -1,5 +1,6 @@
 """Project API routes."""
 
+from decimal import Decimal
 from uuid import UUID
 
 from flask import jsonify, request
@@ -25,9 +26,18 @@ from app.api.v1.projects.decorators import (
     _effective_perms_for,
 )
 from app.application.projects import CreateProjectRequest as CreateDTO
+from app.application.projects.ports import ProjectSpent
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError, InvalidProjectDataError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+# Zero rollup for projects with no spend, or when the reader is not wired.
+_NO_SPEND = ProjectSpent(total=Decimal("0"), by_credits=Decimal("0"))
+
+
+def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
+    """Look up a project's spend rollup, defaulting to zero on both figures."""
+    return spent_map.get(project_id, _NO_SPEND)
 
 
 @projects_bp.route("", methods=["GET"])
@@ -85,7 +95,8 @@ def list_projects():
                         else None
                     ),
                     budget_source=budget_map.get(UUID(str(p.id)), (None, None))[1],
-                    spent=float(spent_map.get(UUID(str(p.id)), 0)),
+                    spent=float(_spent_for(spent_map, UUID(str(p.id))).total),
+                    spent_by_credits=float(_spent_for(spent_map, UUID(str(p.id))).by_credits),
                 )
                 for p in projects
             ],
@@ -187,10 +198,10 @@ def get_project(project_id: str):
 
     # Compute spent for this single project.
     container = get_container()
-    spent_val = 0.0
+    spent_rollup = _NO_SPEND
     if container.project_spent_reader is not None:
         spent_map = container.project_spent_reader.sum_spent_by_projects([project.id])
-        spent_val = float(spent_map.get(project.id, 0))
+        spent_rollup = _spent_for(spent_map, project.id)
 
     return jsonify(
         ProjectResponse(
@@ -205,7 +216,8 @@ def get_project(project_id: str):
             my_permissions=sorted(_effective_perms_for(project.id, user_id)),
             budget=float(project.budget) if project.budget is not None else None,
             budget_source=project.budget_source,
-            spent=spent_val,
+            spent=float(spent_rollup.total),
+            spent_by_credits=float(spent_rollup.by_credits),
         ).model_dump()
     )
 
@@ -268,10 +280,10 @@ def update_project(project_id: str):
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
 
     # Compute spent for the updated project.
-    spent_val = 0.0
+    spent_rollup = _NO_SPEND
     if container.project_spent_reader is not None:
         spent_map = container.project_spent_reader.sum_spent_by_projects([result.id])
-        spent_val = float(spent_map.get(result.id, 0))
+        spent_rollup = _spent_for(spent_map, result.id)
 
     return jsonify(
         ProjectResponse(
@@ -284,7 +296,8 @@ def update_project(project_id: str):
             invoice_prefix=result.invoice_prefix,
             budget=float(result.budget) if result.budget is not None else None,
             budget_source=result.budget_source,
-            spent=spent_val,
+            spent=float(spent_rollup.total),
+            spent_by_credits=float(spent_rollup.by_credits),
         ).model_dump()
     )
 
