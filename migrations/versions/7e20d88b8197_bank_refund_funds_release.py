@@ -23,12 +23,20 @@ from decimal import Decimal
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import JSON, text
+from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.
 revision = "7e20d88b8197"
 down_revision = "a1d4f7b20c93"
 branch_labels = None
 depends_on = None
+
+# JSONB on PostgreSQL, generic JSON elsewhere — mirrors the ORM column type
+# (app/infrastructure/database/models/invoice.py's ItemsJSON) and the same
+# alias used by b8e2d4f6a1c3 / a1c3e5f7b2d4 for writing this exact column
+# from a migration.
+_ItemsJSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 def _items_total(items: list | None) -> Decimal:
@@ -108,11 +116,34 @@ def upgrade() -> None:
         except (ValueError, IndexError, AttributeError):
             continue
 
+    insert_stmt = text(
+        """
+        INSERT INTO invoices (
+            id, project_id, invoice_number, type, issue_date, recipient_name,
+            items, created_by, created_at, updated_at,
+            refunds_invoice_id, is_auto_generated
+        )
+        VALUES (
+            gen_random_uuid(), :project_id, :invoice_number,
+            'released_funds'::invoicetype, :issue_date, :recipient_name,
+            :items, :created_by, now(), now(),
+            :source_id, true
+        )
+        """
+    ).bindparams(sa.bindparam("items", type_=_ItemsJSON))
+
     inserted = 0
     skipped_non_positive = 0
 
     for src in sources:
-        total = _items_total(src.items)
+        # A raw sa.text() SELECT is not guaranteed to hand back an already
+        # -decoded JSONB value (proven necessary by b8e2d4f6a1c3 /
+        # a1c3e5f7b2d4's identical guard on this same column) — decode
+        # defensively before summing.
+        raw_items = src.items
+        if isinstance(raw_items, str):
+            raw_items = json.loads(raw_items)
+        total = _items_total(raw_items or [])
         if total <= 0:
             skipped_non_positive += 1
             continue
@@ -123,33 +154,17 @@ def upgrade() -> None:
         counters[key] = next_seq
         fr_number = f"FR-{year:04d}-{next_seq:04d}"
 
-        items_payload = json.dumps(
-            [
-                {
-                    "description": f"Remboursement banque — {src.invoice_number}",
-                    "quantity": 1.0,
-                    "unit_price": float(total),
-                    "vat_rate": 0.0,
-                }
-            ]
-        )
+        items_payload = [
+            {
+                "description": f"Remboursement banque — {src.invoice_number}",
+                "quantity": 1.0,
+                "unit_price": float(total),
+                "vat_rate": 0.0,
+            }
+        ]
 
         bind.execute(
-            sa.text(
-                """
-                INSERT INTO invoices (
-                    id, project_id, invoice_number, type, issue_date, recipient_name,
-                    items, created_by, created_at, updated_at,
-                    refunds_invoice_id, is_auto_generated
-                )
-                VALUES (
-                    gen_random_uuid(), :project_id, :invoice_number,
-                    'released_funds'::invoicetype, :issue_date, :recipient_name,
-                    CAST(:items AS jsonb), :created_by, now(), now(),
-                    :source_id, true
-                )
-                """
-            ),
+            insert_stmt,
             {
                 "project_id": src.project_id,
                 "invoice_number": fr_number,
