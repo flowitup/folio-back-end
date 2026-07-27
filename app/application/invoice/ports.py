@@ -106,6 +106,20 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def bank_refund_release_numbers(self, source_ids: list[UUID]) -> dict[UUID, str]:
+        """Return {source_invoice_id: released_funds invoice_number} for bank-refund releases.
+
+        A source_id qualifies when an invoice exists with type 'released_funds',
+        is_auto_generated is True, and refunds_invoice_id == source_id. Used to
+        surface the FR-YYYY-NNNN release number tied to a bank-refunded
+        materials_services expense.
+
+        Batch reverse-lookup — one query regardless of input size. Empty input
+        returns an empty dict without issuing a query.
+        """
+        ...
+
+    @abstractmethod
     def list_materials_services_by_companies(
         self,
         company_ids: list[UUID],

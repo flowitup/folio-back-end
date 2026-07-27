@@ -320,6 +320,59 @@ class TestHasBankRefundUnaffected:
         assert items[str(inv_id)]["has_bank_refund"] is False  # no type='refund' row exists for this source
 
 
+class TestFundsReleaseNumberField:
+    """funds_release_number surfaces the linked bank-refund release's FR number."""
+
+    def test_bank_refunded_row_returns_its_release_number(self, brl_client, admin_tok, bank_refund_app):
+        with bank_refund_app.app_context():
+            inv = _make_invoice(bank_refund_app._project_id, bank_refund_app._admin_user_id, unit_price=350.0)
+            inv_id, project_id = inv.id, bank_refund_app._project_id
+
+        resp = _patch(brl_client, admin_tok, inv_id, "refunded", "bank")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        with bank_refund_app.app_context():
+            release = _find_release(project_id, inv_id)
+            assert release is not None
+            expected_number = release.invoice_number
+
+        list_resp = brl_client.get(
+            f"/api/v1/billing/materials-expenses?refundable=true&company_id={_company_id(bank_refund_app)}",
+            headers=_auth(admin_tok),
+        )
+        assert list_resp.status_code == 200, list_resp.get_data(as_text=True)
+        items = {i["id"]: i for i in list_resp.get_json()["items"]}
+        assert items[str(inv_id)]["funds_release_number"] == expected_number
+
+    def test_company_refunded_row_returns_null_funds_release_number(self, brl_client, admin_tok, bank_refund_app):
+        with bank_refund_app.app_context():
+            inv = _make_invoice(bank_refund_app._project_id, bank_refund_app._admin_user_id, unit_price=180.0)
+            inv_id = inv.id
+
+        resp = _patch(brl_client, admin_tok, inv_id, "refunded", "company")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        list_resp = brl_client.get(
+            f"/api/v1/billing/materials-expenses?refundable=true&company_id={_company_id(bank_refund_app)}",
+            headers=_auth(admin_tok),
+        )
+        assert list_resp.status_code == 200, list_resp.get_data(as_text=True)
+        items = {i["id"]: i for i in list_resp.get_json()["items"]}
+        assert items[str(inv_id)]["funds_release_number"] is None
+
+    def test_empty_source_ids_returns_empty_dict_without_querying(self, bank_refund_app, monkeypatch):
+        """Empty input short-circuits before touching the session — never emits an IN ()."""
+        with bank_refund_app.app_context():
+            repo: SQLAlchemyInvoiceRepository = bank_refund_app._invoice_repo
+
+            def _fail_if_called(*args, **kwargs):
+                raise AssertionError("query() must not be called for empty source_ids")
+
+            monkeypatch.setattr(repo._session, "query", _fail_if_called)
+
+            assert repo.bank_refund_release_numbers([]) == {}
+
+
 def _company_id(bank_refund_app) -> str:
     with bank_refund_app.app_context():
         row = db.session.query(ProjectModel.company_id).filter_by(id=bank_refund_app._project_id).first()

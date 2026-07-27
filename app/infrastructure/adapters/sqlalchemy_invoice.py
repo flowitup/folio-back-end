@@ -390,6 +390,28 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         return {r[0] for r in rows if r[0] is not None}
 
+    def bank_refund_release_numbers(self, source_ids: list[UUID]) -> dict[UUID, str]:
+        """Return {source_id: invoice_number} for auto-generated bank-refund releases.
+
+        Single query over (refunds_invoice_id, invoice_number) filtered to
+        type == 'released_funds' AND is_auto_generated IS TRUE; short-circuits
+        on empty input to avoid emitting an invalid ``IN ()`` clause. The
+        partial unique index on refunds_invoice_id (uq_invoices_bank_refund_release)
+        guarantees at most one release per source, so no DISTINCT is needed.
+        """
+        if not source_ids:
+            return {}
+        rows = (
+            self._session.query(InvoiceModel.refunds_invoice_id, InvoiceModel.invoice_number)
+            .filter(
+                InvoiceModel.type == InvoiceType.RELEASED_FUNDS.value,
+                InvoiceModel.is_auto_generated.is_(True),
+                InvoiceModel.refunds_invoice_id.in_(source_ids),
+            )
+            .all()
+        )
+        return {source_id: number for source_id, number in rows if source_id is not None}
+
     def list_materials_services_by_companies(
         self,
         company_ids: list[UUID],
