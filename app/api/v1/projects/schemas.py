@@ -1,7 +1,7 @@
 """Project API schemas."""
 
 from decimal import Decimal
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -48,12 +48,23 @@ class ProjectResponse(BaseModel):
     # Budget tracking — None means no budget set.
     budget: Optional[float] = None
     budget_source: Optional[str] = None
-    # Computed spend: labor cost + non-released_funds invoice totals (refunds net down).
+    # Computed spend: labor accrued from attendance + invoice totals, excluding
+    # released_funds and labor invoices (the latter settle the accrual, they are not
+    # extra cost). Refunds net down.
     spent: float = 0
-    # Subset of `spent` funded with company money (the credit line). The remainder,
-    # spent - spent_by_credits, is out-of-pocket personal spend. Same rule as the
+    # Share of spend funded with company money (the credit line). Same rule as the
     # Expense page's "spent by company" KPI, so the two always agree.
     spent_by_credits: float = 0
+    # Share funded out of pocket. spent_by_credits + spent_personal + labor_unpaid == spent.
+    spent_personal: float = 0
+    # Labor accrued from attendance entries, settled by labor-type invoices.
+    # labor_unpaid is owed to workers — not spent by anyone yet, so it sits outside
+    # both spent_by_credits and spent_personal.
+    labor_accrued: float = 0
+    labor_paid: float = 0
+    labor_unpaid: float = 0
+    # Personal spend broken down by invoice type; values sum to spent_personal.
+    personal_by_type: Dict[str, float] = {}
 
 
 class ProjectListResponse(BaseModel):

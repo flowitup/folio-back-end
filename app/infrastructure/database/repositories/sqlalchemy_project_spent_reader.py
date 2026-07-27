@@ -2,11 +2,18 @@
 
 Aggregates project spend, split by funding source:
 
-    total(project)      = labor_cost + Σ(non-released_funds invoice totals)
-    by_credits(project) = Σ(non-released_funds invoice totals funded with company money)
+    total(project)      = max(labor_accrued, labor_paid)
+                          + Σ(invoice totals except released_funds and labor)
+    by_credits(project) = Σ(invoice totals funded with company money, except released_funds)
+    personal(project)   = Σ(invoice totals funded out of pocket, except released_funds)
+    labor_unpaid        = labor_accrued − labor_paid
 
-The remainder (total − by_credits) is out-of-pocket personal spend. Labor entries are
-never company-funded, so they only ever land in ``total``.
+Labor is accrued from attendance entries and settled by labor-type invoices. Those invoices
+say *who paid* rather than adding cost, so they are excluded from ``total`` — counting the
+accrual and the payment would bill the same work twice. They still classify into
+by_credits/personal, because that money really did leave someone's account.
+
+Invariant: ``by_credits + personal + labor_unpaid == total``.
 
 Labor cost mirrors the effective_cost expression in SqlAlchemyProjectTagRepository:
   - shift_type IS NULL  → 0 (supplement-only rows contribute no cost)
@@ -53,8 +60,14 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
         if not project_ids:
             return {}
 
-        totals: dict[UUID, Decimal] = {pid: Decimal("0") for pid in project_ids}
-        credits: dict[UUID, Decimal] = {pid: Decimal("0") for pid in project_ids}
+        zero = Decimal("0")
+        # labor_accrued doubles as the seed of `total`; invoice totals are added on top.
+        labor_accrued: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        labor_paid: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        non_labor_invoices: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        credits: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        personal: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        personal_by_type: dict[UUID, dict[str, Decimal]] = {pid: {} for pid in project_ids}
 
         # ------------------------------------------------------------------
         # Query 1: labor cost grouped by project_id
@@ -88,8 +101,8 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
 
         for row in labor_rows:
             pid = row.project_id
-            cost = Decimal(str(row.labor_cost)) if row.labor_cost is not None else Decimal("0")
-            totals[pid] = totals.get(pid, Decimal("0")) + cost
+            cost = Decimal(str(row.labor_cost)) if row.labor_cost is not None else zero
+            labor_accrued[pid] = labor_accrued.get(pid, zero) + cost
 
         # ------------------------------------------------------------------
         # Query 2 + 3: resolve each project's company, then that company's
@@ -113,6 +126,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
         invoice_rows = (
             self._session.query(
                 InvoiceModel.project_id,
+                InvoiceModel.type,
                 InvoiceModel.items,
                 InvoiceModel.payment_method_id,
                 InvoiceModel.refundable_status,
@@ -128,7 +142,13 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
         for row in invoice_rows:
             pid = row.project_id
             amount = items_total(row.items)
-            totals[pid] = totals.get(pid, Decimal("0")) + amount
+
+            if row.type == "labor":
+                # A settlement of accrued labor, not new cost: it decides who funded the
+                # work. Adding it to `total` on top of the accrual would double-bill it.
+                labor_paid[pid] = labor_paid.get(pid, zero) + amount
+            else:
+                non_labor_invoices[pid] = non_labor_invoices.get(pid, zero) + amount
 
             company_id = company_by_project.get(pid)
             company_paid_ids = methods_by_company.get(company_id, set()) if company_id else set()
@@ -138,14 +158,33 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
                 refunded_by=row.refunded_by,
                 company_paid_ids=company_paid_ids,
             ):
-                credits[pid] = credits.get(pid, Decimal("0")) + amount
+                credits[pid] = credits.get(pid, zero) + amount
+            else:
+                personal[pid] = personal.get(pid, zero) + amount
+                by_type = personal_by_type[pid]
+                by_type[row.type] = by_type.get(row.type, zero) + amount
 
-        return {
-            pid: ProjectSpent(
-                total=totals.get(pid, Decimal("0")),
+        result: dict[UUID, ProjectSpent] = {}
+        for pid in project_ids:
+            accrued = labor_accrued.get(pid, zero)
+            paid = labor_paid.get(pid, zero)
+            # Overpaying workers must not produce negative "owed"; floor it.
+            unpaid = max(accrued - paid, zero)
+            # Labor costs whichever is larger. Normally that is the accrual, with payments
+            # settling it. But paying more than was logged means the extra really did leave
+            # someone's account — most often wages paid without the attendance being
+            # recorded — so it counts as spend rather than vanishing. Taking the max is also
+            # what keeps `by_credits + personal + labor_unpaid == total` true in both
+            # directions: paid + max(accrued - paid, 0) == max(accrued, paid).
+            result[pid] = ProjectSpent(
+                total=max(accrued, paid) + non_labor_invoices.get(pid, zero),
                 # Company refunds can exceed company spend; a negative "spent by credit"
                 # is meaningless for the KPI, so floor it exactly as sum_company_spent does.
-                by_credits=max(credits.get(pid, Decimal("0")), Decimal("0")),
+                by_credits=max(credits.get(pid, zero), zero),
+                personal=max(personal.get(pid, zero), zero),
+                labor_accrued=accrued,
+                labor_paid=paid,
+                labor_unpaid=unpaid,
+                personal_by_type={k: v for k, v in personal_by_type[pid].items()},
             )
-            for pid in project_ids
-        }
+        return result

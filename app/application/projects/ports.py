@@ -11,15 +11,29 @@ from app.domain.entities.project import Project
 
 @dataclass(frozen=True, slots=True)
 class ProjectSpent:
-    """Spend rollup for a single project.
+    """Spend rollup for a single project, split by who funded it.
 
-    ``by_credits`` is the subset of ``total`` funded with company money (credit line);
-    whatever remains is out-of-pocket personal spend. Labor entries are never
-    company-funded, so they only ever contribute to ``total``.
+    Labor is accrued from attendance entries and settled by labor-type invoices. The
+    invoices record *who paid*, not extra cost, so they never add to ``total`` — counting
+    both would bill the same work twice. Whatever accrued but has not been settled is
+    ``labor_unpaid``: owed to workers, not yet spent by anyone.
+
+    Invariant, asserted by test::
+
+        by_credits + personal + labor_unpaid == total
+
+    ``personal_by_type`` breaks the personal share down by invoice type
+    (``materials_services`` | ``others`` | ``refund`` | ``labor``); its values sum to
+    ``personal``.
     """
 
     total: Decimal
     by_credits: Decimal
+    personal: Decimal
+    labor_accrued: Decimal
+    labor_paid: Decimal
+    labor_unpaid: Decimal
+    personal_by_type: dict[str, Decimal]
 
 
 class ProjectSpentReaderPort(ABC):
