@@ -32,12 +32,33 @@ from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 # Zero rollup for projects with no spend, or when the reader is not wired.
-_NO_SPEND = ProjectSpent(total=Decimal("0"), by_credits=Decimal("0"))
+_NO_SPEND = ProjectSpent(
+    total=Decimal("0"),
+    by_credits=Decimal("0"),
+    personal=Decimal("0"),
+    labor_accrued=Decimal("0"),
+    labor_paid=Decimal("0"),
+    labor_unpaid=Decimal("0"),
+    personal_by_type={},
+)
 
 
 def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
-    """Look up a project's spend rollup, defaulting to zero on both figures."""
+    """Look up a project's spend rollup, defaulting to zero on every figure."""
     return spent_map.get(project_id, _NO_SPEND)
+
+
+def _spend_fields(rollup: ProjectSpent) -> dict:
+    """Serialize a spend rollup into the ProjectResponse money fields."""
+    return {
+        "spent": float(rollup.total),
+        "spent_by_credits": float(rollup.by_credits),
+        "spent_personal": float(rollup.personal),
+        "labor_accrued": float(rollup.labor_accrued),
+        "labor_paid": float(rollup.labor_paid),
+        "labor_unpaid": float(rollup.labor_unpaid),
+        "personal_by_type": {k: float(v) for k, v in rollup.personal_by_type.items()},
+    }
 
 
 @projects_bp.route("", methods=["GET"])
@@ -95,8 +116,7 @@ def list_projects():
                         else None
                     ),
                     budget_source=budget_map.get(UUID(str(p.id)), (None, None))[1],
-                    spent=float(_spent_for(spent_map, UUID(str(p.id))).total),
-                    spent_by_credits=float(_spent_for(spent_map, UUID(str(p.id))).by_credits),
+                    **_spend_fields(_spent_for(spent_map, UUID(str(p.id)))),
                 )
                 for p in projects
             ],
@@ -216,8 +236,7 @@ def get_project(project_id: str):
             my_permissions=sorted(_effective_perms_for(project.id, user_id)),
             budget=float(project.budget) if project.budget is not None else None,
             budget_source=project.budget_source,
-            spent=float(spent_rollup.total),
-            spent_by_credits=float(spent_rollup.by_credits),
+            **_spend_fields(spent_rollup),
         ).model_dump()
     )
 
@@ -296,8 +315,7 @@ def update_project(project_id: str):
             invoice_prefix=result.invoice_prefix,
             budget=float(result.budget) if result.budget is not None else None,
             budget_source=result.budget_source,
-            spent=float(spent_rollup.total),
-            spent_by_credits=float(spent_rollup.by_credits),
+            **_spend_fields(spent_rollup),
         ).model_dump()
     )
 

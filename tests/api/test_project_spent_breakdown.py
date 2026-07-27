@@ -381,3 +381,192 @@ def test_empty_project_list_returns_empty_dict(invitation_app):
 
     with invitation_app.app_context():
         assert _reader(db.session).sum_spent_by_projects([]) == {}
+
+
+# ---------------------------------------------------------------------------
+# Labor accrual vs settlement: paid, unpaid, and the reconciliation invariant
+# ---------------------------------------------------------------------------
+
+
+def _add_labor_entries(session, project_id, *, days, daily_rate="200.00", name="Worker"):
+    """Log `days` full shifts for a fresh worker; accrues days x daily_rate."""
+    worker = WorkerModel(
+        id=uuid4(),
+        project_id=project_id,
+        name=name,
+        daily_rate=Decimal(daily_rate),
+        is_active=True,
+    )
+    session.add(worker)
+    session.flush()
+    for i in range(days):
+        session.add(LaborEntryModel(id=uuid4(), worker_id=worker.id, date=date(2025, 6, i + 1), shift_type="full"))
+    session.commit()
+    return worker
+
+
+def test_labor_invoice_settles_accrual_without_inflating_total(invitation_app, credit_project):
+    """Paying a worker records who funded the work; it must not bill the work twice."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_labor_entries(db.session, pid, days=3)  # accrues 600
+
+        before = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert before.total == pytest.approx(Decimal("600"))
+        assert before.labor_unpaid == pytest.approx(Decimal("600"))
+
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-LAB-1",
+            amount=250,
+            type="labor",
+            payment_method_id=credit_project["regular_pm_id"],
+        )
+
+        after = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        # Total is unchanged: the payment settles part of the accrual, it is not new cost.
+        assert after.total == pytest.approx(Decimal("600"))
+        assert after.labor_paid == pytest.approx(Decimal("250"))
+        assert after.labor_unpaid == pytest.approx(Decimal("350"))
+        assert after.personal == pytest.approx(Decimal("250"))
+
+
+def test_unpaid_is_everything_when_no_labor_invoice_exists(invitation_app, credit_project):
+    """Attendance with no payment yet is entirely owed."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_labor_entries(db.session, pid, days=2)
+
+        result = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert result.labor_accrued == pytest.approx(Decimal("400"))
+        assert result.labor_paid == Decimal("0")
+        assert result.labor_unpaid == pytest.approx(Decimal("400"))
+        assert result.personal == Decimal("0")
+
+
+def test_unpaid_floors_at_zero_when_workers_are_overpaid(invitation_app, credit_project):
+    """Paying more than was accrued yields 0 owed, never a negative."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_labor_entries(db.session, pid, days=1)  # accrues 200
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-LAB-2",
+            amount=500,
+            type="labor",
+            payment_method_id=credit_project["regular_pm_id"],
+        )
+
+        result = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert result.labor_unpaid == Decimal("0")
+
+
+def test_company_paid_labor_invoice_is_credit_not_personal(invitation_app, credit_project):
+    """Who settled the wage decides which bucket it lands in."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_labor_entries(db.session, pid, days=2)  # 400
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-LAB-3",
+            amount=150,
+            type="labor",
+            payment_method_id=credit_project["company_pm_id"],
+        )
+
+        result = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert result.by_credits == pytest.approx(Decimal("150"))
+        assert result.personal == Decimal("0")
+        assert result.labor_unpaid == pytest.approx(Decimal("250"))
+
+
+def test_personal_by_type_sums_to_personal(invitation_app, credit_project):
+    """Every personal euro is attributed to exactly one expense type."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        cash = credit_project["regular_pm_id"]
+        _add_labor_entries(db.session, pid, days=1)
+        _add_invoice(db.session, pid, number="CS-T1", amount=100, type="labor", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-T2", amount=300, type="materials_services", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-T3", amount=50, type="others", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-T4", amount=-20, type="refund", payment_method_id=cash)
+
+        result = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert result.personal_by_type["labor"] == pytest.approx(Decimal("100"))
+        assert result.personal_by_type["materials_services"] == pytest.approx(Decimal("300"))
+        assert result.personal_by_type["others"] == pytest.approx(Decimal("50"))
+        assert result.personal_by_type["refund"] == pytest.approx(Decimal("-20"))
+        assert sum(result.personal_by_type.values()) == pytest.approx(result.personal)
+
+
+def test_reconciliation_invariant_holds_on_mixed_data(invitation_app, credit_project):
+    """credits + personal + unpaid == total, on data exercising every branch.
+
+    This is the guard for the whole model: if any figure is double counted or dropped,
+    the three buckets stop adding up to the project's spend.
+    """
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        company = credit_project["company_pm_id"]
+        cash = credit_project["regular_pm_id"]
+
+        _add_labor_entries(db.session, pid, days=4)  # 800 accrued
+        _add_invoice(db.session, pid, number="CS-M1", amount=1000, type="labor", payment_method_id=company)
+        _add_invoice(db.session, pid, number="CS-M2", amount=90, type="labor", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-M3", amount=400, type="materials_services", payment_method_id=company)
+        _add_invoice(db.session, pid, number="CS-M4", amount=250, type="materials_services", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-M5", amount=75, type="others", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-M6", amount=99999, type="released_funds")
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+
+        # Labor: 800 accrued but 1090 actually paid out (1000 company + 90 cash), so labor
+        # costs the larger figure — the 290 over the accrual left an account for real.
+        # Plus non-labor invoices 400 + 250 + 75. released_funds stays out of every figure.
+        assert r.labor_accrued == pytest.approx(Decimal("800"))
+        assert r.labor_paid == pytest.approx(Decimal("1090"))
+        assert r.labor_unpaid == Decimal("0")
+        assert r.total == pytest.approx(Decimal("1090") + Decimal("400") + Decimal("250") + Decimal("75"))
+
+
+def test_wages_paid_without_logged_attendance_still_count_as_spend(invitation_app, credit_project):
+    """Paying a worker whose days were never logged is real spend, not a rounding hole.
+
+    Guards the max(accrued, paid) rule: without it the payment would vanish from `total`
+    and the reconciliation invariant would break whenever workers are overpaid.
+    """
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-LAB-NOLOG",
+            amount=700,
+            type="labor",
+            payment_method_id=credit_project["regular_pm_id"],
+        )
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.labor_accrued == Decimal("0")
+        assert r.labor_paid == pytest.approx(Decimal("700"))
+        assert r.labor_unpaid == Decimal("0")
+        assert r.total == pytest.approx(Decimal("700"))
+        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
