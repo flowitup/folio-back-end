@@ -75,7 +75,7 @@ def test_create_project_without_budget_defaults_null(inv_client, superadmin_toke
 
 
 def test_get_project_includes_budget_fields(inv_client, admin_token, invitation_app):
-    """GET detail includes budget/budget_source/spent."""
+    """GET detail includes budget/budget_source/spent/spent_by_credits."""
     # Use the seeded project (no budget set)
     pid = invitation_app._test_project_id
     status, body = _get_project(inv_client, admin_token, pid)
@@ -83,10 +83,11 @@ def test_get_project_includes_budget_fields(inv_client, admin_token, invitation_
     assert "budget" in body
     assert "budget_source" in body
     assert "spent" in body
+    assert "spent_by_credits" in body
 
 
 def test_list_projects_includes_budget_fields(inv_client, superadmin_token):
-    """GET list includes budget/budget_source/spent on every project row."""
+    """GET list includes budget/budget_source/spent/spent_by_credits on every project row."""
     resp = inv_client.get("/api/v1/projects", headers=_auth(superadmin_token))
     assert resp.status_code == 200
     projects = resp.get_json()["projects"]
@@ -95,6 +96,8 @@ def test_list_projects_includes_budget_fields(inv_client, superadmin_token):
         assert "budget" in p
         assert "budget_source" in p
         assert "spent" in p
+        # Always a number, never null — the card divides by it.
+        assert isinstance(p["spent_by_credits"], (int, float))
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +236,7 @@ def test_spent_reader_labor_plus_invoice(invitation_app, spent_reader_project):
         assert pid in result
         # labor: 200 (daily_rate * 1.0 multiplier, no override)
         # invoice: 3*50 + 2*100 = 350
-        assert result[pid] == pytest.approx(Decimal("550.00"))
+        assert result[pid].total == pytest.approx(Decimal("550.00"))
 
 
 def test_spent_reader_released_funds_excluded(invitation_app, spent_reader_project):
@@ -262,7 +265,7 @@ def test_spent_reader_released_funds_excluded(invitation_app, spent_reader_proje
         reader = SqlAlchemyProjectSpentReader(db.session)
         result = reader.sum_spent_by_projects([pid])
         # Must still be 550 — released_funds is excluded
-        assert result[pid] == pytest.approx(Decimal("550.00"))
+        assert result[pid].total == pytest.approx(Decimal("550.00"))
 
         db.session.delete(rf_invoice)
         db.session.commit()
@@ -294,7 +297,7 @@ def test_spent_reader_refund_decreases_spent(invitation_app, spent_reader_projec
         reader = SqlAlchemyProjectSpentReader(db.session)
         result = reader.sum_spent_by_projects([pid])
         # 550 - 100 = 450
-        assert result[pid] == pytest.approx(Decimal("450.00"))
+        assert result[pid].total == pytest.approx(Decimal("450.00"))
 
         db.session.delete(refund_invoice)
         db.session.commit()
@@ -322,8 +325,8 @@ def test_spent_reader_batch_two_projects(invitation_app, spent_reader_project):
 
         assert pid1 in result
         assert pid2 in result
-        assert result[pid1] == pytest.approx(Decimal("550.00"))
-        assert result[pid2] == Decimal("0")
+        assert result[pid1].total == pytest.approx(Decimal("550.00"))
+        assert result[pid2].total == Decimal("0")
 
         db.session.execute(
             __import__("sqlalchemy").text("DELETE FROM projects WHERE id = :id"),
@@ -348,7 +351,8 @@ def test_spent_reader_no_rows_returns_zero(invitation_app):
 
         reader = SqlAlchemyProjectSpentReader(db.session)
         result = reader.sum_spent_by_projects([empty_p.id])
-        assert result[empty_p.id] == Decimal("0")
+        assert result[empty_p.id].total == Decimal("0")
+        assert result[empty_p.id].by_credits == Decimal("0")
 
         db.session.execute(
             __import__("sqlalchemy").text("DELETE FROM projects WHERE id = :id"),
@@ -371,7 +375,14 @@ def test_spent_reader_empty_list_returns_empty_dict(invitation_app):
 
 
 def test_spent_cross_check_equals_tag_summary_totals(invitation_app, spent_reader_project):
-    """spent == Σ tag-summary rows (labor_cost + expense_total) for the same project."""
+    """spent == Σ tag-summary rows (labor_cost + expense_total) for VAT-free invoices.
+
+    The two aggregations use different VAT bases: the spent reader is TTC (it shares
+    ``items_total`` with the Expense-page KPIs), while the tag summary is still HT. They
+    therefore agree only while every invoice carries vat_rate 0, which is the case for
+    this fixture. See ``test_spent_reader_is_ttc_where_tag_summary_is_ht`` for the
+    divergence this leaves behind.
+    """
     from app import db
     from app.infrastructure.database.repositories.sqlalchemy_project_spent_reader import (
         SqlAlchemyProjectSpentReader,
@@ -397,9 +408,55 @@ def test_spent_cross_check_equals_tag_summary_totals(invitation_app, spent_reade
         tag_expense_total = sum(v[0] for v in expense_by_tag.values())
         tag_total = tag_labor_total + tag_expense_total
 
-        assert project_spent == pytest.approx(
+        assert project_spent.total == pytest.approx(
             tag_total
-        ), f"spent reader {project_spent} != tag-summary total {tag_total}"
+        ), f"spent reader {project_spent.total} != tag-summary total {tag_total}"
+
+
+def test_spent_reader_is_ttc_where_tag_summary_is_ht(invitation_app, spent_reader_project):
+    """A VAT-bearing invoice counts TTC in the spent reader, HT in the tag summary.
+
+    Pins the known, deliberate divergence introduced when the projects card moved to TTC
+    so it matches the Expense-page KPIs. The tag summary was left on HT; if it is ever
+    migrated too, this test is the one that should fail and be deleted.
+    """
+    from app import db
+    from app.infrastructure.database.models.invoice import InvoiceModel
+    from app.infrastructure.database.repositories.sqlalchemy_project_spent_reader import (
+        SqlAlchemyProjectSpentReader,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
+        SqlAlchemyProjectTagRepository,
+    )
+
+    with invitation_app.app_context():
+        pid = spent_reader_project["project_id"]
+
+        vat_invoice = InvoiceModel(
+            id=uuid4(),
+            project_id=pid,
+            invoice_number="VAT-001",
+            type="materials_services",
+            issue_date=date(2025, 4, 1),
+            recipient_name="Supplier",
+            items=[{"quantity": "1", "unit_price": "100", "vat_rate": "20"}],
+        )
+        db.session.add(vat_invoice)
+        db.session.commit()
+
+        reader = SqlAlchemyProjectSpentReader(db.session)
+        tag_repo = SqlAlchemyProjectTagRepository(db.session)
+
+        # 550 baseline + 120 TTC (100 HT + 20% VAT)
+        assert reader.sum_spent_by_projects([pid])[pid].total == pytest.approx(Decimal("670.00"))
+
+        # Tag summary still sums HT: 550 baseline + 100
+        tag_expense_total = sum(v[0] for v in tag_repo.sum_expense_by_tag(pid).values())
+        tag_labor_total = sum(v[0] for v in tag_repo.sum_labor_cost_by_tag(pid).values())
+        assert tag_expense_total + tag_labor_total == pytest.approx(Decimal("650.00"))
+
+        db.session.delete(vat_invoice)
+        db.session.commit()
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,10 @@ class ProjectResponse(BaseModel):
     budget_source: Optional[str] = None
     # Computed spend: labor cost + non-released_funds invoice totals (refunds net down).
     spent: float = 0
+    # Subset of `spent` funded with company money (the credit line). The remainder,
+    # spent - spent_by_credits, is out-of-pocket personal spend. Same rule as the
+    # Expense page's "spent by company" KPI, so the two always agree.
+    spent_by_credits: float = 0
 
 
 class ProjectListResponse(BaseModel):
