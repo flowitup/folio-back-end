@@ -610,6 +610,7 @@ def invitation_app():
         from app.application.invoice.set_refundable_status_usecase import (
             SetInvoiceRefundableStatusUseCase as _SetRefundStatusUseCase,
         )
+        from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter as _FundsReleaseAdapterForExp
 
         _inv_repo_for_expenses = _c.invoice_repository
         if _inv_repo_for_expenses is None:
@@ -618,6 +619,10 @@ def invitation_app():
             _inv_repo_for_expenses = _FallbackInvRepo(db.session)
             _c.invoice_repository = _inv_repo_for_expenses
 
+        # Mirrors app/__init__.py: the same adapter instance backs both the
+        # billing facture-status use-case and the materials-expenses one.
+        _funds_release_adapter_for_expenses = _FundsReleaseAdapterForExp(invoice_repo=_inv_repo_for_expenses)
+
         _c.list_materials_expenses_usecase = _ListMatExpUseCase(
             invoice_repo=_inv_repo_for_expenses,
             access_repo=_access_repo,
@@ -625,6 +630,7 @@ def invitation_app():
         _c.set_refundable_status_usecase = _SetRefundStatusUseCase(
             invoice_repo=_inv_repo_for_expenses,
             access_repo=_access_repo,
+            funds_release=_funds_release_adapter_for_expenses,
         )
 
         # ------------------------------------------------------------------

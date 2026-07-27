@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from app.application.billing.ports import UserCompanyAccessRepositoryPort, admin_company_ids
+from app.application.billing.ports import FundsReleasePort, UserCompanyAccessRepositoryPort, admin_company_ids
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
@@ -32,15 +32,29 @@ class SetInvoiceRefundableStatusUseCase:
     silently ignoring any provided value. Setting 'refunded' with refunded_by omitted
     or null defaults to 'company' (legacy-compatible). An invalid refunded_by value
     while transitioning to 'refunded' raises InvalidInvoiceDataError.
+
+    Bank-refund reconciliation: when funds_release is provided, every resulting
+    state is reconciled against its linked released_funds invoice — created
+    when the result is 'refunded' with refunded_by in ('bank', 'both'), deleted
+    otherwise (idempotent either way, so repeating the same call is a no-op).
+    Reconciliation runs BEFORE the repo persists the status change, not after:
+    IInvoiceRepository.update() commits on its own (this use-case takes no
+    session to wrap both steps in one transaction), so this is the only
+    ordering under which a reconcile failure leaves refundable_status/
+    refunded_by untouched rather than landing a status change with a missing
+    or stale release. funds_release=None skips reconciliation entirely
+    (existing direct instantiations keep working unchanged).
     """
 
     def __init__(
         self,
         invoice_repo: IInvoiceRepository,
         access_repo: Optional[UserCompanyAccessRepositoryPort] = None,
+        funds_release: Optional[FundsReleasePort] = None,
     ) -> None:
         self._invoice_repo = invoice_repo
         self._access_repo = access_repo
+        self._funds_release = funds_release
 
     def execute(
         self,
@@ -108,6 +122,23 @@ class SetInvoiceRefundableStatusUseCase:
             effective_refunded_by = None
 
         updated = invoice.with_updates(refundable_status=refundable_status, refunded_by=effective_refunded_by)
+
+        # Reconcile the linked bank-refund release before persisting the status
+        # change (see class docstring for why this must run first). None of the
+        # fields the release depends on (id, project_id, issue_date,
+        # recipient_name, total_amount) are touched by this update, so
+        # reconciling against the pre-persist `updated` entity is equivalent to
+        # reconciling against the post-persist one.
+        if self._funds_release is not None:
+            should_have_release = refundable_status == RefundableStatus.REFUNDED.value and effective_refunded_by in (
+                RefundedBy.BANK.value,
+                RefundedBy.BOTH.value,
+            )
+            if should_have_release:
+                self._funds_release.create_bank_refund_release(updated, created_by=user_id)
+            else:
+                self._funds_release.delete_bank_refund_release(updated.id)
+
         saved = self._invoice_repo.update(updated)
         return InvoiceResponse.from_entity(saved)
 

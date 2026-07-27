@@ -695,6 +695,7 @@ def _configure_di_container() -> None:
         _c.set_refundable_status_usecase = _SetRefundableStatusUseCase(
             invoice_repo=_c.invoice_repository,
             access_repo=_access_repo,
+            funds_release=_funds_release_adapter,
         )
 
     # -----------------------------------------------------------------------
