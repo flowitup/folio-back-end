@@ -50,6 +50,28 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
+        """Return the auto-generated bank-refund release linked to source_id, or None.
+
+        Matches only rows where type == 'released_funds' AND
+        refunds_invoice_id == source_id AND is_auto_generated is True. Facture-driven
+        releases (source_billing_document_id set, refunds_invoice_id always NULL on
+        those rows) can never match this predicate.
+        """
+        ...
+
+    @abstractmethod
+    def delete_bank_refund_release(self, source_id: UUID) -> None:
+        """Delete the auto-generated bank-refund release linked to source_id, if any.
+
+        Matches only rows where type == 'released_funds' AND
+        refunds_invoice_id == source_id AND is_auto_generated is True. No-op when
+        none exists. Never touches facture-driven releases — those rows always have
+        refunds_invoice_id IS NULL, so they can never match this predicate.
+        """
+        ...
+
+    @abstractmethod
     def sum_company_spent(self, project_id: UUID) -> Decimal:
         """Sum amounts the company spent directly on a project.
 

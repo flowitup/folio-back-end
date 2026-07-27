@@ -201,9 +201,17 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         rows = q.order_by(InvoiceModel.issue_date, InvoiceModel.invoice_number).all()
         return [_model_to_entity(r) for r in rows]
 
-    def next_funds_release_number(self, project_id: UUID) -> str:
-        """Generate next sequential funds-release number: FR-YYYY-NNNN."""
-        year = datetime.now(timezone.utc).year
+    def next_funds_release_number(self, project_id: UUID, year: Optional[int] = None) -> str:
+        """Generate next sequential funds-release number: FR-YYYY-NNNN.
+
+        year defaults to the current UTC year when omitted, preserving the
+        existing facture-driven behaviour. Bank-refund releases pass the
+        SOURCE expense's issue_date year instead, so the FR number matches the
+        year the expense actually happened (live path and migration backfill
+        stay in parity).
+        """
+        if year is None:
+            year = datetime.now(timezone.utc).year
         prefix = f"FR-{year}-"
         last = (
             self._session.query(InvoiceModel)
@@ -230,6 +238,40 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         self._session.commit()
         return result > 0
+
+    def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
+        """Return the auto-generated bank-refund release linked to source_id, or None.
+
+        Matches only type == 'released_funds' AND refunds_invoice_id == source_id
+        AND is_auto_generated is True — see IInvoiceRepository.find_bank_refund_release.
+        """
+        model = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.type == InvoiceType.RELEASED_FUNDS.value,
+                InvoiceModel.refunds_invoice_id == source_id,
+                InvoiceModel.is_auto_generated.is_(True),
+            )
+            .first()
+        )
+        return _model_to_entity(model) if model else None
+
+    def delete_bank_refund_release(self, source_id: UUID) -> None:
+        """Delete the auto-generated bank-refund release linked to source_id, if any.
+
+        Matches only type == 'released_funds' AND refunds_invoice_id == source_id
+        AND is_auto_generated is True — see IInvoiceRepository.delete_bank_refund_release.
+        """
+        (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.type == InvoiceType.RELEASED_FUNDS.value,
+                InvoiceModel.refunds_invoice_id == source_id,
+                InvoiceModel.is_auto_generated.is_(True),
+            )
+            .delete(synchronize_session=False)
+        )
+        self._session.commit()
 
     def sum_funds_released(self, project_id: UUID) -> Decimal:
         """Sum total_amount for all released_funds invoices in a project.

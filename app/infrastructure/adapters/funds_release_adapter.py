@@ -72,3 +72,61 @@ class FundsReleaseAdapter:
 
     def delete_funds_release(self, source_doc_id: UUID) -> None:
         self._invoice_repo.delete_by_source_billing_document_id(source_doc_id)
+
+    def create_bank_refund_release(self, source: Invoice, created_by: UUID) -> None:
+        """Create the auto-generated released_funds release for a bank-refunded expense.
+
+        Idempotent: no-op if a bank-refund release already exists for source.id.
+        No-op when source.type is not materials_services. No-op (logged at INFO)
+        when source.total_amount <= 0 — a zero/negative inflow would corrupt
+        sum_funds_released. Races with the partial unique index
+        (uq_invoices_bank_refund_release) are caught as IntegrityError and
+        logged, mirroring create_funds_release.
+        """
+        if source.type != InvoiceType.MATERIALS_SERVICES:
+            return
+        if source.total_amount <= 0:
+            log.info(
+                "Skipping bank-refund release for invoice %s — total_amount <= 0",
+                source.id,
+            )
+            return
+        if self._invoice_repo.find_bank_refund_release(source.id) is not None:
+            return
+
+        invoice_number = self._invoice_repo.next_funds_release_number(source.project_id, year=source.issue_date.year)
+        now = datetime.now(timezone.utc)
+
+        release = Invoice(
+            id=uuid4(),
+            project_id=source.project_id,
+            invoice_number=invoice_number,
+            type=InvoiceType.RELEASED_FUNDS,
+            issue_date=source.issue_date,
+            recipient_name=source.recipient_name,
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+            items=[
+                InvoiceItem(
+                    description=f"Remboursement banque — {source.invoice_number}",
+                    quantity=Decimal("1"),
+                    unit_price=source.total_amount,
+                    vat_rate=Decimal("0"),
+                )
+            ],
+            refunds_invoice_id=source.id,
+            is_auto_generated=True,
+        )
+
+        try:
+            self._invoice_repo.create(release)
+        except IntegrityError:
+            log.warning(
+                "Bank-refund release already exists for source invoice %s — skipping duplicate",
+                source.id,
+            )
+
+    def delete_bank_refund_release(self, source_id: UUID) -> None:
+        """Delete the auto-generated bank-refund release linked to source_id, if any."""
+        self._invoice_repo.delete_bank_refund_release(source_id)
