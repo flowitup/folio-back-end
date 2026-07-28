@@ -115,6 +115,29 @@ def _get_company_payment_method_ids(project_id: UUID) -> "set[UUID]":
     return {r[0] for r in rows}
 
 
+def _get_personal_payment_method_ids(project_id: UUID) -> "set[UUID]":
+    """Return the set of payment_method IDs flagged is_personal_payment for the project's company.
+
+    Fetched in one query; ignores is_active so soft-deleted methods are included.
+    Returns an empty set when the project has no company.
+    """
+    from app import db
+    from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+    company_id = _get_project_company_id(project_id)
+    if company_id is None:
+        return set()
+    rows = (
+        db.session.query(PaymentMethodModel.id)
+        .filter(
+            PaymentMethodModel.company_id == company_id,
+            PaymentMethodModel.is_personal_payment.is_(True),
+        )
+        .all()
+    )
+    return {r[0] for r in rows}
+
+
 def _enrich_refunds_invoice_number(invoice_dict: dict, refunds_invoice_id_str: "str | None") -> None:
     """Inject refunds_invoice_number into an invoice dict in-place.
 
@@ -163,6 +186,23 @@ def _enrich_invoice_with_company_payment(
     return invoice_dict
 
 
+def _enrich_invoice_with_personal_payment(
+    invoice_dict: dict,
+    payment_method_id_str: "str | None",
+    personal_pm_id_strs: "set[str]",
+) -> dict:
+    """Inject paid_by_personal into an invoice dict in-place and return it.
+
+    paid_by_personal is True only when the invoice has a payment_method_id that
+    belongs to the project's company and is flagged is_personal_payment.
+    False when payment_method_id is null or the project has no company.
+    """
+    invoice_dict["paid_by_personal"] = (
+        payment_method_id_str is not None and payment_method_id_str in personal_pm_id_strs
+    )
+    return invoice_dict
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -201,8 +241,14 @@ def list_invoices(project_id: str):
     project_uuid = UUID(project_id)
     funds_released_total = money(container.invoice_repository.sum_funds_released(project_uuid))
     company_spent_total = money(container.invoice_repository.sum_company_spent(project_uuid))
+    funds_released_company_total, funds_released_personal_total = container.invoice_repository.sum_funds_released_split(
+        project_uuid
+    )
+    funds_released_company_total = money(funds_released_company_total)
+    funds_released_personal_total = money(funds_released_personal_total)
+    personal_spent_total = money(container.invoice_repository.sum_personal_spent(project_uuid))
 
-    # Resolve company once; reuse for both company_name and paid_by_company enrichment.
+    # Resolve company once; reuse for both company_name and paid_by_company/paid_by_personal enrichment.
     from app import db
     from app.infrastructure.database.models.company import CompanyModel
 
@@ -213,28 +259,18 @@ def list_invoices(project_id: str):
     else:
         company_name = None
 
-    # One query to get all company-payment method IDs; membership-test per invoice row.
-    # IDs come back as UUIDs from the DB; compare as strings to match InvoiceResponse.payment_method_id.
-    if _company_id is not None:
-        from app.infrastructure.database.models.payment_method import PaymentMethodModel
-
-        _pm_rows = (
-            db.session.query(PaymentMethodModel.id)
-            .filter(
-                PaymentMethodModel.company_id == _company_id,
-                PaymentMethodModel.is_company_payment.is_(True),
-            )
-            .all()
-        )
-        company_pm_id_strs: set[str] = {str(r[0]) for r in _pm_rows}
-    else:
-        company_pm_id_strs = set()
+    # One query per flag to get the matching payment-method IDs; membership-test
+    # per invoice row. IDs come back as UUIDs from the DB; compare as strings to
+    # match InvoiceResponse.payment_method_id.
+    company_pm_id_strs: set[str] = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    personal_pm_id_strs: set[str] = {str(uid) for uid in _get_personal_payment_method_ids(project_uuid)}
 
     invoice_dicts = []
     for r in results:
         d = dataclasses.asdict(r)
         # r.payment_method_id is a str (InvoiceResponse serialises it that way)
         _enrich_invoice_with_company_payment(d, r.payment_method_id, company_pm_id_strs)
+        _enrich_invoice_with_personal_payment(d, r.payment_method_id, personal_pm_id_strs)
         invoice_dicts.append(d)
 
     # Batch-enrich refunds_invoice_number in one query (no N+1) so the list/mobile
@@ -264,6 +300,9 @@ def list_invoices(project_id: str):
             "total": len(invoice_dicts),
             "funds_released_total": funds_released_total,
             "company_spent_total": company_spent_total,
+            "funds_released_company_total": funds_released_company_total,
+            "funds_released_personal_total": funds_released_personal_total,
+            "personal_spent_total": personal_spent_total,
             "company_name": company_name,
         }
     )
@@ -329,7 +368,11 @@ def create_invoice(project_id: str):
     except InvalidInvoiceDataError as e:
         return _error_response("ValidationError", str(e), 400)
 
+    company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    personal_pm_id_strs = {str(uid) for uid in _get_personal_payment_method_ids(project_uuid)}
     d = dataclasses.asdict(result)
+    _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    _enrich_invoice_with_personal_payment(d, result.payment_method_id, personal_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d), 201
@@ -355,8 +398,10 @@ def get_invoice(project_id: str, invoice_id: str):
 
     project_uuid = UUID(project_id)
     company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    personal_pm_id_strs = {str(uid) for uid in _get_personal_payment_method_ids(project_uuid)}
     d = dataclasses.asdict(result)
     _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    _enrich_invoice_with_personal_payment(d, result.payment_method_id, personal_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d)
@@ -449,8 +494,10 @@ def update_invoice(project_id: str, invoice_id: str):
         return _error_response("ValidationError", str(e), 400)
 
     company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
+    personal_pm_id_strs = {str(uid) for uid in _get_personal_payment_method_ids(project_uuid)}
     d = dataclasses.asdict(result)
     _enrich_invoice_with_company_payment(d, result.payment_method_id, company_pm_id_strs)
+    _enrich_invoice_with_personal_payment(d, result.payment_method_id, personal_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d)

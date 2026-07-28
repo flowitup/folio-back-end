@@ -19,6 +19,7 @@ from app.infrastructure.database.invoice_spend_rules import (
     is_company_paid,
     items_total,
     load_company_paid_method_ids,
+    load_personal_method_ids,
 )
 from app.infrastructure.database.models.invoice import InvoiceModel
 
@@ -62,6 +63,14 @@ def _jsonb_to_items(raw: list) -> List[InvoiceItem]:
 # breakdown computes invoice worth identically. Aliased to keep the private name
 # used throughout this adapter.
 _items_total = items_total
+
+
+def _project_company_id(session: Session, project_id: UUID) -> Optional[UUID]:
+    """Return the company_id owning project_id, or None if the project has no company."""
+    from app.infrastructure.database.models.project import ProjectModel
+
+    row = session.query(ProjectModel.company_id).filter_by(id=project_id).first()
+    return row[0] if row and row[0] else None
 
 
 def _model_to_entity(m: InvoiceModel) -> Invoice:
@@ -291,6 +300,40 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             total += _items_total(m.items)
         return total
 
+    def sum_funds_released_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
+        """Split sum_funds_released into (company_total, personal_total).
+
+        personal_total: released_funds invoices whose payment_method_id belongs to a
+        method flagged is_personal_payment. company_total: every other released_funds
+        invoice (company-flagged, unflagged, or NULL payment_method_id). Soft-deleted
+        (is_active=false) personal-payment methods still count, mirroring
+        sum_company_spent. items is JSONB — computed in Python to stay DB-agnostic.
+
+        Invariant: company_total + personal_total == sum_funds_released(project_id).
+        """
+        company_id = _project_company_id(self._session, project_id)
+        personal_paid_ids: set[UUID] = set()
+        if company_id is not None:
+            personal_paid_ids = load_personal_method_ids(self._session, [company_id]).get(company_id, set())
+
+        rows = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.type == InvoiceType.RELEASED_FUNDS.value,
+            )
+            .all()
+        )
+        company_total = Decimal("0")
+        personal_total = Decimal("0")
+        for m in rows:
+            amount = _items_total(m.items)
+            if m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
+                personal_total += amount
+            else:
+                company_total += amount
+        return company_total, personal_total
+
     def sum_company_spent(self, project_id: UUID) -> Decimal:
         """Sum amounts the company spent (net) directly on a project.
 
@@ -319,12 +362,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         """
         # Collect IDs of all company-payment methods for this project's company
         # in one query, ignoring is_active so deactivated methods still count.
-        from app.infrastructure.database.models.project import ProjectModel
-
+        company_id = _project_company_id(self._session, project_id)
         company_paid_ids: set[UUID] = set()
-        project_row = self._session.query(ProjectModel.company_id).filter_by(id=project_id).first()
-        if project_row and project_row[0]:
-            company_id = project_row[0]
+        if company_id is not None:
             company_paid_ids = load_company_paid_method_ids(self._session, [company_id]).get(company_id, set())
 
         rows = (
@@ -349,6 +389,48 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 continue
             total += _items_total(m.items)
         # Never report a negative spent-by-company; refunds can exceed spend.
+        return max(total, Decimal("0"))
+
+    def sum_personal_spent(self, project_id: UUID) -> Decimal:
+        """Sum amounts spent personally (out-of-pocket, non-company) on a project.
+
+        Counts non-released_funds invoices paid via a method flagged
+        is_personal_payment, EXCLUDING rows where the company already reimbursed
+        the expense (refundable_status == 'refunded' AND refunded_by != 'bank';
+        NULL refunded_by is legacy and counts as company-refunded, same convention
+        as sum_company_spent). Bank-refunded rows (refunded_by == 'bank') still
+        count — the bank's money is not the company's.
+
+        Refund-type invoices follow the same personal-payment gate: a refund paid
+        out via a personal-flagged method carries negative line amounts, so it
+        nets the total down. Result is floored at 0.
+
+        Soft-deleted (is_active=false) personal-payment methods still count — the
+        expense occurred and should not vanish from the total if a method is later
+        deactivated. items is JSONB — computed in Python to stay DB-agnostic.
+        """
+        company_id = _project_company_id(self._session, project_id)
+        personal_paid_ids: set[UUID] = set()
+        if company_id is not None:
+            personal_paid_ids = load_personal_method_ids(self._session, [company_id]).get(company_id, set())
+
+        rows = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
+            )
+            .all()
+        )
+        total = Decimal("0")
+        for m in rows:
+            if m.payment_method_id is None or m.payment_method_id not in personal_paid_ids:
+                continue
+            company_reimbursed = m.refundable_status == "refunded" and m.refunded_by != "bank"
+            if company_reimbursed:
+                continue
+            total += _items_total(m.items)
+        # Never report a negative personal-spent; refunds can exceed spend.
         return max(total, Decimal("0"))
 
     def sum_refunds_for_source(self, source_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
