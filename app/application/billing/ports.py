@@ -365,7 +365,17 @@ class TransactionalSessionPort(Protocol):
 
 
 class FundsReleasePort(Protocol):
-    """Cross-BC port: billing → invoice. Creates/deletes released_funds invoices."""
+    """Cross-BC port: billing → invoice. Creates/deletes released_funds invoices.
+
+    Bank-refund release methods (create_bank_refund_release /
+    delete_bank_refund_release) live separately in
+    app.application.invoice.ports.BankRefundReleasePort, not here: unlike
+    create_funds_release below, they take the whole Invoice entity, and their
+    only consumer (SetInvoiceRefundableStatusUseCase) already lives in the
+    invoice BC — keeping them here would import Invoice into billing.ports
+    for no reason, widening this module's dependency surface. FundsReleaseAdapter
+    implements both protocols structurally.
+    """
 
     def create_funds_release(
         self,

@@ -39,6 +39,9 @@ class MaterialsExpenseItem:
     # True when ≥1 refund invoice links back to this expense (refunded by bank).
     # The company-refund signal rides on refundable_status == 'refunded'.
     has_bank_refund: bool
+    # invoice_number of the linked auto-generated released_funds release, when
+    # one exists (bank-refund reconciliation). None otherwise.
+    funds_release_number: Optional[str]
     attachments: list[MaterialsExpenseAttachment]
 
 
@@ -130,9 +133,15 @@ class ListMaterialsExpensesUseCase:
             all_companies=is_superadmin and company_id is None,
         )
 
+        row_ids = [UUID(r["id"]) for r in rows]
+
         # Batch reverse-lookup: which of this page's expenses have a linked refund
         # invoice (refunded by bank). One query for the whole page — no N+1.
-        bank_refunded = self._invoice_repo.refund_source_ids([UUID(r["id"]) for r in rows])
+        bank_refunded = self._invoice_repo.refund_source_ids(row_ids)
+
+        # Sibling batch lookup: the FR number of each expense's linked bank-refund
+        # release, when one exists. Same page-scoped, single-query shape as above.
+        release_numbers = self._invoice_repo.bank_refund_release_numbers(row_ids)
 
         items = [
             MaterialsExpenseItem(
@@ -146,6 +155,7 @@ class ListMaterialsExpensesUseCase:
                 refundable_status=r["refundable_status"],
                 refunded_by=r.get("refunded_by"),
                 has_bank_refund=UUID(r["id"]) in bank_refunded,
+                funds_release_number=release_numbers.get(UUID(r["id"])),
                 attachments=[
                     MaterialsExpenseAttachment(
                         id=a["id"],

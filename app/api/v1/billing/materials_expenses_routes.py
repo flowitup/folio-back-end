@@ -22,7 +22,11 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.billing import billing_documents_bp
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
 from app.domain.entities.invoice import RefundableStatus, RefundedBy
-from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, InvoiceNotFoundError
+from app.domain.exceptions.invoice_exceptions import (
+    InvalidInvoiceDataError,
+    InvoiceNotFoundError,
+    InvoiceNumberConflictError,
+)
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -162,6 +166,8 @@ def set_materials_expense_refundable_status(invoice_id: str):
       400 — invalid invoice_id UUID, wrong invoice type, invalid status value
       403 — caller is not company-admin for the invoice's project company
       404 — invoice not found
+      409 — concurrent request claimed the same auto-generated release number;
+            retried internally, returned only if every retry conflicted
     """
     try:
         invoice_uuid = UUID(invoice_id)
@@ -193,5 +199,7 @@ def set_materials_expense_refundable_status(invoice_id: str):
         return _err("ValidationError", str(exc), 400)
     except ForbiddenCompanyBillingError:
         return _err("Forbidden", "You do not have admin access to this invoice's company", 403)
+    except InvoiceNumberConflictError:
+        return _err("Conflict", "Concurrent request generated the same invoice number, please retry", 409)
 
     return jsonify(dataclasses.asdict(updated))

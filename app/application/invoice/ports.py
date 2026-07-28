@@ -3,10 +3,38 @@
 from abc import ABC, abstractmethod
 from datetime import date
 from decimal import Decimal
-from typing import BinaryIO, Optional
+from typing import BinaryIO, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.invoice import Invoice, InvoiceType
+
+
+class BankRefundReleasePort(Protocol):
+    """Cross-BC port: invoice → billing/funds-release, bank-refund lifecycle only.
+
+    Split out of billing.ports.FundsReleasePort: that port's sibling method
+    create_funds_release deliberately takes primitives to keep the billing BC
+    decoupled from the invoice BC, but these two methods take the whole
+    Invoice entity — Invoice already lives in this BC, and
+    SetInvoiceRefundableStatusUseCase (this BC) is their only consumer, so they
+    are declared here instead of in billing.ports. FundsReleaseAdapter
+    satisfies this Protocol structurally, with no changes needed on the
+    adapter itself.
+    """
+
+    def create_bank_refund_release(self, source: Invoice, created_by: UUID) -> None:
+        """Create (idempotently) the auto-generated released_funds release for a
+        bank-refunded materials_services expense.
+
+        No-op when source.type is not materials_services, when
+        source.total_amount <= 0, or when a bank-refund release already exists
+        for source.id.
+        """
+        ...
+
+    def delete_bank_refund_release(self, source_id: UUID) -> None:
+        """Delete the auto-generated bank-refund release linked to source_id, if any."""
+        ...
 
 
 class IInvoiceRepository(ABC):
@@ -50,6 +78,28 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
+        """Return the auto-generated bank-refund release linked to source_id, or None.
+
+        Matches only rows where type == 'released_funds' AND
+        refunds_invoice_id == source_id AND is_auto_generated is True. Facture-driven
+        releases (source_billing_document_id set, refunds_invoice_id always NULL on
+        those rows) can never match this predicate.
+        """
+        ...
+
+    @abstractmethod
+    def delete_bank_refund_release(self, source_id: UUID) -> None:
+        """Delete the auto-generated bank-refund release linked to source_id, if any.
+
+        Matches only rows where type == 'released_funds' AND
+        refunds_invoice_id == source_id AND is_auto_generated is True. No-op when
+        none exists. Never touches facture-driven releases — those rows always have
+        refunds_invoice_id IS NULL, so they can never match this predicate.
+        """
+        ...
+
+    @abstractmethod
     def sum_company_spent(self, project_id: UUID) -> Decimal:
         """Sum amounts the company spent directly on a project.
 
@@ -80,6 +130,20 @@ class IInvoiceRepository(ABC):
 
         Batch reverse-lookup — one query regardless of input size. Empty input
         returns an empty set without issuing a query.
+        """
+        ...
+
+    @abstractmethod
+    def bank_refund_release_numbers(self, source_ids: list[UUID]) -> dict[UUID, str]:
+        """Return {source_invoice_id: released_funds invoice_number} for bank-refund releases.
+
+        A source_id qualifies when an invoice exists with type 'released_funds',
+        is_auto_generated is True, and refunds_invoice_id == source_id. Used to
+        surface the FR-YYYY-NNNN release number tied to a bank-refunded
+        materials_services expense.
+
+        Batch reverse-lookup — one query regardless of input size. Empty input
+        returns an empty dict without issuing a query.
         """
         ...
 
