@@ -11,12 +11,20 @@ from uuid import UUID, uuid4
 from sqlalchemy.exc import IntegrityError
 
 from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.exceptions.invoice_exceptions import InvoiceNumberConflictError
 from app.domain.value_objects.invoice_item import InvoiceItem
 
 if TYPE_CHECKING:
     from app.application.invoice.ports import IInvoiceRepository
 
 log = logging.getLogger(__name__)
+
+# Two concurrent PATCHes (or one double-click) can both read the same "next"
+# sequential FR number before either commits; the loser's insert fails with
+# InvoiceNumberConflictError (translated from the uq_project_invoice_number
+# IntegrityError by SQLAlchemyInvoiceRepository.create). Regenerating the
+# number and retrying resolves it without surfacing a 500 to the caller.
+_MAX_NUMBER_CONFLICT_ATTEMPTS = 3
 
 
 class FundsReleaseAdapter:
@@ -81,7 +89,11 @@ class FundsReleaseAdapter:
         when source.total_amount <= 0 — a zero/negative inflow would corrupt
         sum_funds_released. Races with the partial unique index
         (uq_invoices_bank_refund_release) are caught as IntegrityError and
-        logged, mirroring create_funds_release.
+        logged, mirroring create_funds_release. A concurrent request claiming
+        the same sequential FR number surfaces as InvoiceNumberConflictError
+        instead (already translated by the repository) — retried up to
+        _MAX_NUMBER_CONFLICT_ATTEMPTS times with a freshly generated number,
+        then re-raised for the caller to map to an HTTP response.
         """
         if source.type != InvoiceType.MATERIALS_SERVICES:
             return
@@ -94,38 +106,55 @@ class FundsReleaseAdapter:
         if self._invoice_repo.find_bank_refund_release(source.id) is not None:
             return
 
-        invoice_number = self._invoice_repo.next_funds_release_number(source.project_id, year=source.issue_date.year)
         now = datetime.now(timezone.utc)
-
-        release = Invoice(
-            id=uuid4(),
-            project_id=source.project_id,
-            invoice_number=invoice_number,
-            type=InvoiceType.RELEASED_FUNDS,
-            issue_date=source.issue_date,
-            recipient_name=source.recipient_name,
-            created_by=created_by,
-            created_at=now,
-            updated_at=now,
-            items=[
-                InvoiceItem(
-                    description=f"Remboursement banque — {source.invoice_number}",
-                    quantity=Decimal("1"),
-                    unit_price=source.total_amount,
-                    vat_rate=Decimal("0"),
-                )
-            ],
-            refunds_invoice_id=source.id,
-            is_auto_generated=True,
-        )
-
-        try:
-            self._invoice_repo.create(release)
-        except IntegrityError:
-            log.warning(
-                "Bank-refund release already exists for source invoice %s — skipping duplicate",
-                source.id,
+        items = [
+            InvoiceItem(
+                description=f"Remboursement banque — {source.invoice_number}",
+                quantity=Decimal("1"),
+                unit_price=source.total_amount,
+                vat_rate=Decimal("0"),
             )
+        ]
+
+        for attempt in range(1, _MAX_NUMBER_CONFLICT_ATTEMPTS + 1):
+            invoice_number = self._invoice_repo.next_funds_release_number(
+                source.project_id, year=source.issue_date.year
+            )
+            release = Invoice(
+                id=uuid4(),
+                project_id=source.project_id,
+                invoice_number=invoice_number,
+                type=InvoiceType.RELEASED_FUNDS,
+                issue_date=source.issue_date,
+                recipient_name=source.recipient_name,
+                created_by=created_by,
+                created_at=now,
+                updated_at=now,
+                items=items,
+                refunds_invoice_id=source.id,
+                is_auto_generated=True,
+            )
+
+            try:
+                self._invoice_repo.create(release)
+                return
+            except IntegrityError as exc:
+                log.warning(
+                    "Bank-refund release insert for source %s rejected by a unique constraint: %s",
+                    source.id,
+                    exc,
+                )
+                return
+            except InvoiceNumberConflictError:
+                if attempt == _MAX_NUMBER_CONFLICT_ATTEMPTS:
+                    raise
+                log.warning(
+                    "Invoice number conflict creating bank-refund release for source %s "
+                    "(attempt %d/%d) — retrying with a new number",
+                    source.id,
+                    attempt,
+                    _MAX_NUMBER_CONFLICT_ATTEMPTS,
+                )
 
     def delete_bank_refund_release(self, source_id: UUID) -> None:
         """Delete the auto-generated bank-refund release linked to source_id, if any."""

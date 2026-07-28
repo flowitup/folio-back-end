@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.exceptions.invoice_exceptions import InvoiceNumberConflictError
 from app.domain.value_objects.invoice_item import InvoiceItem
 from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
 from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
@@ -214,11 +215,20 @@ class TestCreateBankRefundRelease:
         repo.create(); the adapter must swallow it (log warning) and leave the
         session usable — mirrors create_funds_release's existing behaviour.
 
-        The Postgres partial unique index isn't enforced under SQLite, so the
-        race is simulated by forcing next_funds_release_number to collide with
-        an invoice_number already occupied for this project (violating the
-        plain uq_project_invoice_number constraint instead — same exception
-        type, same code path).
+        This exercises the adapter's generic IntegrityError branch, NOT the
+        InvoiceNumberConflictError retry path. The Postgres partial unique index
+        isn't enforced under SQLite, so the race is simulated by forcing
+        next_funds_release_number to collide with an invoice_number already
+        occupied for this project (violating the plain uq_project_invoice_number
+        constraint instead). SQLite's error text never contains the string
+        'uq_project_invoice_number' (unlike PostgreSQL, which embeds the
+        constraint name), so repo.create()'s constraint-name check misses under
+        SQLite and it re-raises the raw IntegrityError rather than translating
+        it to InvoiceNumberConflictError. On PostgreSQL the identical collision
+        DOES translate to InvoiceNumberConflictError — see
+        test_invoice_number_conflict_is_retried_and_eventually_succeeds and
+        test_invoice_number_conflict_propagates_after_exhausting_retries below
+        for that path.
 
         repo.create()'s own except-block calls session.rollback() to recover
         from the failed flush. Under this fixture's plain (non-savepoint)
@@ -238,12 +248,63 @@ class TestCreateBankRefundRelease:
         with caplog.at_level(logging.WARNING):
             adapter.create_bank_refund_release(source, created_by=user_id)
 
-        assert "already exists" in caplog.text
+        assert "rejected by a unique constraint" in caplog.text
         assert repo.find_bank_refund_release(source.id) is None
 
         # Session must still be usable after the swallowed IntegrityError.
         marker_user_id = _make_user(session)
         assert session.query(UserModel).filter_by(id=marker_user_id).count() == 1
+
+    def test_invoice_number_conflict_is_retried_and_eventually_succeeds(
+        self, session, repo, adapter, monkeypatch, caplog
+    ):
+        """On PostgreSQL, a concurrent request claiming the same sequential FR
+        number surfaces as InvoiceNumberConflictError (already translated by
+        repo.create(), not a raw IntegrityError). The adapter must retry with a
+        freshly generated number rather than let the first conflict propagate.
+        """
+        user_id = _make_user(session)
+        project_id = _make_project(session, user_id)
+        source = _make_source(session, project_id, user_id)
+
+        real_create = repo.create
+        calls = {"n": 0}
+
+        def flaky_create(invoice):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise InvoiceNumberConflictError("Invoice number conflict, please retry")
+            return real_create(invoice)
+
+        monkeypatch.setattr(repo, "create", flaky_create)
+
+        with caplog.at_level(logging.WARNING):
+            adapter.create_bank_refund_release(source, created_by=user_id)
+
+        assert calls["n"] == 2
+        assert "retrying" in caplog.text
+        release = repo.find_bank_refund_release(source.id)
+        assert release is not None
+        assert release.refunds_invoice_id == source.id
+
+    def test_invoice_number_conflict_propagates_after_exhausting_retries(self, session, repo, adapter, monkeypatch):
+        """When every attempt conflicts, the adapter must not swallow the error —
+        the caller (the use-case, then the route) needs InvoiceNumberConflictError
+        to surface so it can map it to an HTTP 409 rather than silently returning
+        200 with no release created."""
+        user_id = _make_user(session)
+        project_id = _make_project(session, user_id)
+        source = _make_source(session, project_id, user_id)
+
+        def always_conflicts(invoice):
+            raise InvoiceNumberConflictError("Invoice number conflict, please retry")
+
+        monkeypatch.setattr(repo, "create", always_conflicts)
+
+        with pytest.raises(InvoiceNumberConflictError):
+            adapter.create_bank_refund_release(source, created_by=user_id)
+
+        assert repo.find_bank_refund_release(source.id) is None
 
 
 class TestNextFundsReleaseNumberYearParam:
