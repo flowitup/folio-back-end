@@ -133,13 +133,15 @@ class ListMaterialsExpensesUseCase:
             all_companies=is_superadmin and company_id is None,
         )
 
+        row_ids = [UUID(r["id"]) for r in rows]
+
         # Batch reverse-lookup: which of this page's expenses have a linked refund
         # invoice (refunded by bank). One query for the whole page — no N+1.
-        bank_refunded = self._invoice_repo.refund_source_ids([UUID(r["id"]) for r in rows])
+        bank_refunded = self._invoice_repo.refund_source_ids(row_ids)
 
         # Sibling batch lookup: the FR number of each expense's linked bank-refund
         # release, when one exists. Same page-scoped, single-query shape as above.
-        release_numbers = self._invoice_repo.bank_refund_release_numbers([UUID(r["id"]) for r in rows])
+        release_numbers = self._invoice_repo.bank_refund_release_numbers(row_ids)
 
         items = [
             MaterialsExpenseItem(

@@ -3,7 +3,20 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+import sqlalchemy as sa
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -118,7 +131,28 @@ class InvoiceModel(Base):
         remote_side="InvoiceModel.id",
     )
 
-    __table_args__ = (UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),
+        # Partial index declared in migration 7e20d88b8197; mirrored here for
+        # SQLAlchemy schema reflection completeness (matches the house pattern
+        # in BillingDocumentModel.__table_args__). Deliberately postgresql-only:
+        # unlike that precedent, a non-partial fallback here would be actively
+        # wrong, not just a loose approximation — refunds_invoice_id is shared
+        # with type='refund' rows, where MULTIPLE refund invoices legitimately
+        # link to the same source (see sum_refunds_for_source). A plain unique
+        # constraint would break that under SQLite tests, so sqlite_where=0
+        # declares the index but makes it match no row (always-false), keeping
+        # it a schema no-op there instead of silently over-constraining.
+        Index(
+            "uq_invoices_bank_refund_release",
+            "refunds_invoice_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "type = 'released_funds' AND refunds_invoice_id IS NOT NULL AND is_auto_generated"
+            ),
+            sqlite_where=sa.text("0"),
+        ),
+    )
 
     def __repr__(self) -> str:
         return f"<Invoice {self.invoice_number} project={self.project_id}>"

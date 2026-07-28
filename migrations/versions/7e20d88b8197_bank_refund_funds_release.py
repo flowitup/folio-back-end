@@ -52,7 +52,10 @@ def _items_total(items: list | None) -> Decimal:
     for it in items or []:
         qty = Decimal(str(it.get("quantity", 0)))
         price = Decimal(str(it.get("unit_price", 0)))
-        vat = Decimal(str(it.get("vat_rate", 0)))
+        # `or 0`, not `.get(..., 0)`: an explicit JSON null for vat_rate must
+        # also fall back to 0 — .get's default only covers a MISSING key, and
+        # str(None) -> Decimal("None") raises InvalidOperation mid-upgrade.
+        vat = Decimal(str(it.get("vat_rate") or 0))
         total += qty * price * (1 + vat / Decimal("100"))
     return total
 
@@ -69,7 +72,7 @@ def upgrade() -> None:
         "invoices",
         ["refunds_invoice_id"],
         unique=True,
-        postgresql_where=sa.text("type = 'released_funds' AND refunds_invoice_id IS NOT NULL"),
+        postgresql_where=sa.text("type = 'released_funds' AND refunds_invoice_id IS NOT NULL AND is_auto_generated"),
     )
 
     # 2. Every historical bank/both-refunded materials_services row with no
@@ -143,6 +146,8 @@ def upgrade() -> None:
         raw_items = src.items
         if isinstance(raw_items, str):
             raw_items = json.loads(raw_items)
+        if not isinstance(raw_items, list):
+            raw_items = []
         total = _items_total(raw_items or [])
         if total <= 0:
             skipped_non_positive += 1
