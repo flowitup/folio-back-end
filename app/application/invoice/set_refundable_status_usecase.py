@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 from uuid import UUID
 
-from app.application.billing.ports import FundsReleasePort, UserCompanyAccessRepositoryPort, admin_company_ids
+from app.application.billing.ports import UserCompanyAccessRepositoryPort, admin_company_ids
 from app.application.invoice.dtos import InvoiceResponse
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import BankRefundReleasePort, IInvoiceRepository
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
 from app.domain.entities.invoice import InvoiceType, RefundableStatus, RefundedBy
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, InvoiceNotFoundError
+
+log = logging.getLogger(__name__)
 
 
 class SetInvoiceRefundableStatusUseCase:
@@ -37,24 +40,40 @@ class SetInvoiceRefundableStatusUseCase:
     state is reconciled against its linked released_funds invoice — created
     when the result is 'refunded' with refunded_by in ('bank', 'both'), deleted
     otherwise (idempotent either way, so repeating the same call is a no-op).
-    Reconciliation runs BEFORE the repo persists the status change, not after:
-    IInvoiceRepository.update() commits on its own (this use-case takes no
-    session to wrap both steps in one transaction), so this is the only
-    ordering under which a reconcile failure leaves refundable_status/
-    refunded_by untouched rather than landing a status change with a missing
-    or stale release. funds_release=None skips reconciliation entirely
-    (existing direct instantiations keep working unchanged).
+
+    Reconciliation runs BEFORE the repo persists the status change. This is
+    NOT one atomic transaction with that persist: IInvoiceRepository.create(),
+    .update(), and .delete_bank_refund_release() all commit internally (this
+    use-case takes no session to wrap them), so reconcile-then-update is two
+    separate transactions no matter which runs first. The ordering is still
+    deliberate:
+    - If reconciliation itself raises, no status change has been attempted
+      yet, so there is nothing to undo — refundable_status/refunded_by stay
+      at their prior persisted value, and the next successful call
+      re-converges both the release and the status together.
+    - If the later repo.update() call raises, the release was already
+      committed by the reconcile step above; execute() then runs a
+      best-effort compensating delete for a release it just created (see the
+      try/except around repo.update() for exactly what it covers and its
+      residual limits — e.g. it cannot undo a release that was just deleted,
+      only one that was just created).
+
+    funds_release=None skips reconciliation entirely (existing direct
+    instantiations keep working unchanged) but logs a WARNING the first time,
+    so a mis-wire in production is observable rather than silently returning
+    200 with no release created.
     """
 
     def __init__(
         self,
         invoice_repo: IInvoiceRepository,
         access_repo: Optional[UserCompanyAccessRepositoryPort] = None,
-        funds_release: Optional[FundsReleasePort] = None,
+        funds_release: Optional[BankRefundReleasePort] = None,
     ) -> None:
         self._invoice_repo = invoice_repo
         self._access_repo = access_repo
         self._funds_release = funds_release
+        self._warned_missing_funds_release = False
 
     def execute(
         self,
@@ -129,6 +148,9 @@ class SetInvoiceRefundableStatusUseCase:
         # recipient_name, total_amount) are touched by this update, so
         # reconciling against the pre-persist `updated` entity is equivalent to
         # reconciling against the post-persist one.
+        # reconcile_action tracks what just happened so a subsequent repo.update()
+        # failure can be compensated correctly (see below).
+        reconcile_action: Optional[str] = None  # None | "created" | "deleted"
         if self._funds_release is not None:
             should_have_release = refundable_status == RefundableStatus.REFUNDED.value and effective_refunded_by in (
                 RefundedBy.BANK.value,
@@ -136,10 +158,63 @@ class SetInvoiceRefundableStatusUseCase:
             )
             if should_have_release:
                 self._funds_release.create_bank_refund_release(updated, created_by=user_id)
+                reconcile_action = "created"
             else:
                 self._funds_release.delete_bank_refund_release(updated.id)
+                reconcile_action = "deleted"
+        elif not self._warned_missing_funds_release:
+            log.warning(
+                "SetInvoiceRefundableStatusUseCase has no funds_release wired — skipping "
+                "bank-refund release reconciliation for invoice %s. If this is production "
+                "traffic, the use-case was constructed without its FundsReleaseAdapter "
+                "(a wiring bug), not an intentional no-op.",
+                updated.id,
+            )
+            self._warned_missing_funds_release = True
 
-        saved = self._invoice_repo.update(updated)
+        try:
+            saved = self._invoice_repo.update(updated)
+        except Exception:
+            # repo.update() commits internally (see class docstring), so this
+            # failure happens strictly AFTER the reconcile step above already
+            # committed — the two are separate transactions, not one. This is
+            # best-effort compensation, not a rollback:
+            #   - reconcile_action == "created": the release above is now
+            #     committed but the status change that was supposed to
+            #     accompany it never landed. Delete it so it doesn't survive
+            #     as a phantom (it would otherwise permanently inflate
+            #     sum_funds_released and, being auto-generated, cannot be
+            #     removed later via the API).
+            #   - reconcile_action == "deleted": nothing to compensate —
+            #     recreating would mint a different FR number than the one
+            #     just removed, so we only log for investigation; the invoice
+            #     itself still carries its prior (unpersisted-change)
+            #     refundable_status/refunded_by, which no longer matches the
+            #     now-missing release until a later call re-converges them.
+            # Either way, compensation failures are swallowed (logged, not
+            # raised) and the ORIGINAL exception always propagates — callers
+            # must see the real failure, not one from this cleanup attempt.
+            if reconcile_action == "created":
+                try:
+                    self._funds_release.delete_bank_refund_release(updated.id)
+                except Exception:
+                    log.error(
+                        "Compensating delete of bank-refund release for invoice %s failed "
+                        "after repo.update() raised — the release may now be orphaned",
+                        updated.id,
+                        exc_info=True,
+                    )
+            elif reconcile_action == "deleted":
+                log.error(
+                    "repo.update() raised for invoice %s after its bank-refund release was "
+                    "already deleted; refundable_status/refunded_by were not persisted, so "
+                    "they are now inconsistent with the missing release — no automatic "
+                    "compensation is possible",
+                    updated.id,
+                    exc_info=True,
+                )
+            raise
+
         return InvoiceResponse.from_entity(saved)
 
     def _get_project_company_id(self, project_id: UUID) -> Optional[UUID]:

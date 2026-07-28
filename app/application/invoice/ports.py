@@ -3,10 +3,38 @@
 from abc import ABC, abstractmethod
 from datetime import date
 from decimal import Decimal
-from typing import BinaryIO, Optional
+from typing import BinaryIO, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.invoice import Invoice, InvoiceType
+
+
+class BankRefundReleasePort(Protocol):
+    """Cross-BC port: invoice → billing/funds-release, bank-refund lifecycle only.
+
+    Split out of billing.ports.FundsReleasePort: that port's sibling method
+    create_funds_release deliberately takes primitives to keep the billing BC
+    decoupled from the invoice BC, but these two methods take the whole
+    Invoice entity — Invoice already lives in this BC, and
+    SetInvoiceRefundableStatusUseCase (this BC) is their only consumer, so they
+    are declared here instead of in billing.ports. FundsReleaseAdapter
+    satisfies this Protocol structurally, with no changes needed on the
+    adapter itself.
+    """
+
+    def create_bank_refund_release(self, source: Invoice, created_by: UUID) -> None:
+        """Create (idempotently) the auto-generated released_funds release for a
+        bank-refunded materials_services expense.
+
+        No-op when source.type is not materials_services, when
+        source.total_amount <= 0, or when a bank-refund release already exists
+        for source.id.
+        """
+        ...
+
+    def delete_bank_refund_release(self, source_id: UUID) -> None:
+        """Delete the auto-generated bank-refund release linked to source_id, if any."""
+        ...
 
 
 class IInvoiceRepository(ABC):

@@ -12,6 +12,7 @@ Focuses on:
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 from unittest.mock import MagicMock
@@ -19,8 +20,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.application.billing.ports import FundsReleasePort
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import BankRefundReleasePort, IInvoiceRepository
 from app.application.invoice.set_refundable_status_usecase import SetInvoiceRefundableStatusUseCase
 from app.domain.entities.invoice import Invoice, InvoiceType
 
@@ -50,8 +50,8 @@ def _make_invoice_repo(invoice: Invoice) -> IInvoiceRepository:
     return repo
 
 
-def _make_funds_release() -> FundsReleasePort:
-    return MagicMock(spec=FundsReleasePort)
+def _make_funds_release() -> BankRefundReleasePort:
+    return MagicMock(spec=BankRefundReleasePort)
 
 
 class TestReconcileCreatesOnBankOrBoth:
@@ -228,3 +228,108 @@ class TestReconcileOrderingAndAtomicity:
             )
 
         assert funds_release.create_bank_refund_release.call_count == 2
+
+
+class TestReconcileUpdateFailureCompensation:
+    """repo.update() commits separately from the reconcile step above it (see
+    the use-case docstring) — these tests cover what happens when repo.update()
+    is the one that fails, AFTER reconcile already committed."""
+
+    def test_update_failure_after_create_deletes_the_release_and_reraises(self):
+        """If repo.update() raises after create_bank_refund_release() already
+        committed a release, execute() must compensate by deleting that
+        release (best-effort — the two are separate transactions) and let the
+        ORIGINAL repo.update() exception surface, never masking it."""
+        inv = _make_invoice(refundable_status="refundable")
+        invoice_repo = _make_invoice_repo(inv)
+        invoice_repo.update.side_effect = RuntimeError("update failed")
+        funds_release = _make_funds_release()
+
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo, funds_release=funds_release)
+
+        with pytest.raises(RuntimeError, match="update failed"):
+            uc.execute(
+                user_id=uuid4(),
+                is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refunded",
+                refunded_by="bank",
+            )
+
+        funds_release.create_bank_refund_release.assert_called_once()
+        funds_release.delete_bank_refund_release.assert_called_once_with(inv.id)
+
+    def test_update_failure_after_delete_cannot_compensate_but_still_reraises(self):
+        """If repo.update() raises after delete_bank_refund_release() already
+        removed the release, there is nothing left to compensate (recreating
+        would mint a different FR number than the one just removed) —
+        execute() must not call create, and the ORIGINAL exception must still
+        surface."""
+        inv = _make_invoice(refundable_status="refunded", refunded_by="bank")
+        invoice_repo = _make_invoice_repo(inv)
+        invoice_repo.update.side_effect = RuntimeError("update failed")
+        funds_release = _make_funds_release()
+
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo, funds_release=funds_release)
+
+        with pytest.raises(RuntimeError, match="update failed"):
+            uc.execute(
+                user_id=uuid4(),
+                is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refundable",
+            )
+
+        funds_release.delete_bank_refund_release.assert_called_once_with(inv.id)
+        funds_release.create_bank_refund_release.assert_not_called()
+
+    def test_compensating_delete_failure_is_swallowed_and_original_exception_still_surfaces(self):
+        """If the compensating delete itself raises, that failure must be
+        swallowed (logged), not surfaced — the caller must see the ORIGINAL
+        repo.update() exception, not an error from the cleanup attempt."""
+        inv = _make_invoice(refundable_status="refundable")
+        invoice_repo = _make_invoice_repo(inv)
+        invoice_repo.update.side_effect = RuntimeError("update failed")
+        funds_release = _make_funds_release()
+        funds_release.delete_bank_refund_release.side_effect = RuntimeError("compensation also failed")
+
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo, funds_release=funds_release)
+
+        with pytest.raises(RuntimeError, match="update failed"):
+            uc.execute(
+                user_id=uuid4(),
+                is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refunded",
+                refunded_by="bank",
+            )
+
+
+class TestMissingFundsReleaseIsObservable:
+    def test_logs_a_warning_once_when_funds_release_is_none(self, caplog):
+        """funds_release=None still works (backward compatible — see
+        TestReconcileSkippedWhenPortIsNone) but must not be silent: a missing
+        wire in production returns 200 with no release, which is only safe to
+        ship if it is also observable."""
+        inv = _make_invoice(refundable_status="refundable")
+        invoice_repo = _make_invoice_repo(inv)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=invoice_repo)  # funds_release defaults to None
+
+        with caplog.at_level(logging.WARNING):
+            uc.execute(
+                user_id=uuid4(),
+                is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refunded",
+                refunded_by="bank",
+            )
+            uc.execute(
+                user_id=uuid4(),
+                is_superadmin=True,
+                invoice_id=inv.id,
+                refundable_status="refunded",
+                refunded_by="bank",
+            )
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1  # once per instance, not once per call

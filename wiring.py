@@ -84,6 +84,7 @@ from app.application.invoice import (
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
 from app.application.invoice.list_materials_expenses_usecase import ListMaterialsExpensesUseCase
 from app.application.invoice.set_refundable_status_usecase import SetInvoiceRefundableStatusUseCase
+from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
 from app.application.task import (
     ITaskRepository,
     CreateTaskUseCase,
@@ -700,9 +701,16 @@ def configure_container(
             invoice_repo=invoice_repository,
             access_repo=None,  # re-wired in _configure_di_container with access_repo
         )
+        # FundsReleaseAdapter only needs invoice_repository, already available
+        # here, so this is a real instance from the start — not a placeholder.
+        # _configure_di_container re-wires the same use-case below with
+        # access_repo attached, reusing an equivalent adapter built from the
+        # fully-constructed repository; it is never left with funds_release=None
+        # on the normal app-factory boot path.
         container.set_refundable_status_usecase = SetInvoiceRefundableStatusUseCase(
             invoice_repo=invoice_repository,
             access_repo=None,  # re-wired in _configure_di_container with access_repo
+            funds_release=FundsReleaseAdapter(invoice_repo=invoice_repository),
         )
 
     # Wire task (planning) use cases

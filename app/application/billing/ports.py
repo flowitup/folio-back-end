@@ -22,7 +22,6 @@ from app.domain.billing.exceptions import (
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
-from app.domain.entities.invoice import Invoice
 
 if TYPE_CHECKING:
     from app.application.billing.dtos import ActivitySuggestionsResponse
@@ -366,7 +365,17 @@ class TransactionalSessionPort(Protocol):
 
 
 class FundsReleasePort(Protocol):
-    """Cross-BC port: billing → invoice. Creates/deletes released_funds invoices."""
+    """Cross-BC port: billing → invoice. Creates/deletes released_funds invoices.
+
+    Bank-refund release methods (create_bank_refund_release /
+    delete_bank_refund_release) live separately in
+    app.application.invoice.ports.BankRefundReleasePort, not here: unlike
+    create_funds_release below, they take the whole Invoice entity, and their
+    only consumer (SetInvoiceRefundableStatusUseCase) already lives in the
+    invoice BC — keeping them here would import Invoice into billing.ports
+    for no reason, widening this module's dependency surface. FundsReleaseAdapter
+    implements both protocols structurally.
+    """
 
     def create_funds_release(
         self,
@@ -379,17 +388,3 @@ class FundsReleasePort(Protocol):
     ) -> None: ...
 
     def delete_funds_release(self, source_doc_id: UUID) -> None: ...
-
-    def create_bank_refund_release(self, source: Invoice, created_by: UUID) -> None:
-        """Create (idempotently) the auto-generated released_funds release for a
-        bank-refunded materials_services expense.
-
-        No-op when source.type is not materials_services, when
-        source.total_amount <= 0, or when a bank-refund release already exists
-        for source.id.
-        """
-        ...
-
-    def delete_bank_refund_release(self, source_id: UUID) -> None:
-        """Delete the auto-generated bank-refund release linked to source_id, if any."""
-        ...
