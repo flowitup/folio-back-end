@@ -88,8 +88,15 @@ def upgrade() -> None:
               AND i.refundable_status = 'refunded'
               AND i.refunded_by IN ('bank', 'both')
               AND NOT EXISTS (
+                  -- Must match the partial unique index and the adapter's
+                  -- find/delete predicate exactly, is_auto_generated included.
+                  -- Without it a user-created released_funds row that happens to
+                  -- carry refunds_invoice_id would mask its source, leaving that
+                  -- expense permanently without the release the invariant requires.
                   SELECT 1 FROM invoices r
-                  WHERE r.type::text = 'released_funds' AND r.refunds_invoice_id = i.id
+                  WHERE r.type::text = 'released_funds'
+                    AND r.refunds_invoice_id = i.id
+                    AND r.is_auto_generated
               )
             ORDER BY i.project_id, i.issue_date, i.invoice_number
             """
