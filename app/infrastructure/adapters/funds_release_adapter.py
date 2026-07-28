@@ -94,6 +94,12 @@ class FundsReleaseAdapter:
         instead (already translated by the repository) — retried up to
         _MAX_NUMBER_CONFLICT_ATTEMPTS times with a freshly generated number,
         then re-raised for the caller to map to an HTTP response.
+
+        The release inherits payment_method_id + payment_method_label from source
+        so the released funds carry the same company-vs-personal attribution as the
+        expense they reimburse (dataviz split relies on this). Editable afterwards
+        via the narrow auto-generated released_funds payment-method-only carve-out
+        in UpdateInvoiceUseCase.
         """
         if source.type != InvoiceType.MATERIALS_SERVICES:
             return
@@ -133,6 +139,8 @@ class FundsReleaseAdapter:
                 items=items,
                 refunds_invoice_id=source.id,
                 is_auto_generated=True,
+                payment_method_id=source.payment_method_id,
+                payment_method_label=source.payment_method_label,
             )
 
             try:

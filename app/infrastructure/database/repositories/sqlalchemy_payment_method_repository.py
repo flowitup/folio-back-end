@@ -34,6 +34,7 @@ def _to_entity(row: PaymentMethodModel) -> PaymentMethod:
         is_builtin=row.is_builtin,
         is_active=row.is_active,
         is_company_payment=row.is_company_payment,
+        is_personal_payment=row.is_personal_payment,
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -51,6 +52,7 @@ def _to_model(method: PaymentMethod, row: PaymentMethodModel) -> PaymentMethodMo
     row.is_builtin = method.is_builtin
     row.is_active = method.is_active
     row.is_company_payment = method.is_company_payment
+    row.is_personal_payment = method.is_personal_payment
     row.created_by = method.created_by
     row.created_at = method.created_at
     row.updated_at = method.updated_at

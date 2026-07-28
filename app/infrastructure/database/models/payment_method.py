@@ -15,7 +15,7 @@ partial-unique definition — it is enforced by the migration on PostgreSQL only
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -48,6 +48,9 @@ class PaymentMethodModel(Base):
     # Invoices paid via a flagged method count toward "spent by company" regardless
     # of refundable_status, matching expenditure the company bore out-of-pocket.
     is_company_payment = Column(Boolean, nullable=False, default=False, server_default="false")
+    # True for methods funded directly by an individual (personal out-of-pocket spend).
+    # Mutually exclusive with is_company_payment — enforced by the CHECK constraint below.
+    is_personal_payment = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # NULL when the creating user has been hard-deleted (ON DELETE SET NULL)
     created_by = Column(
@@ -80,6 +83,13 @@ class PaymentMethodModel(Base):
         # because SQLAlchemy cannot express functional partial indexes in a
         # SQLite-compatible way.
         Index("ix_payment_methods_company_active", "company_id", "is_active"),
+        # A method cannot be flagged as both company-funded and personal-funded.
+        # Declared here (not just in the migration) so SQLite-backed tests, which
+        # build the schema straight from the ORM, enforce it too.
+        CheckConstraint(
+            "NOT (is_company_payment AND is_personal_payment)",
+            name="ck_payment_methods_company_personal_exclusive",
+        ),
     )
 
     def __repr__(self) -> str:

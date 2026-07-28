@@ -78,6 +78,43 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def sum_funds_released_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
+        """Split sum_funds_released into (company_total, personal_total).
+
+        personal_total: released_funds invoices whose payment_method_id belongs to a
+        method flagged is_personal_payment.
+        company_total: every other released_funds invoice (company-flagged, unflagged,
+        or NULL payment_method_id).
+
+        Invariant: company_total + personal_total == sum_funds_released(project_id).
+        """
+        ...
+
+    @abstractmethod
+    def sum_personal_spent(self, project_id: UUID) -> Decimal:
+        """Sum amounts spent personally (out-of-pocket, non-company) on a project.
+
+        Counts non-released_funds invoices paid via a method flagged
+        is_personal_payment, EXCLUDING rows where the company already reimbursed
+        the expense (refundable_status == 'refunded' AND refunded_by != 'bank';
+        NULL refunded_by counts as company-refunded). Bank-refunded rows still
+        count. Refund-type invoices net the total down (mirrors sum_company_spent).
+        Result is floored at 0.
+        """
+        ...
+
+    @abstractmethod
+    def sum_spent_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
+        """Return (company_spent_total, personal_spent_total) computed in one scan.
+
+        Equivalent to calling sum_company_spent and sum_personal_spent separately,
+        but scans the project's non-released_funds invoices once instead of twice.
+        Each bucket keeps its own independent rules and floor-at-0 exactly as
+        sum_company_spent / sum_personal_spent define them.
+        """
+        ...
+
+    @abstractmethod
     def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
         """Return the auto-generated bank-refund release linked to source_id, or None.
 

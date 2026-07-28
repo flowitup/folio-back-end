@@ -10,6 +10,7 @@ from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.payment_methods.exceptions import (
     BuiltinPaymentMethodDeletionError,
     PaymentMethodAlreadyExistsError,
+    PaymentMethodConflictingFlagsError,
     PaymentMethodNotFoundError,
 )
 from .conftest import make_payment_method
@@ -20,7 +21,16 @@ def usecase(pm_repo, role_service):
     return UpdatePaymentMethodUseCase(payment_method_repo=pm_repo, role_checker=role_service)
 
 
-def _inp(requester_id, pm_id, *, company_id=None, label=None, is_active=None):
+def _inp(
+    requester_id,
+    pm_id,
+    *,
+    company_id=None,
+    label=None,
+    is_active=None,
+    is_company_payment=None,
+    is_personal_payment=None,
+):
     from uuid import uuid4
 
     return UpdatePaymentMethodInput(
@@ -29,6 +39,8 @@ def _inp(requester_id, pm_id, *, company_id=None, label=None, is_active=None):
         payment_method_id=pm_id,
         label=label,
         is_active=is_active,
+        is_company_payment=is_company_payment,
+        is_personal_payment=is_personal_payment,
     )
 
 
@@ -147,3 +159,36 @@ class TestUpdatePaymentMethodGuards:
 
         with pytest.raises(ValueError):
             usecase.execute(_inp(admin_id, pm.id, company_id=company_id, label="A" * 121), fake_session)
+
+    def test_both_payment_flags_true_in_single_request_raises(
+        self, usecase, pm_repo, admin_id, company_id, fake_session
+    ):
+        """Setting both flags True in one PATCH is rejected (mutually exclusive)."""
+        pm = make_payment_method(company_id, label="Wire")
+        pm_repo.save(pm)
+
+        with pytest.raises(PaymentMethodConflictingFlagsError):
+            usecase.execute(
+                _inp(
+                    admin_id,
+                    pm.id,
+                    company_id=company_id,
+                    is_company_payment=True,
+                    is_personal_payment=True,
+                ),
+                fake_session,
+            )
+
+    def test_setting_personal_true_on_already_company_flagged_raises(
+        self, usecase, pm_repo, admin_id, company_id, fake_session
+    ):
+        """Effective-final-state check: flipping one flag while the other is already
+        True on the stored row must also be rejected, not just literal both-true payloads."""
+        pm = make_payment_method(company_id, label="Wire", is_company_payment=True)
+        pm_repo.save(pm)
+
+        with pytest.raises(PaymentMethodConflictingFlagsError):
+            usecase.execute(
+                _inp(admin_id, pm.id, company_id=company_id, is_personal_payment=True),
+                fake_session,
+            )

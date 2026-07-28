@@ -44,6 +44,10 @@ class PaymentMethod:
     # True when money is paid directly by the company — counts toward project "spent by company"
     # regardless of refundable_status.  Togglable on any method (including builtins) by admins.
     is_company_payment: bool = False
+    # True when money is paid directly by an individual out of pocket (not the company) —
+    # counts toward project "spent personally". Mutually exclusive with is_company_payment;
+    # enforced at the use-case layer (effective final state) and the DB CHECK constraint.
+    is_personal_payment: bool = False
 
     # ------------------------------------------------------------------
     # Mutation helper
@@ -55,6 +59,7 @@ class PaymentMethod:
         label: Optional[str] = None,
         is_active: Optional[bool] = None,
         is_company_payment: Optional[bool] = None,
+        is_personal_payment: Optional[bool] = None,
         updated_at: Optional[datetime] = None,
     ) -> "PaymentMethod":
         """Return a new PaymentMethod with the given fields replaced.
@@ -69,6 +74,8 @@ class PaymentMethod:
             kwargs["is_active"] = is_active
         if is_company_payment is not None:
             kwargs["is_company_payment"] = is_company_payment
+        if is_personal_payment is not None:
+            kwargs["is_personal_payment"] = is_personal_payment
         if updated_at is not None:
             kwargs["updated_at"] = updated_at
         return dataclasses.replace(self, **kwargs)

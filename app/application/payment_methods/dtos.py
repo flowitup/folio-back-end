@@ -41,6 +41,10 @@ class UpdatePaymentMethodInput:
     is_active: Optional[bool] = None
     # Toggle whether this method's invoices count toward project "spent by company".
     is_company_payment: Optional[bool] = None
+    # Toggle whether this method's invoices count toward project "spent personally".
+    # Mutually exclusive with is_company_payment — validated against the EFFECTIVE
+    # final state (existing value merged with this update) in the use-case.
+    is_personal_payment: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +68,8 @@ class PaymentMethodResponse:
     is_active: bool
     # True when invoices paid via this method count toward project "spent by company".
     is_company_payment: bool
+    # True when invoices paid via this method count toward project "spent personally".
+    is_personal_payment: bool
     created_by: Optional[UUID]
     created_at: datetime
     updated_at: datetime
@@ -89,6 +95,7 @@ class PaymentMethodResponse:
             is_builtin=method.is_builtin,
             is_active=method.is_active,
             is_company_payment=method.is_company_payment,
+            is_personal_payment=method.is_personal_payment,
             created_by=method.created_by,
             created_at=method.created_at,
             updated_at=method.updated_at,

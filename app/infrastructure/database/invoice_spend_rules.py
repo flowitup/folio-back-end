@@ -63,6 +63,35 @@ def load_company_paid_method_ids(session: Session, company_ids: Iterable[UUID]) 
     return result
 
 
+def load_personal_method_ids(session: Session, company_ids: Iterable[UUID]) -> dict[UUID, set[UUID]]:
+    """Map company_id -> set of payment_method ids flagged ``is_personal_payment``.
+
+    Mirrors ``load_company_paid_method_ids``: ``is_active`` is deliberately ignored so
+    deactivating a payment method never erases spend that already happened. Companies
+    with no flagged methods map to an empty set. Returns {} for empty input so callers
+    never emit an invalid ``IN ()`` clause.
+    """
+    from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+    ids = {cid for cid in company_ids if cid is not None}
+    if not ids:
+        return {}
+
+    rows = (
+        session.query(PaymentMethodModel.company_id, PaymentMethodModel.id)
+        .filter(
+            PaymentMethodModel.company_id.in_(ids),
+            PaymentMethodModel.is_personal_payment.is_(True),
+        )
+        .all()
+    )
+
+    result: dict[UUID, set[UUID]] = {cid: set() for cid in ids}
+    for company_id, method_id in rows:
+        result[company_id].add(method_id)
+    return result
+
+
 def is_company_paid(
     *,
     payment_method_id: Optional[UUID],

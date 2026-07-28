@@ -27,6 +27,7 @@ from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.payment_methods.exceptions import (
     BuiltinPaymentMethodDeletionError,
     PaymentMethodAlreadyExistsError,
+    PaymentMethodConflictingFlagsError,
     PaymentMethodNotFoundError,
 )
 from app.infrastructure.rate_limiter import limiter
@@ -174,6 +175,7 @@ def update_payment_method(company_id: str, payment_method_id: str):
         label=body.label,
         is_active=body.is_active,
         is_company_payment=body.is_company_payment,
+        is_personal_payment=body.is_personal_payment,
     )
 
     from app import db
@@ -206,6 +208,8 @@ def update_payment_method(company_id: str, payment_method_id: str):
             ),
             409,
         )
+    except PaymentMethodConflictingFlagsError as e:
+        return _err("conflicting_payment_flags", str(e), 400)
 
     return jsonify(dataclasses.asdict(result))
 
