@@ -138,6 +138,34 @@ def _get_personal_payment_method_ids(project_id: UUID) -> "set[UUID]":
     return {r[0] for r in rows}
 
 
+def _load_company_and_personal_payment_method_ids(company_id: "UUID | None") -> "tuple[set[UUID], set[UUID]]":
+    """Return (company_payment_ids, personal_payment_ids) for a company in one query.
+
+    Single query over both flag columns, replacing the two separate queries
+    _get_company_payment_method_ids / _get_personal_payment_method_ids would
+    otherwise issue. Takes an already-resolved company_id so callers that need
+    it for other purposes (e.g. company_name) don't re-resolve it. Returns two
+    empty sets when company_id is None.
+    """
+    if company_id is None:
+        return set(), set()
+    from app import db
+    from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+    rows = (
+        db.session.query(
+            PaymentMethodModel.id,
+            PaymentMethodModel.is_company_payment,
+            PaymentMethodModel.is_personal_payment,
+        )
+        .filter(PaymentMethodModel.company_id == company_id)
+        .all()
+    )
+    company_ids = {r[0] for r in rows if r[1]}
+    personal_ids = {r[0] for r in rows if r[2]}
+    return company_ids, personal_ids
+
+
 def _enrich_refunds_invoice_number(invoice_dict: dict, refunds_invoice_id_str: "str | None") -> None:
     """Inject refunds_invoice_number into an invoice dict in-place.
 
@@ -239,16 +267,25 @@ def list_invoices(project_id: str):
         return _error_response("ValidationError", str(e), 400)
 
     project_uuid = UUID(project_id)
-    funds_released_total = money(container.invoice_repository.sum_funds_released(project_uuid))
-    company_spent_total = money(container.invoice_repository.sum_company_spent(project_uuid))
-    funds_released_company_total, funds_released_personal_total = container.invoice_repository.sum_funds_released_split(
+
+    # One scan for the released-funds split, one scan for the spent split — down from
+    # four whole-table aggregations (sum_funds_released + sum_funds_released_split +
+    # sum_company_spent + sum_personal_spent) to two. funds_released_total is derived
+    # from the RAW (pre-quantization) split components so it exactly reconciles with
+    # their sum, per the port's documented invariant.
+    funds_released_company_raw, funds_released_personal_raw = container.invoice_repository.sum_funds_released_split(
         project_uuid
     )
-    funds_released_company_total = money(funds_released_company_total)
-    funds_released_personal_total = money(funds_released_personal_total)
-    personal_spent_total = money(container.invoice_repository.sum_personal_spent(project_uuid))
+    funds_released_total = money(funds_released_company_raw + funds_released_personal_raw)
+    funds_released_company_total = money(funds_released_company_raw)
+    funds_released_personal_total = money(funds_released_personal_raw)
 
-    # Resolve company once; reuse for both company_name and paid_by_company/paid_by_personal enrichment.
+    company_spent_raw, personal_spent_raw = container.invoice_repository.sum_spent_split(project_uuid)
+    company_spent_total = money(company_spent_raw)
+    personal_spent_total = money(personal_spent_raw)
+
+    # Resolve company once; reuse for company_name, paid_by_company/paid_by_personal
+    # enrichment, and the payment-method-id lookups below (was resolved 3x before).
     from app import db
     from app.infrastructure.database.models.company import CompanyModel
 
@@ -259,11 +296,12 @@ def list_invoices(project_id: str):
     else:
         company_name = None
 
-    # One query per flag to get the matching payment-method IDs; membership-test
+    # Single query over both flag columns (was two separate queries); membership-test
     # per invoice row. IDs come back as UUIDs from the DB; compare as strings to
     # match InvoiceResponse.payment_method_id.
-    company_pm_id_strs: set[str] = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
-    personal_pm_id_strs: set[str] = {str(uid) for uid in _get_personal_payment_method_ids(project_uuid)}
+    _company_pm_ids, _personal_pm_ids = _load_company_and_personal_payment_method_ids(_company_id)
+    company_pm_id_strs: set[str] = {str(uid) for uid in _company_pm_ids}
+    personal_pm_id_strs: set[str] = {str(uid) for uid in _personal_pm_ids}
 
     invoice_dicts = []
     for r in results:

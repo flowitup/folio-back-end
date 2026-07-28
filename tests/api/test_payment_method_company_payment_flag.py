@@ -278,3 +278,19 @@ class TestIsCompanyPaymentToggle:
         assert len(items) > 0
         for item in items:
             assert "is_company_payment" in item
+
+
+class TestConflictingPaymentFlagsRejected:
+    def test_patch_both_flags_true_returns_400_conflicting_payment_flags(self, cpf_client, cpf_app, admin_token):
+        """PATCH with both is_company_payment and is_personal_payment true maps
+        PaymentMethodConflictingFlagsError to a 400 with the dedicated error code —
+        exercises the route's except clause, which was previously unexercised."""
+        pm_id = _insert_pm(cpf_app, is_company_payment=False)
+
+        resp = cpf_client.patch(
+            _detail_url(cpf_app._test_company_id, pm_id),
+            json={"is_company_payment": True, "is_personal_payment": True},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "conflicting_payment_flags"

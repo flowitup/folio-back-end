@@ -283,6 +283,13 @@ class TestPersonalSpentTotal:
         project_id = ps_app._test_project_id
         personal_pm_id = ps_app._test_personal_pm_id
 
+        # Capture the total BEFORE seeding so the assertion is an exact delta, not a
+        # monotonic threshold — the fixture's project accumulates invoices across tests
+        # (module-scoped, no per-test cleanup), so ">= 77.0" would pass even if
+        # bank-refunded rows were wrongly excluded from personal spend.
+        before_resp = ps_client.get(_list_url(project_id), headers=_auth(admin_token))
+        before_total = before_resp.get_json()["personal_spent_total"]
+
         _seed_invoice(
             ps_app,
             project_id,
@@ -295,7 +302,7 @@ class TestPersonalSpentTotal:
 
         resp = ps_client.get(_list_url(project_id), headers=_auth(admin_token))
         data = resp.get_json()
-        assert data["personal_spent_total"] >= 77.0
+        assert data["personal_spent_total"] == pytest.approx(before_total + 77.0, abs=0.01)
 
     def test_released_funds_never_counted(self, ps_client, ps_app, admin_token):
         project_id = ps_app._test_project_id

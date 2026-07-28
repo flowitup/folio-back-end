@@ -334,6 +334,53 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 company_total += amount
         return company_total, personal_total
 
+    def sum_spent_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
+        """Compute (company_spent_total, personal_spent_total) in a single scan.
+
+        Merges the sum_company_spent and sum_personal_spent rules clause-by-clause
+        over one query of the project's non-released_funds invoices instead of two
+        (each method previously issued its own identical scan). Each bucket keeps
+        its own independent rule set and floor-at-0 exactly as documented on
+        sum_company_spent / sum_personal_spent — see those docstrings for the
+        full per-bucket rules (refund-nets-down, is_active ignored, etc.).
+        """
+        company_id = _project_company_id(self._session, project_id)
+        company_paid_ids: set[UUID] = set()
+        personal_paid_ids: set[UUID] = set()
+        if company_id is not None:
+            company_paid_ids = load_company_paid_method_ids(self._session, [company_id]).get(company_id, set())
+            personal_paid_ids = load_personal_method_ids(self._session, [company_id]).get(company_id, set())
+
+        rows = (
+            self._session.query(InvoiceModel)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
+            )
+            .all()
+        )
+        company_total = Decimal("0")
+        personal_total = Decimal("0")
+        for m in rows:
+            # Company bucket: same predicate as sum_company_spent's is_company_paid gate.
+            if is_company_paid(
+                payment_method_id=m.payment_method_id,
+                refundable_status=m.refundable_status,
+                refunded_by=m.refunded_by,
+                company_paid_ids=company_paid_ids,
+            ):
+                company_total += _items_total(m.items)
+
+            # Personal bucket: same predicate as sum_personal_spent (personal-flagged
+            # method, excluding company-reimbursed rows; bank-refunded still counts).
+            if m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
+                company_reimbursed = m.refundable_status == "refunded" and m.refunded_by != "bank"
+                if not company_reimbursed:
+                    personal_total += _items_total(m.items)
+
+        # Never report a negative spent total; refunds can exceed spend per bucket.
+        return max(company_total, Decimal("0")), max(personal_total, Decimal("0"))
+
     def sum_company_spent(self, project_id: UUID) -> Decimal:
         """Sum amounts the company spent (net) directly on a project.
 
@@ -359,37 +406,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         Soft-deleted (is_active=false) company-payment methods still count — the
         expense occurred and should not vanish from the total if a method is later
         deactivated.  items is JSONB — we compute in Python to stay DB-agnostic.
-        """
-        # Collect IDs of all company-payment methods for this project's company
-        # in one query, ignoring is_active so deactivated methods still count.
-        company_id = _project_company_id(self._session, project_id)
-        company_paid_ids: set[UUID] = set()
-        if company_id is not None:
-            company_paid_ids = load_company_paid_method_ids(self._session, [company_id]).get(company_id, set())
 
-        rows = (
-            self._session.query(InvoiceModel)
-            .filter(
-                InvoiceModel.project_id == project_id,
-                InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
-            )
-            .all()
-        )
-        total = Decimal("0")
-        for m in rows:
-            # A company-issued refund is type=refund + paid via a company method: the
-            # predicate holds and its negative line amounts net the total down. A supplier
-            # refund has no company method, so it is skipped here.
-            if not is_company_paid(
-                payment_method_id=m.payment_method_id,
-                refundable_status=m.refundable_status,
-                refunded_by=m.refunded_by,
-                company_paid_ids=company_paid_ids,
-            ):
-                continue
-            total += _items_total(m.items)
-        # Never report a negative spent-by-company; refunds can exceed spend.
-        return max(total, Decimal("0"))
+        Thin delegate over sum_spent_split, which computes both buckets in one scan.
+        """
+        company_total, _ = self.sum_spent_split(project_id)
+        return company_total
 
     def sum_personal_spent(self, project_id: UUID) -> Decimal:
         """Sum amounts spent personally (out-of-pocket, non-company) on a project.
@@ -408,30 +429,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         Soft-deleted (is_active=false) personal-payment methods still count — the
         expense occurred and should not vanish from the total if a method is later
         deactivated. items is JSONB — computed in Python to stay DB-agnostic.
-        """
-        company_id = _project_company_id(self._session, project_id)
-        personal_paid_ids: set[UUID] = set()
-        if company_id is not None:
-            personal_paid_ids = load_personal_method_ids(self._session, [company_id]).get(company_id, set())
 
-        rows = (
-            self._session.query(InvoiceModel)
-            .filter(
-                InvoiceModel.project_id == project_id,
-                InvoiceModel.type != InvoiceType.RELEASED_FUNDS.value,
-            )
-            .all()
-        )
-        total = Decimal("0")
-        for m in rows:
-            if m.payment_method_id is None or m.payment_method_id not in personal_paid_ids:
-                continue
-            company_reimbursed = m.refundable_status == "refunded" and m.refunded_by != "bank"
-            if company_reimbursed:
-                continue
-            total += _items_total(m.items)
-        # Never report a negative personal-spent; refunds can exceed spend.
-        return max(total, Decimal("0"))
+        Thin delegate over sum_spent_split, which computes both buckets in one scan.
+        """
+        _, personal_total = self.sum_spent_split(project_id)
+        return personal_total
 
     def sum_refunds_for_source(self, source_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
         """Sum total_amount of all refund invoices linked to source_id.

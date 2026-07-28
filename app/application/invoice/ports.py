@@ -104,6 +104,17 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def sum_spent_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
+        """Return (company_spent_total, personal_spent_total) computed in one scan.
+
+        Equivalent to calling sum_company_spent and sum_personal_spent separately,
+        but scans the project's non-released_funds invoices once instead of twice.
+        Each bucket keeps its own independent rules and floor-at-0 exactly as
+        sum_company_spent / sum_personal_spent define them.
+        """
+        ...
+
+    @abstractmethod
     def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
         """Return the auto-generated bank-refund release linked to source_id, or None.
 

@@ -9,6 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from app.infrastructure.database.repositories.sqlalchemy_payment_method_repository import (
     SqlAlchemyPaymentMethodRepository,
 )
@@ -164,6 +167,30 @@ class TestSave:
 
         refetched = repo.find_by_id(row.id)
         assert refetched.label == "New Label"
+
+
+class TestCompanyPersonalExclusiveCheckConstraint:
+    def test_both_flags_true_rejected_by_db_check(self, session):
+        """Defense-in-depth: ck_payment_methods_company_personal_exclusive fires on a
+        direct ORM insert with both flags True, independent of the use-case guard."""
+        company_id = uuid4()
+        now = _now()
+        row = PaymentMethodModel(
+            id=uuid4(),
+            company_id=company_id,
+            label="Both Flags",
+            is_builtin=False,
+            is_active=True,
+            is_company_payment=True,
+            is_personal_payment=True,
+            created_by=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+
+        with pytest.raises(IntegrityError):
+            session.flush()
 
 
 class TestInsertMany:
