@@ -61,6 +61,8 @@ def _make_source(
     unit_price: float = 500.0,
     quantity: float = 1.0,
     invoice_number: str | None = None,
+    payment_method_id: "UUID | None" = None,
+    payment_method_label: "str | None" = None,
 ) -> Invoice:
     """Persist a raw source invoice row and return it as a domain Invoice."""
     now = _now()
@@ -77,6 +79,8 @@ def _make_source(
         updated_at=now,
         refundable_status="refunded",
         refunded_by="bank",
+        payment_method_id=payment_method_id,
+        payment_method_label=payment_method_label,
     )
     session.add(inv)
     session.flush()
@@ -95,6 +99,8 @@ def _make_source(
         ],
         refundable_status="refunded",
         refunded_by="bank",
+        payment_method_id=payment_method_id,
+        payment_method_label=payment_method_label,
     )
 
 
@@ -305,6 +311,37 @@ class TestCreateBankRefundRelease:
             adapter.create_bank_refund_release(source, created_by=user_id)
 
         assert repo.find_bank_refund_release(source.id) is None
+
+
+class TestBankRefundReleasePaymentMethodInheritance:
+    """The release inherits payment_method_id + payment_method_label from source
+    so dataviz can attribute released funds as company-vs-personal."""
+
+    def test_release_inherits_payment_method_from_source(self, session, repo, adapter):
+        user_id = _make_user(session)
+        project_id = _make_project(session, user_id)
+        pm_id = uuid4()
+        source = _make_source(session, project_id, user_id, payment_method_id=pm_id, payment_method_label="Carte perso")
+
+        adapter.create_bank_refund_release(source, created_by=user_id)
+
+        release = repo.find_bank_refund_release(source.id)
+        assert release is not None
+        assert release.payment_method_id == pm_id
+        assert release.payment_method_label == "Carte perso"
+
+    def test_release_has_no_payment_method_when_source_has_none(self, session, repo, adapter):
+        user_id = _make_user(session)
+        project_id = _make_project(session, user_id)
+        source = _make_source(session, project_id, user_id)
+        assert source.payment_method_id is None
+
+        adapter.create_bank_refund_release(source, created_by=user_id)
+
+        release = repo.find_bank_refund_release(source.id)
+        assert release is not None
+        assert release.payment_method_id is None
+        assert release.payment_method_label is None
 
 
 class TestNextFundsReleaseNumberYearParam:
