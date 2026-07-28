@@ -13,6 +13,7 @@ from app.application.payment_methods.ports import (
 from app.domain.payment_methods.exceptions import (
     BuiltinPaymentMethodDeletionError,
     PaymentMethodAlreadyExistsError,
+    PaymentMethodConflictingFlagsError,
     PaymentMethodNotFoundError,
 )
 
@@ -41,6 +42,9 @@ class UpdatePaymentMethodUseCase:
         PaymentMethodNotFoundError: No method exists for the given ID.
         PaymentMethodAlreadyExistsError: The new label collides (case-insensitive)
             with an existing active method in the same company.
+        PaymentMethodConflictingFlagsError: The effective final state (existing
+            value merged with this update) would have both is_company_payment
+            and is_personal_payment set to True.
         ValueError: Label is blank or exceeds 120 characters.
     """
 
@@ -88,11 +92,24 @@ class UpdatePaymentMethodUseCase:
         if inp.is_active is False and method.is_builtin:
             raise BuiltinPaymentMethodDeletionError(method.id)
 
+        # 3c. Mutually-exclusive flags guard — validate the EFFECTIVE final state
+        # (existing value merged with this update), not just the raw request payload,
+        # so flipping one flag on a method that already has the other set is caught too.
+        effective_company_payment = (
+            inp.is_company_payment if inp.is_company_payment is not None else method.is_company_payment
+        )
+        effective_personal_payment = (
+            inp.is_personal_payment if inp.is_personal_payment is not None else method.is_personal_payment
+        )
+        if effective_company_payment and effective_personal_payment:
+            raise PaymentMethodConflictingFlagsError(method.id)
+
         # 4. Apply updates
         updated = method.with_updates(
             label=new_label,
             is_active=inp.is_active,
             is_company_payment=inp.is_company_payment,
+            is_personal_payment=inp.is_personal_payment,
             updated_at=datetime.now(timezone.utc),
         )
 

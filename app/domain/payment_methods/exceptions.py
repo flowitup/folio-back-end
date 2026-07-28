@@ -52,6 +52,27 @@ class BuiltinPaymentMethodDeletionError(PaymentMethodError):
         super().__init__(f"Payment method {payment_method_id} is a builtin method and cannot be deleted")
 
 
+class PaymentMethodConflictingFlagsError(PaymentMethodError, ValueError):
+    """Raised when a payment method's effective final state has both
+    ``is_company_payment`` and ``is_personal_payment`` set to True.
+
+    The flags are mutually exclusive — a method funded by the company cannot
+    simultaneously be funded personally. "Effective final state" means the
+    merge of the existing row with the requested update, not just the raw
+    request payload (e.g. flipping is_personal_payment=True on a method that
+    already has is_company_payment=True must also be rejected).
+
+    Maps to HTTP 400 at the API boundary.
+    """
+
+    def __init__(self, payment_method_id: UUID) -> None:
+        self.payment_method_id = payment_method_id
+        super().__init__(
+            f"Payment method {payment_method_id} cannot be flagged as both "
+            "is_company_payment and is_personal_payment"
+        )
+
+
 class PaymentMethodNotActiveError(PaymentMethodError):
     """Raised when an invoice references a soft-deleted payment method.
 
