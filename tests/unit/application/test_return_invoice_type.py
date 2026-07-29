@@ -72,7 +72,7 @@ def _make_mock_repo(find_by_id_result=None, sum_refunds: Decimal = Decimal("0"))
     return repo
 
 
-def _create_request(project_id=None, invoice_type=InvoiceType.REFUND, items=None, refunds_invoice_id=None):
+def _create_request(project_id=None, invoice_type=InvoiceType.RETURN, items=None, refunds_invoice_id=None):
     pid = project_id or uuid4()
     return CreateInvoiceRequest(
         project_id=pid,
@@ -106,7 +106,7 @@ class TestMixedSignTypesConstant:
         assert InvoiceType.MATERIALS_SERVICES in MIXED_SIGN_TYPES
 
     def test_refund_in_mixed_sign_types(self):
-        assert InvoiceType.REFUND in MIXED_SIGN_TYPES
+        assert InvoiceType.RETURN in MIXED_SIGN_TYPES
 
     def test_labor_not_in_mixed_sign_types(self):
         assert InvoiceType.LABOR not in MIXED_SIGN_TYPES
@@ -144,7 +144,7 @@ class TestCreateMixedSignItems:
         uc = CreateInvoiceUseCase(repo)
         result = uc.execute(_create_request(items=[_make_item(-100.0)]))
         assert result.total_amount == -100.0
-        assert result.type == "refund"
+        assert result.type == "return"
 
     def test_create_materials_services_negative_discount_line(self):
         """M&S with a negative discount line → accepted, total reduced."""
@@ -200,7 +200,7 @@ class TestCreatePositiveOnlyTypes:
             InvoiceType.OTHERS,
             InvoiceType.RELEASED_FUNDS,
             InvoiceType.MATERIALS_SERVICES,
-            InvoiceType.REFUND,
+            InvoiceType.RETURN,
         ],
     )
     def test_zero_qty_rejected_for_all_types(self, invoice_type):
@@ -268,7 +268,7 @@ class TestCreateRefundLinkValidation:
         repo = _make_mock_repo()
         uc = CreateInvoiceUseCase(repo)
         result = uc.execute(_create_request())  # refunds_invoice_id defaults to None
-        assert result.type == "refund"
+        assert result.type == "return"
         repo.sum_refunds_for_source.assert_not_called()
 
 
@@ -379,7 +379,7 @@ class TestUpdateEffectiveTypeSignGuard:
     def test_patch_negative_items_without_type_on_refund_succeeds(self):
         """PATCH only items on an existing refund invoice without resending type → accepted."""
         project_id = uuid4()
-        existing = _make_invoice(project_id=project_id, invoice_type=InvoiceType.REFUND)
+        existing = _make_invoice(project_id=project_id, invoice_type=InvoiceType.RETURN)
 
         repo = _make_mock_repo(find_by_id_result=existing)
         uc = UpdateInvoiceUseCase(repo)
@@ -439,7 +439,7 @@ class TestUpdateRefundsInvoiceIdSentinel:
     def _refund_invoice(self, project_id, refunds_invoice_id=None):
         return _make_invoice(
             project_id=project_id,
-            invoice_type=InvoiceType.REFUND,
+            invoice_type=InvoiceType.RETURN,
             refunds_invoice_id=refunds_invoice_id,
         )
 
@@ -516,7 +516,7 @@ class TestUpdateCapExcludesSelf:
             id=uuid4(),
             project_id=project_id,
             invoice_number="INV-2026-0002",
-            type=InvoiceType.REFUND,
+            type=InvoiceType.RETURN,
             issue_date=date.today(),
             recipient_name="Refund",
             recipient_address=None,
@@ -561,7 +561,7 @@ class TestUpdateCapExcludesSelf:
             id=uuid4(),
             project_id=project_id,
             invoice_number="INV-2026-0003",
-            type=InvoiceType.REFUND,
+            type=InvoiceType.RETURN,
             issue_date=date.today(),
             recipient_name="Refund",
             recipient_address=None,
@@ -618,7 +618,7 @@ class TestSumRefundsForSourceContract:
             id=uuid4(),
             project_id=project_id,
             invoice_number="INV-2026-0004",
-            type=InvoiceType.REFUND,
+            type=InvoiceType.RETURN,
             issue_date=date.today(),
             recipient_name="Refund",
             recipient_address=None,
@@ -660,8 +660,8 @@ class TestExportTypeLabelEN:
     def test_refund_label_in_type_label_en(self):
         from app.domain.invoice.export.format import TYPE_LABEL_EN
 
-        assert "refund" in TYPE_LABEL_EN
-        assert TYPE_LABEL_EN["refund"] == "Refund"
+        assert "return" in TYPE_LABEL_EN
+        assert TYPE_LABEL_EN["return"] == "Return"
 
     def test_others_label_in_type_label_en(self):
         from app.domain.invoice.export.format import TYPE_LABEL_EN
@@ -669,9 +669,9 @@ class TestExportTypeLabelEN:
         assert "others" in TYPE_LABEL_EN
         assert TYPE_LABEL_EN["others"] == "Others"
 
-    def test_xlsx_builder_get_with_refund_type(self):
-        """xlsx_builder uses .get() so refund type produces a label, not a KeyError."""
+    def test_xlsx_builder_get_with_return_type(self):
+        """xlsx_builder uses .get() so the return type produces a label, not a KeyError."""
         from app.domain.invoice.export.format import TYPE_LABEL_EN
 
-        label = TYPE_LABEL_EN.get("refund", "refund".replace("_", " ").title())
-        assert label == "Refund"
+        label = TYPE_LABEL_EN.get("return", "return".replace("_", " ").title())
+        assert label == "Return"

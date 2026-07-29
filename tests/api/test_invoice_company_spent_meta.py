@@ -702,7 +702,7 @@ def test_refund_over_cap_returns_distinct_error_code(cs_client, cs_app, admin_to
         f"/api/v1/projects/{pid}/invoices",
         headers=_auth(admin_token),
         json={
-            "type": "refund",
+            "type": "return",
             "issue_date": "2026-06-14",
             "recipient_name": "ACME",
             "refunds_invoice_id": src_id,
@@ -738,7 +738,7 @@ def test_list_enriches_refunds_invoice_number(cs_client, cs_app, admin_token):
         f"/api/v1/projects/{pid}/invoices",
         headers=_auth(admin_token),
         json={
-            "type": "refund",
+            "type": "return",
             "issue_date": "2026-06-14",
             "recipient_name": "ACME",
             "refunds_invoice_id": src_id,
@@ -754,3 +754,27 @@ def test_list_enriches_refunds_invoice_number(cs_client, cs_app, admin_token):
     match = next((i for i in rows if i["id"] == ref_id), None)
     assert match is not None, "refund invoice missing from list"
     assert match["refunds_invoice_number"] == src_number
+
+
+def test_legacy_refund_type_alias_normalizes_to_return(cs_client, cs_app, admin_token):
+    """Pre-rename clients (e.g. the folio MCP plugin) may still send type='refund'
+    on create and as a list filter; both resolve to the canonical 'return'."""
+    pid = cs_app._test_project_with_company_id
+
+    resp = cs_client.post(
+        f"/api/v1/projects/{pid}/invoices",
+        headers=_auth(admin_token),
+        json={
+            "type": "refund",
+            "issue_date": "2026-06-14",
+            "recipient_name": "ACME",
+            "items": [{"description": "Credit", "quantity": 1, "unit_price": -50, "vat_rate": 0}],
+        },
+    )
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    assert resp.get_json()["type"] == "return"
+
+    listed = cs_client.get(f"/api/v1/projects/{pid}/invoices?type=refund", headers=_auth(admin_token))
+    assert listed.status_code == 200, listed.get_data(as_text=True)
+    listed_types = {inv["type"] for inv in listed.get_json()["invoices"]}
+    assert listed_types == {"return"}, listed_types

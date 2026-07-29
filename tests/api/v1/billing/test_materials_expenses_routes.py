@@ -960,13 +960,13 @@ class TestInlineAttachments:
 
 
 def _make_linked_refund(source_id: UUID, project_id: UUID, user_id: UUID) -> InvoiceModel:
-    """Persist a type='refund' invoice linked to source_id via refunds_invoice_id."""
+    """Persist a type='return' invoice linked to source_id via refunds_invoice_id."""
     now = datetime.now(timezone.utc)
     inv = InvoiceModel(
         id=uuid4(),
         project_id=project_id,
         invoice_number=f"REF-{uuid4().hex[:8]}",
-        type="refund",
+        type="return",
         issue_date=date.today(),
         recipient_name="Refund",
         items=[{"description": "Refund", "quantity": 1.0, "unit_price": -100.0}],

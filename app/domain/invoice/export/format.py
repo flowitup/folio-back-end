@@ -14,5 +14,5 @@ TYPE_LABEL_EN = {
     "labor": "Labor",
     "materials_services": "Materials & Services",
     "others": "Others",
-    "refund": "Refund",
+    "return": "Return",
 }

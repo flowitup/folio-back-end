@@ -115,7 +115,7 @@ class CreateInvoiceUseCase:
         # Refund link validation + cap (only when refunds_invoice_id is provided).
         refunds_invoice_id: Optional[UUID] = None
         if request.refunds_invoice_id is not None:
-            if request.type != InvoiceType.REFUND:
+            if request.type != InvoiceType.RETURN:
                 raise InvalidInvoiceDataError("refunds_invoice_id may only be set on invoices of type 'refund'")
             source = self._repo.find_by_id(request.refunds_invoice_id)
             if source is None:

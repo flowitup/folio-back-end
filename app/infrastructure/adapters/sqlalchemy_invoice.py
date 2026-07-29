@@ -444,7 +444,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         items is JSONB — computed in Python to stay DB-agnostic.
         """
         query = self._session.query(InvoiceModel).filter(
-            InvoiceModel.type == InvoiceType.REFUND.value,
+            InvoiceModel.type == InvoiceType.RETURN.value,
             InvoiceModel.refunds_invoice_id == source_id,
         )
         if exclude_invoice_id is not None:
@@ -466,7 +466,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         rows = (
             self._session.query(InvoiceModel.refunds_invoice_id)
             .filter(
-                InvoiceModel.type == InvoiceType.REFUND.value,
+                InvoiceModel.type == InvoiceType.RETURN.value,
                 InvoiceModel.refunds_invoice_id.in_(source_ids),
             )
             .distinct()

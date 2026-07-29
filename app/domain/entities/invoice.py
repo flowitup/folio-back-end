@@ -14,12 +14,12 @@ class InvoiceType(str, Enum):
     LABOR = "labor"
     MATERIALS_SERVICES = "materials_services"
     OTHERS = "others"
-    REFUND = "refund"
+    RETURN = "return"
 
 
-# Invoice types that allow mixed-sign unit_price (negative = credit/refund line).
+# Invoice types that allow mixed-sign unit_price (negative = credit/return line).
 # All other types require unit_price >= 0.
-MIXED_SIGN_TYPES: frozenset = frozenset({InvoiceType.MATERIALS_SERVICES, InvoiceType.REFUND})
+MIXED_SIGN_TYPES: frozenset = frozenset({InvoiceType.MATERIALS_SERVICES, InvoiceType.RETURN})
 
 
 class RefundableStatus(str, Enum):
@@ -74,8 +74,8 @@ class Invoice:
     # refundable_status == 'refunded'. Must be NULL whenever refundable_status
     # is anything else; enforced at the use-case layer, not here.
     refunded_by: Optional[str] = None
-    # Optional self-link: refund invoice → the materials_services invoice it refunds.
-    # SET NULL on deletion of the linked invoice so the refund survives as standalone.
+    # Optional self-link: return invoice → the materials_services invoice it refunds.
+    # SET NULL on deletion of the linked invoice so the return survives as standalone.
     refunds_invoice_id: Optional[UUID] = None
     # Payment month for labor invoices — optional, first-of-month, labor type only.
     # NULL for non-labor invoices and for labor invoices where the month is not tracked.

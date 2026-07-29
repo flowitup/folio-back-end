@@ -213,7 +213,7 @@ class UpdateInvoiceUseCase:
                 updates["refunds_invoice_id"] = None
             else:
                 # UUID provided → validate link target + cap
-                if effective_type != InvoiceType.REFUND:
+                if effective_type != InvoiceType.RETURN:
                     raise InvalidInvoiceDataError("refunds_invoice_id may only be set on invoices of type 'refund'")
                 link_uuid: UUID = link_id  # type: ignore[assignment]
                 if link_uuid == invoice.id:
@@ -235,7 +235,7 @@ class UpdateInvoiceUseCase:
                         f"Refund exceeds source invoice amount. Remaining refundable: {remaining:.2f}"
                     )
                 updates["refunds_invoice_id"] = link_uuid
-        elif effective_type == InvoiceType.REFUND and invoice.refunds_invoice_id is not None:
+        elif effective_type == InvoiceType.RETURN and invoice.refunds_invoice_id is not None:
             # Link was not touched in this PATCH but the invoice already has one.
             # Re-validate the cap in case the item amounts changed.
             if "items" in updates:

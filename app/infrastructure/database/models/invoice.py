@@ -45,7 +45,7 @@ class InvoiceModel(Base):
             "labor",
             "materials_services",
             "others",
-            "refund",
+            "return",
             name="invoicetype",
             create_type=False,
         ),
@@ -138,7 +138,7 @@ class InvoiceModel(Base):
         # in BillingDocumentModel.__table_args__). Deliberately postgresql-only:
         # unlike that precedent, a non-partial fallback here would be actively
         # wrong, not just a loose approximation — refunds_invoice_id is shared
-        # with type='refund' rows, where MULTIPLE refund invoices legitimately
+        # with type='return' rows, where MULTIPLE return invoices legitimately
         # link to the same source (see sum_refunds_for_source). A plain unique
         # constraint would break that under SQLite tests, so sqlite_where=0
         # declares the index but makes it match no row (always-false), keeping

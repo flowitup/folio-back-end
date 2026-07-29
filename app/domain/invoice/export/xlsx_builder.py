@@ -423,13 +423,13 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     _set_col_widths(ws_summary, _INVOICE_COL_WIDTHS)
 
     # Per-type sheets — one per type that has invoices (maintain canonical order).
-    # OTHERS and REFUND are included so new types never trigger a KeyError.
+    # OTHERS and RETURN are included so new types never trigger a KeyError.
     for invoice_type in (
         InvoiceType.RELEASED_FUNDS,
         InvoiceType.LABOR,
         InvoiceType.MATERIALS_SERVICES,
         InvoiceType.OTHERS,
-        InvoiceType.REFUND,
+        InvoiceType.RETURN,
     ):
         type_invoices = [inv for inv in bundle.invoices if inv.type == invoice_type]
         if not type_invoices:
