@@ -11,7 +11,11 @@ from pydantic import ValidationError
 from app.api._helpers.validation_error import validation_error_response
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
-from app.api.v1.invoices.schemas import CreateInvoiceSchema, UpdateInvoiceSchema
+from app.api.v1.invoices.schemas import (
+    CreateInvoiceSchema,
+    UpdateInvoiceSchema,
+    normalize_invoice_type_value,
+)
 from app.api.v1.projects.decorators import (
     require_permission,
     require_project_access,
@@ -243,14 +247,15 @@ def _enrich_invoice_with_personal_payment(
 @require_project_access(write=False)
 def list_invoices(project_id: str):
     """List invoices for a project, optionally filtered by ?type=."""
-    invoice_type_param = request.args.get("type")
+    invoice_type_param = normalize_invoice_type_value(request.args.get("type"))
     tag_id_param = request.args.get("tag_id")
     try:
         parsed_type = InvoiceType(invoice_type_param) if invoice_type_param else None
     except ValueError:
+        valid = ", ".join(t.value for t in InvoiceType)
         return _error_response(
             "ValidationError",
-            f"Invalid type '{invoice_type_param}'. Must be one of: client, labor, supplier",
+            f"Invalid type '{invoice_type_param}'. Must be one of: {valid}",
             400,
         )
 

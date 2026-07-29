@@ -321,7 +321,7 @@ class TestSumCompanySpent:
         # Company-paid expense of 100, then the company issues a 40 refund on the
         # same company method (stored as a negative line).
         _make_invoice(session, project_id, "materials_services", 100.0, payment_method_id=pm_id)
-        _make_invoice(session, project_id, "refund", -40.0, payment_method_id=pm_id)
+        _make_invoice(session, project_id, "return", -40.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
         total = repo.sum_company_spent(project_id)
@@ -337,7 +337,7 @@ class TestSumCompanySpent:
         other_pm = _make_payment_method(session, company_id, is_company_payment=False)
         _make_invoice(session, project_id, "materials_services", 100.0, payment_method_id=company_pm)
         # Supplier refund on a non-company method must not touch company_spent.
-        _make_invoice(session, project_id, "refund", -40.0, payment_method_id=other_pm)
+        _make_invoice(session, project_id, "return", -40.0, payment_method_id=other_pm)
 
         repo = SQLAlchemyInvoiceRepository(session)
         total = repo.sum_company_spent(project_id)
@@ -351,7 +351,7 @@ class TestSumCompanySpent:
         project_id = _make_project(session, user_id, company_id)
         pm_id = _make_payment_method(session, company_id, is_company_payment=True)
         _make_invoice(session, project_id, "materials_services", 40.0, payment_method_id=pm_id)
-        _make_invoice(session, project_id, "refund", -100.0, payment_method_id=pm_id)
+        _make_invoice(session, project_id, "return", -100.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
         total = repo.sum_company_spent(project_id)

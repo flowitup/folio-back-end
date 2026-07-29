@@ -298,7 +298,7 @@ class TestReleaseDeletedOnTransitionsAway:
 
 class TestHasBankRefundUnaffected:
     def test_has_bank_refund_unaffected_by_release_creation(self, brl_client, admin_tok, bank_refund_app):
-        """has_bank_refund keys off type='refund' linkage only — creating a
+        """has_bank_refund keys off type='return' linkage only — creating a
         released_funds row for the same source must never flip it."""
         with bank_refund_app.app_context():
             inv = _make_invoice(bank_refund_app._project_id, bank_refund_app._admin_user_id, unit_price=300.0)
@@ -317,7 +317,7 @@ class TestHasBankRefundUnaffected:
         assert list_resp.status_code == 200, list_resp.get_data(as_text=True)
         items = {i["id"]: i for i in list_resp.get_json()["items"]}
         assert str(inv_id) in items
-        assert items[str(inv_id)]["has_bank_refund"] is False  # no type='refund' row exists for this source
+        assert items[str(inv_id)]["has_bank_refund"] is False  # no type='return' row exists for this source
 
 
 class TestFundsReleaseNumberField:

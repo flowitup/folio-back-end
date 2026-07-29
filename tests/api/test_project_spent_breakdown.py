@@ -212,7 +212,7 @@ def test_company_refund_nets_credits_down(invitation_app, credit_project):
         pid = credit_project["project_id"]
         pm = credit_project["company_pm_id"]
         _add_invoice(db.session, pid, number="CS-004", amount=500, payment_method_id=pm)
-        _add_invoice(db.session, pid, number="CS-005", amount=-200, type="refund", payment_method_id=pm)
+        _add_invoice(db.session, pid, number="CS-005", amount=-200, type="return", payment_method_id=pm)
 
         result = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert result.total == pytest.approx(Decimal("300"))
@@ -227,7 +227,7 @@ def test_credits_floored_at_zero(invitation_app, credit_project):
         pid = credit_project["project_id"]
         pm = credit_project["company_pm_id"]
         _add_invoice(db.session, pid, number="CS-006", amount=100, payment_method_id=pm)
-        _add_invoice(db.session, pid, number="CS-007", amount=-350, type="refund", payment_method_id=pm)
+        _add_invoice(db.session, pid, number="CS-007", amount=-350, type="return", payment_method_id=pm)
 
         result = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert result.total == pytest.approx(Decimal("-250"))
@@ -502,13 +502,13 @@ def test_personal_by_type_sums_to_personal(invitation_app, credit_project):
         _add_invoice(db.session, pid, number="CS-T1", amount=100, type="labor", payment_method_id=cash)
         _add_invoice(db.session, pid, number="CS-T2", amount=300, type="materials_services", payment_method_id=cash)
         _add_invoice(db.session, pid, number="CS-T3", amount=50, type="others", payment_method_id=cash)
-        _add_invoice(db.session, pid, number="CS-T4", amount=-20, type="refund", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-T4", amount=-20, type="return", payment_method_id=cash)
 
         result = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert result.personal_by_type["labor"] == pytest.approx(Decimal("100"))
         assert result.personal_by_type["materials_services"] == pytest.approx(Decimal("300"))
         assert result.personal_by_type["others"] == pytest.approx(Decimal("50"))
-        assert result.personal_by_type["refund"] == pytest.approx(Decimal("-20"))
+        assert result.personal_by_type["return"] == pytest.approx(Decimal("-20"))
         assert sum(result.personal_by_type.values()) == pytest.approx(result.personal)
 
 

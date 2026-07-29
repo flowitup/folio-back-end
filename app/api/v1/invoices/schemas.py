@@ -9,6 +9,18 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error schema
 
+InvoiceTypeLiteral = Literal["released_funds", "labor", "materials_services", "others", "return"]
+
+
+def normalize_invoice_type_value(value: object) -> object:
+    """Map the pre-rename wire value 'refund' to its canonical 'return'.
+
+    External clients (e.g. the folio MCP plugin) may still send 'refund';
+    responses always emit 'return'.
+    """
+    return "return" if value == "refund" else value
+
+
 # ---------------------------------------------------------------------------
 # Request schemas
 # ---------------------------------------------------------------------------
@@ -18,7 +30,7 @@ class InvoiceItemSchema(BaseModel):
     """A single line item on an invoice.
 
     unit_price carries no ge=0 bound — sign validation is type-dependent and
-    enforced in the use-case (mixed-sign allowed for materials_services + refund).
+    enforced in the use-case (mixed-sign allowed for materials_services + return).
     quantity must be > 0; vat_rate is 0–100.
     """
 
@@ -31,15 +43,21 @@ class InvoiceItemSchema(BaseModel):
 class CreateInvoiceSchema(BaseModel):
     """Request body for creating an invoice.
 
-    refunds_invoice_id is optional; only valid when type='refund'. When provided,
+    refunds_invoice_id is optional; only valid when type='return'. When provided,
     the use-case validates that the target is a same-project materials_services invoice
-    and enforces the cap (cumulative refunds may not exceed the source total).
-    Mixed-sign unit_price is allowed for materials_services and refund types.
+    and enforces the cap (cumulative returns may not exceed the source total).
+    Mixed-sign unit_price is allowed for materials_services and return types.
     service_month is optional; only valid when type='labor'. The use-case normalizes
     any day-of-month to day=1.
     """
 
-    type: Literal["released_funds", "labor", "materials_services", "others", "refund"]
+    type: InvoiceTypeLiteral
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _legacy_type_alias(cls, v: object) -> object:
+        return normalize_invoice_type_value(v)
+
     issue_date: date  # Pydantic parses ISO date string (YYYY-MM-DD) automatically
     recipient_name: str = Field(..., min_length=1, max_length=255)
     recipient_address: Optional[str] = None
@@ -59,11 +77,17 @@ class UpdateInvoiceSchema(BaseModel):
       - field absent  → do not touch that field
       - field = null  → clear the field
       - field = value → set to that value
-    Mixed-sign unit_price is allowed for materials_services and refund types.
+    Mixed-sign unit_price is allowed for materials_services and return types.
     """
 
-    type: Optional[Literal["released_funds", "labor", "materials_services", "others", "refund"]] = None
+    type: Optional[InvoiceTypeLiteral] = None
     issue_date: Optional[date] = None  # Pydantic parses ISO date string automatically
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _legacy_type_alias(cls, v: object) -> object:
+        return normalize_invoice_type_value(v)
+
     recipient_name: Optional[str] = Field(None, min_length=1, max_length=255)
     recipient_address: Optional[str] = None
     notes: Optional[str] = None
@@ -83,9 +107,14 @@ class ExportInvoicesQuery(BaseModel):
     from_month: str = Field(alias="from")
     to_month: str = Field(alias="to")
     format: Literal["xlsx", "pdf"]
-    type: Optional[Literal["released_funds", "labor", "materials_services", "others", "refund"]] = None
+    type: Optional[InvoiceTypeLiteral] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _legacy_type_alias(cls, v: object) -> object:
+        return normalize_invoice_type_value(v)
 
     @field_validator("from_month", "to_month")
     @classmethod

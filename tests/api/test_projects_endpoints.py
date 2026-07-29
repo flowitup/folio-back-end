@@ -286,7 +286,7 @@ def test_spent_reader_refund_decreases_spent(invitation_app, spent_reader_projec
             id=uuid4(),
             project_id=pid,
             invoice_number="REF-001",
-            type="refund",
+            type="return",
             issue_date=date(2025, 3, 1),
             recipient_name="Supplier",
             items=[{"quantity": "1", "unit_price": "-100"}],

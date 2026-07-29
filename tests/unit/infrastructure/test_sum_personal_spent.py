@@ -248,7 +248,7 @@ class TestSumPersonalSpent:
         project_id = _make_project(session, user_id, company_id)
         pm_id = _make_payment_method(session, company_id, is_personal_payment=True)
         _make_invoice(session, project_id, "materials_services", 100.0, payment_method_id=pm_id)
-        _make_invoice(session, project_id, "refund", -40.0, payment_method_id=pm_id)
+        _make_invoice(session, project_id, "return", -40.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
         total = repo.sum_personal_spent(project_id)
@@ -262,7 +262,7 @@ class TestSumPersonalSpent:
         project_id = _make_project(session, user_id, company_id)
         pm_id = _make_payment_method(session, company_id, is_personal_payment=True)
         _make_invoice(session, project_id, "materials_services", 40.0, payment_method_id=pm_id)
-        _make_invoice(session, project_id, "refund", -100.0, payment_method_id=pm_id)
+        _make_invoice(session, project_id, "return", -100.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
         total = repo.sum_personal_spent(project_id)
