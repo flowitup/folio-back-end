@@ -478,6 +478,7 @@ def create_invoice(project_id: str):
     _enrich_invoice_with_personal_payment(d, result.payment_method_id, personal_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
+    _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d), 201
 
@@ -618,6 +619,7 @@ def update_invoice(project_id: str, invoice_id: str):
     _enrich_invoice_with_personal_payment(d, result.payment_method_id, personal_pm_id_strs)
     _enrich_refunds_invoice_number(d, result.refunds_invoice_id)
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
+    _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
     return jsonify(d)
 

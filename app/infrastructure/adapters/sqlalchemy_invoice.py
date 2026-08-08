@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.application.invoice.dtos import money
 from app.application.invoice.ports import IInvoiceRepository
 from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus
 from app.domain.exceptions.invoice_exceptions import (
@@ -506,7 +507,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         result: dict[UUID, list[dict]] = {}
         for target_id, invoice_number, items in rows:
             result.setdefault(target_id, []).append(
-                {"invoice_number": invoice_number, "total_amount": float(_items_total(items))}
+                {"invoice_number": invoice_number, "total_amount": money(_items_total(items))}
             )
         return result
 

@@ -247,6 +247,12 @@ class UpdateInvoiceUseCase:
                         f"Refund exceeds source invoice amount. Remaining refundable: {remaining:.2f}"
                     )
                 updates["refunds_invoice_id"] = link_uuid
+        elif effective_type != InvoiceType.RETURN and invoice.refunds_invoice_id is not None:
+            # Type is changing away from 'return' (or already isn't) while a
+            # refunds_invoice_id link is still stored and the PATCH didn't touch it —
+            # clear it server-side, mirroring the service_month auto-clear above, so no
+            # non-return invoice ever carries a stale refund-source link.
+            updates["refunds_invoice_id"] = None
         elif effective_type == InvoiceType.RETURN and invoice.refunds_invoice_id is not None:
             # Link was not touched in this PATCH but the invoice already has one.
             # Re-validate the cap in case the item amounts changed.
@@ -274,6 +280,12 @@ class UpdateInvoiceUseCase:
                         f"settled_via must be one of: {', '.join(sorted(_VALID_SETTLED_VIA))}"
                     )
                 updates["settled_via"] = request.settled_via
+        elif effective_type != InvoiceType.RETURN and invoice.settled_via is not None:
+            # Type is changing away from 'return' (or already isn't) while settled_via
+            # is still stored and the PATCH didn't touch it — clear it server-side,
+            # mirroring the service_month auto-clear above, so no non-return invoice
+            # ever carries a stale settlement mode.
+            updates["settled_via"] = None
 
         effective_settled_via = updates["settled_via"] if "settled_via" in updates else invoice.settled_via
 
@@ -301,6 +313,10 @@ class UpdateInvoiceUseCase:
                         "applied_to_invoice_id must reference an invoice that is not a return or released_funds"
                     )
                 # Cap: exclude this invoice's own row from the Σ (avoid self-double-counting on update).
+                # Race (accepted, not locked): this is a read-then-write check with no
+                # row/advisory lock, so two concurrent updates against the same target
+                # could both pass and jointly exceed the cap — identical, accepted class
+                # of drift as the pre-existing sum_refunds_for_source cap check above.
                 new_items = updates.get("items", invoice.items)
                 this_total = sum((item.total for item in new_items), Decimal("0"))
                 existing_applied = self._repo.sum_applied_for_target(target.id, exclude_invoice_id=invoice.id)
@@ -315,6 +331,13 @@ class UpdateInvoiceUseCase:
                 # NULL — mirrors the create-time behaviour exactly.
                 updates["payment_method_id"] = target.payment_method_id
                 updates["payment_method_label"] = target.payment_method_label
+        elif effective_type != InvoiceType.RETURN and invoice.applied_to_invoice_id is not None:
+            # Type is changing away from 'return' (or already isn't) while
+            # applied_to_invoice_id is still stored and the PATCH didn't touch it —
+            # clear it server-side, mirroring the service_month auto-clear above, so
+            # the target's cap is freed and no non-return invoice ever carries a stale
+            # avoir-application link.
+            updates["applied_to_invoice_id"] = None
         elif effective_type == InvoiceType.RETURN and invoice.applied_to_invoice_id is not None:
             # Link was not touched in this PATCH but the invoice already has one.
             # Re-validate when items changed (cap) or settled_via changed away from

@@ -175,6 +175,10 @@ class CreateInvoiceUseCase:
                     "applied_to_invoice_id must reference an invoice that is not a return or released_funds"
                 )
             # Cap: abs(Σ applied returns incl. this one) must stay <= target total.
+            # Race (accepted, not locked): this is a read-then-write check with no
+            # row/advisory lock, so two concurrent creates against the same target
+            # could both pass and jointly exceed the cap — identical, accepted class
+            # of drift as the pre-existing refunds_invoice_id cap check above.
             this_total = sum((item.total for item in invoice_items), Decimal("0"))
             existing_applied = self._repo.sum_applied_for_target(target.id)
             total_applied = existing_applied + this_total

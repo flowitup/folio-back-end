@@ -655,3 +655,163 @@ class TestListAndGetEnrichment:
         return_get_data = resp_return.get_json()
         assert return_get_data["applied_to_invoice_number"] == target["invoice_number"]
         assert return_get_data["settled_via"] == "avoir"
+
+    def test_paid_with_returns_total_amount_is_quantized_to_cents(self, avoir_client, avoir_app, admin_token):
+        """NIT regression: applied_return_summaries must pass amounts through the house
+        money() quantizer, not raw float(Decimal), so sub-cent artifacts never leak into
+        paid_with_returns JSON."""
+        target = _create_target(avoir_client, avoir_app, admin_token, amount=500.0)
+        # unit_price carries a sub-cent fraction; ROUND_HALF_UP must produce -100.01.
+        created = _create_return(
+            avoir_client, avoir_app, admin_token, applied_to=target["id"], settled_via="avoir", unit_price=-100.005
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+
+        resp = avoir_client.get(_invoice_url(avoir_app._test_project_id, target["id"]), headers=_auth(admin_token))
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["paid_with_returns"]) == 1
+        assert data["paid_with_returns"][0]["total_amount"] == -100.01
+
+
+# ---------------------------------------------------------------------------
+# Update: type change away from 'return' must not strand avoir/refund link fields (H1)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTypeChangeClearsReturnLinkFields:
+    """H1 regression: PATCHing type away from 'return' must auto-clear settled_via,
+    applied_to_invoice_id, and refunds_invoice_id — mirroring the pre-existing
+    service_month auto-clear pattern one screen up in the same use-case. Without this,
+    the stranded applied_to_invoice_id silently keeps consuming the target's cap and
+    changing type back to 'return' later would otherwise resurrect the link."""
+
+    def test_patch_type_away_clears_all_link_fields_and_frees_target_cap(self, avoir_client, avoir_app, admin_token):
+        # Independent materials_services source for refunds_invoice_id, with enough
+        # headroom that it is not the constraint under test.
+        refund_source = _create_target(avoir_client, avoir_app, admin_token, amount=1000.0)
+        applied_target = _create_target(avoir_client, avoir_app, admin_token, amount=300.0)
+
+        created = avoir_client.post(
+            _invoices_url(avoir_app._test_project_id),
+            json={
+                **_invoice_body(invoice_type="return", unit_price=-300.0),
+                "refunds_invoice_id": refund_source["id"],
+                "settled_via": "avoir",
+                "applied_to_invoice_id": applied_target["id"],
+            },
+            headers=_auth(admin_token),
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        before = created.get_json()
+        assert before["refunds_invoice_id"] == refund_source["id"]
+        assert before["settled_via"] == "avoir"
+        assert before["applied_to_invoice_id"] == applied_target["id"]
+        invoice_id = before["id"]
+
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, invoice_id),
+            json={"type": "materials_services"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        after = resp.get_json()
+        assert after["type"] == "materials_services"
+        assert after["refunds_invoice_id"] is None
+        assert after["settled_via"] is None
+        assert after["applied_to_invoice_id"] is None
+
+        # Persisted, not just echoed back in the mutation response.
+        refetched = avoir_client.get(_invoice_url(avoir_app._test_project_id, invoice_id), headers=_auth(admin_token))
+        assert refetched.status_code == 200
+        refetched_data = refetched.get_json()
+        assert refetched_data["refunds_invoice_id"] is None
+        assert refetched_data["settled_via"] is None
+        assert refetched_data["applied_to_invoice_id"] is None
+
+        # Cap freed: a second avoir return for the target's full amount now succeeds —
+        # would 400 (AppliedExceedsTarget) had the stranded link still been counted.
+        second = _create_return(
+            avoir_client,
+            avoir_app,
+            admin_token,
+            applied_to=applied_target["id"],
+            settled_via="avoir",
+            unit_price=-300.0,
+        )
+        assert second.status_code == 201, second.get_data(as_text=True)
+
+    def test_patch_type_back_to_return_does_not_resurrect_cleared_links(self, avoir_client, avoir_app, admin_token):
+        target = _create_target(avoir_client, avoir_app, admin_token, amount=300.0)
+        created = _create_return(
+            avoir_client, avoir_app, admin_token, applied_to=target["id"], settled_via="avoir", unit_price=-300.0
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        invoice_id = created.get_json()["id"]
+
+        away = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, invoice_id),
+            json={"type": "materials_services"},
+            headers=_auth(admin_token),
+        )
+        assert away.status_code == 200, away.get_data(as_text=True)
+        assert away.get_json()["settled_via"] is None
+        assert away.get_json()["applied_to_invoice_id"] is None
+
+        back = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, invoice_id),
+            json={"type": "return"},
+            headers=_auth(admin_token),
+        )
+        assert back.status_code == 200, back.get_data(as_text=True)
+        after = back.get_json()
+        assert after["type"] == "return"
+        assert after["settled_via"] is None
+        assert after["applied_to_invoice_id"] is None
+        assert after["refunds_invoice_id"] is None
+
+        # Not just the response — the DB row must not have resurrected the link either.
+        refetched = avoir_client.get(_invoice_url(avoir_app._test_project_id, invoice_id), headers=_auth(admin_token))
+        assert refetched.status_code == 200
+        refetched_data = refetched.get_json()
+        assert refetched_data["settled_via"] is None
+        assert refetched_data["applied_to_invoice_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Mutation responses carry paid_with_returns (M2)
+# ---------------------------------------------------------------------------
+
+
+class TestMutationResponsesIncludePaidWithReturns:
+    """M2 regression: create/update responses must enrich paid_with_returns exactly
+    like list/GET, so the FE detail view (which replaces state from the mutation
+    response) doesn't show stale "paid with avoir" info until a manual refetch."""
+
+    def test_put_on_paying_invoice_returns_non_empty_paid_with_returns(self, avoir_client, avoir_app, admin_token):
+        target = _create_target(avoir_client, avoir_app, admin_token, amount=500.0)
+        applied = _create_return(
+            avoir_client, avoir_app, admin_token, applied_to=target["id"], settled_via="avoir", unit_price=-200.0
+        )
+        assert applied.status_code == 201, applied.get_data(as_text=True)
+        applied_data = applied.get_json()
+
+        # Edit an unrelated field on the paying (target) invoice via PUT.
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, target["id"]),
+            json={"notes": "updated via PUT"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["notes"] == "updated via PUT"
+        assert len(data["paid_with_returns"]) == 1
+        assert data["paid_with_returns"][0]["invoice_number"] == applied_data["invoice_number"]
+        assert data["paid_with_returns"][0]["total_amount"] == -200.0
+
+    def test_post_create_response_includes_paid_with_returns_key(self, avoir_client, avoir_app, admin_token):
+        """A freshly created invoice has no returns applied to it yet, but the key must
+        be present (empty list) — proves the enrichment call runs on create too."""
+        resp = _create(avoir_client, avoir_app, admin_token, invoice_type="materials_services", unit_price=250.0)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["paid_with_returns"] == []
