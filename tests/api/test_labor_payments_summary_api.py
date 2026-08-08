@@ -302,6 +302,10 @@ class TestLaborPaymentsSummaryEndpoint:
         assert bucket["unassigned_paid"] == 234.56
         assert bucket["unassigned_count"] == 1
         assert bucket["total_paid"] == 234.56
+        # Flagged-method split serializes on every bucket; no payment method
+        # on the invoice → neither figure (repo tests cover the split math).
+        assert bucket["company_paid"] == 0.0
+        assert bucket["personal_paid"] == 0.0
 
     def test_no_service_month_bucket_last_with_null_year_month(self, pay_client, admin_token, project):
         worker = _create_worker(project.id, "Alice")

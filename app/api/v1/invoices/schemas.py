@@ -158,6 +158,11 @@ class LaborPaymentsMonthSchema(BaseModel):
     workers: List[LaborPaymentsWorkerSchema]
     unassigned_paid: float
     unassigned_count: int
+    # Flagged-method split of the bucket's paid total. Invoices with no
+    # method or an unflagged one count in neither, so these may sum to less
+    # than total_paid.
+    company_paid: float = 0.0
+    personal_paid: float = 0.0
 
 
 class LaborPaymentsSummarySchema(BaseModel):
