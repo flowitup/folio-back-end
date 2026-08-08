@@ -5,11 +5,12 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.invoice.dtos import money
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import IInvoiceRepository, LaborPaymentsMonthRow, LaborPaymentsWorkerRow
 from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus
 from app.domain.exceptions.invoice_exceptions import (
     InvoiceNotFoundError,
@@ -23,6 +24,8 @@ from app.infrastructure.database.invoice_spend_rules import (
     load_personal_method_ids,
 )
 from app.infrastructure.database.models.invoice import InvoiceModel
+from app.infrastructure.database.models.person import PersonModel
+from app.infrastructure.database.models.worker import WorkerModel
 
 
 def _items_to_jsonb(items: list) -> list:
@@ -158,12 +161,18 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         project_id: UUID,
         invoice_type: Optional[InvoiceType] = None,
         tag_id: Optional[UUID] = None,
+        service_month: Optional[date] = None,
+        worker_id: Optional[UUID] = None,
     ) -> List[Invoice]:
         query = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
         if invoice_type is not None:
             query = query.filter(InvoiceModel.type == invoice_type.value)
         if tag_id is not None:
             query = query.filter(InvoiceModel.tag_id == tag_id)
+        if service_month is not None:
+            query = query.filter(InvoiceModel.service_month == service_month)
+        if worker_id is not None:
+            query = query.filter(InvoiceModel.worker_id == worker_id)
         # Order by the invoice (issue) date, newest first; fall back to
         # creation time so same-date invoices keep a stable, deterministic order.
         models = query.order_by(InvoiceModel.issue_date.desc(), InvoiceModel.created_at.desc()).all()
@@ -248,6 +257,76 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             except (ValueError, IndexError):
                 pass
         return f"{prefix}{n:04d}"
+
+    def get_labor_payments_summary(self, project_id: UUID) -> List[LaborPaymentsMonthRow]:
+        """Aggregate paid amounts per (service_month, worker) for type='labor' invoices.
+
+        items is JSONB — summed in Python via the shared items_total rule, same as
+        every other spend aggregation in this adapter. worker_name mirrors the
+        labor summary precedent (sqlalchemy_labor_entry.py): COALESCE(persons.name,
+        workers.name) via an outer join, so a linked worker with no Person still
+        resolves to its own name. NULL worker_id (never linked, or SET NULL after
+        the linked worker was deleted) rolls into the bucket's unassigned total.
+        """
+        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
+        rows = (
+            self._session.query(
+                InvoiceModel.service_month,
+                InvoiceModel.worker_id,
+                display_name.label("worker_name"),
+                InvoiceModel.items,
+            )
+            .outerjoin(WorkerModel, InvoiceModel.worker_id == WorkerModel.id)
+            .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
+            .filter(
+                InvoiceModel.project_id == project_id,
+                InvoiceModel.type == InvoiceType.LABOR.value,
+            )
+            .all()
+        )
+
+        zero = Decimal("0")
+        # Per-bucket worker totals: {(year, month) | None: {worker_id: [name, paid, count]}}
+        worker_totals: dict = {}
+        # Per-bucket unassigned totals: {(year, month) | None: [paid, count]}
+        unassigned_totals: dict = {}
+
+        for service_month, worker_id, worker_name, items in rows:
+            key = (service_month.year, service_month.month) if service_month is not None else None
+            amount = items_total(items)
+
+            if worker_id is None:
+                bucket = unassigned_totals.setdefault(key, [zero, 0])
+                bucket[0] += amount
+                bucket[1] += 1
+            else:
+                per_worker = worker_totals.setdefault(key, {})
+                entry = per_worker.setdefault(worker_id, [worker_name, zero, 0])
+                entry[1] += amount
+                entry[2] += 1
+
+        all_keys = set(worker_totals) | set(unassigned_totals)
+        # Most-recent month first; the no-service_month bucket (key=None) always last.
+        month_keys = sorted((k for k in all_keys if k is not None), reverse=True)
+        ordered_keys = month_keys + ([None] if None in all_keys else [])
+
+        result: List[LaborPaymentsMonthRow] = []
+        for key in ordered_keys:
+            workers = [
+                LaborPaymentsWorkerRow(worker_id=wid, worker_name=name, paid=paid, invoice_count=count)
+                for wid, (name, paid, count) in sorted(worker_totals.get(key, {}).items(), key=lambda kv: kv[1][0])
+            ]
+            u_paid, u_count = unassigned_totals.get(key, [zero, 0])
+            result.append(
+                LaborPaymentsMonthRow(
+                    year=key[0] if key is not None else None,
+                    month=key[1] if key is not None else None,
+                    workers=workers,
+                    unassigned_paid=u_paid,
+                    unassigned_count=u_count,
+                )
+            )
+        return result
 
     def delete_by_source_billing_document_id(self, source_doc_id: UUID) -> bool:
         result = (

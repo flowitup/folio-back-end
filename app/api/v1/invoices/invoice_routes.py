@@ -1,6 +1,7 @@
 """Invoice API routes."""
 
 import dataclasses
+from datetime import datetime
 from typing import Tuple
 from uuid import UUID
 
@@ -8,11 +9,14 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.validation_error import validation_error_response
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.invoices.schemas import (
     CreateInvoiceSchema,
+    LaborPaymentsSummarySchema,
+    ListInvoicesFilterQuery,
     UpdateInvoiceSchema,
     normalize_invoice_type_value,
 )
@@ -28,6 +32,7 @@ from app.application.invoice import (
     UpdateInvoiceRequest,
 )
 from app.application.invoice.dtos import money
+from app.application.invoice.get_labor_payments_summary_usecase import GetLaborPaymentsSummaryRequest
 from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.entities.invoice import InvoiceType
 from app.domain.exceptions.invoice_exceptions import (
@@ -275,12 +280,16 @@ def _enrich_invoice_with_personal_payment(
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["GET"])
-@openapi_doc(summary="List invoices for a project, optionally filtered by ?type=", tags=["invoices"])
+@openapi_doc(
+    summary="List invoices for a project, optionally filtered by ?type=/?tag_id=/?service_month=/?worker_id=",
+    query=ListInvoicesFilterQuery,
+    tags=["invoices"],
+)
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
 def list_invoices(project_id: str):
-    """List invoices for a project, optionally filtered by ?type=."""
+    """List invoices for a project, optionally filtered by ?type=/?tag_id=/?service_month=/?worker_id=."""
     invoice_type_param = normalize_invoice_type_value(request.args.get("type"))
     tag_id_param = request.args.get("tag_id")
     try:
@@ -293,6 +302,20 @@ def list_invoices(project_id: str):
             400,
         )
 
+    # service_month/worker_id are the labor-payments drill-down filters — validated
+    # via Pydantic so malformed input returns 422 (mirrors ExportLaborQuery).
+    try:
+        filters = ListInvoicesFilterQuery(
+            service_month=request.args.get("service_month"),
+            worker_id=request.args.get("worker_id"),
+        )
+    except ValidationError as e:
+        return format_validation_error(e)
+
+    service_month_date = (
+        datetime.strptime(filters.service_month, "%Y-%m").date().replace(day=1) if filters.service_month else None
+    )
+
     container = get_container()
     try:
         results = container.list_invoices_usecase.execute(
@@ -300,6 +323,8 @@ def list_invoices(project_id: str):
                 project_id=UUID(project_id),
                 invoice_type=parsed_type,
                 tag_id=UUID(tag_id_param) if tag_id_param else None,
+                service_month=service_month_date,
+                worker_id=filters.worker_id,
             )
         )
     except ValueError as e:
@@ -406,6 +431,24 @@ def list_invoices(project_id: str):
             "company_name": company_name,
         }
     )
+
+
+@invoice_bp.route("/projects/<project_id>/labor-payments-summary", methods=["GET"])
+@openapi_doc(
+    summary="Aggregate paid labor amounts per service month and worker",
+    responses={200: LaborPaymentsSummarySchema},
+    tags=["invoices"],
+)
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+def get_labor_payments_summary(project_id: str):
+    """Aggregate paid amounts per (service_month, worker) for the project's labor invoices."""
+    result = get_container().get_labor_payments_summary_usecase.execute(
+        GetLaborPaymentsSummaryRequest(project_id=UUID(project_id))
+    )
+    schema = LaborPaymentsSummarySchema.model_validate(dataclasses.asdict(result))
+    return jsonify(schema.model_dump())
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])

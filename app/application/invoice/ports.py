@@ -1,10 +1,10 @@
 """Invoice repository port — persistence contract for the invoice domain."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import BinaryIO, Optional, Protocol
+from typing import BinaryIO, List, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.invoice import Invoice, InvoiceType
@@ -40,6 +40,36 @@ class WorkerReaderPort(Protocol):
         leak cross-project existence.
         """
         ...
+
+
+@dataclass(frozen=True)
+class LaborPaymentsWorkerRow:
+    """One worker's paid total within a labor-payments month bucket."""
+
+    worker_id: UUID
+    worker_name: str
+    paid: Decimal
+    invoice_count: int
+
+
+@dataclass(frozen=True)
+class LaborPaymentsMonthRow:
+    """One (service_month) bucket of the labor-payments summary.
+
+    ``year``/``month`` are both None for the no-service_month bucket (labor
+    invoices with a NULL service_month), which the repository always places
+    last regardless of the other buckets' chronological order.
+
+    ``unassigned_paid``/``unassigned_count`` roll up rows whose ``worker_id``
+    is NULL — either the invoice never recorded a worker, or the linked
+    worker was deleted (ON DELETE SET NULL).
+    """
+
+    year: Optional[int]
+    month: Optional[int]
+    workers: List[LaborPaymentsWorkerRow] = field(default_factory=list)
+    unassigned_paid: Decimal = Decimal("0")
+    unassigned_count: int = 0
 
 
 class BankRefundReleasePort(Protocol):
@@ -81,8 +111,20 @@ class IInvoiceRepository(ABC):
 
     @abstractmethod
     def list_by_project(
-        self, project_id: UUID, invoice_type: Optional[InvoiceType] = None, tag_id: Optional[UUID] = None
-    ) -> list[Invoice]: ...
+        self,
+        project_id: UUID,
+        invoice_type: Optional[InvoiceType] = None,
+        tag_id: Optional[UUID] = None,
+        service_month: Optional[date] = None,
+        worker_id: Optional[UUID] = None,
+    ) -> list[Invoice]:
+        """List a project's invoices, optionally filtered by type/tag/service_month/worker_id.
+
+        service_month matches labor rows whose service_month equals the given
+        (already first-of-month-normalized) date exactly. worker_id matches
+        the invoice's linked worker exactly. Filters compose (AND).
+        """
+        ...
 
     @abstractmethod
     def update(self, invoice: Invoice) -> Invoice: ...
@@ -284,6 +326,22 @@ class IInvoiceRepository(ABC):
           refunded_total       — sum of totals where status == 'refunded'
           refunded_by_company  — refunded_total subset where refunded_by is NULL or 'company'
           refunded_by_bank     — refunded_total subset where refunded_by == 'bank'
+        """
+        ...
+
+    @abstractmethod
+    def get_labor_payments_summary(self, project_id: UUID) -> List[LaborPaymentsMonthRow]:
+        """Aggregate paid amounts per (service_month, worker) for the project's labor invoices.
+
+        Scoped to type == 'labor' only. Buckets by service_month (None groups
+        into the no-month bucket) then by worker_id within each bucket; rows
+        with a NULL worker_id (never linked, or the linked worker was
+        deleted via ON DELETE SET NULL) roll into that bucket's
+        unassigned_paid/unassigned_count instead of the workers list.
+
+        Returned buckets are ordered most-recent service_month first, with
+        the no-month bucket (year=None, month=None) always last. Returns []
+        for a project with no labor invoices.
         """
         ...
 

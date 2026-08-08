@@ -690,6 +690,15 @@ def invitation_app():
             _inv_repo = _InvRepo(db.session)
             _c.invoice_repository = _inv_repo
 
+        # Wire labor-payments-summary use-case (Labor Payments Hub).
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        from app.application.invoice.get_labor_payments_summary_usecase import (
+            GetLaborPaymentsSummaryUseCase as _GetLaborPaymentsSummaryUC,
+        )
+
+        _c.get_labor_payments_summary_usecase = _GetLaborPaymentsSummaryUC(_c.invoice_repository)
+
         # Re-wire create_company_usecase with seeder
         from app.application.companies.create_company_usecase import (
             CreateCompanyUseCase as _CreateCompanyUCv2,

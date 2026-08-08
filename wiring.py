@@ -84,6 +84,7 @@ from app.application.invoice import (
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
 from app.application.invoice.list_materials_expenses_usecase import ListMaterialsExpensesUseCase
 from app.application.invoice.set_refundable_status_usecase import SetInvoiceRefundableStatusUseCase
+from app.application.invoice.get_labor_payments_summary_usecase import GetLaborPaymentsSummaryUseCase
 from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
 from app.application.task import (
     ITaskRepository,
@@ -244,6 +245,7 @@ class Container:
     get_invoice_usecase: Optional[GetInvoiceUseCase] = None
     update_invoice_usecase: Optional[UpdateInvoiceUseCase] = None
     delete_invoice_usecase: Optional[DeleteInvoiceUseCase] = None
+    get_labor_payments_summary_usecase: Optional[GetLaborPaymentsSummaryUseCase] = None
 
     # Attachment storage + repository
     attachment_storage: Optional[IAttachmentStorage] = None
@@ -686,6 +688,7 @@ def configure_container(
             invoice_attachment_repository,
             attachment_storage,
         )
+        container.get_labor_payments_summary_usecase = GetLaborPaymentsSummaryUseCase(invoice_repository)
 
     # Wire invoice export use case (requires both invoice_repository and project_repository)
     if invoice_repository and project_repository:

@@ -113,6 +113,53 @@ class UpdateInvoiceSchema(BaseModel):
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
+_YYYY_MM_PATTERN = _YYYY_MM.pattern
+
+
+class ListInvoicesFilterQuery(BaseModel):
+    """Optional drill-down query filters for GET /projects/<id>/invoices.
+
+    ``type``/``tag_id`` keep their pre-existing manual-parse/400 error path
+    unchanged; these two are new (Labor Payments Hub) and are validated here,
+    returning 422 on malformed input — mirrors ExportLaborQuery's month-format
+    pattern. Both compose with the existing ``type``/``tag_id`` filters.
+    """
+
+    service_month: Optional[str] = Field(
+        None,
+        pattern=_YYYY_MM_PATTERN,
+        description="Exact service_month match (labor invoices only). Format: YYYY-MM",
+    )
+    worker_id: Optional[UUID] = None
+
+
+class LaborPaymentsWorkerSchema(BaseModel):
+    """One worker's paid total within a labor-payments month bucket."""
+
+    worker_id: str
+    worker_name: str
+    paid: float
+    invoice_count: int
+
+
+class LaborPaymentsMonthSchema(BaseModel):
+    """One (service_month) bucket of the labor-payments summary response.
+
+    year/month are both null for the no-service_month bucket, always last.
+    """
+
+    year: Optional[int] = None
+    month: Optional[int] = None
+    total_paid: float
+    workers: List[LaborPaymentsWorkerSchema]
+    unassigned_paid: float
+    unassigned_count: int
+
+
+class LaborPaymentsSummarySchema(BaseModel):
+    """Response body for GET /projects/<id>/labor-payments-summary."""
+
+    months: List[LaborPaymentsMonthSchema]
 
 
 class ExportInvoicesQuery(BaseModel):
@@ -155,5 +202,9 @@ __all__ = [
     "CreateInvoiceSchema",
     "UpdateInvoiceSchema",
     "ExportInvoicesQuery",
+    "ListInvoicesFilterQuery",
+    "LaborPaymentsWorkerSchema",
+    "LaborPaymentsMonthSchema",
+    "LaborPaymentsSummarySchema",
     "ErrorResponse",
 ]
