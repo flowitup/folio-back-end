@@ -53,3 +53,20 @@ class AppliedAmountExceedsTargetError(InvalidInvoiceDataError):
     """
 
     pass
+
+
+class WorkerLinkNotAllowedError(InvalidInvoiceDataError):
+    """Raised when worker_id is set on an invoice whose type is not 'labor'."""
+
+    pass
+
+
+class WorkerNotInProjectError(InvalidInvoiceDataError):
+    """Raised when worker_id does not reference a worker in the invoice's project.
+
+    Also raised when the worker_id does not exist at all — the same error is
+    used for both cases so the response never leaks whether a given worker id
+    exists outside the caller's project.
+    """
+
+    pass

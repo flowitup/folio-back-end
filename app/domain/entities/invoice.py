@@ -100,6 +100,11 @@ class Invoice:
     # release). Only valid when type == RETURN and settled_via == 'avoir'. ON DELETE
     # SET NULL keeps the return standalone if the target invoice is deleted.
     applied_to_invoice_id: Optional[UUID] = None
+    # Worker link for labor invoices — optional, labor type only. NULL for
+    # non-labor invoices and for labor invoices with no worker recorded.
+    # When set, recipient_name is server-snapshotted from the worker's
+    # display name (see CreateInvoiceUseCase / UpdateInvoiceUseCase).
+    worker_id: Optional[UUID] = None
 
     @property
     def total_amount(self) -> Decimal:

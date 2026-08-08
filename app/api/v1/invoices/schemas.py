@@ -54,6 +54,9 @@ class CreateInvoiceSchema(BaseModel):
     applied_to_invoice_id additionally requires settled_via='avoir' — the use-case
     validates the target and enforces the applied-amount cap, then auto-aligns the
     return's payment_method_id to the target's.
+    worker_id is optional; only valid when type='labor'. The use-case validates the
+    worker belongs to this project and overrides recipient_name with a server-side
+    snapshot of the worker's display name.
     """
 
     type: InvoiceTypeLiteral
@@ -74,13 +77,14 @@ class CreateInvoiceSchema(BaseModel):
     service_month: Optional[date] = None
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
     """Request body for partially updating an invoice.
 
-    payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via, and
-    applied_to_invoice_id use exclude_unset semantics:
+    payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via,
+    applied_to_invoice_id, and worker_id use exclude_unset semantics:
       - field absent  → do not touch that field
       - field = null  → clear the field
       - field = value → set to that value
@@ -105,9 +109,61 @@ class UpdateInvoiceSchema(BaseModel):
     service_month: Optional[date] = None
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
 
 
-_YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
+_YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$")
+_YYYY_MM_PATTERN = _YYYY_MM.pattern
+
+
+class ListInvoicesFilterQuery(BaseModel):
+    """Optional drill-down query filters for GET /projects/<id>/invoices.
+
+    ``type``/``tag_id`` keep their pre-existing manual-parse/400 error path
+    unchanged; these two are new (Labor Payments Hub) and are validated here,
+    returning 422 on malformed input — mirrors ExportLaborQuery's month-format
+    pattern. Both compose with the existing ``type``/``tag_id`` filters.
+    """
+
+    service_month: Optional[str] = Field(
+        None,
+        pattern=_YYYY_MM_PATTERN,
+        description=(
+            "Exact service_month match (labor invoices only). Format: YYYY-MM or "
+            "YYYY-MM-DD — a day suffix is tolerated and normalized to the month, "
+            "matching the YYYY-MM-01 convention the FE uses for the entity field."
+        ),
+    )
+    worker_id: Optional[UUID] = None
+
+
+class LaborPaymentsWorkerSchema(BaseModel):
+    """One worker's paid total within a labor-payments month bucket."""
+
+    worker_id: str
+    worker_name: str
+    paid: float
+    invoice_count: int
+
+
+class LaborPaymentsMonthSchema(BaseModel):
+    """One (service_month) bucket of the labor-payments summary response.
+
+    year/month are both null for the no-service_month bucket, always last.
+    """
+
+    year: Optional[int] = None
+    month: Optional[int] = None
+    total_paid: float
+    workers: List[LaborPaymentsWorkerSchema]
+    unassigned_paid: float
+    unassigned_count: int
+
+
+class LaborPaymentsSummarySchema(BaseModel):
+    """Response body for GET /projects/<id>/labor-payments-summary."""
+
+    months: List[LaborPaymentsMonthSchema]
 
 
 class ExportInvoicesQuery(BaseModel):
@@ -150,5 +206,9 @@ __all__ = [
     "CreateInvoiceSchema",
     "UpdateInvoiceSchema",
     "ExportInvoicesQuery",
+    "ListInvoicesFilterQuery",
+    "LaborPaymentsWorkerSchema",
+    "LaborPaymentsMonthSchema",
+    "LaborPaymentsSummarySchema",
     "ErrorResponse",
 ]

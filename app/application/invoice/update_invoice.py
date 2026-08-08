@@ -18,6 +18,8 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNotFoundError,
     RefundExceedsSourceError,
     ServiceMonthNotAllowedError,
+    WorkerLinkNotAllowedError,
+    WorkerNotInProjectError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.domain.value_objects.invoice_item import InvoiceItem
@@ -57,6 +59,8 @@ class UpdateInvoiceRequest:
     settled_via: object = dataclasses.field(default_factory=lambda: _UNSET)
     # applied_to_invoice_id uses sentinel: _UNSET = keep existing, None = clear link, UUID = set+validate.
     applied_to_invoice_id: object = dataclasses.field(default_factory=lambda: _UNSET)
+    # worker_id uses sentinel: _UNSET = not provided, None = clear, UUID = set (validated + snapshot).
+    worker_id: object = dataclasses.field(default_factory=lambda: _UNSET)
 
 
 def _is_release_payment_method_only_edit(invoice: Invoice, request: UpdateInvoiceRequest) -> bool:
@@ -83,6 +87,7 @@ def _is_release_payment_method_only_edit(invoice: Invoice, request: UpdateInvoic
         and request.service_month is _UNSET
         and request.settled_via is _UNSET
         and request.applied_to_invoice_id is _UNSET
+        and request.worker_id is _UNSET
     )
 
 
@@ -94,10 +99,12 @@ class UpdateInvoiceUseCase:
         invoice_repo: IInvoiceRepository,
         payment_method_repo: object = None,  # IPaymentMethodRepository | None
         tag_repo=None,  # ProjectTagRepositoryPort | None
+        worker_reader: object = None,  # WorkerReaderPort | None
     ) -> None:
         self._repo = invoice_repo
         self._pm_repo = payment_method_repo
         self._tag_repo = tag_repo
+        self._worker_reader = worker_reader
 
     def execute(self, request: UpdateInvoiceRequest) -> InvoiceResponse:
         invoice = self._repo.find_by_id(request.invoice_id)
@@ -216,6 +223,29 @@ class UpdateInvoiceUseCase:
             # service_month is still stored and the PATCH didn't touch it — clear
             # it server-side so no non-labor invoice ever carries a stale month.
             updates["service_month"] = None
+
+        # worker_id sentinel: absent = keep existing (unless cleared below), None = clear,
+        # UUID = set+validate (only valid when effective_type is labor). When set, the
+        # resolved worker display name overrides recipient_name in this same PATCH
+        # (server-side snapshot, not just a default).
+        if request.worker_id is not _UNSET:
+            if request.worker_id is None:
+                updates["worker_id"] = None
+            else:
+                if effective_type != InvoiceType.LABOR:
+                    raise WorkerLinkNotAllowedError("worker_id may only be set on invoices of type 'labor'")
+                if self._worker_reader is None:
+                    raise InvalidInvoiceDataError("Worker link support is not available")
+                worker = self._worker_reader.get_for_project(request.worker_id, invoice.project_id)
+                if worker is None:
+                    raise WorkerNotInProjectError(f"Worker {request.worker_id} not found in this project")
+                updates["worker_id"] = worker.id
+                updates["recipient_name"] = worker.display_name
+        elif effective_type != InvoiceType.LABOR and invoice.worker_id is not None:
+            # Type is changing away from labor (or already isn't labor) while a
+            # worker link is still stored and the PATCH didn't touch it — clear it
+            # server-side so no non-labor invoice ever carries a stale worker link.
+            updates["worker_id"] = None
 
         # refunds_invoice_id sentinel: absent = keep existing, None = clear, UUID = set+validate.
         if request.refunds_invoice_id is not _UNSET:

@@ -1,6 +1,7 @@
 """Invoice API routes."""
 
 import dataclasses
+from datetime import datetime
 from typing import Tuple
 from uuid import UUID
 
@@ -8,11 +9,14 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.validation_error import validation_error_response
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.invoices.schemas import (
     CreateInvoiceSchema,
+    LaborPaymentsSummarySchema,
+    ListInvoicesFilterQuery,
     UpdateInvoiceSchema,
     normalize_invoice_type_value,
 )
@@ -28,6 +32,7 @@ from app.application.invoice import (
     UpdateInvoiceRequest,
 )
 from app.application.invoice.dtos import money
+from app.application.invoice.get_labor_payments_summary_usecase import GetLaborPaymentsSummaryRequest
 from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.entities.invoice import InvoiceType
 from app.domain.exceptions.invoice_exceptions import (
@@ -38,6 +43,8 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNumberConflictError,
     RefundExceedsSourceError,
     ServiceMonthNotAllowedError,
+    WorkerLinkNotAllowedError,
+    WorkerNotInProjectError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.infrastructure.database.models.invoice import InvoiceModel
@@ -273,12 +280,16 @@ def _enrich_invoice_with_personal_payment(
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["GET"])
-@openapi_doc(summary="List invoices for a project, optionally filtered by ?type=", tags=["invoices"])
+@openapi_doc(
+    summary="List invoices for a project, optionally filtered by ?type=/?tag_id=/?service_month=/?worker_id=",
+    query=ListInvoicesFilterQuery,
+    tags=["invoices"],
+)
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
 def list_invoices(project_id: str):
-    """List invoices for a project, optionally filtered by ?type=."""
+    """List invoices for a project, optionally filtered by ?type=/?tag_id=/?service_month=/?worker_id=."""
     invoice_type_param = normalize_invoice_type_value(request.args.get("type"))
     tag_id_param = request.args.get("tag_id")
     try:
@@ -291,6 +302,22 @@ def list_invoices(project_id: str):
             400,
         )
 
+    # service_month/worker_id are the labor-payments drill-down filters — validated
+    # via Pydantic so malformed input returns 422 (mirrors ExportLaborQuery).
+    try:
+        filters = ListInvoicesFilterQuery(
+            service_month=request.args.get("service_month"),
+            worker_id=request.args.get("worker_id"),
+        )
+    except ValidationError as e:
+        return format_validation_error(e)
+
+    # The schema tolerates an optional -DD suffix; only the month prefix is
+    # significant, so truncate before parsing to normalize both forms to day 1.
+    service_month_date = (
+        datetime.strptime(filters.service_month[:7], "%Y-%m").date().replace(day=1) if filters.service_month else None
+    )
+
     container = get_container()
     try:
         results = container.list_invoices_usecase.execute(
@@ -298,6 +325,8 @@ def list_invoices(project_id: str):
                 project_id=UUID(project_id),
                 invoice_type=parsed_type,
                 tag_id=UUID(tag_id_param) if tag_id_param else None,
+                service_month=service_month_date,
+                worker_id=filters.worker_id,
             )
         )
     except ValueError as e:
@@ -406,6 +435,24 @@ def list_invoices(project_id: str):
     )
 
 
+@invoice_bp.route("/projects/<project_id>/labor-payments-summary", methods=["GET"])
+@openapi_doc(
+    summary="Aggregate paid labor amounts per service month and worker",
+    responses={200: LaborPaymentsSummarySchema},
+    tags=["invoices"],
+)
+@jwt_required()
+@require_permission("project:read")
+@require_project_access(write=False)
+def get_labor_payments_summary(project_id: str):
+    """Aggregate paid amounts per (service_month, worker) for the project's labor invoices."""
+    result = get_container().get_labor_payments_summary_usecase.execute(
+        GetLaborPaymentsSummaryRequest(project_id=UUID(project_id))
+    )
+    schema = LaborPaymentsSummarySchema.model_validate(dataclasses.asdict(result))
+    return jsonify(schema.model_dump())
+
+
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])
 @openapi_doc(
     summary="Create a new invoice for a project",
@@ -448,6 +495,7 @@ def create_invoice(project_id: str):
                 service_month=data.service_month,
                 settled_via=data.settled_via,
                 applied_to_invoice_id=data.applied_to_invoice_id,
+                worker_id=data.worker_id,
             )
         )
     except InvoiceNumberConflictError:
@@ -466,6 +514,10 @@ def create_invoice(project_id: str):
         return _error_response("AppliedExceedsTarget", str(e), 400)
     except ServiceMonthNotAllowedError:
         return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
+    except WorkerLinkNotAllowedError:
+        return _error_response("worker_link_not_allowed", "worker_id is only allowed on labor invoices", 400)
+    except WorkerNotInProjectError:
+        return _error_response("worker_not_in_project", "Worker does not belong to this project", 400)
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except InvalidInvoiceDataError as e:
@@ -533,9 +585,9 @@ def update_invoice(project_id: str, invoice_id: str):
 
     # Build kwargs — only pass fields the caller provided.
     # issue_date is already a date object from Pydantic (no manual conversion needed).
-    # payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via, and
-    # applied_to_invoice_id are handled separately: use exclude_unset so we can
-    # distinguish "not provided" (absent) from "explicitly null".
+    # payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via,
+    # applied_to_invoice_id, and worker_id are handled separately: use exclude_unset
+    # so we can distinguish "not provided" (absent) from "explicitly null".
     provided_fields = data.model_dump(exclude_unset=True)
     sentinel_fields = (
         "payment_method_id",
@@ -544,6 +596,7 @@ def update_invoice(project_id: str, invoice_id: str):
         "service_month",
         "settled_via",
         "applied_to_invoice_id",
+        "worker_id",
     )
     update_kwargs = {k: v for k, v in provided_fields.items() if k not in sentinel_fields and v is not None}
     # type arrives as a validated string literal; the use case and domain entity
@@ -564,8 +617,8 @@ def update_invoice(project_id: str, invoice_id: str):
     project_uuid = UUID(project_id)
 
     # Determine payment_method, tag_id, refunds_invoice_id, service_month, settled_via,
-    # and applied_to_invoice_id sentinels: _UNSET if not in request body; else the
-    # provided value (which may be None = clear).
+    # applied_to_invoice_id, and worker_id sentinels: _UNSET if not in request body;
+    # else the provided value (which may be None = clear).
     from app.application.invoice.update_invoice import _UNSET
 
     pm_id = provided_fields["payment_method_id"] if "payment_method_id" in provided_fields else _UNSET
@@ -574,6 +627,7 @@ def update_invoice(project_id: str, invoice_id: str):
     service_month_val = provided_fields["service_month"] if "service_month" in provided_fields else _UNSET
     settled_via_val = provided_fields["settled_via"] if "settled_via" in provided_fields else _UNSET
     applied_to_val = provided_fields["applied_to_invoice_id"] if "applied_to_invoice_id" in provided_fields else _UNSET
+    worker_id_val = provided_fields["worker_id"] if "worker_id" in provided_fields else _UNSET
 
     company_id = _get_project_company_id(project_uuid) if pm_id is not _UNSET else None
 
@@ -586,6 +640,7 @@ def update_invoice(project_id: str, invoice_id: str):
         service_month=service_month_val,
         settled_via=settled_via_val,
         applied_to_invoice_id=applied_to_val,
+        worker_id=worker_id_val,
         **update_kwargs,
     )
 
@@ -609,6 +664,10 @@ def update_invoice(project_id: str, invoice_id: str):
         return _error_response("AppliedExceedsTarget", str(e), 400)
     except ServiceMonthNotAllowedError:
         return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
+    except WorkerLinkNotAllowedError:
+        return _error_response("worker_link_not_allowed", "worker_id is only allowed on labor invoices", 400)
+    except WorkerNotInProjectError:
+        return _error_response("worker_not_in_project", "Worker does not belong to this project", 400)
     except (ValueError, InvalidInvoiceDataError) as e:
         return _error_response("ValidationError", str(e), 400)
 

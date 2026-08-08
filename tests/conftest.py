@@ -690,6 +690,15 @@ def invitation_app():
             _inv_repo = _InvRepo(db.session)
             _c.invoice_repository = _inv_repo
 
+        # Wire labor-payments-summary use-case (Labor Payments Hub).
+        # CRITICAL: any use-case added to _configure_di_container() MUST also
+        # appear here or the invitation_app test fixture will drift from prod.
+        from app.application.invoice.get_labor_payments_summary_usecase import (
+            GetLaborPaymentsSummaryUseCase as _GetLaborPaymentsSummaryUC,
+        )
+
+        _c.get_labor_payments_summary_usecase = _GetLaborPaymentsSummaryUC(_c.invoice_repository)
+
         # Re-wire create_company_usecase with seeder
         from app.application.companies.create_company_usecase import (
             CreateCompanyUseCase as _CreateCompanyUCv2,
@@ -878,6 +887,15 @@ def invitation_app():
                 tag_repo=_tag_repo,
             )
 
+        # Read-only worker lookup for validating/snapshotting invoice worker links.
+        # Mirrors app/__init__.py.
+        from app.infrastructure.adapters.sqlalchemy_worker_reader import (
+            SQLAlchemyWorkerReader as _WorkerReader,
+        )
+
+        _worker_reader = _WorkerReader(db.session)
+        _c.worker_reader = _worker_reader
+
         # Single construction of invoice write use-cases — includes tag_repo from the start.
         from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
         from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
@@ -888,11 +906,13 @@ def invitation_app():
                 invoice_repo=_c.invoice_repository,
                 payment_method_repo=_pm,
                 tag_repo=_tag_repo,
+                worker_reader=_worker_reader,
             )
             _c.update_invoice_usecase = _UpdateInvUC(
                 invoice_repo=_c.invoice_repository,
                 payment_method_repo=_pm,
                 tag_repo=_tag_repo,
+                worker_reader=_worker_reader,
             )
 
         # ------------------------------------------------------------------

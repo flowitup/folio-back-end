@@ -136,6 +136,16 @@ class InvoiceModel(Base):
         index=True,
     )
 
+    # Worker link for labor invoices — optional; NULL for non-labor invoices and
+    # for labor invoices with no worker recorded. ON DELETE SET NULL keeps the
+    # invoice (financial record) intact when the linked worker is deleted.
+    worker_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("workers.id", ondelete="SET NULL", name="fk_invoices_worker_id"),
+        nullable=True,
+        index=True,
+    )
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
