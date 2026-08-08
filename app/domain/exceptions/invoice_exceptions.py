@@ -43,3 +43,13 @@ class ServiceMonthNotAllowedError(InvalidInvoiceDataError):
     """Raised when service_month is set on an invoice whose type is not 'labor'."""
 
     pass
+
+
+class AppliedAmountExceedsTargetError(InvalidInvoiceDataError):
+    """Raised when an avoir return's applied amount would exceed the target invoice's total.
+
+    The message includes the remaining applicable amount so the caller can surface a
+    precise error to the user.
+    """
+
+    pass

@@ -461,6 +461,55 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             total += _items_total(m.items)
         return total
 
+    def sum_applied_for_target(self, target_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
+        """Sum total_amount of all avoir return invoices applied to target_id.
+
+        Only counts invoices of type 'return' whose applied_to_invoice_id == target_id.
+        When exclude_invoice_id is provided, that invoice's own row is excluded from the
+        sum — used on update to avoid self-double-counting.
+        items is JSONB — computed in Python to stay DB-agnostic.
+        """
+        query = self._session.query(InvoiceModel).filter(
+            InvoiceModel.type == InvoiceType.RETURN.value,
+            InvoiceModel.applied_to_invoice_id == target_id,
+        )
+        if exclude_invoice_id is not None:
+            query = query.filter(InvoiceModel.id != exclude_invoice_id)
+        rows = query.all()
+        total = Decimal("0")
+        for m in rows:
+            total += _items_total(m.items)
+        return total
+
+    def applied_return_summaries(self, invoice_ids: list[UUID]) -> dict[UUID, list[dict]]:
+        """Return {target_invoice_id: [{"invoice_number": str, "total_amount": float}, ...]}.
+
+        Reverse lookup powering 'paid_with_returns': for each id in invoice_ids, the
+        avoir return invoices whose applied_to_invoice_id points at it. Single batch
+        query (one IN clause) regardless of page size; short-circuits on empty input to
+        avoid emitting an invalid ``IN ()`` clause.
+        """
+        if not invoice_ids:
+            return {}
+        rows = (
+            self._session.query(
+                InvoiceModel.applied_to_invoice_id,
+                InvoiceModel.invoice_number,
+                InvoiceModel.items,
+            )
+            .filter(
+                InvoiceModel.type == InvoiceType.RETURN.value,
+                InvoiceModel.applied_to_invoice_id.in_(invoice_ids),
+            )
+            .all()
+        )
+        result: dict[UUID, list[dict]] = {}
+        for target_id, invoice_number, items in rows:
+            result.setdefault(target_id, []).append(
+                {"invoice_number": invoice_number, "total_amount": float(_items_total(items))}
+            )
+        return result
+
     def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
         """Return the subset of source_ids that have ≥1 linked refund invoice.
 

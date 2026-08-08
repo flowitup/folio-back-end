@@ -158,6 +158,29 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def sum_applied_for_target(self, target_id: UUID, exclude_invoice_id: "UUID | None" = None) -> Decimal:
+        """Sum total_amount of all avoir return invoices applied to target_id.
+
+        Only counts invoices of type 'return' with applied_to_invoice_id == target_id.
+        When exclude_invoice_id is provided, that invoice's own row is excluded
+        from the sum (used on update to avoid self-double-counting).
+        Returns Decimal("0") when no matching rows exist.
+        """
+        ...
+
+    @abstractmethod
+    def applied_return_summaries(self, invoice_ids: list[UUID]) -> dict[UUID, list[dict]]:
+        """Return {target_invoice_id: [{"invoice_number": str, "total_amount": float}, ...]}.
+
+        Reverse lookup powering 'paid_with_returns': for each id in invoice_ids, the
+        avoir return invoices whose applied_to_invoice_id points at it.
+
+        Batch reverse-lookup — one query regardless of input size. Empty input
+        returns an empty dict without issuing a query.
+        """
+        ...
+
+    @abstractmethod
     def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
         """Return the subset of source_ids that have ≥1 linked refund invoice.
 

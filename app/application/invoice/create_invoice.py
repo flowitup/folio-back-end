@@ -9,14 +9,20 @@ from uuid import UUID, uuid4
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.tags.exceptions import InvalidProjectTagError
-from app.domain.entities.invoice import Invoice, InvoiceType, MIXED_SIGN_TYPES
+from app.domain.entities.invoice import Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
+    AppliedAmountExceedsTargetError,
     InvalidInvoiceDataError,
     RefundExceedsSourceError,
     ServiceMonthNotAllowedError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.domain.value_objects.invoice_item import InvoiceItem
+
+# Allowed settled_via string values (mirrors SettledVia enum members). Validated
+# here too — not only at the Pydantic schema boundary — so any direct/internal
+# caller of the use-case still gets the invariant enforced.
+_VALID_SETTLED_VIA = {v.value for v in SettledVia}
 
 
 @dataclass
@@ -41,6 +47,11 @@ class CreateInvoiceRequest:
     # Payment month for labor invoices — optional; only valid when type == LABOR.
     # Normalized to day=1 by the use-case.
     service_month: Optional[date] = None
+    # How this return is settled ('cash' | 'avoir') — optional; only valid when type == RETURN.
+    settled_via: Optional[str] = None
+    # Avoir-only link: the invoice this return's credit is applied to — optional; only
+    # valid when type == RETURN and settled_via == 'avoir'.
+    applied_to_invoice_id: Optional[UUID] = None
 
 
 class CreateInvoiceUseCase:
@@ -134,6 +145,52 @@ class CreateInvoiceUseCase:
                 )
             refunds_invoice_id = request.refunds_invoice_id
 
+        # settled_via / applied_to_invoice_id validation (only valid on type == RETURN).
+        if (request.settled_via is not None or request.applied_to_invoice_id is not None) and (
+            request.type != InvoiceType.RETURN
+        ):
+            raise InvalidInvoiceDataError(
+                "settled_via and applied_to_invoice_id may only be set on invoices of type 'return'"
+            )
+
+        settled_via: Optional[str] = None
+        if request.settled_via is not None:
+            if request.settled_via not in _VALID_SETTLED_VIA:
+                raise InvalidInvoiceDataError(f"settled_via must be one of: {', '.join(sorted(_VALID_SETTLED_VIA))}")
+            settled_via = request.settled_via
+
+        applied_to_invoice_id: Optional[UUID] = None
+        if request.applied_to_invoice_id is not None:
+            # applied_to_invoice_id means "consumed as payment" — only meaningful when
+            # the return is settled as store credit, not a straight cash refund.
+            if settled_via != SettledVia.AVOIR.value:
+                raise InvalidInvoiceDataError("applied_to_invoice_id may only be set when settled_via is 'avoir'")
+            target = self._repo.find_by_id(request.applied_to_invoice_id)
+            if target is None:
+                raise InvalidInvoiceDataError(f"Target invoice {request.applied_to_invoice_id} not found")
+            if target.project_id != request.project_id:
+                raise InvalidInvoiceDataError("applied_to_invoice_id must reference an invoice in the same project")
+            if target.type in (InvoiceType.RETURN, InvoiceType.RELEASED_FUNDS):
+                raise InvalidInvoiceDataError(
+                    "applied_to_invoice_id must reference an invoice that is not a return or released_funds"
+                )
+            # Cap: abs(Σ applied returns incl. this one) must stay <= target total.
+            this_total = sum((item.total for item in invoice_items), Decimal("0"))
+            existing_applied = self._repo.sum_applied_for_target(target.id)
+            total_applied = existing_applied + this_total
+            if abs(total_applied) > target.total_amount:
+                remaining = target.total_amount - abs(existing_applied)
+                raise AppliedAmountExceedsTargetError(
+                    f"Applied amount exceeds target invoice total. Remaining applicable: {remaining:.2f}"
+                )
+            applied_to_invoice_id = target.id
+            # Auto-align: server-side copy of the target's payment method, even when
+            # NULL — an avoir return is settled by consuming the target invoice's
+            # payment record, so it must mirror the target exactly regardless of
+            # whatever payment_method_id the caller may have also supplied.
+            payment_method_id = target.payment_method_id
+            payment_method_label = target.payment_method_label
+
         # service_month is only valid on labor invoices; normalize any day to day=1.
         service_month: Optional[date] = None
         if request.service_month is not None:
@@ -163,6 +220,8 @@ class CreateInvoiceUseCase:
             tag_id=request.tag_id,
             refunds_invoice_id=refunds_invoice_id,
             service_month=service_month,
+            settled_via=settled_via,
+            applied_to_invoice_id=applied_to_invoice_id,
         )
 
         saved = self._repo.create(invoice)
