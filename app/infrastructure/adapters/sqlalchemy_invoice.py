@@ -100,6 +100,7 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         service_month=m.service_month,
         settled_via=m.settled_via,
         applied_to_invoice_id=m.applied_to_invoice_id,
+        worker_id=m.worker_id,
     )
 
 
@@ -134,6 +135,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             service_month=invoice.service_month,
             settled_via=invoice.settled_via,
             applied_to_invoice_id=invoice.applied_to_invoice_id,
+            worker_id=invoice.worker_id,
         )
         self._session.add(model)
         try:
@@ -187,6 +189,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.service_month = invoice.service_month
         model.settled_via = invoice.settled_via
         model.applied_to_invoice_id = invoice.applied_to_invoice_id
+        model.worker_id = invoice.worker_id
         self._session.commit()
         return _model_to_entity(model)
 

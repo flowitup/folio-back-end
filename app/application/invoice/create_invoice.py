@@ -15,6 +15,8 @@ from app.domain.exceptions.invoice_exceptions import (
     InvalidInvoiceDataError,
     RefundExceedsSourceError,
     ServiceMonthNotAllowedError,
+    WorkerLinkNotAllowedError,
+    WorkerNotInProjectError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.domain.value_objects.invoice_item import InvoiceItem
@@ -52,6 +54,9 @@ class CreateInvoiceRequest:
     # Avoir-only link: the invoice this return's credit is applied to — optional; only
     # valid when type == RETURN and settled_via == 'avoir'.
     applied_to_invoice_id: Optional[UUID] = None
+    # Worker link — optional; only valid when type == LABOR. When set, the
+    # use-case snapshots recipient_name from the worker's display name.
+    worker_id: Optional[UUID] = None
 
 
 class CreateInvoiceUseCase:
@@ -62,10 +67,12 @@ class CreateInvoiceUseCase:
         invoice_repo: IInvoiceRepository,
         payment_method_repo: object = None,  # IPaymentMethodRepository | None
         tag_repo=None,  # ProjectTagRepositoryPort | None
+        worker_reader: object = None,  # WorkerReaderPort | None
     ) -> None:
         self._repo = invoice_repo
         self._pm_repo = payment_method_repo
         self._tag_repo = tag_repo
+        self._worker_reader = worker_reader
 
     def execute(self, request: CreateInvoiceRequest) -> InvoiceResponse:
         # Validate recipient
@@ -202,6 +209,21 @@ class CreateInvoiceUseCase:
                 raise ServiceMonthNotAllowedError("service_month may only be set on invoices of type 'labor'")
             service_month = request.service_month.replace(day=1)
 
+        # worker_id is only valid on labor invoices; the worker must belong to this
+        # project. When set, the resolved display name overrides the client-sent
+        # recipient_name (server-side snapshot, not just a default).
+        worker_id: Optional[UUID] = None
+        if request.worker_id is not None:
+            if request.type != InvoiceType.LABOR:
+                raise WorkerLinkNotAllowedError("worker_id may only be set on invoices of type 'labor'")
+            if self._worker_reader is None:
+                raise InvalidInvoiceDataError("Worker link support is not available")
+            worker = self._worker_reader.get_for_project(request.worker_id, request.project_id)
+            if worker is None:
+                raise WorkerNotInProjectError(f"Worker {request.worker_id} not found in this project")
+            worker_id = worker.id
+            name = worker.display_name
+
         # Generate invoice number via repo
         invoice_number = self._repo.next_invoice_number(request.project_id)
 
@@ -226,6 +248,7 @@ class CreateInvoiceUseCase:
             service_month=service_month,
             settled_via=settled_via,
             applied_to_invoice_id=applied_to_invoice_id,
+            worker_id=worker_id,
         )
 
         saved = self._repo.create(invoice)

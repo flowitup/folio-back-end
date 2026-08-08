@@ -68,6 +68,8 @@ class InvoiceResponse:
     # applied_to_invoice_number is enriched at the route layer from a secondary lookup.
     applied_to_invoice_id: Optional[str] = None
     applied_to_invoice_number: Optional[str] = None
+    # Worker link for labor invoices — present only when a worker is recorded.
+    worker_id: Optional[str] = None
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -111,4 +113,5 @@ class InvoiceResponse:
             applied_to_invoice_id=(str(inv.applied_to_invoice_id) if inv.applied_to_invoice_id is not None else None),
             # applied_to_invoice_number is None here; the route enriches it via a lookup.
             applied_to_invoice_number=None,
+            worker_id=str(inv.worker_id) if inv.worker_id is not None else None,
         )

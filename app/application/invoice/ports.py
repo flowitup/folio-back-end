@@ -1,12 +1,45 @@
 """Invoice repository port — persistence contract for the invoice domain."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import BinaryIO, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.invoice import Invoice, InvoiceType
+
+
+@dataclass(frozen=True)
+class WorkerRef:
+    """Minimal worker projection the invoice BC needs to validate/snapshot a worker link.
+
+    display_name is the resolved COALESCE(persons.name, workers.name) — the same
+    display precedence used by labor summaries — snapshotted into
+    Invoice.recipient_name when a worker is linked.
+    """
+
+    id: UUID
+    project_id: UUID
+    display_name: str
+
+
+class WorkerReaderPort(Protocol):
+    """Cross-BC port: invoice → labor, read-only worker lookup for the worker_id link.
+
+    Keeps the invoice BC decoupled from labor's WorkerModel / IWorkerRepository —
+    only the minimal projection needed to validate a worker link and snapshot its
+    display name is exposed here.
+    """
+
+    def get_for_project(self, worker_id: UUID, project_id: UUID) -> Optional[WorkerRef]:
+        """Return the worker if it exists AND belongs to project_id, else None.
+
+        A worker that exists but belongs to a different project must return
+        None — same as a worker that does not exist at all — so callers never
+        leak cross-project existence.
+        """
+        ...
 
 
 class BankRefundReleasePort(Protocol):

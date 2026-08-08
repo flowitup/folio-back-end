@@ -38,6 +38,8 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNumberConflictError,
     RefundExceedsSourceError,
     ServiceMonthNotAllowedError,
+    WorkerLinkNotAllowedError,
+    WorkerNotInProjectError,
 )
 from app.domain.payment_methods.exceptions import PaymentMethodNotActiveError, PaymentMethodNotFoundError
 from app.infrastructure.database.models.invoice import InvoiceModel
@@ -448,6 +450,7 @@ def create_invoice(project_id: str):
                 service_month=data.service_month,
                 settled_via=data.settled_via,
                 applied_to_invoice_id=data.applied_to_invoice_id,
+                worker_id=data.worker_id,
             )
         )
     except InvoiceNumberConflictError:
@@ -466,6 +469,10 @@ def create_invoice(project_id: str):
         return _error_response("AppliedExceedsTarget", str(e), 400)
     except ServiceMonthNotAllowedError:
         return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
+    except WorkerLinkNotAllowedError:
+        return _error_response("worker_link_not_allowed", "worker_id is only allowed on labor invoices", 400)
+    except WorkerNotInProjectError:
+        return _error_response("worker_not_in_project", "Worker does not belong to this project", 400)
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except InvalidInvoiceDataError as e:
@@ -533,9 +540,9 @@ def update_invoice(project_id: str, invoice_id: str):
 
     # Build kwargs — only pass fields the caller provided.
     # issue_date is already a date object from Pydantic (no manual conversion needed).
-    # payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via, and
-    # applied_to_invoice_id are handled separately: use exclude_unset so we can
-    # distinguish "not provided" (absent) from "explicitly null".
+    # payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via,
+    # applied_to_invoice_id, and worker_id are handled separately: use exclude_unset
+    # so we can distinguish "not provided" (absent) from "explicitly null".
     provided_fields = data.model_dump(exclude_unset=True)
     sentinel_fields = (
         "payment_method_id",
@@ -544,6 +551,7 @@ def update_invoice(project_id: str, invoice_id: str):
         "service_month",
         "settled_via",
         "applied_to_invoice_id",
+        "worker_id",
     )
     update_kwargs = {k: v for k, v in provided_fields.items() if k not in sentinel_fields and v is not None}
     # type arrives as a validated string literal; the use case and domain entity
@@ -564,8 +572,8 @@ def update_invoice(project_id: str, invoice_id: str):
     project_uuid = UUID(project_id)
 
     # Determine payment_method, tag_id, refunds_invoice_id, service_month, settled_via,
-    # and applied_to_invoice_id sentinels: _UNSET if not in request body; else the
-    # provided value (which may be None = clear).
+    # applied_to_invoice_id, and worker_id sentinels: _UNSET if not in request body;
+    # else the provided value (which may be None = clear).
     from app.application.invoice.update_invoice import _UNSET
 
     pm_id = provided_fields["payment_method_id"] if "payment_method_id" in provided_fields else _UNSET
@@ -574,6 +582,7 @@ def update_invoice(project_id: str, invoice_id: str):
     service_month_val = provided_fields["service_month"] if "service_month" in provided_fields else _UNSET
     settled_via_val = provided_fields["settled_via"] if "settled_via" in provided_fields else _UNSET
     applied_to_val = provided_fields["applied_to_invoice_id"] if "applied_to_invoice_id" in provided_fields else _UNSET
+    worker_id_val = provided_fields["worker_id"] if "worker_id" in provided_fields else _UNSET
 
     company_id = _get_project_company_id(project_uuid) if pm_id is not _UNSET else None
 
@@ -586,6 +595,7 @@ def update_invoice(project_id: str, invoice_id: str):
         service_month=service_month_val,
         settled_via=settled_via_val,
         applied_to_invoice_id=applied_to_val,
+        worker_id=worker_id_val,
         **update_kwargs,
     )
 
@@ -609,6 +619,10 @@ def update_invoice(project_id: str, invoice_id: str):
         return _error_response("AppliedExceedsTarget", str(e), 400)
     except ServiceMonthNotAllowedError:
         return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
+    except WorkerLinkNotAllowedError:
+        return _error_response("worker_link_not_allowed", "worker_id is only allowed on labor invoices", 400)
+    except WorkerNotInProjectError:
+        return _error_response("worker_not_in_project", "Worker does not belong to this project", 400)
     except (ValueError, InvalidInvoiceDataError) as e:
         return _error_response("ValidationError", str(e), 400)
 

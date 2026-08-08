@@ -262,3 +262,47 @@ class TestInvoiceServiceMonth:
         assert updated.service_month == date(2026, 3, 1)
         # Original instance must remain unchanged (dataclasses.replace semantics).
         assert invoice.service_month is None
+
+
+class TestInvoiceWorkerId:
+    """Tests for the optional worker_id field."""
+
+    def test_defaults_to_none(self):
+        """worker_id must default to None when not supplied."""
+        invoice = make_invoice()
+        assert invoice.worker_id is None
+
+    def test_accepts_a_uuid_value(self):
+        """worker_id can be set directly on construction."""
+        worker_id = uuid4()
+        invoice = make_invoice(type=InvoiceType.LABOR, worker_id=worker_id)
+        assert invoice.worker_id == worker_id
+
+    def test_with_updates_replaces_worker_id(self):
+        """with_updates must be able to set worker_id like any other field."""
+        invoice = make_invoice(type=InvoiceType.LABOR)
+        worker_id = uuid4()
+        updated = invoice.with_updates(worker_id=worker_id)
+        assert updated.worker_id == worker_id
+        # Original instance must remain unchanged (dataclasses.replace semantics).
+        assert invoice.worker_id is None
+
+    def test_with_updates_worker_id_only_leaves_other_fields_untouched(self):
+        """Regression: a PATCH that touches ONLY worker_id must not drop/alter
+        unrelated fields (description-drop landmine — see with_updates docstring).
+        """
+        worker_id = uuid4()
+        invoice = make_invoice(
+            type=InvoiceType.LABOR,
+            recipient_name="Original Recipient",
+            notes="Keep me",
+            recipient_address="123 Main St",
+        )
+        updated = invoice.with_updates(worker_id=worker_id)
+
+        assert updated.worker_id == worker_id
+        assert updated.recipient_name == "Original Recipient"
+        assert updated.notes == "Keep me"
+        assert updated.recipient_address == "123 Main St"
+        assert updated.type == InvoiceType.LABOR
+        assert updated.id == invoice.id

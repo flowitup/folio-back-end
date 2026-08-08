@@ -1051,6 +1051,15 @@ def _configure_di_container() -> None:
             tag_repo=_tag_repo,
         )
 
+    # Read-only worker lookup for validating/snapshotting invoice worker links —
+    # decouples the invoice BC from labor's WorkerModel/IWorkerRepository.
+    from app.infrastructure.adapters.sqlalchemy_worker_reader import (
+        SQLAlchemyWorkerReader as _WorkerReader,
+    )
+
+    _worker_reader = _WorkerReader(db.session)
+    _c.worker_reader = _worker_reader
+
     # Single construction of invoice write use-cases — includes tag_repo from the start.
     from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
     from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
@@ -1061,11 +1070,13 @@ def _configure_di_container() -> None:
             invoice_repo=_c.invoice_repository,
             payment_method_repo=_pm,
             tag_repo=_tag_repo,
+            worker_reader=_worker_reader,
         )
         _c.update_invoice_usecase = _UpdateInvUC(
             invoice_repo=_c.invoice_repository,
             payment_method_repo=_pm,
             tag_repo=_tag_repo,
+            worker_reader=_worker_reader,
         )
 
     # -----------------------------------------------------------------------

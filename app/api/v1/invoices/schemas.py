@@ -54,6 +54,9 @@ class CreateInvoiceSchema(BaseModel):
     applied_to_invoice_id additionally requires settled_via='avoir' — the use-case
     validates the target and enforces the applied-amount cap, then auto-aligns the
     return's payment_method_id to the target's.
+    worker_id is optional; only valid when type='labor'. The use-case validates the
+    worker belongs to this project and overrides recipient_name with a server-side
+    snapshot of the worker's display name.
     """
 
     type: InvoiceTypeLiteral
@@ -74,13 +77,14 @@ class CreateInvoiceSchema(BaseModel):
     service_month: Optional[date] = None
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
     """Request body for partially updating an invoice.
 
-    payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via, and
-    applied_to_invoice_id use exclude_unset semantics:
+    payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via,
+    applied_to_invoice_id, and worker_id use exclude_unset semantics:
       - field absent  → do not touch that field
       - field = null  → clear the field
       - field = value → set to that value
@@ -105,6 +109,7 @@ class UpdateInvoiceSchema(BaseModel):
     service_month: Optional[date] = None
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")

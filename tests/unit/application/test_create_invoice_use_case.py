@@ -8,12 +8,17 @@ import pytest
 
 from app.application.invoice.create_invoice import CreateInvoiceUseCase, CreateInvoiceRequest
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import IInvoiceRepository, WorkerRef
 from app.application.invoice.update_invoice import UpdateInvoiceUseCase, UpdateInvoiceRequest
 from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus
 from app.domain.entities.project_tag import ProjectTag
-from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, ServiceMonthNotAllowedError
+from app.domain.exceptions.invoice_exceptions import (
+    InvalidInvoiceDataError,
+    ServiceMonthNotAllowedError,
+    WorkerLinkNotAllowedError,
+    WorkerNotInProjectError,
+)
 
 
 def make_mock_repo():
@@ -774,3 +779,234 @@ class TestUpdateInvoiceServiceMonth:
 
         assert result.type == "labor"
         assert result.service_month == "2026-07-01"
+
+
+# ---------------------------------------------------------------------------
+# worker_id — CreateInvoice / UpdateInvoice
+# ---------------------------------------------------------------------------
+
+
+def _make_worker_ref(project_id, display_name="Jean Dupont", worker_id=None) -> WorkerRef:
+    return WorkerRef(id=worker_id or uuid4(), project_id=project_id, display_name=display_name)
+
+
+def _make_worker_reader(worker_ref):
+    """Mock WorkerReaderPort returning worker_ref (or None) from get_for_project."""
+    reader = Mock()
+    reader.get_for_project.return_value = worker_ref
+    return reader
+
+
+class TestCreateInvoiceWorkerLink:
+    """CreateInvoiceUseCase must gate worker_id to labor invoices and snapshot the name."""
+
+    def test_labor_invoice_with_worker_snapshots_recipient_name(self):
+        project_id = uuid4()
+        worker = _make_worker_ref(project_id, display_name="Jean Dupont")
+        repo = make_mock_repo()
+        worker_reader = _make_worker_reader(worker)
+        use_case = CreateInvoiceUseCase(repo, worker_reader=worker_reader)
+
+        result = use_case.execute(
+            make_request(project_id=project_id, type=InvoiceType.LABOR, worker_id=worker.id, recipient_name="Ignored")
+        )
+
+        assert result.worker_id == str(worker.id)
+        # Server-side snapshot overrides the client-sent recipient_name.
+        assert result.recipient_name == "Jean Dupont"
+        worker_reader.get_for_project.assert_called_once_with(worker.id, project_id)
+
+    def test_labor_invoice_without_worker_id_is_none(self):
+        repo = make_mock_repo()
+        worker_reader = _make_worker_reader(None)
+        use_case = CreateInvoiceUseCase(repo, worker_reader=worker_reader)
+
+        result = use_case.execute(make_request(type=InvoiceType.LABOR))
+
+        assert result.worker_id is None
+        worker_reader.get_for_project.assert_not_called()
+
+    def test_non_labor_invoice_with_worker_id_raises(self):
+        project_id = uuid4()
+        worker = _make_worker_ref(project_id)
+        repo = make_mock_repo()
+        worker_reader = _make_worker_reader(worker)
+        use_case = CreateInvoiceUseCase(repo, worker_reader=worker_reader)
+
+        with pytest.raises(WorkerLinkNotAllowedError):
+            use_case.execute(
+                make_request(project_id=project_id, type=InvoiceType.MATERIALS_SERVICES, worker_id=worker.id)
+            )
+
+        repo.create.assert_not_called()
+
+    def test_foreign_project_worker_raises(self):
+        """Worker exists but belongs to a different project → WorkerNotInProjectError."""
+        project_id = uuid4()
+        repo = make_mock_repo()
+        worker_reader = _make_worker_reader(None)  # reader returns None for cross-project/missing
+        use_case = CreateInvoiceUseCase(repo, worker_reader=worker_reader)
+
+        with pytest.raises(WorkerNotInProjectError):
+            use_case.execute(make_request(project_id=project_id, type=InvoiceType.LABOR, worker_id=uuid4()))
+
+        repo.create.assert_not_called()
+
+    def test_worker_id_without_worker_reader_configured_raises(self):
+        """worker_reader=None (not wired) must fail closed, not silently ignore worker_id."""
+        repo = make_mock_repo()
+        use_case = CreateInvoiceUseCase(repo)  # worker_reader defaults to None
+
+        with pytest.raises(InvalidInvoiceDataError, match="[Ww]orker"):
+            use_case.execute(make_request(type=InvoiceType.LABOR, worker_id=uuid4()))
+
+        repo.create.assert_not_called()
+
+
+class TestUpdateInvoiceWorkerLink:
+    """UpdateInvoiceUseCase must thread worker_id through the sentinel + guard + clear-on-type-change pattern."""
+
+    def test_patch_only_worker_id_sets_link_and_snapshots_name(self):
+        project_id = uuid4()
+        invoice = _make_invoice(
+            project_id,
+            type=InvoiceType.LABOR,
+            notes="Untouched notes",
+        )
+        worker = _make_worker_ref(project_id, display_name="Marie Curie")
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        worker_reader = _make_worker_reader(worker)
+        use_case = UpdateInvoiceUseCase(inv_repo, worker_reader=worker_reader)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, worker_id=worker.id))
+
+        assert result.worker_id == str(worker.id)
+        assert result.recipient_name == "Marie Curie"
+        assert result.notes == "Untouched notes"
+        assert result.items[0].description == "Work"
+
+    def test_patch_worker_id_overrides_client_recipient_name_in_same_patch(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR)
+        worker = _make_worker_ref(project_id, display_name="Marie Curie")
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        worker_reader = _make_worker_reader(worker)
+        use_case = UpdateInvoiceUseCase(inv_repo, worker_reader=worker_reader)
+
+        result = use_case.execute(
+            UpdateInvoiceRequest(invoice_id=invoice.id, worker_id=worker.id, recipient_name="Client Sent Name")
+        )
+
+        assert result.recipient_name == "Marie Curie"
+
+    def test_patch_worker_id_null_clears_it(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR, worker_id=uuid4())
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, worker_id=None))
+
+        assert result.worker_id is None
+
+    def test_patch_unset_worker_id_leaves_it_unchanged(self):
+        """worker_id not provided (_UNSET) must not touch the stored value."""
+        project_id = uuid4()
+        stored_worker_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR, worker_id=stored_worker_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, notes="New notes"))
+
+        assert result.worker_id == str(stored_worker_id)
+
+    def test_patch_type_away_from_labor_clears_stored_worker_id(self):
+        """Changing type away from labor without touching worker_id must clear it server-side."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR, worker_id=uuid4())
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        use_case = UpdateInvoiceUseCase(inv_repo)
+
+        result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, type=InvoiceType.OTHERS))
+
+        assert result.type == "others"
+        assert result.worker_id is None
+
+    def test_patch_setting_worker_id_on_non_labor_invoice_raises(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.MATERIALS_SERVICES)
+        worker = _make_worker_ref(project_id)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        worker_reader = _make_worker_reader(worker)
+        use_case = UpdateInvoiceUseCase(inv_repo, worker_reader=worker_reader)
+
+        with pytest.raises(WorkerLinkNotAllowedError):
+            use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, worker_id=worker.id))
+
+        inv_repo.update.assert_not_called()
+
+    def test_patch_foreign_project_worker_raises(self):
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        worker_reader = _make_worker_reader(None)
+        use_case = UpdateInvoiceUseCase(inv_repo, worker_reader=worker_reader)
+
+        with pytest.raises(WorkerNotInProjectError):
+            use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, worker_id=uuid4()))
+
+        inv_repo.update.assert_not_called()
+
+    def test_patch_worker_id_without_worker_reader_configured_raises(self):
+        """worker_reader=None (not wired) must fail closed, not silently ignore worker_id."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.LABOR)
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        use_case = UpdateInvoiceUseCase(inv_repo)  # worker_reader defaults to None
+
+        with pytest.raises(InvalidInvoiceDataError, match="[Ww]orker"):
+            use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, worker_id=uuid4()))
+
+        inv_repo.update.assert_not_called()
+
+    def test_patch_type_to_labor_and_worker_id_together_succeeds(self):
+        """Setting type=labor and worker_id in the same PATCH must succeed (effective_type)."""
+        project_id = uuid4()
+        invoice = _make_invoice(project_id, type=InvoiceType.OTHERS)
+        worker = _make_worker_ref(project_id, display_name="New Hire")
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.update.side_effect = lambda inv: inv
+        worker_reader = _make_worker_reader(worker)
+        use_case = UpdateInvoiceUseCase(inv_repo, worker_reader=worker_reader)
+
+        result = use_case.execute(
+            UpdateInvoiceRequest(invoice_id=invoice.id, type=InvoiceType.LABOR, worker_id=worker.id)
+        )
+
+        assert result.type == "labor"
+        assert result.worker_id == str(worker.id)
+        assert result.recipient_name == "New Hire"

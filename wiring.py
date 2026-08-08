@@ -238,6 +238,7 @@ class Container:
 
     # Invoice ports and use cases
     invoice_repository: Optional[IInvoiceRepository] = None
+    worker_reader: Optional[Any] = None  # WorkerReaderPort — cross-BC read for invoice worker_id links
     create_invoice_usecase: Optional[CreateInvoiceUseCase] = None
     list_invoices_usecase: Optional[ListInvoicesUseCase] = None
     get_invoice_usecase: Optional[GetInvoiceUseCase] = None
