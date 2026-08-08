@@ -7,6 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -119,6 +120,22 @@ class InvoiceModel(Base):
     # type == 'labor'; NULL for all other invoice types.
     service_month = Column(Date, nullable=True)
 
+    # How this return is settled ('cash' | 'avoir') — only meaningful when type == 'return'.
+    # Plain VARCHAR + CHECK constraint rather than a Postgres enum type: adding new
+    # allowed values later needs no ALTER TYPE migration.
+    settled_via = Column(String(10), nullable=True)
+
+    # Avoir-only self-link: a return invoice may reference the invoice its credit is
+    # applied to (a future materials_services/labor/others invoice — never another
+    # return or a released_funds release; enforced at the application layer). ON DELETE
+    # SET NULL keeps the return standalone if the target invoice is deleted.
+    applied_to_invoice_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="SET NULL", name="fk_invoices_applied_to_invoice_id"),
+        nullable=True,
+        index=True,
+    )
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
@@ -130,9 +147,16 @@ class InvoiceModel(Base):
         foreign_keys=[refunds_invoice_id],
         remote_side="InvoiceModel.id",
     )
+    # Self-referential: many avoir returns may apply their credit to one target invoice.
+    applied_to = relationship(
+        "InvoiceModel",
+        foreign_keys=[applied_to_invoice_id],
+        remote_side="InvoiceModel.id",
+    )
 
     __table_args__ = (
         UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),
+        CheckConstraint("settled_via IN ('cash', 'avoir')", name="ck_invoices_settled_via"),
         # Partial index declared in migration 7e20d88b8197; mirrored here for
         # SQLAlchemy schema reflection completeness (matches the house pattern
         # in BillingDocumentModel.__table_args__). Deliberately postgresql-only:

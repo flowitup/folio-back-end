@@ -30,6 +30,18 @@ class RefundableStatus(str, Enum):
     REFUNDED = "refunded"
 
 
+class SettledVia(str, Enum):
+    """How a return invoice is settled — only meaningful when type == RETURN.
+
+    CASH: the money is refunded directly (e.g. bank/company refund).
+    AVOIR: the return's value is applied as credit toward another invoice
+    (applied_to_invoice_id) instead of being cashed out.
+    """
+
+    CASH = "cash"
+    AVOIR = "avoir"
+
+
 class RefundedBy(str, Enum):
     """Who issued the refund — only meaningful when refundable_status == 'refunded'.
 
@@ -80,6 +92,14 @@ class Invoice:
     # Payment month for labor invoices — optional, first-of-month, labor type only.
     # NULL for non-labor invoices and for labor invoices where the month is not tracked.
     service_month: Optional[date] = None
+    # How this return is settled ('cash' | 'avoir') — only meaningful when type == RETURN.
+    # NULL for every other invoice type.
+    settled_via: Optional[str] = None
+    # Avoir-only self-link: the invoice this return's credit is applied to (a future
+    # materials_services/labor/others invoice, never another return or a released_funds
+    # release). Only valid when type == RETURN and settled_via == 'avoir'. ON DELETE
+    # SET NULL keeps the return standalone if the target invoice is deleted.
+    applied_to_invoice_id: Optional[UUID] = None
 
     @property
     def total_amount(self) -> Decimal:

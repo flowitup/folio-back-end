@@ -62,6 +62,12 @@ class InvoiceResponse:
     # Payment month for labor invoices — "YYYY-MM-01" or null. Only settable
     # when the invoice type is 'labor'; always first-of-month.
     service_month: Optional[str] = None
+    # How this return is settled ('cash' | 'avoir') — only meaningful on return invoices.
+    settled_via: Optional[str] = None
+    # Avoir-only link: the invoice this return's credit is applied to.
+    # applied_to_invoice_number is enriched at the route layer from a secondary lookup.
+    applied_to_invoice_id: Optional[str] = None
+    applied_to_invoice_number: Optional[str] = None
 
     @classmethod
     def from_entity(cls, inv: Invoice) -> "InvoiceResponse":
@@ -101,4 +107,8 @@ class InvoiceResponse:
             # refunds_invoice_number is None here; the route enriches it via a lookup.
             refunds_invoice_number=None,
             service_month=_isoformat_or_none(inv.service_month),
+            settled_via=inv.settled_via,
+            applied_to_invoice_id=(str(inv.applied_to_invoice_id) if inv.applied_to_invoice_id is not None else None),
+            # applied_to_invoice_number is None here; the route enriches it via a lookup.
+            applied_to_invoice_number=None,
         )
