@@ -312,8 +312,10 @@ def list_invoices(project_id: str):
     except ValidationError as e:
         return format_validation_error(e)
 
+    # The schema tolerates an optional -DD suffix; only the month prefix is
+    # significant, so truncate before parsing to normalize both forms to day 1.
     service_month_date = (
-        datetime.strptime(filters.service_month, "%Y-%m").date().replace(day=1) if filters.service_month else None
+        datetime.strptime(filters.service_month[:7], "%Y-%m").date().replace(day=1) if filters.service_month else None
     )
 
     container = get_container()

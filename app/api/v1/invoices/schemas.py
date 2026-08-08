@@ -112,7 +112,7 @@ class UpdateInvoiceSchema(BaseModel):
     worker_id: Optional[UUID] = None
 
 
-_YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])$")
+_YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$")
 _YYYY_MM_PATTERN = _YYYY_MM.pattern
 
 
@@ -128,7 +128,11 @@ class ListInvoicesFilterQuery(BaseModel):
     service_month: Optional[str] = Field(
         None,
         pattern=_YYYY_MM_PATTERN,
-        description="Exact service_month match (labor invoices only). Format: YYYY-MM",
+        description=(
+            "Exact service_month match (labor invoices only). Format: YYYY-MM or "
+            "YYYY-MM-DD — a day suffix is tolerated and normalized to the month, "
+            "matching the YYYY-MM-01 convention the FE uses for the entity field."
+        ),
     )
     worker_id: Optional[UUID] = None
 

@@ -372,6 +372,38 @@ class TestInvoiceListLaborPaymentsFilters:
         notes = [inv["notes"] for inv in resp.get_json()["invoices"]]
         assert notes == ["july"]
 
+    def test_filter_accepts_full_date_and_normalizes_to_month(self, pay_client, admin_token, project):
+        # The FE sends the entity-field convention (YYYY-MM-01) as the filter
+        # value; any day suffix must match the whole month, not just day 1.
+        worker = _create_worker(project.id, "Alice")
+        _post_labor_invoice(
+            pay_client,
+            admin_token,
+            project.id,
+            worker_id=str(worker.id),
+            service_month="2026-07-01",
+            amount=100,
+            notes="july",
+        )
+        _post_labor_invoice(
+            pay_client,
+            admin_token,
+            project.id,
+            worker_id=str(worker.id),
+            service_month="2026-06-01",
+            amount=100,
+            notes="june",
+        )
+
+        for param in ("2026-07-01", "2026-07-15"):
+            resp = pay_client.get(
+                _invoices_url(project.id) + f"?service_month={param}",
+                headers=_auth(admin_token),
+            )
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            notes = [inv["notes"] for inv in resp.get_json()["invoices"]]
+            assert notes == ["july"], param
+
     def test_filter_by_worker_id(self, pay_client, admin_token, project):
         alice = _create_worker(project.id, "Alice")
         bob = _create_worker(project.id, "Bob")
