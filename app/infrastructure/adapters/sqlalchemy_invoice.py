@@ -24,6 +24,7 @@ from app.infrastructure.database.invoice_spend_rules import (
     load_personal_method_ids,
 )
 from app.infrastructure.database.models.invoice import InvoiceModel
+from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
 
@@ -275,9 +276,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 InvoiceModel.worker_id,
                 display_name.label("worker_name"),
                 InvoiceModel.items,
+                PaymentMethodModel.is_company_payment,
+                PaymentMethodModel.is_personal_payment,
             )
             .outerjoin(WorkerModel, InvoiceModel.worker_id == WorkerModel.id)
             .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
+            .outerjoin(PaymentMethodModel, InvoiceModel.payment_method_id == PaymentMethodModel.id)
             .filter(
                 InvoiceModel.project_id == project_id,
                 InvoiceModel.type == InvoiceType.LABOR.value,
@@ -290,10 +294,20 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         worker_totals: dict = {}
         # Per-bucket unassigned totals: {(year, month) | None: [paid, count]}
         unassigned_totals: dict = {}
+        # Per-bucket flagged-method split: {(year, month) | None: [company, personal]}.
+        # is_active is deliberately not consulted (mirrors invoice_spend_rules
+        # loaders): deactivating a method must not erase spend that happened.
+        method_split: dict = {}
 
-        for service_month, worker_id, worker_name, items in rows:
+        for service_month, worker_id, worker_name, items, is_company, is_personal in rows:
             key = (service_month.year, service_month.month) if service_month is not None else None
             amount = items_total(items)
+
+            split = method_split.setdefault(key, [zero, zero])
+            if is_company:
+                split[0] += amount
+            elif is_personal:
+                split[1] += amount
 
             if worker_id is None:
                 bucket = unassigned_totals.setdefault(key, [zero, 0])
@@ -317,6 +331,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 for wid, (name, paid, count) in sorted(worker_totals.get(key, {}).items(), key=lambda kv: kv[1][0])
             ]
             u_paid, u_count = unassigned_totals.get(key, [zero, 0])
+            company_paid, personal_paid = method_split.get(key, [zero, zero])
             result.append(
                 LaborPaymentsMonthRow(
                     year=key[0] if key is not None else None,
@@ -324,6 +339,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                     workers=workers,
                     unassigned_paid=u_paid,
                     unassigned_count=u_count,
+                    company_paid=company_paid,
+                    personal_paid=personal_paid,
                 )
             )
         return result

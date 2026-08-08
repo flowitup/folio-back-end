@@ -40,6 +40,11 @@ class LaborPaymentsMonthResponse:
     workers: List[LaborPaymentsWorkerResponse] = field(default_factory=list)
     unassigned_paid: float = 0.0
     unassigned_count: int = 0
+    # Flagged-method split of the bucket's paid total (company/personal
+    # payment-method flags). No-method or unflagged invoices count in
+    # neither, so company_paid + personal_paid <= total_paid.
+    company_paid: float = 0.0
+    personal_paid: float = 0.0
 
 
 @dataclass
@@ -80,6 +85,8 @@ class GetLaborPaymentsSummaryUseCase:
                     ],
                     unassigned_paid=money(r.unassigned_paid),
                     unassigned_count=r.unassigned_count,
+                    company_paid=money(r.company_paid),
+                    personal_paid=money(r.personal_paid),
                 )
             )
         return LaborPaymentsSummaryResponse(months=months)

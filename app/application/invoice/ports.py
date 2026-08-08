@@ -63,6 +63,13 @@ class LaborPaymentsMonthRow:
     ``unassigned_paid``/``unassigned_count`` roll up rows whose ``worker_id``
     is NULL — either the invoice never recorded a worker, or the linked
     worker was deleted (ON DELETE SET NULL).
+
+    ``company_paid``/``personal_paid`` split the bucket's whole paid amount
+    (worker-linked and unassigned alike) by the invoice's payment-method flag
+    (``is_company_payment`` / ``is_personal_payment``). Invoices with no
+    method or an unflagged method belong to neither figure, so
+    company_paid + personal_paid <= the bucket total — same flagged-only
+    semantics as the expense-page spent buckets.
     """
 
     year: Optional[int]
@@ -70,6 +77,8 @@ class LaborPaymentsMonthRow:
     workers: List[LaborPaymentsWorkerRow] = field(default_factory=list)
     unassigned_paid: Decimal = Decimal("0")
     unassigned_count: int = 0
+    company_paid: Decimal = Decimal("0")
+    personal_paid: Decimal = Decimal("0")
 
 
 class BankRefundReleasePort(Protocol):
