@@ -305,6 +305,33 @@ class TestDayTagEndpoint:
         assert len(cleared) == 2
         assert all(e["tag_id"] is None for e in cleared)
 
+    def test_overwrite_tag_a_with_tag_b_retags_all_entries(self, day_tag_client, admin_token, day_tag_app):
+        """Core retro-retag flow: a day already tagged A gets fully switched to B."""
+        pid = day_tag_app._test_project_a_id
+        tag_a = _create_tag(day_tag_app, pid, "Tag A")
+        tag_b = _create_tag(day_tag_app, pid, "Tag B")
+        w1 = _create_worker(day_tag_client, admin_token, pid, "Overwrite W1")
+        w2 = _create_worker(day_tag_client, admin_token, pid, "Overwrite W2")
+        w3 = _create_worker(day_tag_client, admin_token, pid, "Overwrite W3")
+        for w in (w1, w2, w3):
+            _log_full_day(day_tag_client, admin_token, pid, w, "2026-03-09", tag_id=tag_a)
+
+        resp = day_tag_client.put(
+            _day_tag_url(pid),
+            json={"date": "2026-03-09", "tag_id": tag_b},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        data = resp.get_json()
+        assert data["updated_count"] == 3
+        assert data["date"] == "2026-03-09"
+        assert data["tag_id"] == tag_b
+
+        entries = _list_entries(day_tag_client, admin_token, pid)
+        retagged = [e for e in entries if e["date"] == "2026-03-09"]
+        assert len(retagged) == 3
+        assert all(e["tag_id"] == tag_b for e in retagged)
+
     def test_zero_entry_day_returns_200_zero(self, day_tag_client, admin_token, day_tag_app):
         pid = day_tag_app._test_project_a_id
         resp = day_tag_client.put(
