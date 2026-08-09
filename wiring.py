@@ -419,6 +419,7 @@ class Container:
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
     get_monthly_labor_summary_usecase: Optional[GetMonthlyLaborSummaryUseCase] = None
     export_labor_usecase: Optional[ExportLaborUseCase] = None
+    tag_day_usecase: Optional[Any] = None  # TagDayUseCase — wired in app/__init__.py once tag_repo exists
 
     # Labor role use cases
     create_labor_role_usecase: Optional[CreateLaborRoleUseCase] = None

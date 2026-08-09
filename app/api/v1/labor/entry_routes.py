@@ -20,6 +20,8 @@ from app.api.v1.labor.schemas import (
     BulkLogAttendanceRequest,
     BulkLogAttendanceResponse,
     UpdateAttendanceRequest,
+    DayTagRequest,
+    DayTagResponse,
     LaborEntryResponse,
     LaborEntryListResponse,
     LaborSummaryResponse,
@@ -43,6 +45,7 @@ from app.application.labor import (
     ListLaborEntriesRequest,
     GetLaborSummaryRequest,
     GetMonthlyLaborSummaryRequest,
+    TagDayRequest as TagDayDTO,
 )
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
@@ -400,6 +403,50 @@ def update_attendance(project_id: str, entry_id: str):
             "created_at": result.created_at,
             "tag_id": result.tag_id,
         }
+    )
+
+
+@labor_bp.route("/projects/<project_id>/labor-entries/day-tag", methods=["PUT"])
+@openapi_doc(
+    summary="Bulk set (or clear) the tag on all labor entries of a project day",
+    request=DayTagRequest,
+    tags=["labor"],
+)
+@jwt_required()
+@limiter.limit("10 per minute")
+@require_permission("project:manage_labor")
+@require_project_access(write=False)
+def set_labor_day_tag(project_id: str):
+    """Bulk set/clear tag_id on every labor entry of a project day.
+
+    Overwrite semantics: `tag_id` (a UUID) replaces the tag on every entry of
+    the day; `tag_id: null` clears it. A day with zero entries is not an
+    error — the response carries `updated_count: 0`.
+    """
+    try:
+        data = DayTagRequest(**(request.get_json() or {}))
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    try:
+        result = get_container().tag_day_usecase.execute(
+            TagDayDTO(
+                project_id=UUID(project_id),
+                date=_parse_date(data.date),
+                tag_id=data.tag_id,
+            )
+        )
+    except ValueError as e:
+        # InvalidProjectTagError subclasses ValueError, so a cross-project
+        # tag_id lands here as a 400 — same mapping as update_attendance.
+        return _error_response("ValidationError", str(e), 400)
+
+    return jsonify(
+        DayTagResponse(
+            updated_count=result.updated_count,
+            date=result.date,
+            tag_id=result.tag_id,
+        ).model_dump()
     )
 
 

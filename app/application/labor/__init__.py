@@ -86,6 +86,11 @@ from app.application.labor.delete_worker_rate_change import (
     DeleteWorkerRateChangeUseCase,
     DeleteWorkerRateChangeRequest,
 )
+from app.application.labor.tag_day_usecase import (
+    TagDayUseCase,
+    TagDayRequest,
+    TagDayResponse,
+)
 
 __all__ = [
     # Ports
@@ -147,4 +152,8 @@ __all__ = [
     "ListWorkerRateChangesRequest",
     "DeleteWorkerRateChangeUseCase",
     "DeleteWorkerRateChangeRequest",
+    # Day-tag use case
+    "TagDayUseCase",
+    "TagDayRequest",
+    "TagDayResponse",
 ]

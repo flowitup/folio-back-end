@@ -219,6 +219,23 @@ class ILaborEntryRepository(ABC):
         """
         ...
 
+    @abstractmethod
+    def set_tag_for_date(
+        self,
+        project_id: UUID,
+        date: date,
+        tag_id: Optional[UUID],
+    ) -> int:
+        """Bulk set (or clear, when ``tag_id`` is None) ``tag_id`` on every
+        labor entry of ``date`` whose worker belongs to ``project_id``.
+
+        Scoped via a worker→project join so entries belonging to other
+        projects' workers on the same date are never touched (IDOR guard).
+        Returns the number of rows updated; 0 is a valid, non-error result
+        for a day with no entries.
+        """
+        ...
+
 
 class IWorkerRateChangeRepository(ABC):
     """Port for worker rate-change persistence operations.

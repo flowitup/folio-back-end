@@ -172,6 +172,18 @@ class UpdateAttendanceRequest(BaseModel):
         return self
 
 
+class DayTagRequest(BaseModel):
+    """Request body for PUT /labor-entries/day-tag.
+
+    ``tag_id`` explicitly null (or omitted) clears the tag on every entry of
+    the day; a UUID overwrites the tag on every entry of the day. The
+    use-case rejects a tag_id that does not belong to the project.
+    """
+
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    tag_id: Optional[UUID] = None
+
+
 # ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
@@ -245,6 +257,14 @@ class LaborEntryListResponse(BaseModel):
 
     entries: List[LaborEntryResponse]
     total: int
+
+
+class DayTagResponse(BaseModel):
+    """Response for PUT /labor-entries/day-tag."""
+
+    updated_count: int
+    date: str
+    tag_id: Optional[str] = None
 
 
 class WorkerSummaryRow(BaseModel):

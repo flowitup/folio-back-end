@@ -6,6 +6,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import case as sa_case, func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -397,6 +398,30 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 )
             )
         return [buckets[k] for k in order]
+
+    def set_tag_for_date(
+        self,
+        project_id: UUID,
+        date: date,
+        tag_id: Optional[UUID],
+    ) -> int:
+        """Bulk set/clear tag_id for every entry of a project day.
+
+        Single UPDATE scoped via a worker-id subquery joined to project_id —
+        never touches another project's workers on the same date (IDOR
+        guard). synchronize_session=False is safe here: no ORM-loaded
+        LaborEntry instances are read back or mutated in this call.
+        """
+        worker_ids_subq = select(WorkerModel.id).where(WorkerModel.project_id == project_id)
+        stmt = (
+            sa_update(LaborEntryModel)
+            .where(LaborEntryModel.date == date, LaborEntryModel.worker_id.in_(worker_ids_subq))
+            .values(tag_id=tag_id)
+            .execution_options(synchronize_session=False)
+        )
+        result = self._session.execute(stmt)
+        self._session.commit()
+        return result.rowcount
 
     def _to_entity(self, model: LaborEntryModel) -> LaborEntry:
         return LaborEntry(
