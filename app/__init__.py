@@ -1032,6 +1032,7 @@ def _configure_di_container() -> None:
     from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
     from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
     from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
+    from app.application.labor.tag_day_usecase import TagDayUseCase as _TagDayUC
 
     if _c.worker_repository is not None and _c.labor_entry_repository is not None:
         _c.log_attendance_usecase = _LogAttendUC(
@@ -1048,6 +1049,10 @@ def _configure_di_container() -> None:
             worker_repo=_c.worker_repository,
             entry_repo=_c.labor_entry_repository,
             db_session=db.session,
+            tag_repo=_tag_repo,
+        )
+        _c.tag_day_usecase = _TagDayUC(
+            entry_repo=_c.labor_entry_repository,
             tag_repo=_tag_repo,
         )
 
