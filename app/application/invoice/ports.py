@@ -266,11 +266,16 @@ class IInvoiceRepository(ABC):
 
     @abstractmethod
     def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
-        """Return the subset of source_ids that have ≥1 linked refund invoice.
+        """Return the subset of source_ids that have ≥1 linked CASH refund invoice.
 
-        A source qualifies when at least one invoice exists with type 'return'
-        and refunds_invoice_id == source_id. Used to flag "refunded by bank"
-        (a supplier/vendor sent money back) on materials_services expenses.
+        A source qualifies when at least one invoice exists with type 'return',
+        refunds_invoice_id == source_id, and settled_via is not 'avoir'. Used to
+        flag "refunded by bank" (a supplier/vendor sent money back) on
+        materials_services expenses.
+
+        Avoir-settled returns do NOT qualify: an avoir is a credit note applied
+        to another invoice, so no money came back. Legacy returns predate
+        settled_via and carry NULL — those count as cash.
 
         Batch reverse-lookup — one query regardless of input size. Empty input
         returns an empty set without issuing a query.

@@ -959,8 +959,17 @@ class TestInlineAttachments:
 # ---------------------------------------------------------------------------
 
 
-def _make_linked_refund(source_id: UUID, project_id: UUID, user_id: UUID) -> InvoiceModel:
-    """Persist a type='return' invoice linked to source_id via refunds_invoice_id."""
+def _make_linked_refund(
+    source_id: UUID,
+    project_id: UUID,
+    user_id: UUID,
+    settled_via: str | None = None,
+) -> InvoiceModel:
+    """Persist a type='return' invoice linked to source_id via refunds_invoice_id.
+
+    settled_via defaults to None (legacy row = cash). Pass 'avoir' to model a
+    credit note applied to another invoice rather than money coming back.
+    """
     now = datetime.now(timezone.utc)
     inv = InvoiceModel(
         id=uuid4(),
@@ -974,6 +983,7 @@ def _make_linked_refund(source_id: UUID, project_id: UUID, user_id: UUID) -> Inv
         created_at=now,
         updated_at=now,
         refunds_invoice_id=source_id,
+        settled_via=settled_via,
     )
     db.session.add(inv)
     db.session.commit()
@@ -1007,6 +1017,52 @@ class TestHasBankRefundFlag:
         assert resp.status_code == 200
         items = {i["id"]: i for i in resp.get_json()["items"]}
         assert items[inv_id]["has_bank_refund"] is False
+
+    def test_avoir_settled_refund_does_not_flag_bank_refund(self, mat_client, admin_tok, mat_exp_app):
+        """An avoir is credit applied to another invoice — no money came back."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            _make_linked_refund(inv.id, mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, settled_via="avoir")
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert items[inv_id]["has_bank_refund"] is False
+
+    def test_cash_settled_refund_flags_bank_refund(self, mat_client, admin_tok, mat_exp_app):
+        """Explicit settled_via='cash' is a real bank refund, same as legacy NULL."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refunded")
+            _make_linked_refund(inv.id, mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, settled_via="cash")
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert items[inv_id]["has_bank_refund"] is True
+
+    def test_avoir_alongside_cash_refund_still_flags_bank_refund(self, mat_client, admin_tok, mat_exp_app):
+        """One cash return is enough — an extra avoir must not mask it."""
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refunded")
+            _make_linked_refund(inv.id, mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, settled_via="avoir")
+            _make_linked_refund(inv.id, mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, settled_via="cash")
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200
+        items = {i["id"]: i for i in resp.get_json()["items"]}
+        assert items[inv_id]["has_bank_refund"] is True
 
 
 # ---------------------------------------------------------------------------

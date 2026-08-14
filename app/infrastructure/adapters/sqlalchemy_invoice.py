@@ -5,13 +5,13 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.invoice.dtos import money
 from app.application.invoice.ports import IInvoiceRepository, LaborPaymentsMonthRow, LaborPaymentsWorkerRow
-from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus
+from app.domain.entities.invoice import Invoice, InvoiceType, RefundableStatus, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
@@ -611,7 +611,14 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         return result
 
     def refund_source_ids(self, source_ids: list[UUID]) -> set[UUID]:
-        """Return the subset of source_ids that have ≥1 linked refund invoice.
+        """Return the subset of source_ids that have ≥1 linked CASH refund invoice.
+
+        Avoir-settled returns are excluded: an avoir is a credit note applied to
+        another invoice (applied_to_invoice_id), so no money came back and the
+        expense is not "refunded by bank". Only cash returns count. Legacy rows
+        predate settled_via and carry NULL — those are cash, hence the explicit
+        NULL branch (``settled_via != 'avoir'`` alone would drop them, since SQL
+        comparisons against NULL yield NULL, not TRUE).
 
         Single DISTINCT query over refunds_invoice_id; short-circuits on empty
         input to avoid emitting an invalid ``IN ()`` clause.
@@ -623,6 +630,10 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             .filter(
                 InvoiceModel.type == InvoiceType.RETURN.value,
                 InvoiceModel.refunds_invoice_id.in_(source_ids),
+                or_(
+                    InvoiceModel.settled_via.is_(None),
+                    InvoiceModel.settled_via != SettledVia.AVOIR.value,
+                ),
             )
             .distinct()
             .all()
