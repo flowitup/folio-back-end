@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import pytest
 from uuid import uuid4
+from werkzeug.datastructures import MultiDict
 
 
 # ---------------------------------------------------------------------------
@@ -59,21 +60,22 @@ def _upload(
     title: str = "Test Analysis",
     summary: str | None = None,
     source_url: str | None = None,
-    tags: list[str] | None = None,  # IGNORED - use MultiDict manually for tags
+    tags: list[str] | None = None,
 ) -> object:
     """Execute a multipart upload and return response.
 
-    NOTE: tags parameter is ignored here. For tags, construct the request
-    manually using werkzeug.datastructures.MultiDict. See test cases above.
+    Uses a MultiDict so `tags` can be sent as a repeated form field, which is
+    how the route reads them (``request.form.getlist("tags")``).
     """
-    data = {
-        "file": (io.BytesIO(content.encode("utf-8")), filename, "text/html"),
-        "title": title,
-    }
+    data = MultiDict()
+    data.add("file", (io.BytesIO(content.encode("utf-8")), filename, "text/html"))
+    data.add("title", title)
     if summary is not None:
-        data["summary"] = summary
+        data.add("summary", summary)
     if source_url is not None:
-        data["source_url"] = source_url
+        data.add("source_url", source_url)
+    for tag in tags or []:
+        data.add("tags", tag)
 
     return client.post(
         _analyses_url(project_id),
@@ -90,15 +92,21 @@ def _upload_analysis(
     title: str = "Test Analysis",
     summary: str | None = None,
     source_url: str | None = None,
+    tags: list[str] | None = None,
+    content: str = "<html><body>Test</body></html>",
+    filename: str = "test.html",
 ) -> str:
     """Helper: upload an analysis and return its UUID."""
     resp = _upload(
         client,
         project_id,
         token,
+        content=content,
+        filename=filename,
         title=title,
         summary=summary,
         source_url=source_url,
+        tags=tags,
     )
     assert resp.status_code == 201, f"Upload failed: {resp.get_data(as_text=True)}"
     return resp.get_json()["id"]
@@ -163,11 +171,45 @@ def analyses_app(invitation_app):
     invitation_app._analyses_superadmin_email = invitation_app._test_superadmin_email
     invitation_app._analyses_superadmin_password = invitation_app._test_superadmin_password
     invitation_app._analyses_project_id = invitation_app._test_project_id
-    invitation_app._analyses_other_project_id = invitation_app._test_project_2_id
+
+    # A second project the ADMIN also owns, for the cross-project guard test.
+    # `_test_project_2_id` is not usable here: no matching row exists in this
+    # app's database, so the actor fails the membership gate and the request is
+    # rejected with 403 before the guard can answer 404.
+    with invitation_app.app_context():
+        other_project_id = str(uuid4())
+        db.session.execute(
+            db.text("INSERT INTO projects (id, name, owner_id) VALUES (:id, :name, :owner)"),
+            {
+                "id": other_project_id,
+                "name": "Analyses Cross-Project Guard Project",
+                "owner": invitation_app._test_admin_user_id,
+            },
+        )
+        db.session.commit()
+    invitation_app._analyses_other_project_id = other_project_id
     invitation_app._analyses_owner_user_id = invitation_app._test_target_user_id
     invitation_app._analyses_member_user_id = invitation_app._test_member_user_id
 
     return invitation_app
+
+
+@pytest.fixture(autouse=True)
+def _clean_analyses_rows(analyses_app):
+    """Delete analyses rows between tests.
+
+    The Flask app fixture is module-scoped (a function-scoped app costs ~10s
+    per test and blows the CI lint-test budget), so rows created by one test
+    would otherwise leak into the next and break every count-, pagination- and
+    ordering-sensitive assertion.
+    """
+    yield
+    from app import db
+
+    with analyses_app.app_context():
+        db.session.execute(db.text("DELETE FROM project_analysis_tags"))
+        db.session.execute(db.text("DELETE FROM project_analyses"))
+        db.session.commit()
 
 
 @pytest.fixture
@@ -177,8 +219,9 @@ def inv_client(analyses_app):
 
 
 @pytest.fixture
-def owner_token(inv_client, analyses_app):
-    """JWT token for owner_user (target_user, project member)."""
+def other_member_token(inv_client, analyses_app):
+    """JWT token for target_user: a plain project member who is NOT the uploader,
+    NOT the project owner and NOT an admin. Use this for "other member" cases."""
     return _login(inv_client, analyses_app._analyses_owner_email, analyses_app._analyses_owner_password)
 
 
@@ -189,8 +232,8 @@ def member_token(inv_client, analyses_app):
 
 
 @pytest.fixture
-def another_token(inv_client, analyses_app):
-    """JWT token for another_member (admin_user, project owner)."""
+def project_owner_token(inv_client, analyses_app):
+    """JWT token for admin_user: the OWNER of the test project."""
     return _login(inv_client, analyses_app._analyses_another_email, analyses_app._analyses_another_password)
 
 
@@ -216,23 +259,17 @@ class TestCreateAnalysisEndpoint:
 
     def test_201_member_uploads_analysis(self, inv_client, member_token, analyses_app):
         """Happy path: member uploads analysis → 201 with metadata."""
-        from werkzeug.datastructures import MultiDict
-
-        data_dict = {
-            "file": (io.BytesIO(b"<html><body>Test</body></html>"), "test.html", "text/html"),
-            "title": "Marketing Analysis",
-            "summary": "Q3 market trends",
-            "source_url": "https://example.com/report",
-        }
-        md = MultiDict(data_dict)
-        md.add("tags", "market")
-        md.add("tags", "q3")
-
-        resp = inv_client.post(
-            _analyses_url(analyses_app._analyses_project_id),
-            data=md,
-            content_type="multipart/form-data",
-            headers=_auth(member_token),
+        # NOTE: build the MultiDict with .add(). MultiDict({"file": (stream,
+        # name, mime)}) treats the tuple as three separate values and destroys
+        # the file part, which the route then reports as a missing file.
+        resp = _upload(
+            inv_client,
+            analyses_app._analyses_project_id,
+            member_token,
+            title="Marketing Analysis",
+            summary="Q3 market trends",
+            source_url="https://example.com/report",
+            tags=["market", "q3"],
         )
         assert resp.status_code == 201
         data = resp.get_json()
@@ -270,22 +307,11 @@ class TestCreateAnalysisEndpoint:
 
     def test_201_tags_normalized_lowercase_dedupe(self, inv_client, member_token, analyses_app):
         """Tags are normalized: lowercased, deduplicated."""
-        # Create request with multiple tags
-        from werkzeug.datastructures import MultiDict
-
-        data_dict = {
-            "file": (io.BytesIO(b"<html><body>Test</body></html>"), "test.html", "text/html"),
-            "title": "Test Analysis",
-        }
-        md = MultiDict(data_dict)
-        for tag in ["Market", "MARKET", "q3"]:
-            md.add("tags", tag)
-
-        resp = inv_client.post(
-            _analyses_url(analyses_app._analyses_project_id),
-            data=md,
-            content_type="multipart/form-data",
-            headers=_auth(member_token),
+        resp = _upload(
+            inv_client,
+            analyses_app._analyses_project_id,
+            member_token,
+            tags=["Market", "MARKET", "q3"],
         )
         assert resp.status_code == 201
         tags = set(resp.get_json()["tags"])
@@ -332,7 +358,7 @@ class TestCreateAnalysisEndpoint:
             _analyses_url(analyses_app._analyses_project_id),
             data={
                 "file": (io.BytesIO(b"<html></html>"), "test.html", "application/pdf"),
-                "title": (None, "Test"),
+                "title": "Test",
             },
             content_type="multipart/form-data",
             headers=_auth(member_token),
@@ -346,7 +372,7 @@ class TestCreateAnalysisEndpoint:
             _analyses_url(analyses_app._analyses_project_id),
             data={
                 "file": (io.BytesIO(b"\xff\xfe"), "test.html", "text/html"),
-                "title": (None, "Test"),
+                "title": "Test",
             },
             content_type="multipart/form-data",
             headers=_auth(member_token),
@@ -378,7 +404,7 @@ class TestCreateAnalysisEndpoint:
             _analyses_url(analyses_app._analyses_project_id),
             data={
                 "file": (io.BytesIO(b"<html></html>"), "test.html", "text/html"),
-                "title": (None, "Test"),
+                "title": "Test",
             },
             content_type="multipart/form-data",
         )
@@ -655,14 +681,18 @@ class TestGetAnalysisEndpoint:
         )
         assert resp.status_code == 404
 
-    def test_404_cross_project_guard(self, inv_client, member_token, analyses_app):
-        """Analysis from other project → 404 (existence not leaked)."""
+    def test_404_cross_project_guard(self, inv_client, member_token, project_owner_token, analyses_app):
+        """Analysis from other project → 404 (existence not leaked).
+
+        The actor must be a member of the project in the URL, otherwise the
+        membership gate answers 403 first and the guard is never exercised.
+        admin_user owns both test projects, so it qualifies for both.
+        """
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
-        # Try to get it from other project
         resp = inv_client.get(
             _analysis_url(analyses_app._analyses_other_project_id, analysis_id),
-            headers=_auth(member_token),
+            headers=_auth(project_owner_token),
         )
         assert resp.status_code == 404
 
@@ -798,9 +828,9 @@ class TestGetAnalysisContentEndpoint:
         )
         assert resp.status_code == 404
 
-    def test_403_non_member_cannot_get_content(self, inv_client, outsider_token, analyses_app, owner_token):
+    def test_403_non_member_cannot_get_content(self, inv_client, outsider_token, analyses_app, other_member_token):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, owner_token)
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, other_member_token)
 
         resp = inv_client.get(
             _content_url(analyses_app._analyses_project_id, analysis_id),
@@ -961,45 +991,38 @@ class TestUpdateAnalysisEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["tags"] == []
 
-    def test_403_non_uploader_member_cannot_patch(self, inv_client, member_token, another_token, analyses_app):
-        """Member who didn't upload cannot PATCH (regression test for two-tier authz)."""
+    def test_403_non_uploader_member_cannot_patch(self, inv_client, member_token, other_member_token, analyses_app):
+        """Member who didn't upload cannot PATCH (regression test for two-tier authz).
+
+        other_member_token is a plain project member: not the uploader, not the
+        project owner, not an admin. Membership alone must not grant edit.
+        """
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
-        # another_token is a project member but didn't upload this analysis
         resp = inv_client.patch(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
             json={"title": "Hijacked"},
-            headers=_auth(another_token),
+            headers=_auth(other_member_token),
         )
         assert resp.status_code == 403
 
-    def test_200_project_owner_can_patch_others_analysis(self, inv_client, member_token, owner_token, analyses_app):
+    def test_200_project_owner_can_patch_others_analysis(
+        self, inv_client, member_token, project_owner_token, analyses_app
+    ):
         """Project owner can PATCH any analysis (uploader or not)."""
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.patch(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
             json={"title": "Owner Edit"},
-            headers=_auth(owner_token),
+            headers=_auth(project_owner_token),
         )
         assert resp.status_code == 200
         assert resp.get_json()["title"] == "Owner Edit"
 
-    def test_200_admin_can_patch_any_analysis(self, inv_client, member_token, superadmin_token, analyses_app):
-        """Admin (*:*) can PATCH any analysis."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
-
-        resp = inv_client.patch(
-            _analysis_url(analyses_app._analyses_project_id, analysis_id),
-            json={"title": "Admin Edit"},
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 200
-        assert resp.get_json()["title"] == "Admin Edit"
-
-    def test_403_non_member_cannot_patch(self, inv_client, outsider_token, analyses_app, owner_token):
+    def test_403_non_member_cannot_patch(self, inv_client, outsider_token, analyses_app, other_member_token):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, owner_token)
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, other_member_token)
 
         resp = inv_client.patch(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
@@ -1092,39 +1115,35 @@ class TestDeleteAnalysisEndpoint:
         ids = [item["id"] for item in resp.get_json()["items"]]
         assert analysis_id not in ids
 
-    def test_200_project_owner_can_delete_others_analysis(self, inv_client, member_token, owner_token, analyses_app):
+    def test_200_project_owner_can_delete_others_analysis(
+        self, inv_client, member_token, project_owner_token, analyses_app
+    ):
         """Project owner can DELETE any analysis."""
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.delete(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
-            headers=_auth(owner_token),
+            headers=_auth(project_owner_token),
         )
         assert resp.status_code == 204
 
-    def test_200_admin_can_delete_any_analysis(self, inv_client, member_token, superadmin_token, analyses_app):
-        """Admin (*:*) can DELETE any analysis."""
+    def test_403_non_uploader_member_cannot_delete(self, inv_client, member_token, other_member_token, analyses_app):
+        """Member who didn't upload cannot DELETE (regression test).
+
+        other_member_token is a plain project member: not uploader, not owner,
+        not admin. Membership alone must not grant delete.
+        """
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.delete(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 204
-
-    def test_403_non_uploader_member_cannot_delete(self, inv_client, member_token, another_token, analyses_app):
-        """Member who didn't upload cannot DELETE (regression test)."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
-
-        resp = inv_client.delete(
-            _analysis_url(analyses_app._analyses_project_id, analysis_id),
-            headers=_auth(another_token),
+            headers=_auth(other_member_token),
         )
         assert resp.status_code == 403
 
-    def test_403_non_member_cannot_delete(self, inv_client, outsider_token, analyses_app, owner_token):
+    def test_403_non_member_cannot_delete(self, inv_client, outsider_token, analyses_app, other_member_token):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, owner_token)
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, other_member_token)
 
         resp = inv_client.delete(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
@@ -1159,3 +1178,96 @@ class TestDeleteAnalysisEndpoint:
         """No token → 401."""
         resp = inv_client.delete(_analysis_url(analyses_app._analyses_project_id, str(uuid4())))
         assert resp.status_code == 401
+
+
+# ===========================================================================
+# authorize_analysis_mutation — direct unit tests
+# ===========================================================================
+#
+# The admin (`*:*`) branch is covered here rather than through HTTP: the shared
+# invitation_app fixture's superadmin user has no roles attached, so a request
+# made with its token never reaches the mutation check — it is stopped by the
+# membership gate first. Testing the rule directly keeps the coverage honest
+# and independent of that fixture's wiring.
+
+
+class TestAuthorizeAnalysisMutation:
+    """Uploader OR project owner OR admin may mutate; a plain member may not."""
+
+    @staticmethod
+    def _analysis(uploader_id):
+        from datetime import datetime, timezone
+
+        from app.domain.entities.project_analysis import ProjectAnalysis
+
+        now = datetime.now(timezone.utc)
+        return ProjectAnalysis(
+            id=uuid4(),
+            project_id=uuid4(),
+            uploader_user_id=uploader_id,
+            title="T",
+            summary=None,
+            source_url=None,
+            storage_key="k",
+            size_bytes=1,
+            tags=(),
+            created_at=now,
+            updated_at=now,
+            deleted_at=None,
+        )
+
+    def test_uploader_allowed(self):
+        from app.application.project_analyses.authorization import authorize_analysis_mutation
+
+        uploader = uuid4()
+        authorize_analysis_mutation(
+            analysis=self._analysis(uploader),
+            actor_id=uploader,
+            project_owner_id=uuid4(),
+            is_admin=False,
+        )
+
+    def test_project_owner_allowed(self):
+        from app.application.project_analyses.authorization import authorize_analysis_mutation
+
+        owner = uuid4()
+        authorize_analysis_mutation(
+            analysis=self._analysis(uuid4()),
+            actor_id=owner,
+            project_owner_id=owner,
+            is_admin=False,
+        )
+
+    def test_admin_allowed_even_when_not_uploader_or_owner(self):
+        from app.application.project_analyses.authorization import authorize_analysis_mutation
+
+        authorize_analysis_mutation(
+            analysis=self._analysis(uuid4()),
+            actor_id=uuid4(),
+            project_owner_id=uuid4(),
+            is_admin=True,
+        )
+
+    def test_plain_member_denied(self):
+        from app.application.project_analyses.authorization import authorize_analysis_mutation
+        from app.application.project_analyses.exceptions import PermissionDeniedError
+
+        with pytest.raises(PermissionDeniedError):
+            authorize_analysis_mutation(
+                analysis=self._analysis(uuid4()),
+                actor_id=uuid4(),
+                project_owner_id=uuid4(),
+                is_admin=False,
+            )
+
+    def test_denied_when_owner_unknown(self):
+        from app.application.project_analyses.authorization import authorize_analysis_mutation
+        from app.application.project_analyses.exceptions import PermissionDeniedError
+
+        with pytest.raises(PermissionDeniedError):
+            authorize_analysis_mutation(
+                analysis=self._analysis(uuid4()),
+                actor_id=uuid4(),
+                project_owner_id=None,
+                is_admin=False,
+            )
