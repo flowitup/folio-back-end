@@ -1,11 +1,20 @@
 """Project analyses API routes — list, upload, metadata, content, edit, delete.
 
 Authorization note:
-    Authorization is single-layer, same convention as notes/routes.py: each
-    use-case calls ``is_member()`` and raises ``NotProjectMemberError``, which
-    the route maps to 403. There is no redundant route-layer membership
-    pre-check — KISS. If a future use-case forgets the membership check,
-    there is no second net, so the pattern must be followed consistently.
+    Two tiers, and they are not the same rule.
+
+    * Read (list, get, content) and create: project membership is enough. Each
+      use-case calls ``is_member()`` and raises ``NotProjectMemberError``,
+      which the route maps to 403.
+    * Mutate (PATCH, DELETE): membership AND uploader-or-project-owner-or-admin,
+      enforced by ``authorize_analysis_mutation``. Membership alone would let
+      any project member rewrite or delete a colleague's report. This mirrors
+      ``DeleteProjectDocumentUseCase``.
+
+    Authorization is single-layer, same convention as notes/routes.py: the
+    checks live in the use-cases, not in route decorators — KISS. If a future
+    use-case forgets its check there is no second net, so the pattern must be
+    followed consistently.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.project_analyses import project_analyses_bp
 from app.api.v1.project_analyses.schemas import AnalysisUpdateBody, ListQueryParams
+from app.api.v1.projects.decorators import has_permission
 from app.application.project_analyses.dtos import (
     AnalysisOutput,
     CreateAnalysisInput,
@@ -35,6 +45,7 @@ from app.application.project_analyses.exceptions import (
     AnalysisTooLargeError,
     InvalidAnalysisFileError,
     NotProjectMemberError,
+    PermissionDeniedError,
 )
 from app.domain.entities.project_analysis import _UNSET, _Unset
 from app.infrastructure.rate_limiter import limiter
@@ -324,6 +335,15 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     if container.update_project_analysis_usecase is None:
         raise RuntimeError("update_project_analysis_usecase not wired in container")
 
+    # Editing is restricted to the uploader, the project owner, or an admin —
+    # membership alone only grants read access. Re-load the project because the
+    # use-case needs its owner_id to make that call.
+    if container.project_repository is None:
+        raise RuntimeError("project_repository not wired in container")
+    project = container.project_repository.find_by_id(project_id)
+    if project is None:
+        return _err(404, "NotFound", "Project not found")
+
     try:
         out = container.update_project_analysis_usecase.execute(
             actor_id=actor_id,
@@ -335,11 +355,15 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
                 source_url=source_url_arg,
                 tags=tags_arg,
             ),
+            project_owner_id=project.owner_id,
+            is_admin=has_permission("*:*"),
         )
     except AnalysisNotFoundError:
         return _err(404, "NotFound", "Analysis not found")
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
+    except PermissionDeniedError:
+        return _err(403, "Forbidden", "You are not permitted to edit this analysis")
     except ValueError as exc:
         return _err(400, "BadRequest", str(exc))
     except Exception:
@@ -365,14 +389,27 @@ def delete_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     if container.delete_project_analysis_usecase is None:
         raise RuntimeError("delete_project_analysis_usecase not wired in container")
 
+    # Same restriction as PATCH: uploader, project owner, or admin only.
+    if container.project_repository is None:
+        raise RuntimeError("project_repository not wired in container")
+    project = container.project_repository.find_by_id(project_id)
+    if project is None:
+        return _err(404, "NotFound", "Project not found")
+
     try:
         container.delete_project_analysis_usecase.execute(
-            actor_id=actor_id, analysis_id=analysis_id, expected_project_id=project_id
+            actor_id=actor_id,
+            analysis_id=analysis_id,
+            expected_project_id=project_id,
+            project_owner_id=project.owner_id,
+            is_admin=has_permission("*:*"),
         )
     except AnalysisNotFoundError:
         return _err(404, "NotFound", "Analysis not found")
     except NotProjectMemberError:
         return _err(403, "Forbidden", "Not a project member")
+    except PermissionDeniedError:
+        return _err(403, "Forbidden", "You are not permitted to delete this analysis")
     except Exception:
         logger.exception("delete_analysis unexpected error analysis_id=%s", analysis_id)
         return _err(500, "InternalError", "An unexpected error occurred.")

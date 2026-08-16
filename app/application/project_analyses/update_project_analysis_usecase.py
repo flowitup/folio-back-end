@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.application.project_analyses.authorization import authorize_analysis_mutation
 from app.application.project_analyses.dtos import AnalysisOutput, UpdateAnalysisInput
 from app.application.project_analyses.exceptions import AnalysisNotFoundError, NotProjectMemberError
 from app.application.project_analyses.ports import (
@@ -16,7 +17,9 @@ from app.application.project_analyses.ports import (
 class UpdateProjectAnalysisUseCase:
     """Update title, summary, source_url, or tags on an analysis.
 
-    Authorization: the acting user must be a member of the analysis's project.
+    Authorization: the acting user must be a member of the analysis's project
+    AND be the uploader, the project owner, or an admin — see
+    ``authorize_analysis_mutation``.
 
     CRITICAL: every optional field on ``UpdateAnalysisInput`` (summary,
     source_url, tags) is threaded straight through to
@@ -36,13 +39,23 @@ class UpdateProjectAnalysisUseCase:
         self._membership = membership_reader
         self._db = db_session
 
-    def execute(self, *, actor_id: UUID, expected_project_id: UUID, data: UpdateAnalysisInput) -> AnalysisOutput:
+    def execute(
+        self,
+        *,
+        actor_id: UUID,
+        expected_project_id: UUID,
+        data: UpdateAnalysisInput,
+        project_owner_id: UUID | None = None,
+        is_admin: bool = False,
+    ) -> AnalysisOutput:
         """Apply updates and return the updated AnalysisOutput.
 
         Raises:
             AnalysisNotFoundError: analysis does not exist, is soft-deleted,
                 or belongs to a different project.
             NotProjectMemberError: actor is not a member of the analysis's project.
+            PermissionDeniedError: actor is a member but is neither the
+                uploader, the project owner, nor an admin.
             ValueError: title, summary, source_url, or tags fail validation.
         """
         analysis = self._repo.find_by_id_for_update(data.analysis_id)
@@ -53,6 +66,13 @@ class UpdateProjectAnalysisUseCase:
 
         if not self._membership.is_member(actor_id, analysis.project_id):
             raise NotProjectMemberError(f"User {actor_id} is not a member of project {analysis.project_id}.")
+
+        authorize_analysis_mutation(
+            analysis=analysis,
+            actor_id=actor_id,
+            project_owner_id=project_owner_id,
+            is_admin=is_admin,
+        )
 
         updated = analysis.with_updates(
             title=data.title,
