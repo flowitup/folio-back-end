@@ -136,6 +136,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.persons import persons_bp
     from app.api.v1.payment_methods import payment_methods_bp
     from app.api.v1.project_documents import project_documents_bp
+    from app.api.v1.project_analyses import project_analyses_bp
     from app.api.v1.project_photos import project_photos_bp
     from app.api.v1.bibliotheque import bibliotheque_bp
 
@@ -161,6 +162,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(persons_bp, url_prefix="/api/v1")
     app.register_blueprint(payment_methods_bp, url_prefix="/api/v1")
     app.register_blueprint(project_documents_bp, url_prefix="/api/v1")
+    app.register_blueprint(project_analyses_bp, url_prefix="/api/v1")
     app.register_blueprint(project_photos_bp, url_prefix="/api/v1")
     app.register_blueprint(bibliotheque_bp, url_prefix="/api/v1")
 

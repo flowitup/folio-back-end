@@ -33,6 +33,7 @@ from app.infrastructure.database.models.company_invite_token import CompanyInvit
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.labor_role import LaborRoleModel
 from app.infrastructure.database.models.project_document import ProjectDocumentModel
+from app.infrastructure.database.models.project_analysis import ProjectAnalysisModel, ProjectAnalysisTagRow
 from app.infrastructure.database.models.project_photo import ProjectPhotoRow
 from app.infrastructure.database.models.project_tag import ProjectTagModel
 from app.infrastructure.database.models.labor_activity import LaborActivityModel
@@ -68,6 +69,8 @@ __all__ = [
     "CompanyInviteTokenModel",
     "PaymentMethodModel",
     "ProjectDocumentModel",
+    "ProjectAnalysisModel",
+    "ProjectAnalysisTagRow",
     "ProjectPhotoRow",
     "LaborRoleModel",
     "LaborActivityModel",

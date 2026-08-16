@@ -11,6 +11,7 @@ This follows the Dependency Inversion Principle.
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
+from uuid import UUID
 
 # Import port interfaces from application layer
 from app.application.ports.email_port import EmailPort
@@ -128,6 +129,14 @@ from app.application.project_documents.confirm_project_document_upload import (
     ConfirmProjectDocumentUploadUseCase,
 )
 from app.application.project_documents.ports import IDocumentStorage, IProjectDocumentRepository
+from app.application.project_analyses.ports import ProjectAnalysisRepositoryPort
+from app.application.project_analyses.create_project_analysis_usecase import CreateProjectAnalysisUseCase
+from app.application.project_analyses.list_project_analyses_usecase import ListProjectAnalysesUseCase
+from app.application.project_analyses.list_project_analysis_tags_usecase import ListProjectAnalysisTagsUseCase
+from app.application.project_analyses.get_project_analysis_usecase import GetProjectAnalysisUseCase
+from app.application.project_analyses.get_project_analysis_content_usecase import GetProjectAnalysisContentUseCase
+from app.application.project_analyses.update_project_analysis_usecase import UpdateProjectAnalysisUseCase
+from app.application.project_analyses.delete_project_analysis_usecase import DeleteProjectAnalysisUseCase
 from app.application.notes.create_note_usecase import CreateNoteUseCase
 from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
 from app.application.notes.update_note_usecase import UpdateNoteUseCase
@@ -195,11 +204,11 @@ class ProjectRepository(Protocol):
 
     def find_all(self) -> list: ...
 
-    def find_by_id(self, project_id: str) -> Optional[Any]: ...
+    def find_by_id(self, project_id: UUID) -> Optional[Any]: ...
 
     def save(self, project: Any) -> Any: ...
 
-    def delete(self, project_id: str) -> bool: ...
+    def delete(self, project_id: UUID) -> bool: ...
 
 
 # =============================================================================
@@ -398,6 +407,18 @@ class Container:
     purge_soft_deleted_documents_usecase: Optional[PurgeSoftDeletedDocumentsUseCase] = None
     presign_project_document_usecase: Optional[PresignProjectDocumentUploadUseCase] = None
     confirm_project_document_usecase: Optional[ConfirmProjectDocumentUploadUseCase] = None
+
+    # -----------------------------------------------------------------------
+    # Project analyses repo + use-cases (project-scoped HTML report library)
+    # -----------------------------------------------------------------------
+    project_analysis_repository: Optional[ProjectAnalysisRepositoryPort] = None
+    create_project_analysis_usecase: Optional[CreateProjectAnalysisUseCase] = None
+    list_project_analyses_usecase: Optional[ListProjectAnalysesUseCase] = None
+    list_project_analysis_tags_usecase: Optional[ListProjectAnalysisTagsUseCase] = None
+    get_project_analysis_usecase: Optional[GetProjectAnalysisUseCase] = None
+    get_project_analysis_content_usecase: Optional[GetProjectAnalysisContentUseCase] = None
+    update_project_analysis_usecase: Optional[UpdateProjectAnalysisUseCase] = None
+    delete_project_analysis_usecase: Optional[DeleteProjectAnalysisUseCase] = None
 
     # Persons repo + use cases (Phase 1b-ii / 1c of labor-calendar-and-bulk-log plan)
     person_repo: Optional[Any] = None  # SqlAlchemyPersonRepository
@@ -827,6 +848,58 @@ def configure_container(
     # _configure_di_container() which injects db.session at app startup.
     # Note: note_repo, note_dismissal_repo, and note_membership_reader are set
     # directly on the container after this function returns (see app/__init__.py).
+
+    # Wire project analyses use-cases. Local db.session import (same lazy
+    # pattern as the invitations block above) avoids a circular import at
+    # module load time. Reuses the S3AttachmentStorage singleton already
+    # built for invoices/documents — namespaced by storage_key prefix
+    # ("project-analyses/<project_id>/<id>.html"), no new bucket/adapter.
+    if attachment_storage is not None:
+        from app import db as _db
+        from app.infrastructure.database.repositories.sqlalchemy_project_analysis_repository import (
+            SqlAlchemyProjectAnalysisRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
+            SqlAlchemyProjectMembershipReader as _AnalysisMembershipReader,
+        )
+
+        _analysis_repo = SqlAlchemyProjectAnalysisRepository(_db.session)
+        _analysis_membership_reader = _AnalysisMembershipReader(_db.session)
+
+        container.project_analysis_repository = _analysis_repo
+        container.create_project_analysis_usecase = CreateProjectAnalysisUseCase(
+            repo=_analysis_repo,
+            storage=attachment_storage,
+            membership_reader=_analysis_membership_reader,
+            db_session=_db.session,
+        )
+        container.list_project_analyses_usecase = ListProjectAnalysesUseCase(
+            repo=_analysis_repo,
+            membership_reader=_analysis_membership_reader,
+        )
+        container.list_project_analysis_tags_usecase = ListProjectAnalysisTagsUseCase(
+            repo=_analysis_repo,
+            membership_reader=_analysis_membership_reader,
+        )
+        container.get_project_analysis_usecase = GetProjectAnalysisUseCase(
+            repo=_analysis_repo,
+            membership_reader=_analysis_membership_reader,
+        )
+        container.get_project_analysis_content_usecase = GetProjectAnalysisContentUseCase(
+            repo=_analysis_repo,
+            storage=attachment_storage,
+            membership_reader=_analysis_membership_reader,
+        )
+        container.update_project_analysis_usecase = UpdateProjectAnalysisUseCase(
+            repo=_analysis_repo,
+            membership_reader=_analysis_membership_reader,
+            db_session=_db.session,
+        )
+        container.delete_project_analysis_usecase = DeleteProjectAnalysisUseCase(
+            repo=_analysis_repo,
+            membership_reader=_analysis_membership_reader,
+            db_session=_db.session,
+        )
 
     return container
 
