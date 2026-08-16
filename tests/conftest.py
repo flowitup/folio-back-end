@@ -793,6 +793,9 @@ def invitation_app():
         from app.application.project_analyses.list_project_analyses_usecase import (
             ListProjectAnalysesUseCase as _ListAnalysesUC,
         )
+        from app.application.project_analyses.list_project_analysis_tags_usecase import (
+            ListProjectAnalysisTagsUseCase as _ListAnalysisTagsUC,
+        )
         from app.application.project_analyses.get_project_analysis_usecase import (
             GetProjectAnalysisUseCase as _GetAnalysisUC,
         )
@@ -815,6 +818,9 @@ def invitation_app():
             db_session=db.session,
         )
         _c.list_project_analyses_usecase = _ListAnalysesUC(repo=_analysis_repo, membership_reader=_membership_reader)
+        _c.list_project_analysis_tags_usecase = _ListAnalysisTagsUC(
+            repo=_analysis_repo, membership_reader=_membership_reader
+        )
         _c.get_project_analysis_usecase = _GetAnalysisUC(repo=_analysis_repo, membership_reader=_membership_reader)
         _c.get_project_analysis_content_usecase = _GetAnalysisContentUC(
             repo=_analysis_repo,

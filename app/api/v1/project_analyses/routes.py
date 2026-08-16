@@ -139,6 +139,38 @@ def list_analyses(project_id: UUID) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/projects/<uuid:project_id>/analyses/tags
+# ---------------------------------------------------------------------------
+
+
+@project_analyses_bp.get("/projects/<uuid:project_id>/analyses/tags")
+@openapi_doc(summary="List the distinct tags used by a project's analyses", tags=["project_analyses"])
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def list_analysis_tags(project_id: UUID) -> Any:
+    """Return the project's whole analysis tag vocabulary, for the filter UI.
+
+    Declared before the ``/<uuid:analysis_id>`` route for readability; the
+    ``uuid`` converter would not match the literal "tags" segment anyway, so
+    the two cannot collide.
+    """
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.list_project_analysis_tags_usecase is None:
+        raise RuntimeError("list_project_analysis_tags_usecase not wired in container")
+
+    try:
+        tags = container.list_project_analysis_tags_usecase.execute(actor_id=actor_id, project_id=project_id)
+    except NotProjectMemberError:
+        return _err(403, "Forbidden", "Not a project member")
+    except Exception:
+        logger.exception("list_analysis_tags unexpected error project_id=%s", project_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    return jsonify({"tags": tags}), 200
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/projects/<uuid:project_id>/analyses
 # ---------------------------------------------------------------------------
 

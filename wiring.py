@@ -132,6 +132,7 @@ from app.application.project_documents.ports import IDocumentStorage, IProjectDo
 from app.application.project_analyses.ports import ProjectAnalysisRepositoryPort
 from app.application.project_analyses.create_project_analysis_usecase import CreateProjectAnalysisUseCase
 from app.application.project_analyses.list_project_analyses_usecase import ListProjectAnalysesUseCase
+from app.application.project_analyses.list_project_analysis_tags_usecase import ListProjectAnalysisTagsUseCase
 from app.application.project_analyses.get_project_analysis_usecase import GetProjectAnalysisUseCase
 from app.application.project_analyses.get_project_analysis_content_usecase import GetProjectAnalysisContentUseCase
 from app.application.project_analyses.update_project_analysis_usecase import UpdateProjectAnalysisUseCase
@@ -413,6 +414,7 @@ class Container:
     project_analysis_repository: Optional[ProjectAnalysisRepositoryPort] = None
     create_project_analysis_usecase: Optional[CreateProjectAnalysisUseCase] = None
     list_project_analyses_usecase: Optional[ListProjectAnalysesUseCase] = None
+    list_project_analysis_tags_usecase: Optional[ListProjectAnalysisTagsUseCase] = None
     get_project_analysis_usecase: Optional[GetProjectAnalysisUseCase] = None
     get_project_analysis_content_usecase: Optional[GetProjectAnalysisContentUseCase] = None
     update_project_analysis_usecase: Optional[UpdateProjectAnalysisUseCase] = None
@@ -872,6 +874,10 @@ def configure_container(
             db_session=_db.session,
         )
         container.list_project_analyses_usecase = ListProjectAnalysesUseCase(
+            repo=_analysis_repo,
+            membership_reader=_analysis_membership_reader,
+        )
+        container.list_project_analysis_tags_usecase = ListProjectAnalysisTagsUseCase(
             repo=_analysis_repo,
             membership_reader=_analysis_membership_reader,
         )
