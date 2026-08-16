@@ -11,6 +11,7 @@ This follows the Dependency Inversion Principle.
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol
+from uuid import UUID
 
 # Import port interfaces from application layer
 from app.application.ports.email_port import EmailPort
@@ -202,11 +203,11 @@ class ProjectRepository(Protocol):
 
     def find_all(self) -> list: ...
 
-    def find_by_id(self, project_id: str) -> Optional[Any]: ...
+    def find_by_id(self, project_id: UUID) -> Optional[Any]: ...
 
     def save(self, project: Any) -> Any: ...
 
-    def delete(self, project_id: str) -> bool: ...
+    def delete(self, project_id: UUID) -> bool: ...
 
 
 # =============================================================================
