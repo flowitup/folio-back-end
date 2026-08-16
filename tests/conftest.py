@@ -776,6 +776,63 @@ def invitation_app():
         )
 
         # ------------------------------------------------------------------
+        # Wire project analyses use-cases (phase 04)
+        # CRITICAL: any use-case added to configure_container()'s analyses
+        # block MUST also appear here or the invitation_app test fixture will
+        # drift from prod. Reuses the InMemoryDocumentStorage instance wired
+        # above for documents (structurally satisfies IAttachmentStorage's
+        # put/get_stream/delete contract — no real S3/MinIO needed in tests)
+        # and the SqlAlchemyProjectMembershipReader wired above for notes.
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_project_analysis_repository import (
+            SqlAlchemyProjectAnalysisRepository as _AnalysisRepo,
+        )
+        from app.application.project_analyses.create_project_analysis_usecase import (
+            CreateProjectAnalysisUseCase as _CreateAnalysisUC,
+        )
+        from app.application.project_analyses.list_project_analyses_usecase import (
+            ListProjectAnalysesUseCase as _ListAnalysesUC,
+        )
+        from app.application.project_analyses.get_project_analysis_usecase import (
+            GetProjectAnalysisUseCase as _GetAnalysisUC,
+        )
+        from app.application.project_analyses.get_project_analysis_content_usecase import (
+            GetProjectAnalysisContentUseCase as _GetAnalysisContentUC,
+        )
+        from app.application.project_analyses.update_project_analysis_usecase import (
+            UpdateProjectAnalysisUseCase as _UpdateAnalysisUC,
+        )
+        from app.application.project_analyses.delete_project_analysis_usecase import (
+            DeleteProjectAnalysisUseCase as _DeleteAnalysisUC,
+        )
+
+        _analysis_repo = _AnalysisRepo(db.session)
+        _c.project_analysis_repository = _analysis_repo
+        _c.create_project_analysis_usecase = _CreateAnalysisUC(
+            repo=_analysis_repo,
+            storage=_doc_storage,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.list_project_analyses_usecase = _ListAnalysesUC(repo=_analysis_repo, membership_reader=_membership_reader)
+        _c.get_project_analysis_usecase = _GetAnalysisUC(repo=_analysis_repo, membership_reader=_membership_reader)
+        _c.get_project_analysis_content_usecase = _GetAnalysisContentUC(
+            repo=_analysis_repo,
+            storage=_doc_storage,
+            membership_reader=_membership_reader,
+        )
+        _c.update_project_analysis_usecase = _UpdateAnalysisUC(
+            repo=_analysis_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+        _c.delete_project_analysis_usecase = _DeleteAnalysisUC(
+            repo=_analysis_repo,
+            membership_reader=_membership_reader,
+            db_session=db.session,
+        )
+
+        # ------------------------------------------------------------------
         # Wire project_photos use-cases
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the invitation_app test fixture will drift from prod.
