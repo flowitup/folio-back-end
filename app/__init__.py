@@ -128,6 +128,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.invitations import invitations_bp
     from app.api.v1.roles import roles_bp
     from app.api.v1.admin import admin_bp
+    from app.api.v1.chiffrage import chiffrage_bp
     from app.api.v1.notes import notes_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.tags import tags_bp
@@ -148,6 +149,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(invoice_bp, url_prefix="/api/v1")
     app.register_blueprint(invoice_export_bp, url_prefix="/api/v1")
     app.register_blueprint(task_bp, url_prefix="/api/v1")
+    app.register_blueprint(chiffrage_bp, url_prefix="/api/v1")
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
     app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
