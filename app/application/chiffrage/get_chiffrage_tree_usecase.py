@@ -25,4 +25,22 @@ class GetChiffrageTreeUseCase:
         """Assemble the project's chiffrage tree."""
         postes, articles_by_poste, quotes_by_article = self._repo.get_tree(project_id)
         stores_by_poste = self._repo.stores_for_postes([p.id for p in postes])
-        return build_tree_response(project_id, postes, articles_by_poste, quotes_by_article, stores_by_poste)
+
+        # One keyed lookup for the whole tree: which linked library products
+        # actually have an image an article can borrow as its thumbnail.
+        product_ids = [
+            q.library_product_id
+            for quotes in quotes_by_article.values()
+            for q in quotes
+            if q.library_product_id is not None
+        ]
+        library_with_image = self._repo.library_products_with_image(product_ids)
+
+        return build_tree_response(
+            project_id,
+            postes,
+            articles_by_poste,
+            quotes_by_article,
+            stores_by_poste,
+            library_with_image,
+        )

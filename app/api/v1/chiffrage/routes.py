@@ -26,7 +26,9 @@ import logging
 from typing import Any, Callable
 from uuid import UUID
 
-from flask import Response, jsonify, request
+from io import BytesIO
+
+from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from pydantic import BaseModel, ValidationError
 
@@ -38,6 +40,7 @@ from app.api.v1.chiffrage.schemas import (
     ArticleUpdateBody,
     PosteCreateBody,
     PosteUpdateBody,
+    ImageFromUrlBody,
     StoreCreateBody,
     StoreUpdateBody,
     QuoteCreateBody,
@@ -47,13 +50,17 @@ from app.api.v1.chiffrage.schemas import (
 )
 from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.chiffrage.exceptions import (
+    ArticleImageNotFoundError,
     ArticleNotFoundError,
     ChiffragePermissionDeniedError,
     InvalidChiffrageInputError,
     NotProjectMemberError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    ImageTooLargeError,
+    SsrfBlockedError,
     StoreNotFoundError,
+    UnsupportedImageTypeError,
     UnitAlreadyExistsError,
     UnitNotFoundError,
 )
@@ -90,8 +97,15 @@ def _handle(fn: Callable[[], Any]) -> Any:
         return fn()
     except ValidationError as e:
         return jsonify({"error": "ValidationError", "fields": safe_validation_fields(e)}), 422
+    except UnsupportedImageTypeError as e:
+        return _err(415, "UnsupportedMediaType", str(e))
+    except ImageTooLargeError as e:
+        return _err(413, "FileTooLarge", str(e))
+    except SsrfBlockedError as e:
+        return _err(400, "InvalidInput", str(e))
     except (
         PosteNotFoundError,
+        ArticleImageNotFoundError,
         ArticleNotFoundError,
         QuoteNotFoundError,
         StoreNotFoundError,
@@ -562,5 +576,102 @@ def select_quote(project_id: str, quote_id: str) -> Any:
             project_id=UUID(project_id), quote_id=UUID(quote_id)
         )
         return jsonify(_quote_json(quote)), 200
+
+    return _handle(run)
+
+
+# ---------------------------------------------------------------------------
+# Article photos
+# ---------------------------------------------------------------------------
+
+
+@chiffrage_bp.get("/projects/<project_id>/chiffrage/articles/<article_id>/image")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access()
+@limiter.limit(READ_LIMIT, key_func=jwt_user_key)
+def get_article_image(project_id: str, article_id: str) -> Any:
+    """Stream an article photo inline.
+
+    Bytes are proxied through the API rather than served from the object store:
+    the store endpoint is not browser-reachable, and the app CSP only allows
+    images from our own origin. nosniff + a locked-down CSP guard against
+    MIME-sniffing user-supplied bytes into something renderable.
+    """
+    try:
+        stream, length, content_type = get_container().get_chiffrage_article_image_usecase.execute(
+            project_id=UUID(project_id), article_id=UUID(article_id)
+        )
+    except (ArticleNotFoundError, ArticleImageNotFoundError):
+        return _err(404, "NotFound", "Article or image not found.")
+    except Exception:
+        logger.exception("get_article_image error article_id=%s", article_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    response = send_file(stream, mimetype=content_type or "application/octet-stream")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    response.headers["Cache-Control"] = "private, max-age=300"
+    if length:
+        response.headers["Content-Length"] = str(length)
+    return response
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/image")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def upload_article_image(project_id: str, article_id: str) -> Any:
+    """Upload a photo for an article (multipart field 'image')."""
+
+    def run() -> Any:
+        if "image" not in request.files:
+            return _err(422, "ValidationError", "Multipart field 'image' is required.")
+        file = request.files["image"]
+        raw = file.stream.read()
+        get_container().upload_chiffrage_article_image_usecase.execute(
+            project_id=UUID(project_id),
+            article_id=UUID(article_id),
+            fileobj=BytesIO(raw),
+            content_type=file.content_type or "application/octet-stream",
+            size=len(raw),
+        )
+        return jsonify({"ok": True}), 201
+
+    return _handle(run)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/image-from-url")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit("10 per minute", key_func=jwt_user_key)
+def set_article_image_from_url(project_id: str, article_id: str) -> Any:
+    """Fetch a supplier image server-side and store it for the article."""
+
+    def run() -> Any:
+        body = _parse(ImageFromUrlBody)
+        get_container().set_chiffrage_article_image_from_url_usecase.execute(
+            project_id=UUID(project_id), article_id=UUID(article_id), url=body.url
+        )
+        return jsonify({"ok": True}), 201
+
+    return _handle(run)
+
+
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<article_id>/image")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def delete_article_image(project_id: str, article_id: str) -> Any:
+    """Detach an article's photo."""
+
+    def run() -> Any:
+        get_container().delete_chiffrage_article_image_usecase.execute(
+            project_id=UUID(project_id), article_id=UUID(article_id)
+        )
+        return "", 204
 
     return _handle(run)

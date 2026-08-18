@@ -23,6 +23,22 @@ class UnitNotFoundError(Exception):
     """Raised when a requested custom unit does not exist."""
 
 
+class ArticleImageNotFoundError(Exception):
+    """Raised when an article has no stored image."""
+
+
+class ImageTooLargeError(Exception):
+    """Raised when an image exceeds the size cap."""
+
+
+class UnsupportedImageTypeError(Exception):
+    """Raised for a content-type outside the accepted image set."""
+
+
+class SsrfBlockedError(Exception):
+    """Raised when a remote image URL fails the SSRF allowlist."""
+
+
 class InvalidChiffrageInputError(ValueError):
     """Raised when input fails a domain rule (blank name, unknown unit, no supplier)."""
 

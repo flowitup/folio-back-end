@@ -17,6 +17,7 @@ from app.infrastructure.database.models.chiffrage_article import ChiffrageArticl
 from app.infrastructure.database.models.chiffrage_poste import ChiffragePosteModel
 from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
 from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
+from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.chiffrage_unit import ChiffrageUnitModel
 
 
@@ -151,6 +152,7 @@ class SqlAlchemyChiffrageRepository:
         orm.quantity = article.quantity
         orm.unit = article.unit
         orm.note = article.note
+        orm.image_storage_key = article.image_storage_key
         orm.position = article.position
         orm.updated_at = article.updated_at
         self._session.flush()
@@ -329,6 +331,22 @@ class SqlAlchemyChiffrageRepository:
             .join(ChiffrageArticleModel, ChiffrageArticleModel.poste_id == ChiffragePosteModel.id)
             .where(ChiffrageArticleModel.id == article_id)
         ).scalar_one_or_none()
+
+    def library_products_with_image(self, product_ids: list[UUID]) -> set[UUID]:
+        """One keyed query — never one lookup per article."""
+        if not product_ids:
+            return set()
+        rows = (
+            self._session.execute(
+                select(BibliothequeProductModel.id).where(
+                    BibliothequeProductModel.id.in_(product_ids),
+                    BibliothequeProductModel.image_storage_key.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return set(rows)
 
     def project_id_for_quote(self, quote_id: UUID) -> Optional[UUID]:
         return self._session.execute(

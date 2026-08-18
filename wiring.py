@@ -156,6 +156,12 @@ from app.application.chiffrage.quote_usecases import (
     SelectQuoteUseCase,
     UpdateQuoteUseCase,
 )
+from app.application.chiffrage.article_image_usecases import (
+    DeleteArticleImageUseCase,
+    GetArticleImageUseCase,
+    SetArticleImageFromUrlUseCase,
+    UploadArticleImageUseCase,
+)
 from app.application.chiffrage.store_usecases import (
     CreateStoreUseCase,
     DeleteStoreUseCase,
@@ -350,6 +356,11 @@ class Container:
     update_chiffrage_quote_usecase: Optional[UpdateQuoteUseCase] = None
     delete_chiffrage_quote_usecase: Optional[DeleteQuoteUseCase] = None
     select_chiffrage_quote_usecase: Optional[SelectQuoteUseCase] = None
+    chiffrage_image_storage: Optional[Any] = None  # ChiffrageImageStorage
+    upload_chiffrage_article_image_usecase: Optional[UploadArticleImageUseCase] = None
+    set_chiffrage_article_image_from_url_usecase: Optional[SetArticleImageFromUrlUseCase] = None
+    delete_chiffrage_article_image_usecase: Optional[DeleteArticleImageUseCase] = None
+    get_chiffrage_article_image_usecase: Optional[GetArticleImageUseCase] = None
     create_chiffrage_store_usecase: Optional[CreateStoreUseCase] = None
     update_chiffrage_store_usecase: Optional[UpdateStoreUseCase] = None
     delete_chiffrage_store_usecase: Optional[DeleteStoreUseCase] = None
@@ -951,11 +962,6 @@ def configure_container(
             db_session=_db.session,
         )
 
-    return container
-
-
-def get_container() -> Container:
-    """Get the current container instance."""
     # ------------------------------------------------------------------
     # Chiffrage — project-scoped material provisioning and price comparison
     # ------------------------------------------------------------------
@@ -981,6 +987,25 @@ def get_container() -> Container:
     container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    from app.infrastructure.adapters.chiffrage_image_storage import ChiffrageImageStorage
+    from config import Config as _ChiffrageConfig
+
+    _chiffrage_image_storage = ChiffrageImageStorage(
+        endpoint_url=_ChiffrageConfig.S3_ENDPOINT_URL,
+        access_key=_ChiffrageConfig.S3_ACCESS_KEY,
+        secret_key=_ChiffrageConfig.S3_SECRET_KEY,
+        bucket=_ChiffrageConfig.S3_BUCKET,
+        region=_ChiffrageConfig.S3_REGION,
+    )
+    container.chiffrage_image_storage = _chiffrage_image_storage
+    container.upload_chiffrage_article_image_usecase = UploadArticleImageUseCase(
+        _chiffrage_repo, _chiffrage_image_storage, _chiffrage_session
+    )
+    container.set_chiffrage_article_image_from_url_usecase = SetArticleImageFromUrlUseCase(
+        _chiffrage_repo, _chiffrage_image_storage, _chiffrage_session
+    )
+    container.delete_chiffrage_article_image_usecase = DeleteArticleImageUseCase(_chiffrage_repo, _chiffrage_session)
+    container.get_chiffrage_article_image_usecase = GetArticleImageUseCase(_chiffrage_repo, _chiffrage_image_storage)
     container.create_chiffrage_store_usecase = CreateStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.update_chiffrage_store_usecase = UpdateStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_store_usecase = DeleteStoreUseCase(_chiffrage_repo, _chiffrage_session)
@@ -988,4 +1013,13 @@ def get_container() -> Container:
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_unit_usecase = DeleteUnitUseCase(_chiffrage_repo, _chiffrage_session)
 
+    return container
+
+
+def get_container() -> Container:
+    """Return the process-wide container.
+
+    Wiring happens once in configure_container(); rebuilding it here would
+    reconstruct every use-case — and an S3 client — on each request.
+    """
     return container

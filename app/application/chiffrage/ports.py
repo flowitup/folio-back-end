@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Protocol
+from typing import BinaryIO, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.chiffrage_article import ChiffrageArticle
@@ -164,8 +164,33 @@ class ChiffrageRepositoryPort(Protocol):
         """Return the owning project id of an article, walking poste -> project."""
         ...
 
+    def library_products_with_image(self, product_ids: list[UUID]) -> set[UUID]:
+        """Of the given library products, which actually have a stored image.
+
+        Used to decide whether an article with no photo of its own can fall
+        back to the image of the product its retained quote points at.
+        """
+        ...
+
     def project_id_for_quote(self, quote_id: UUID) -> Optional[UUID]:
         """Return the owning project id of a quote, walking article -> poste -> project."""
+        ...
+
+
+class IArticleImageStorage(Protocol):
+    """Object-store contract for article photos."""
+
+    def put(self, key: str, fileobj: BinaryIO, content_type: str) -> None:
+        """Upload image bytes under the given key."""
+        ...
+
+    def get_stream(self, key: str) -> tuple[BinaryIO, int, str]:
+        """Return (body, content_length, content_type) for the given key."""
+        ...
+
+    @staticmethod
+    def build_key(article_id: UUID) -> str:
+        """Canonical key for an article's image."""
         ...
 
 
