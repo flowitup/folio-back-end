@@ -512,6 +512,81 @@ class TestPosteStores:
         )
         assert resp.status_code == 422
 
+    def test_website_is_saved_and_returned_in_the_tree(self, inv_client, writer_token, reader_token, project_id, poste):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={
+                "name": "Leroy Merlin Ivry",
+                "address": "45 av de Verdun",
+                "website_url": "https://www.leroymerlin.fr/magasin/ivry",
+            },
+            headers=_auth(writer_token),
+        ).get_json()
+        assert created["website_url"] == "https://www.leroymerlin.fr/magasin/ivry"
+
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        target = next(p for p in tree["postes"] if p["id"] == poste["id"])
+        store = next(s for s in target["stores"] if s["id"] == created["id"])
+        assert store["website_url"] == "https://www.leroymerlin.fr/magasin/ivry"
+
+    def test_website_is_optional(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Rexel"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["website_url"] is None
+
+    def test_patching_only_the_website_keeps_name_and_address(self, inv_client, writer_token, project_id, poste):
+        store = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Point P", "address": "12 rue Charles Fourier"},
+            headers=_auth(writer_token),
+        ).get_json()
+        resp = inv_client.patch(
+            f"{_base(project_id)}/stores/{store['id']}",
+            json={"website_url": "https://www.pointp.fr"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["website_url"] == "https://www.pointp.fr"
+        # The field-drop landmine: omitted fields must survive the PATCH.
+        assert body["name"] == "Point P"
+        assert body["address"] == "12 rue Charles Fourier"
+
+    def test_website_can_be_cleared_explicitly(self, inv_client, writer_token, project_id, poste):
+        store = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Brico", "website_url": "https://example.com"},
+            headers=_auth(writer_token),
+        ).get_json()
+        resp = inv_client.patch(
+            f"{_base(project_id)}/stores/{store['id']}",
+            json={"website_url": None},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["website_url"] is None
+
+    def test_blank_website_is_normalised_to_null(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Castorama", "website_url": "   "},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["website_url"] is None
+
+    def test_overlong_website_is_rejected(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Shop", "website_url": "https://x.fr/" + "a" * 500},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 422
+
     def test_blank_address_is_normalised_to_null(self, inv_client, writer_token, project_id, poste):
         resp = inv_client.post(
             f"{_base(project_id)}/postes/{poste['id']}/stores",

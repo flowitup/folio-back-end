@@ -129,6 +129,7 @@ def _store_json(s: Any) -> dict[str, Any]:
         "poste_id": str(s.poste_id),
         "name": s.name,
         "address": s.address,
+        "website_url": s.website_url,
         "position": s.position,
     }
 
@@ -334,6 +335,7 @@ def create_store(project_id: str, poste_id: str) -> Any:
             poste_id=UUID(poste_id),
             name=body.name,
             address=body.address,
+            website_url=body.website_url,
         )
         return jsonify(_store_json(store)), 201
 
@@ -346,7 +348,7 @@ def create_store(project_id: str, poste_id: str) -> Any:
 @require_project_access(write=True)
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def update_store(project_id: str, store_id: str) -> Any:
-    """Rename a shop or correct its address."""
+    """Rename a shop, correct its address or its website."""
 
     def run() -> Any:
         from app.domain.entities.chiffrage_store import ChiffrageStore
@@ -358,6 +360,7 @@ def update_store(project_id: str, store_id: str) -> Any:
             store_id=UUID(store_id),
             name=_sentinel(body, "name", unset),
             address=_sentinel(body, "address", unset),
+            website_url=_sentinel(body, "website_url", unset),
         )
         return jsonify(_store_json(store)), 200
 

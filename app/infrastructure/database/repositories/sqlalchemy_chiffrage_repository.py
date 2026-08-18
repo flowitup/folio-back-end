@@ -251,6 +251,7 @@ class SqlAlchemyChiffrageRepository:
             return
         orm.name = store.name
         orm.address = store.address
+        orm.website_url = store.website_url
         orm.position = store.position
         orm.updated_at = store.updated_at
         self._session.flush()

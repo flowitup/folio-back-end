@@ -34,6 +34,7 @@ class StoreCreateBody(BaseModel):
 
     name: str = Field(min_length=1, max_length=160)
     address: Optional[str] = Field(default=None, max_length=500)
+    website_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class StoreUpdateBody(BaseModel):
@@ -41,6 +42,7 @@ class StoreUpdateBody(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=160)
     address: Optional[str] = Field(default=None, max_length=500)
+    website_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class ArticleCreateBody(BaseModel):

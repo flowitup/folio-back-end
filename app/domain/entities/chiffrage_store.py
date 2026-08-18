@@ -26,6 +26,7 @@ class ChiffrageStore:
     poste_id: UUID
     name: str
     address: Optional[str]
+    website_url: Optional[str]
     position: int
     created_at: datetime
     updated_at: datetime
@@ -41,6 +42,7 @@ class ChiffrageStore:
         name: str,
         position: int,
         address: Optional[str] = None,
+        website_url: Optional[str] = None,
     ) -> "ChiffrageStore":
         """Create a new store entry at the given position within its poste."""
         now = datetime.now(timezone.utc)
@@ -49,6 +51,7 @@ class ChiffrageStore:
             poste_id=poste_id,
             name=name,
             address=address,
+            website_url=website_url,
             position=position,
             created_at=now,
             updated_at=now,
@@ -59,6 +62,7 @@ class ChiffrageStore:
         *,
         name: object = _UNSET,
         address: object = _UNSET,
+        website_url: object = _UNSET,
     ) -> "ChiffrageStore":
         """Return a copy with the given editable fields overwritten.
 
@@ -70,6 +74,7 @@ class ChiffrageStore:
             self,
             name=self.name if name is U else name,
             address=self.address if address is U else address,
+            website_url=(self.website_url if website_url is U else website_url),
             updated_at=datetime.now(timezone.utc),
         )
 
