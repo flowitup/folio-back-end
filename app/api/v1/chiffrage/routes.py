@@ -41,6 +41,8 @@ from app.api.v1.chiffrage.schemas import (
     PosteCreateBody,
     PosteUpdateBody,
     ImageFromUrlBody,
+    RoomCreateBody,
+    RoomUpdateBody,
     StoreCreateBody,
     StoreUpdateBody,
     QuoteCreateBody,
@@ -57,6 +59,8 @@ from app.application.chiffrage.exceptions import (
     NotProjectMemberError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    RoomAlreadyExistsError,
+    RoomNotFoundError,
     ImageTooLargeError,
     SsrfBlockedError,
     StoreNotFoundError,
@@ -108,11 +112,12 @@ def _handle(fn: Callable[[], Any]) -> Any:
         ArticleImageNotFoundError,
         ArticleNotFoundError,
         QuoteNotFoundError,
+        RoomNotFoundError,
         StoreNotFoundError,
         UnitNotFoundError,
     ) as e:
         return _err(404, "NotFound", str(e))
-    except UnitAlreadyExistsError as e:
+    except (UnitAlreadyExistsError, RoomAlreadyExistsError) as e:
         return _err(409, "Conflict", str(e))
     except InvalidChiffrageInputError as e:
         return _err(400, "InvalidInput", str(e))
@@ -137,6 +142,10 @@ def _poste_json(p: Any) -> dict[str, Any]:
     }
 
 
+def _room_json(r: Any) -> dict[str, Any]:
+    return {"id": str(r.id), "name": r.name, "position": r.position}
+
+
 def _store_json(s: Any) -> dict[str, Any]:
     return {
         "id": str(s.id),
@@ -156,6 +165,7 @@ def _article_json(a: Any) -> dict[str, Any]:
         "quantity": float(a.quantity),
         "unit": a.unit,
         "note": a.note,
+        "room_id": str(a.room_id) if a.room_id else None,
         "position": a.position,
     }
 
@@ -418,6 +428,7 @@ def create_article(project_id: str, poste_id: str) -> Any:
             quantity=body.quantity,
             unit=body.unit,
             note=body.note,
+            room_id=body.room_id,
         )
         return jsonify(_article_json(article)), 201
 
@@ -444,6 +455,7 @@ def update_article(project_id: str, article_id: str) -> Any:
             quantity=_sentinel(body, "quantity", unset),
             unit=_sentinel(body, "unit", unset),
             note=_sentinel(body, "note", unset),
+            room_id=_sentinel(body, "room_id", unset),
         )
         return jsonify(_article_json(article)), 200
 
@@ -673,5 +685,95 @@ def delete_article_image(project_id: str, article_id: str) -> Any:
             project_id=UUID(project_id), article_id=UUID(article_id)
         )
         return "", 204
+
+    return _handle(run)
+
+
+# ---------------------------------------------------------------------------
+# Rooms — the chantier's pièces, shared by every poste
+# ---------------------------------------------------------------------------
+
+
+@chiffrage_bp.get("/projects/<project_id>/chiffrage/rooms")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access()
+@limiter.limit(READ_LIMIT, key_func=jwt_user_key)
+def list_rooms(project_id: str) -> Any:
+    """List the project's rooms in display order."""
+
+    def run() -> Any:
+        rooms = get_container().list_chiffrage_rooms_usecase.execute(project_id=UUID(project_id))
+        return jsonify([_room_json(r) for r in rooms]), 200
+
+    return _handle(run)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/rooms")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def create_room(project_id: str) -> Any:
+    """Declare a room for this chantier."""
+
+    def run() -> Any:
+        body = _parse(RoomCreateBody)
+        room = get_container().create_chiffrage_room_usecase.execute(project_id=UUID(project_id), name=body.name)
+        return jsonify(_room_json(room)), 201
+
+    return _handle(run)
+
+
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/rooms/<room_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def update_room(project_id: str, room_id: str) -> Any:
+    """Rename a room. Articles hold its id, so they follow the rename."""
+
+    def run() -> Any:
+        body = _parse(RoomUpdateBody)
+        room = get_container().update_chiffrage_room_usecase.execute(
+            project_id=UUID(project_id), room_id=UUID(room_id), name=body.name
+        )
+        return jsonify(_room_json(room)), 200
+
+    return _handle(run)
+
+
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/rooms/<room_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def delete_room(project_id: str, room_id: str) -> Any:
+    """Delete a room; its articles resurface as unassigned rather than vanish."""
+
+    def run() -> Any:
+        get_container().delete_chiffrage_room_usecase.execute(project_id=UUID(project_id), room_id=UUID(room_id))
+        return "", 204
+
+    return _handle(run)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/rooms/<room_id>/reorder")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def reorder_room(project_id: str, room_id: str) -> Any:
+    """Move a room between two neighbours."""
+
+    def run() -> Any:
+        body = _parse(ReorderBody)
+        room = get_container().reorder_chiffrage_room_usecase.execute(
+            project_id=UUID(project_id),
+            room_id=UUID(room_id),
+            before_id=body.before_id,
+            after_id=body.after_id,
+        )
+        return jsonify(_room_json(room)), 200
 
     return _handle(run)

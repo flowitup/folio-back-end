@@ -35,6 +35,18 @@ class ImageFromUrlBody(BaseModel):
     url: str = Field(min_length=1, max_length=1000)
 
 
+class RoomCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+
+
+class RoomUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+
+
 class StoreCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -57,6 +69,7 @@ class ArticleCreateBody(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     quantity: Decimal = Field(ge=0)
     unit: Optional[str] = Field(default=None, max_length=16)
+    room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
@@ -66,6 +79,7 @@ class ArticleUpdateBody(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     quantity: Optional[Decimal] = Field(default=None, ge=0)
     unit: Optional[str] = Field(default=None, max_length=16)
+    room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
 
 

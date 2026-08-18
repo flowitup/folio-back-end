@@ -17,6 +17,7 @@ from app.application.chiffrage.exceptions import (
     InvalidChiffrageInputError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    RoomNotFoundError,
     StoreNotFoundError,
 )
 from app.application.chiffrage.ports import ChiffrageRepositoryPort
@@ -25,6 +26,7 @@ from app.application.chiffrage.units import PRESET_UNITS
 MAX_POSTE_NAME = 120
 MAX_ARTICLE_NAME = 200
 MAX_UNIT_SYMBOL = 16
+MAX_ROOM_NAME = 120
 MAX_STORE_NAME = 160
 MAX_STORE_ADDRESS = 500
 MAX_STORE_WEBSITE = 500
@@ -109,6 +111,14 @@ def owned_poste(repo: ChiffrageRepositoryPort, poste_id: UUID, project_id: UUID)
     if poste is None or poste.project_id != project_id:
         raise PosteNotFoundError(f"Poste {poste_id} not found in project {project_id}.")
     return poste
+
+
+def owned_room(repo: ChiffrageRepositoryPort, room_id: UUID, project_id: UUID):
+    """Load a room, refusing ids that belong to another project."""
+    room = repo.find_room(room_id)
+    if room is None or room.project_id != project_id:
+        raise RoomNotFoundError(f"Room {room_id} not found in project {project_id}.")
+    return room
 
 
 def owned_store(repo: ChiffrageRepositoryPort, store_id: UUID, project_id: UUID):

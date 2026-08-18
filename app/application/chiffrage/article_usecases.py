@@ -15,6 +15,7 @@ from app.application.chiffrage.validation import (
     clean_optional_text,
     owned_article,
     owned_poste,
+    owned_room,
     validate_quantity,
     validate_unit,
 )
@@ -37,14 +38,19 @@ class CreateArticleUseCase:
         quantity: Decimal,
         unit: Optional[str] = None,
         note: Optional[str] = None,
+        room_id: Optional[UUID] = None,
     ) -> ChiffrageArticle:
         owned_poste(self._repo, poste_id, project_id)
+        # A room id from another project must not be attachable here.
+        if room_id is not None:
+            owned_room(self._repo, room_id, project_id)
         article = ChiffrageArticle.create(
             poste_id=poste_id,
             name=clean_name(name, field="Article name", max_length=MAX_ARTICLE_NAME),
             quantity=validate_quantity(quantity),
             unit=validate_unit(self._repo, project_id, unit),
             note=clean_optional_text(note),
+            room_id=room_id,
             position=self._repo.max_article_position(poste_id) + POSITION_STEP,
         )
         self._repo.add_article(article)
@@ -72,14 +78,18 @@ class UpdateArticleUseCase:
         quantity: object,
         unit: object,
         note: object,
+        room_id: object,
     ) -> ChiffrageArticle:
         article = owned_article(self._repo, article_id, project_id)
         U = ChiffrageArticle._UNSET
+        if room_id is not U and room_id is not None:
+            owned_room(self._repo, UUID(str(room_id)), project_id)
         updated = article.with_updates(
             name=(U if name is U else clean_name(str(name), field="Article name", max_length=MAX_ARTICLE_NAME)),
             quantity=(U if quantity is U else validate_quantity(Decimal(str(quantity)))),
             unit=(U if unit is U else validate_unit(self._repo, project_id, None if unit is None else str(unit))),
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
+            room_id=(U if room_id is U else (None if room_id is None else UUID(str(room_id)))),
         )
         self._repo.save_article(updated)
         self._db.commit()
