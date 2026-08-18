@@ -29,6 +29,20 @@ class PosteUpdateBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
+class StoreCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=160)
+    address: Optional[str] = Field(default=None, max_length=500)
+
+
+class StoreUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    address: Optional[str] = Field(default=None, max_length=500)
+
+
 class ArticleCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

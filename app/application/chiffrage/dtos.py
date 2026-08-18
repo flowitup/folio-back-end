@@ -21,6 +21,7 @@ from uuid import UUID
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_store import ChiffrageStore
 
 _CENTS = Decimal("0.01")
 _HUNDRED = Decimal("100")
@@ -93,6 +94,27 @@ class ArticleResponse:
 
 
 @dataclass
+class StoreResponse:
+    """A shop to visit for this poste."""
+
+    id: str
+    poste_id: str
+    name: str
+    address: Optional[str]
+    position: int
+
+    @classmethod
+    def from_entity(cls, s: ChiffrageStore) -> "StoreResponse":
+        return cls(
+            id=str(s.id),
+            poste_id=str(s.poste_id),
+            name=s.name,
+            address=s.address,
+            position=s.position,
+        )
+
+
+@dataclass
 class PosteResponse:
     id: str
     project_id: str
@@ -100,6 +122,7 @@ class PosteResponse:
     note: Optional[str]
     position: int
     articles: list[ArticleResponse] = field(default_factory=list)
+    stores: list[StoreResponse] = field(default_factory=list)
     subtotal_ht: float = 0.0
     subtotal_ttc: float = 0.0
 
@@ -164,6 +187,7 @@ def build_tree_response(
     postes: list[ChiffragePoste],
     articles_by_poste: dict[UUID, list[ChiffrageArticle]],
     quotes_by_article: dict[UUID, list[ChiffrageQuote]],
+    stores_by_poste: Optional[dict[UUID, list[ChiffrageStore]]] = None,
 ) -> ChiffrageTreeResponse:
     """Assemble the full chiffrage tree with per-level totals.
 
@@ -198,6 +222,7 @@ def build_tree_response(
                 note=poste.note,
                 position=poste.position,
                 articles=article_responses,
+                stores=[StoreResponse.from_entity(s) for s in (stores_by_poste or {}).get(poste.id, [])],
                 subtotal_ht=float(subtotal_ht),
                 subtotal_ttc=float(subtotal_ttc),
             )

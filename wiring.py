@@ -156,6 +156,11 @@ from app.application.chiffrage.quote_usecases import (
     SelectQuoteUseCase,
     UpdateQuoteUseCase,
 )
+from app.application.chiffrage.store_usecases import (
+    CreateStoreUseCase,
+    DeleteStoreUseCase,
+    UpdateStoreUseCase,
+)
 from app.application.chiffrage.unit_usecases import (
     CreateUnitUseCase,
     DeleteUnitUseCase,
@@ -345,6 +350,9 @@ class Container:
     update_chiffrage_quote_usecase: Optional[UpdateQuoteUseCase] = None
     delete_chiffrage_quote_usecase: Optional[DeleteQuoteUseCase] = None
     select_chiffrage_quote_usecase: Optional[SelectQuoteUseCase] = None
+    create_chiffrage_store_usecase: Optional[CreateStoreUseCase] = None
+    update_chiffrage_store_usecase: Optional[UpdateStoreUseCase] = None
+    delete_chiffrage_store_usecase: Optional[DeleteStoreUseCase] = None
     list_chiffrage_units_usecase: Optional[ListUnitsUseCase] = None
     create_chiffrage_unit_usecase: Optional[CreateUnitUseCase] = None
     delete_chiffrage_unit_usecase: Optional[DeleteUnitUseCase] = None
@@ -973,6 +981,9 @@ def get_container() -> Container:
     container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.create_chiffrage_store_usecase = CreateStoreUseCase(_chiffrage_repo, _chiffrage_session)
+    container.update_chiffrage_store_usecase = UpdateStoreUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_store_usecase = DeleteStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_unit_usecase = DeleteUnitUseCase(_chiffrage_repo, _chiffrage_session)

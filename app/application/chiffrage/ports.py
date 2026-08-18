@@ -8,6 +8,7 @@ from uuid import UUID
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_store import ChiffrageStore
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 
 
@@ -99,6 +100,36 @@ class ChiffrageRepositoryPort(Protocol):
 
     def clear_selection(self, article_id: UUID) -> None:
         """Unselect every quote of the article (bulk UPDATE, no session sync)."""
+        ...
+
+    # -- stores ------------------------------------------------------------
+
+    def stores_for_postes(self, poste_ids: list[UUID]) -> dict[UUID, list[ChiffrageStore]]:
+        """Return stores keyed by poste id, ordered by position — one query."""
+        ...
+
+    def find_store(self, store_id: UUID) -> Optional[ChiffrageStore]:
+        """Return a store by id, or None."""
+        ...
+
+    def add_store(self, store: ChiffrageStore) -> None:
+        """Insert a new store."""
+        ...
+
+    def save_store(self, store: ChiffrageStore) -> None:
+        """Update an existing store."""
+        ...
+
+    def delete_store(self, store_id: UUID) -> None:
+        """Delete a store."""
+        ...
+
+    def max_store_position(self, poste_id: UUID) -> int:
+        """Return the highest store position within the poste, or 0 when empty."""
+        ...
+
+    def project_id_for_store(self, store_id: UUID) -> Optional[UUID]:
+        """Return the owning project id of a store, walking poste -> project."""
         ...
 
     # -- units -------------------------------------------------------------

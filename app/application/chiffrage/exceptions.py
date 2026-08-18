@@ -15,6 +15,10 @@ class QuoteNotFoundError(Exception):
     """Raised when a requested quote does not exist."""
 
 
+class StoreNotFoundError(Exception):
+    """Raised when a requested store does not exist."""
+
+
 class UnitNotFoundError(Exception):
     """Raised when a requested custom unit does not exist."""
 

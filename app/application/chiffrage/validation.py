@@ -17,6 +17,7 @@ from app.application.chiffrage.exceptions import (
     InvalidChiffrageInputError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    StoreNotFoundError,
 )
 from app.application.chiffrage.ports import ChiffrageRepositoryPort
 from app.application.chiffrage.units import PRESET_UNITS
@@ -24,6 +25,8 @@ from app.application.chiffrage.units import PRESET_UNITS
 MAX_POSTE_NAME = 120
 MAX_ARTICLE_NAME = 200
 MAX_UNIT_SYMBOL = 16
+MAX_STORE_NAME = 160
+MAX_STORE_ADDRESS = 500
 MAX_TVA_RATE = Decimal("100")
 
 
@@ -105,6 +108,14 @@ def owned_poste(repo: ChiffrageRepositoryPort, poste_id: UUID, project_id: UUID)
     if poste is None or poste.project_id != project_id:
         raise PosteNotFoundError(f"Poste {poste_id} not found in project {project_id}.")
     return poste
+
+
+def owned_store(repo: ChiffrageRepositoryPort, store_id: UUID, project_id: UUID):
+    """Load a store, refusing ids that belong to another project."""
+    store = repo.find_store(store_id)
+    if store is None or repo.project_id_for_store(store_id) != project_id:
+        raise StoreNotFoundError(f"Store {store_id} not found in project {project_id}.")
+    return store
 
 
 def owned_article(repo: ChiffrageRepositoryPort, article_id: UUID, project_id: UUID):

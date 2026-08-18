@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_store import ChiffrageStore
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 from app.infrastructure.database.models.chiffrage_article import ChiffrageArticleModel
 from app.infrastructure.database.models.chiffrage_poste import ChiffragePosteModel
 from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
+from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
 from app.infrastructure.database.models.chiffrage_unit import ChiffrageUnitModel
 
 
@@ -211,6 +213,66 @@ class SqlAlchemyChiffrageRepository:
             execution_options={"synchronize_session": False},
         )
         self._session.flush()
+
+    # ------------------------------------------------------------------
+    # Stores
+    # ------------------------------------------------------------------
+
+    def stores_for_postes(self, poste_ids: list[UUID]) -> dict[UUID, list[ChiffrageStore]]:
+        """Return stores keyed by poste id in one query (never one per poste)."""
+        result: dict[UUID, list[ChiffrageStore]] = {pid: [] for pid in poste_ids}
+        if not poste_ids:
+            return result
+        rows = (
+            self._session.execute(
+                select(ChiffrageStoreModel)
+                .where(ChiffrageStoreModel.poste_id.in_(poste_ids))
+                .order_by(ChiffrageStoreModel.position, ChiffrageStoreModel.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            entity = row.to_entity()
+            result.setdefault(entity.poste_id, []).append(entity)
+        return result
+
+    def find_store(self, store_id: UUID) -> Optional[ChiffrageStore]:
+        orm = self._session.get(ChiffrageStoreModel, store_id)
+        return orm.to_entity() if orm is not None else None
+
+    def add_store(self, store: ChiffrageStore) -> None:
+        self._session.add(ChiffrageStoreModel.from_entity(store))
+        self._session.flush()
+
+    def save_store(self, store: ChiffrageStore) -> None:
+        orm = self._session.get(ChiffrageStoreModel, store.id)
+        if orm is None:
+            return
+        orm.name = store.name
+        orm.address = store.address
+        orm.position = store.position
+        orm.updated_at = store.updated_at
+        self._session.flush()
+
+    def delete_store(self, store_id: UUID) -> None:
+        orm = self._session.get(ChiffrageStoreModel, store_id)
+        if orm is not None:
+            self._session.delete(orm)
+            self._session.flush()
+
+    def max_store_position(self, poste_id: UUID) -> int:
+        value = self._session.execute(
+            select(func.max(ChiffrageStoreModel.position)).where(ChiffrageStoreModel.poste_id == poste_id)
+        ).scalar()
+        return int(value) if value is not None else 0
+
+    def project_id_for_store(self, store_id: UUID) -> Optional[UUID]:
+        return self._session.execute(
+            select(ChiffragePosteModel.project_id)
+            .join(ChiffrageStoreModel, ChiffrageStoreModel.poste_id == ChiffragePosteModel.id)
+            .where(ChiffrageStoreModel.id == store_id)
+        ).scalar_one_or_none()
 
     # ------------------------------------------------------------------
     # Units
