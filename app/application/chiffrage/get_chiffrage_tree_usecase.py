@@ -43,4 +43,5 @@ class GetChiffrageTreeUseCase:
             quotes_by_article,
             stores_by_poste,
             library_with_image,
+            self._repo.list_rooms(project_id),
         )

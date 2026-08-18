@@ -11,12 +11,14 @@ from sqlalchemy.orm import Session
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_room import ChiffrageRoom
 from app.domain.entities.chiffrage_store import ChiffrageStore
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 from app.infrastructure.database.models.chiffrage_article import ChiffrageArticleModel
 from app.infrastructure.database.models.chiffrage_poste import ChiffragePosteModel
 from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
 from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
+from app.infrastructure.database.models.chiffrage_room import ChiffrageRoomModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.chiffrage_unit import ChiffrageUnitModel
 
@@ -152,6 +154,7 @@ class SqlAlchemyChiffrageRepository:
         orm.quantity = article.quantity
         orm.unit = article.unit
         orm.note = article.note
+        orm.room_id = article.room_id
         orm.image_storage_key = article.image_storage_key
         orm.position = article.position
         orm.updated_at = article.updated_at
@@ -215,6 +218,75 @@ class SqlAlchemyChiffrageRepository:
             execution_options={"synchronize_session": False},
         )
         self._session.flush()
+
+    # ------------------------------------------------------------------
+    # Rooms
+    # ------------------------------------------------------------------
+
+    def list_rooms(self, project_id: UUID) -> list[ChiffrageRoom]:
+        rows = (
+            self._session.execute(
+                select(ChiffrageRoomModel)
+                .where(ChiffrageRoomModel.project_id == project_id)
+                .order_by(ChiffrageRoomModel.position, ChiffrageRoomModel.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        return [r.to_entity() for r in rows]
+
+    def find_room(self, room_id: UUID) -> Optional[ChiffrageRoom]:
+        orm = self._session.get(ChiffrageRoomModel, room_id)
+        return orm.to_entity() if orm is not None else None
+
+    def room_name_exists(self, project_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        stmt = select(ChiffrageRoomModel.id).where(
+            ChiffrageRoomModel.project_id == project_id,
+            ChiffrageRoomModel.name == name,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(ChiffrageRoomModel.id != exclude_id)
+        return self._session.execute(stmt).first() is not None
+
+    def add_room(self, room: ChiffrageRoom) -> None:
+        self._session.add(ChiffrageRoomModel.from_entity(room))
+        self._session.flush()
+
+    def save_room(self, room: ChiffrageRoom) -> None:
+        orm = self._session.get(ChiffrageRoomModel, room.id)
+        if orm is None:
+            return
+        orm.name = room.name
+        orm.position = room.position
+        orm.updated_at = room.updated_at
+        self._session.flush()
+
+    def delete_room(self, room_id: UUID) -> None:
+        orm = self._session.get(ChiffrageRoomModel, room_id)
+        if orm is None:
+            return
+        # Detach the articles here rather than leaning on ON DELETE SET NULL:
+        # SQLite does not enforce foreign keys by default, so the cascade would
+        # fire on Postgres and silently not in the test suite. The FK stays as a
+        # backstop for rows written outside this path.
+        self._session.execute(
+            update(ChiffrageArticleModel).where(ChiffrageArticleModel.room_id == room_id).values(room_id=None),
+            execution_options={"synchronize_session": False},
+        )
+        self._session.delete(orm)
+        self._session.flush()
+
+    def max_room_position(self, project_id: UUID) -> int:
+        value = self._session.execute(
+            select(func.max(ChiffrageRoomModel.position)).where(ChiffrageRoomModel.project_id == project_id)
+        ).scalar()
+        return int(value) if value is not None else 0
+
+    def count_articles_in_room(self, room_id: UUID) -> int:
+        value = self._session.execute(
+            select(func.count(ChiffrageArticleModel.id)).where(ChiffrageArticleModel.room_id == room_id)
+        ).scalar()
+        return int(value or 0)
 
     # ------------------------------------------------------------------
     # Stores

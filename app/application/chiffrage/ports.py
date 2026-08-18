@@ -8,6 +8,7 @@ from uuid import UUID
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_room import ChiffrageRoom
 from app.domain.entities.chiffrage_store import ChiffrageStore
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 
@@ -100,6 +101,40 @@ class ChiffrageRepositoryPort(Protocol):
 
     def clear_selection(self, article_id: UUID) -> None:
         """Unselect every quote of the article (bulk UPDATE, no session sync)."""
+        ...
+
+    # -- rooms -------------------------------------------------------------
+
+    def list_rooms(self, project_id: UUID) -> list[ChiffrageRoom]:
+        """Return the project's rooms ordered by position."""
+        ...
+
+    def find_room(self, room_id: UUID) -> Optional[ChiffrageRoom]:
+        """Return a room by id, or None."""
+        ...
+
+    def room_name_exists(self, project_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        """Return True if the project already has a room with that name."""
+        ...
+
+    def add_room(self, room: ChiffrageRoom) -> None:
+        """Insert a new room."""
+        ...
+
+    def save_room(self, room: ChiffrageRoom) -> None:
+        """Update an existing room."""
+        ...
+
+    def delete_room(self, room_id: UUID) -> None:
+        """Delete a room; articles pointing at it fall back to unassigned."""
+        ...
+
+    def max_room_position(self, project_id: UUID) -> int:
+        """Return the highest room position, or 0 when the project has none."""
+        ...
+
+    def count_articles_in_room(self, room_id: UUID) -> int:
+        """How many articles currently point at this room."""
         ...
 
     # -- stores ------------------------------------------------------------

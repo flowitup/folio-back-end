@@ -162,6 +162,12 @@ from app.application.chiffrage.article_image_usecases import (
     SetArticleImageFromUrlUseCase,
     UploadArticleImageUseCase,
 )
+from app.application.chiffrage.room_usecases import (
+    CreateRoomUseCase,
+    DeleteRoomUseCase,
+    ReorderRoomUseCase,
+    UpdateRoomUseCase,
+)
 from app.application.chiffrage.store_usecases import (
     CreateStoreUseCase,
     DeleteStoreUseCase,
@@ -356,6 +362,11 @@ class Container:
     update_chiffrage_quote_usecase: Optional[UpdateQuoteUseCase] = None
     delete_chiffrage_quote_usecase: Optional[DeleteQuoteUseCase] = None
     select_chiffrage_quote_usecase: Optional[SelectQuoteUseCase] = None
+    list_chiffrage_rooms_usecase: Optional[Any] = None
+    create_chiffrage_room_usecase: Optional[CreateRoomUseCase] = None
+    update_chiffrage_room_usecase: Optional[UpdateRoomUseCase] = None
+    delete_chiffrage_room_usecase: Optional[DeleteRoomUseCase] = None
+    reorder_chiffrage_room_usecase: Optional[ReorderRoomUseCase] = None
     chiffrage_image_storage: Optional[Any] = None  # ChiffrageImageStorage
     upload_chiffrage_article_image_usecase: Optional[UploadArticleImageUseCase] = None
     set_chiffrage_article_image_from_url_usecase: Optional[SetArticleImageFromUrlUseCase] = None
@@ -987,6 +998,22 @@ def configure_container(
     container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+
+    class _ListRooms:
+        """Thin read use-case: the room list needs no rules beyond project access."""
+
+        def __init__(self, repo: Any) -> None:
+            self._repo = repo
+
+        def execute(self, *, project_id: Any) -> Any:
+            return self._repo.list_rooms(project_id)
+
+    container.list_chiffrage_rooms_usecase = _ListRooms(_chiffrage_repo)
+    container.create_chiffrage_room_usecase = CreateRoomUseCase(_chiffrage_repo, _chiffrage_session)
+    container.update_chiffrage_room_usecase = UpdateRoomUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_room_usecase = DeleteRoomUseCase(_chiffrage_repo, _chiffrage_session)
+    container.reorder_chiffrage_room_usecase = ReorderRoomUseCase(_chiffrage_repo, _chiffrage_session)
+
     from app.infrastructure.adapters.chiffrage_image_storage import ChiffrageImageStorage
     from config import Config as _ChiffrageConfig
 

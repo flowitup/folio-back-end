@@ -21,6 +21,7 @@ from uuid import UUID
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_room import ChiffrageRoom
 from app.domain.entities.chiffrage_store import ChiffrageStore
 
 _CENTS = Decimal("0.01")
@@ -89,6 +90,7 @@ class ArticleResponse:
     quantity: float
     unit: Optional[str]
     note: Optional[str]
+    room_id: Optional[str]
     position: int
     quotes: list[QuoteResponse] = field(default_factory=list)
     # None, or {"kind": "article"|"library", "id": "<uuid>"} telling the client
@@ -99,6 +101,29 @@ class ArticleResponse:
     effective_source: str = SOURCE_NONE
     total_ht: float = 0.0
     total_ttc: float = 0.0
+
+
+@dataclass
+class RoomResponse:
+    """A room of the chantier, shared by every poste."""
+
+    id: str
+    name: str
+    position: int
+
+    @classmethod
+    def from_entity(cls, r: ChiffrageRoom) -> "RoomResponse":
+        return cls(id=str(r.id), name=r.name, position=r.position)
+
+
+@dataclass
+class RoomSubtotal:
+    """What one room costs inside one poste. None id = articles with no room."""
+
+    room_id: Optional[str]
+    subtotal_ht: float
+    subtotal_ttc: float
+    article_count: int
 
 
 @dataclass
@@ -133,6 +158,8 @@ class PosteResponse:
     position: int
     articles: list[ArticleResponse] = field(default_factory=list)
     stores: list[StoreResponse] = field(default_factory=list)
+    # Per-room breakdown inside this poste, so the UI never re-adds money.
+    room_subtotals: list[RoomSubtotal] = field(default_factory=list)
     subtotal_ht: float = 0.0
     subtotal_ttc: float = 0.0
 
@@ -141,6 +168,8 @@ class PosteResponse:
 class ChiffrageTreeResponse:
     project_id: str
     postes: list[PosteResponse] = field(default_factory=list)
+    # The project's room vocabulary, in display order.
+    rooms: list[RoomResponse] = field(default_factory=list)
     total_ht: float = 0.0
     total_ttc: float = 0.0
     unpriced_article_count: int = 0
@@ -205,6 +234,7 @@ def _build_article(
         quantity=float(article.quantity),
         unit=article.unit,
         note=article.note,
+        room_id=str(article.room_id) if article.room_id else None,
         position=article.position,
         quotes=[QuoteResponse.from_entity(q) for q in quotes],
         image_ref=_resolve_image_ref(article, effective, library_with_image or set()),
@@ -216,6 +246,25 @@ def _build_article(
     return response, line_ht, line_ttc
 
 
+def _room_subtotals(per_room: dict, rooms: Optional[list[ChiffrageRoom]]) -> list[RoomSubtotal]:
+    """Order the per-room figures the way the rooms are displayed.
+
+    Rooms follow the project's declared order; articles with no room come last,
+    so an incomplete assignment reads as a leftover rather than a first item.
+    """
+    order = {str(r.id): i for i, r in enumerate(rooms or [])}
+    keys = sorted(per_room, key=lambda k: (k is None, order.get(k, len(order))))
+    return [
+        RoomSubtotal(
+            room_id=k,
+            subtotal_ht=float(per_room[k][0]),
+            subtotal_ttc=float(per_room[k][1]),
+            article_count=per_room[k][2],
+        )
+        for k in keys
+    ]
+
+
 def build_tree_response(
     project_id: UUID,
     postes: list[ChiffragePoste],
@@ -223,6 +272,7 @@ def build_tree_response(
     quotes_by_article: dict[UUID, list[ChiffrageQuote]],
     stores_by_poste: Optional[dict[UUID, list[ChiffrageStore]]] = None,
     library_with_image: Optional[set] = None,
+    rooms: Optional[list[ChiffrageRoom]] = None,
 ) -> ChiffrageTreeResponse:
     """Assemble the full chiffrage tree with per-level totals.
 
@@ -239,6 +289,9 @@ def build_tree_response(
         subtotal_ht = Decimal("0")
         subtotal_ttc = Decimal("0")
         article_responses: list[ArticleResponse] = []
+        # Keyed by room id (None = unassigned) so the per-room figures come
+        # from the same quantized line totals as the poste subtotal.
+        per_room: dict = {}
 
         for article in articles_by_poste.get(poste.id, []):
             quotes = quotes_by_article.get(article.id, [])
@@ -249,6 +302,12 @@ def build_tree_response(
             subtotal_ht += line_ht
             subtotal_ttc += line_ttc
 
+            key = str(article.room_id) if article.room_id else None
+            bucket = per_room.setdefault(key, [Decimal("0"), Decimal("0"), 0])
+            bucket[0] += line_ht
+            bucket[1] += line_ttc
+            bucket[2] += 1
+
         poste_responses.append(
             PosteResponse(
                 id=str(poste.id),
@@ -258,6 +317,7 @@ def build_tree_response(
                 position=poste.position,
                 articles=article_responses,
                 stores=[StoreResponse.from_entity(s) for s in (stores_by_poste or {}).get(poste.id, [])],
+                room_subtotals=_room_subtotals(per_room, rooms),
                 subtotal_ht=float(subtotal_ht),
                 subtotal_ttc=float(subtotal_ttc),
             )
@@ -268,6 +328,7 @@ def build_tree_response(
     return ChiffrageTreeResponse(
         project_id=str(project_id),
         postes=poste_responses,
+        rooms=[RoomResponse.from_entity(r) for r in (rooms or [])],
         total_ht=float(grand_ht),
         total_ttc=float(grand_ttc),
         unpriced_article_count=unpriced,

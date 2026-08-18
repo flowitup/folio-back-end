@@ -15,6 +15,14 @@ class QuoteNotFoundError(Exception):
     """Raised when a requested quote does not exist."""
 
 
+class RoomNotFoundError(Exception):
+    """Raised when a requested room does not exist in the project."""
+
+
+class RoomAlreadyExistsError(Exception):
+    """Raised when adding a room name the project already has."""
+
+
 class StoreNotFoundError(Exception):
     """Raised when a requested store does not exist."""
 

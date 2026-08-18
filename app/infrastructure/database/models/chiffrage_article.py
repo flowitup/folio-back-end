@@ -36,6 +36,11 @@ class ChiffrageArticleModel(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=Decimal("0"))
     unit: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    room_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("chiffrage_rooms.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     image_storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, unique=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
@@ -53,6 +58,7 @@ class ChiffrageArticleModel(Base):
             quantity=Decimal(str(self.quantity)),
             unit=self.unit,
             note=self.note,
+            room_id=self.room_id,
             image_storage_key=self.image_storage_key,
             position=self.position,
             created_at=self.created_at,
@@ -68,6 +74,7 @@ class ChiffrageArticleModel(Base):
             quantity=a.quantity,
             unit=a.unit,
             note=a.note,
+            room_id=a.room_id,
             image_storage_key=a.image_storage_key,
             position=a.position,
             created_at=a.created_at,

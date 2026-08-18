@@ -776,6 +776,150 @@ class TestArticleImage:
         assert resp.status_code == 404
 
 
+class TestRooms:
+    """The chantier's pièces: declared once, reused by every poste."""
+
+    def _room(self, inv_client, token, project_id, name):
+        return inv_client.post(f"{_base(project_id)}/rooms", json={"name": name}, headers=_auth(token))
+
+    def test_rooms_are_listed_in_declared_order(self, inv_client, writer_token, reader_token, project_id):
+        for n in ("Salon", "Cuisine", "Chambre 1"):
+            assert self._room(inv_client, writer_token, project_id, n).status_code == 201
+        rooms = inv_client.get(f"{_base(project_id)}/rooms", headers=_auth(reader_token)).get_json()
+        names = [r["name"] for r in rooms]
+        assert names[:3] == ["Salon", "Cuisine", "Chambre 1"]
+
+    def test_duplicate_room_name_is_rejected(self, inv_client, writer_token, project_id):
+        self._room(inv_client, writer_token, project_id, "Garage")
+        assert self._room(inv_client, writer_token, project_id, "Garage").status_code == 409
+
+    def test_blank_room_name_is_rejected(self, inv_client, writer_token, project_id):
+        # Rejected by the schema (strip + min_length), so 422 rather than 400.
+        assert self._room(inv_client, writer_token, project_id, "   ").status_code == 422
+
+    def test_room_is_shared_across_postes(self, inv_client, writer_token, reader_token, project_id, poste):
+        room = self._room(inv_client, writer_token, project_id, "Salle de bain").get_json()
+        other = inv_client.post(
+            f"{_base(project_id)}/postes", json={"name": "Peinture"}, headers=_auth(writer_token)
+        ).get_json()
+        # The same room id is attachable from two different postes.
+        for target in (poste["id"], other["id"]):
+            resp = inv_client.post(
+                f"{_base(project_id)}/postes/{target}/articles",
+                json={"name": "Item", "quantity": "1", "unit": "u", "room_id": room["id"]},
+                headers=_auth(writer_token),
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+            assert resp.get_json()["room_id"] == room["id"]
+
+    def test_article_can_be_created_without_a_room(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Divers", "quantity": "1", "unit": "u"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["room_id"] is None
+
+    def test_article_can_be_moved_to_another_room(self, inv_client, writer_token, project_id, poste):
+        a = self._room(inv_client, writer_token, project_id, "Entrée").get_json()
+        b = self._room(inv_client, writer_token, project_id, "Couloir").get_json()
+        art = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Spot", "quantity": "2", "unit": "u", "room_id": a["id"]},
+            headers=_auth(writer_token),
+        ).get_json()
+        resp = inv_client.patch(
+            f"{_base(project_id)}/articles/{art['id']}",
+            json={"room_id": b["id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["room_id"] == b["id"]
+        # The field-drop landmine: the rest of the line survives the move.
+        assert body["name"] == "Spot" and body["quantity"] == 2.0
+
+    def test_renaming_a_room_keeps_its_articles(self, inv_client, writer_token, reader_token, project_id, poste):
+        room = self._room(inv_client, writer_token, project_id, "Sejour").get_json()
+        art = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Applique", "quantity": "1", "unit": "u", "room_id": room["id"]},
+            headers=_auth(writer_token),
+        ).get_json()
+        assert (
+            inv_client.patch(
+                f"{_base(project_id)}/rooms/{room['id']}",
+                json={"name": "Séjour"},
+                headers=_auth(writer_token),
+            ).status_code
+            == 200
+        )
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        # Articles hold the id, so a rename does not detach them.
+        assert _article_in_tree(tree, art["id"])["room_id"] == room["id"]
+        assert any(r["name"] == "Séjour" for r in tree["rooms"])
+
+    def test_deleting_a_room_keeps_its_articles_as_unassigned(
+        self, inv_client, writer_token, reader_token, project_id, poste
+    ):
+        room = self._room(inv_client, writer_token, project_id, "Cellier").get_json()
+        art = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Étagère", "quantity": "1", "unit": "u", "room_id": room["id"]},
+            headers=_auth(writer_token),
+        ).get_json()
+        assert (
+            inv_client.delete(f"{_base(project_id)}/rooms/{room['id']}", headers=_auth(writer_token)).status_code == 204
+        )
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        found = _article_in_tree(tree, art["id"])
+        # The item survives the room it was planned for.
+        assert found is not None and found["room_id"] is None
+
+    def test_room_of_another_project_cannot_be_attached(
+        self, inv_client, writer_token, chiffrage_world, project_id, poste
+    ):
+        other = chiffrage_world["other_project_id"]
+        foreign = inv_client.post(
+            f"/api/v1/projects/{other}/chiffrage/rooms",
+            json={"name": "Salon"},
+            headers=_auth(writer_token),
+        )
+        if foreign.status_code != 201:
+            pytest.skip("writer has no access to the sibling project")
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "X", "quantity": "1", "unit": "u", "room_id": foreign.get_json()["id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+    def test_read_only_member_cannot_declare_a_room(self, inv_client, reader_token, project_id):
+        assert self._room(inv_client, reader_token, project_id, "Bureau").status_code == 403
+
+    def test_per_room_subtotals_add_up_to_the_poste_subtotal(
+        self, inv_client, writer_token, reader_token, project_id, poste
+    ):
+        r1 = self._room(inv_client, writer_token, project_id, "Salon TV").get_json()
+        r2 = self._room(inv_client, writer_token, project_id, "Cuisine B").get_json()
+        for room, qty, price in ((r1, "2", "10.00"), (r2, "3", "20.00")):
+            art = inv_client.post(
+                f"{_base(project_id)}/postes/{poste['id']}/articles",
+                json={"name": "Item", "quantity": qty, "unit": "u", "room_id": room["id"]},
+                headers=_auth(writer_token),
+            ).get_json()
+            _add_quote(inv_client, writer_token, project_id, art["id"], "LM", price)
+
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        target = next(p for p in tree["postes"] if p["id"] == poste["id"])
+        subs = {s["room_id"]: s for s in target["room_subtotals"]}
+        assert subs[r1["id"]]["subtotal_ht"] == 20.0
+        assert subs[r2["id"]]["subtotal_ht"] == 60.0
+        # The invariant that matters: rooms partition the poste exactly.
+        assert round(sum(s["subtotal_ht"] for s in target["room_subtotals"]), 2) == target["subtotal_ht"]
+
+
 class TestValidationAndAuthorization:
     def test_quote_without_any_supplier_is_rejected(self, inv_client, writer_token, project_id, article):
         resp = inv_client.post(

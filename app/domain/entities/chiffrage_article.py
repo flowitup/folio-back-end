@@ -25,6 +25,9 @@ class ChiffrageArticle:
     quantity: Decimal
     unit: Optional[str]
     note: Optional[str]
+    # The room this item is for; None until one is picked (the UI requires it,
+    # the column stays nullable so pre-existing lines remain valid).
+    room_id: Optional[UUID]
     # S3 key of the article's own photo; None when it has none (the UI may
     # still fall back to a linked library product's image).
     image_storage_key: Optional[str]
@@ -45,6 +48,7 @@ class ChiffrageArticle:
         position: int,
         unit: Optional[str] = None,
         note: Optional[str] = None,
+        room_id: Optional[UUID] = None,
         image_storage_key: Optional[str] = None,
     ) -> "ChiffrageArticle":
         """Create a new article at the given position within its poste."""
@@ -56,6 +60,7 @@ class ChiffrageArticle:
             quantity=quantity,
             unit=unit,
             note=note,
+            room_id=room_id,
             image_storage_key=image_storage_key,
             position=position,
             created_at=now,
@@ -69,6 +74,7 @@ class ChiffrageArticle:
         quantity: object = _UNSET,
         unit: object = _UNSET,
         note: object = _UNSET,
+        room_id: object = _UNSET,
     ) -> "ChiffrageArticle":
         """Return a copy with the given editable fields overwritten.
 
@@ -82,6 +88,7 @@ class ChiffrageArticle:
             quantity=self.quantity if quantity is U else quantity,
             unit=self.unit if unit is U else unit,
             note=self.note if note is U else note,
+            room_id=self.room_id if room_id is U else room_id,
             updated_at=datetime.now(timezone.utc),
         )
 
