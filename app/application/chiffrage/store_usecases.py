@@ -14,6 +14,7 @@ from app.application.chiffrage.ports import ChiffrageRepositoryPort, Transaction
 from app.application.chiffrage.units import POSITION_STEP
 from app.application.chiffrage.validation import (
     MAX_STORE_ADDRESS,
+    MAX_STORE_WEBSITE,
     MAX_STORE_NAME,
     clean_name,
     clean_optional_text,
@@ -32,6 +33,15 @@ def _clean_address(value: Optional[str]) -> Optional[str]:
     return cleaned
 
 
+def _clean_website(value: Optional[str]) -> Optional[str]:
+    """Normalise a website URL. Scheme is not enforced — same as the quote
+    product_url, which also stores whatever the user pasted."""
+    cleaned = clean_optional_text(value)
+    if cleaned is not None and len(cleaned) > MAX_STORE_WEBSITE:
+        raise InvalidChiffrageInputError(f"Store website cannot exceed {MAX_STORE_WEBSITE} characters.")
+    return cleaned
+
+
 class CreateStoreUseCase:
     """Append a shop to a poste's list."""
 
@@ -46,12 +56,14 @@ class CreateStoreUseCase:
         poste_id: UUID,
         name: str,
         address: Optional[str] = None,
+        website_url: Optional[str] = None,
     ) -> ChiffrageStore:
         owned_poste(self._repo, poste_id, project_id)
         store = ChiffrageStore.create(
             poste_id=poste_id,
             name=clean_name(name, field="Store name", max_length=MAX_STORE_NAME),
             address=_clean_address(address),
+            website_url=_clean_website(website_url),
             position=self._repo.max_store_position(poste_id) + POSITION_STEP,
         )
         self._repo.add_store(store)
@@ -60,18 +72,23 @@ class CreateStoreUseCase:
 
 
 class UpdateStoreUseCase:
-    """Rename a shop or correct its address."""
+    """Rename a shop, correct its address or its website."""
 
     def __init__(self, repo: ChiffrageRepositoryPort, db_session: TransactionalSessionPort) -> None:
         self._repo = repo
         self._db = db_session
 
-    def execute(self, *, project_id: UUID, store_id: UUID, name: object, address: object) -> ChiffrageStore:
+    def execute(
+        self, *, project_id: UUID, store_id: UUID, name: object, address: object, website_url: object
+    ) -> ChiffrageStore:
         store = owned_store(self._repo, store_id, project_id)
         U = ChiffrageStore._UNSET
         updated = store.with_updates(
             name=(U if name is U else clean_name(str(name), field="Store name", max_length=MAX_STORE_NAME)),
             address=(U if address is U else _clean_address(address if address is None else str(address))),
+            website_url=(
+                U if website_url is U else _clean_website(website_url if website_url is None else str(website_url))
+            ),
         )
         self._repo.save_store(updated)
         self._db.commit()

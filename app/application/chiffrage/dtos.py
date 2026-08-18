@@ -101,6 +101,7 @@ class StoreResponse:
     poste_id: str
     name: str
     address: Optional[str]
+    website_url: Optional[str]
     position: int
 
     @classmethod
@@ -110,6 +111,7 @@ class StoreResponse:
             poste_id=str(s.poste_id),
             name=s.name,
             address=s.address,
+            website_url=s.website_url,
             position=s.position,
         )
 

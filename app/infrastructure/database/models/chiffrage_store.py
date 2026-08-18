@@ -28,6 +28,7 @@ class ChiffrageStoreModel(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    website_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
@@ -42,6 +43,7 @@ class ChiffrageStoreModel(Base):
             poste_id=self.poste_id,
             name=self.name,
             address=self.address,
+            website_url=self.website_url,
             position=self.position,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -54,6 +56,7 @@ class ChiffrageStoreModel(Base):
             poste_id=s.poste_id,
             name=s.name,
             address=s.address,
+            website_url=s.website_url,
             position=s.position,
             created_at=s.created_at,
             updated_at=s.updated_at,
