@@ -613,6 +613,169 @@ class TestPosteStores:
         assert resp.status_code == 404
 
 
+class _FakeImageStorage:
+    """In-memory stand-in for the S3 adapter: same three methods, a dict inside."""
+
+    def __init__(self) -> None:
+        self.objects: dict = {}
+
+    def put(self, key, fileobj, content_type):
+        self.objects[key] = (fileobj.read(), content_type)
+
+    def get_stream(self, key):
+        import io
+
+        raw, ct = self.objects[key]
+        return io.BytesIO(raw), len(raw), ct
+
+    @staticmethod
+    def build_key(article_id):
+        return f"chiffrage-articles/{article_id}/image"
+
+
+_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+class TestArticleImage:
+    """Photos for the things to buy."""
+
+    @pytest.fixture(autouse=True)
+    def fake_storage(self, invitation_app):
+        """Swap the S3 adapter for an in-memory one, restoring it afterwards."""
+        from wiring import get_container
+
+        with invitation_app.app_context():
+            c = get_container()
+            original = c.chiffrage_image_storage
+            fake = _FakeImageStorage()
+            c.chiffrage_image_storage = fake
+            c.upload_chiffrage_article_image_usecase._storage = fake
+            c.set_chiffrage_article_image_from_url_usecase._storage = fake
+            c.get_chiffrage_article_image_usecase._storage = fake
+            yield fake
+            c.chiffrage_image_storage = original
+            c.upload_chiffrage_article_image_usecase._storage = original
+            c.set_chiffrage_article_image_from_url_usecase._storage = original
+            c.get_chiffrage_article_image_usecase._storage = original
+
+    def _upload(self, inv_client, token, project_id, article_id, data=_PNG, ct="image/png"):
+        import io
+
+        return inv_client.post(
+            f"{_base(project_id)}/articles/{article_id}/image",
+            data={"image": (io.BytesIO(data), "photo.png", ct)},
+            content_type="multipart/form-data",
+            headers=_auth(token),
+        )
+
+    def test_uploaded_photo_is_stored_and_streamed_back(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        assert self._upload(inv_client, writer_token, project_id, article["id"]).status_code == 201
+
+        resp = inv_client.get(f"{_base(project_id)}/articles/{article['id']}/image", headers=_auth(reader_token))
+        assert resp.status_code == 200
+        assert resp.data == _PNG
+        # User-supplied bytes must never be sniffed into something renderable.
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+    def test_tree_points_at_the_article_own_image(self, inv_client, writer_token, reader_token, project_id, article):
+        self._upload(inv_client, writer_token, project_id, article["id"])
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        found = _article_in_tree(tree, article["id"])
+        assert found["image_ref"] == {"kind": "article", "id": article["id"]}
+
+    def test_article_without_a_photo_has_no_image_ref(self, inv_client, reader_token, project_id, article):
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, article["id"])["image_ref"] is None
+
+    def test_missing_image_is_404_not_500(self, inv_client, reader_token, project_id, article):
+        resp = inv_client.get(f"{_base(project_id)}/articles/{article['id']}/image", headers=_auth(reader_token))
+        assert resp.status_code == 404
+
+    def test_photo_can_be_detached(self, inv_client, writer_token, reader_token, project_id, article):
+        self._upload(inv_client, writer_token, project_id, article["id"])
+        assert (
+            inv_client.delete(
+                f"{_base(project_id)}/articles/{article['id']}/image", headers=_auth(writer_token)
+            ).status_code
+            == 204
+        )
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, article["id"])["image_ref"] is None
+
+    def test_non_image_upload_is_rejected(self, inv_client, writer_token, project_id, article):
+        resp = self._upload(inv_client, writer_token, project_id, article["id"], b"%PDF-1.4", "application/pdf")
+        assert resp.status_code == 415
+
+    def test_missing_multipart_field_is_422(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/image",
+            data={},
+            content_type="multipart/form-data",
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 422
+
+    def test_read_only_member_cannot_upload(self, inv_client, reader_token, project_id, article):
+        assert self._upload(inv_client, reader_token, project_id, article["id"]).status_code == 403
+
+    def test_image_from_url_refuses_a_host_off_the_allowlist(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/image-from-url",
+            json={"url": "https://evil.example.com/x.png"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 400
+
+    def test_image_from_url_refuses_plain_http(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/image-from-url",
+            json={"url": "http://media.adeo.com/x.png"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 400
+
+    def test_image_from_url_refuses_a_link_local_address(self, inv_client, writer_token, project_id, article):
+        # The classic SSRF target — must not be reachable through this endpoint.
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/image-from-url",
+            json={"url": "https://169.254.169.254/latest/meta-data/"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 400
+
+    def test_image_from_url_stores_an_allowlisted_image(
+        self, inv_client, writer_token, reader_token, project_id, article, monkeypatch
+    ):
+        import httpx
+
+        class _Resp:
+            status_code = 200
+            content = _PNG
+            headers = {"content-type": "image/png"}
+
+        monkeypatch.setattr(httpx, "get", lambda *a, **kw: _Resp())
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/image-from-url",
+            json={"url": "https://media.adeo.com/some/product.png"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+        got = inv_client.get(f"{_base(project_id)}/articles/{article['id']}/image", headers=_auth(reader_token))
+        assert got.status_code == 200 and got.data == _PNG
+
+    def test_cross_project_article_image_is_404(self, inv_client, writer_token, chiffrage_world, project_id, article):
+        other = chiffrage_world["other_project_id"]
+        resp = self._upload(inv_client, writer_token, other, article["id"])
+        assert resp.status_code == 404
+
+
 class TestValidationAndAuthorization:
     def test_quote_without_any_supplier_is_rejected(self, inv_client, writer_token, project_id, article):
         resp = inv_client.post(

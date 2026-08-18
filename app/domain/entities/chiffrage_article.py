@@ -25,6 +25,9 @@ class ChiffrageArticle:
     quantity: Decimal
     unit: Optional[str]
     note: Optional[str]
+    # S3 key of the article's own photo; None when it has none (the UI may
+    # still fall back to a linked library product's image).
+    image_storage_key: Optional[str]
     position: int
     created_at: datetime
     updated_at: datetime
@@ -42,6 +45,7 @@ class ChiffrageArticle:
         position: int,
         unit: Optional[str] = None,
         note: Optional[str] = None,
+        image_storage_key: Optional[str] = None,
     ) -> "ChiffrageArticle":
         """Create a new article at the given position within its poste."""
         now = datetime.now(timezone.utc)
@@ -52,6 +56,7 @@ class ChiffrageArticle:
             quantity=quantity,
             unit=unit,
             note=note,
+            image_storage_key=image_storage_key,
             position=position,
             created_at=now,
             updated_at=now,
@@ -79,6 +84,14 @@ class ChiffrageArticle:
             note=self.note if note is U else note,
             updated_at=datetime.now(timezone.utc),
         )
+
+    def with_image_key(self, image_storage_key: Optional[str]) -> "ChiffrageArticle":
+        """Attach or clear the article's own photo.
+
+        Deliberately separate from with_updates: the image travels as bytes
+        through its own endpoints, so it must not ride on a JSON PATCH.
+        """
+        return replace(self, image_storage_key=image_storage_key, updated_at=datetime.now(timezone.utc))
 
     def with_position(self, position: int) -> "ChiffrageArticle":
         """Return a copy moved to a new ordering position within its poste."""

@@ -36,6 +36,7 @@ class ChiffrageArticleModel(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=Decimal("0"))
     unit: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, unique=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
@@ -52,6 +53,7 @@ class ChiffrageArticleModel(Base):
             quantity=Decimal(str(self.quantity)),
             unit=self.unit,
             note=self.note,
+            image_storage_key=self.image_storage_key,
             position=self.position,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -66,6 +68,7 @@ class ChiffrageArticleModel(Base):
             quantity=a.quantity,
             unit=a.unit,
             note=a.note,
+            image_storage_key=a.image_storage_key,
             position=a.position,
             created_at=a.created_at,
             updated_at=a.updated_at,

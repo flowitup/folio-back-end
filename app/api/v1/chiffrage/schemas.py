@@ -29,6 +29,12 @@ class PosteUpdateBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
+class ImageFromUrlBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    url: str = Field(min_length=1, max_length=1000)
+
+
 class StoreCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

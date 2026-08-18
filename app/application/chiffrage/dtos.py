@@ -31,6 +31,10 @@ SOURCE_SELECTED = "selected"
 SOURCE_CHEAPEST = "cheapest"
 SOURCE_NONE = "none"
 
+# Where an article's thumbnail comes from.
+IMAGE_OWN = "article"
+IMAGE_LIBRARY = "library"
+
 
 def money(value: Decimal) -> float:
     """Quantize a monetary Decimal to cents for serialization.
@@ -87,6 +91,10 @@ class ArticleResponse:
     note: Optional[str]
     position: int
     quotes: list[QuoteResponse] = field(default_factory=list)
+    # None, or {"kind": "article"|"library", "id": "<uuid>"} telling the client
+    # which image endpoint to fetch. Bytes are streamed through the API, so the
+    # client never needs an object-store URL.
+    image_ref: Optional[dict] = None
     effective_quote_id: Optional[str] = None
     effective_source: str = SOURCE_NONE
     total_ht: float = 0.0
@@ -156,7 +164,30 @@ def resolve_effective_quote(quotes: list[ChiffrageQuote]) -> tuple[Optional[Chif
     return cheapest, SOURCE_CHEAPEST
 
 
-def _build_article(article: ChiffrageArticle, quotes: list[ChiffrageQuote]) -> tuple[ArticleResponse, Decimal, Decimal]:
+def _resolve_image_ref(
+    article: ChiffrageArticle,
+    effective: Optional[ChiffrageQuote],
+    library_with_image: set,
+) -> Optional[dict]:
+    """Pick the thumbnail to show for an article.
+
+    The article's own photo wins. Failing that, if the retained quote points at
+    a library product that has one, borrow it — most finition items come
+    straight out of the bibliothèque, so this fills the grid without asking the
+    user to upload the same photo twice.
+    """
+    if article.image_storage_key:
+        return {"kind": IMAGE_OWN, "id": str(article.id)}
+    if effective is not None and effective.library_product_id in library_with_image:
+        return {"kind": IMAGE_LIBRARY, "id": str(effective.library_product_id)}
+    return None
+
+
+def _build_article(
+    article: ChiffrageArticle,
+    quotes: list[ChiffrageQuote],
+    library_with_image: Optional[set] = None,
+) -> tuple[ArticleResponse, Decimal, Decimal]:
     """Assemble one article response plus its exact (HT, TTC) Decimal line totals."""
     effective, source = resolve_effective_quote(quotes)
 
@@ -176,6 +207,7 @@ def _build_article(article: ChiffrageArticle, quotes: list[ChiffrageQuote]) -> t
         note=article.note,
         position=article.position,
         quotes=[QuoteResponse.from_entity(q) for q in quotes],
+        image_ref=_resolve_image_ref(article, effective, library_with_image or set()),
         effective_quote_id=str(effective.id) if effective else None,
         effective_source=source,
         total_ht=float(line_ht),
@@ -190,6 +222,7 @@ def build_tree_response(
     articles_by_poste: dict[UUID, list[ChiffrageArticle]],
     quotes_by_article: dict[UUID, list[ChiffrageQuote]],
     stores_by_poste: Optional[dict[UUID, list[ChiffrageStore]]] = None,
+    library_with_image: Optional[set] = None,
 ) -> ChiffrageTreeResponse:
     """Assemble the full chiffrage tree with per-level totals.
 
@@ -211,7 +244,7 @@ def build_tree_response(
             quotes = quotes_by_article.get(article.id, [])
             if not quotes:
                 unpriced += 1
-            article_response, line_ht, line_ttc = _build_article(article, quotes)
+            article_response, line_ht, line_ttc = _build_article(article, quotes, library_with_image)
             article_responses.append(article_response)
             subtotal_ht += line_ht
             subtotal_ttc += line_ttc
