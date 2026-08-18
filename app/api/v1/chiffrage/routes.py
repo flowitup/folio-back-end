@@ -38,6 +38,8 @@ from app.api.v1.chiffrage.schemas import (
     ArticleUpdateBody,
     PosteCreateBody,
     PosteUpdateBody,
+    StoreCreateBody,
+    StoreUpdateBody,
     QuoteCreateBody,
     QuoteUpdateBody,
     ReorderBody,
@@ -51,6 +53,7 @@ from app.application.chiffrage.exceptions import (
     NotProjectMemberError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    StoreNotFoundError,
     UnitAlreadyExistsError,
     UnitNotFoundError,
 )
@@ -87,7 +90,13 @@ def _handle(fn: Callable[[], Any]) -> Any:
         return fn()
     except ValidationError as e:
         return jsonify({"error": "ValidationError", "fields": safe_validation_fields(e)}), 422
-    except (PosteNotFoundError, ArticleNotFoundError, QuoteNotFoundError, UnitNotFoundError) as e:
+    except (
+        PosteNotFoundError,
+        ArticleNotFoundError,
+        QuoteNotFoundError,
+        StoreNotFoundError,
+        UnitNotFoundError,
+    ) as e:
         return _err(404, "NotFound", str(e))
     except UnitAlreadyExistsError as e:
         return _err(409, "Conflict", str(e))
@@ -111,6 +120,16 @@ def _poste_json(p: Any) -> dict[str, Any]:
         "name": p.name,
         "note": p.note,
         "position": p.position,
+    }
+
+
+def _store_json(s: Any) -> dict[str, Any]:
+    return {
+        "id": str(s.id),
+        "poste_id": str(s.poste_id),
+        "name": s.name,
+        "address": s.address,
+        "position": s.position,
     }
 
 
@@ -291,6 +310,71 @@ def reorder_poste(project_id: str, poste_id: str) -> Any:
             after_id=body.after_id,
         )
         return jsonify(_poste_json(poste)), 200
+
+    return _handle(run)
+
+
+# ---------------------------------------------------------------------------
+# Stores — where to go and buy a poste's items
+# ---------------------------------------------------------------------------
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/stores")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def create_store(project_id: str, poste_id: str) -> Any:
+    """Add a shop to visit for this poste."""
+
+    def run() -> Any:
+        body = _parse(StoreCreateBody)
+        store = get_container().create_chiffrage_store_usecase.execute(
+            project_id=UUID(project_id),
+            poste_id=UUID(poste_id),
+            name=body.name,
+            address=body.address,
+        )
+        return jsonify(_store_json(store)), 201
+
+    return _handle(run)
+
+
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/stores/<store_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def update_store(project_id: str, store_id: str) -> Any:
+    """Rename a shop or correct its address."""
+
+    def run() -> Any:
+        from app.domain.entities.chiffrage_store import ChiffrageStore
+
+        body = _parse(StoreUpdateBody)
+        unset = ChiffrageStore._UNSET
+        store = get_container().update_chiffrage_store_usecase.execute(
+            project_id=UUID(project_id),
+            store_id=UUID(store_id),
+            name=_sentinel(body, "name", unset),
+            address=_sentinel(body, "address", unset),
+        )
+        return jsonify(_store_json(store)), 200
+
+    return _handle(run)
+
+
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/stores/<store_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def delete_store(project_id: str, store_id: str) -> Any:
+    """Remove a shop from a poste."""
+
+    def run() -> Any:
+        get_container().delete_chiffrage_store_usecase.execute(project_id=UUID(project_id), store_id=UUID(store_id))
+        return "", 204
 
     return _handle(run)
 

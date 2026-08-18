@@ -391,6 +391,153 @@ class TestPatchDoesNotDropFields:
         assert body["tva_rate"] == 20.0
 
 
+class TestPosteStores:
+    """Where to go and buy — a poste keeps a list of shops, not just one."""
+
+    def test_a_poste_holds_several_shops_in_order(self, inv_client, writer_token, reader_token, project_id, poste):
+        for name, addr in [
+            ("Leroy Merlin Ivry", "45 av de Verdun, 94200 Ivry-sur-Seine"),
+            ("Point P Vitry", "12 rue Charles Fourier, 94400 Vitry"),
+            ("Rexel Paris 13", None),
+        ]:
+            body = {"name": name}
+            if addr:
+                body["address"] = addr
+            resp = inv_client.post(
+                f"{_base(project_id)}/postes/{poste['id']}/stores",
+                json=body,
+                headers=_auth(writer_token),
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        # Module-scoped app fixture: sibling tests share the project, so find ours.
+        target = next(p for p in tree["postes"] if p["id"] == poste["id"])
+        assert [s["name"] for s in target["stores"]] == [
+            "Leroy Merlin Ivry",
+            "Point P Vitry",
+            "Rexel Paris 13",
+        ]
+        assert target["stores"][0]["address"] == "45 av de Verdun, 94200 Ivry-sur-Seine"
+        assert target["stores"][2]["address"] is None
+
+    def test_poste_without_shops_returns_an_empty_list(self, inv_client, writer_token, reader_token, project_id):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes", json={"name": "Plomberie"}, headers=_auth(writer_token)
+        ).get_json()
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        target = next(p for p in tree["postes"] if p["id"] == created["id"])
+        assert target["stores"] == []
+
+    def test_shop_can_be_renamed_without_losing_its_address(self, inv_client, writer_token, project_id, poste):
+        store = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Leroy Merlin", "address": "45 av de Verdun"},
+            headers=_auth(writer_token),
+        ).get_json()
+        resp = inv_client.patch(
+            f"{_base(project_id)}/stores/{store['id']}",
+            json={"name": "Leroy Merlin Ivry"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["name"] == "Leroy Merlin Ivry"
+        # The field-drop landmine: an omitted field must survive the PATCH.
+        assert body["address"] == "45 av de Verdun"
+
+    def test_address_can_be_cleared_explicitly(self, inv_client, writer_token, project_id, poste):
+        store = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Rexel", "address": "à confirmer"},
+            headers=_auth(writer_token),
+        ).get_json()
+        resp = inv_client.patch(
+            f"{_base(project_id)}/stores/{store['id']}",
+            json={"address": None},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["address"] is None
+
+    def test_deleting_a_shop_leaves_the_others(self, inv_client, writer_token, reader_token, project_id, poste):
+        a = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Shop A"},
+            headers=_auth(writer_token),
+        ).get_json()
+        inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Shop B"},
+            headers=_auth(writer_token),
+        )
+        assert (
+            inv_client.delete(f"{_base(project_id)}/stores/{a['id']}", headers=_auth(writer_token)).status_code == 204
+        )
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        target = next(p for p in tree["postes"] if p["id"] == poste["id"])
+        assert [s["name"] for s in target["stores"]] == ["Shop B"]
+
+    def test_deleting_the_poste_removes_its_shops(self, inv_client, writer_token, reader_token, project_id):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes", json={"name": "Sol"}, headers=_auth(writer_token)
+        ).get_json()
+        store = inv_client.post(
+            f"{_base(project_id)}/postes/{created['id']}/stores",
+            json={"name": "Saint Maclou"},
+            headers=_auth(writer_token),
+        ).get_json()
+        inv_client.delete(f"{_base(project_id)}/postes/{created['id']}", headers=_auth(writer_token))
+        # The store went with it; addressing it directly must 404, not 500.
+        resp = inv_client.patch(
+            f"{_base(project_id)}/stores/{store['id']}",
+            json={"name": "x"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+    def test_blank_shop_name_is_rejected(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "   "},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 400
+
+    def test_overlong_shop_name_is_rejected(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "x" * 161},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 422
+
+    def test_blank_address_is_normalised_to_null(self, inv_client, writer_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Brico Dépôt", "address": "   "},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["address"] is None
+
+    def test_read_only_member_cannot_add_a_shop(self, inv_client, reader_token, project_id, poste):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Leroy Merlin"},
+            headers=_auth(reader_token),
+        )
+        assert resp.status_code == 403
+
+    def test_unknown_shop_is_404(self, inv_client, writer_token, project_id):
+        resp = inv_client.patch(
+            f"{_base(project_id)}/stores/{uuid.uuid4()}",
+            json={"name": "x"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+
 class TestValidationAndAuthorization:
     def test_quote_without_any_supplier_is_rejected(self, inv_client, writer_token, project_id, article):
         resp = inv_client.post(
@@ -430,6 +577,34 @@ class TestValidationAndAuthorization:
 
 
 class TestCrossProjectIsolation:
+    def test_store_of_another_project_is_not_reachable(
+        self, inv_client, writer_token, chiffrage_world, project_id, poste
+    ):
+        """A valid store id under the wrong project must 404, never mutate."""
+        store = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/stores",
+            json={"name": "Leroy Merlin Ivry", "address": "45 av de Verdun"},
+            headers=_auth(writer_token),
+        ).get_json()
+        other_project = chiffrage_world["other_project_id"]
+
+        resp = inv_client.patch(
+            f"/api/v1/projects/{other_project}/chiffrage/stores/{store['id']}",
+            json={"name": "hijacked"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+        resp = inv_client.delete(
+            f"/api/v1/projects/{other_project}/chiffrage/stores/{store['id']}",
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+        tree = inv_client.get(_base(project_id), headers=_auth(writer_token)).get_json()
+        target = next(p for p in tree["postes"] if p["id"] == poste["id"])
+        assert [s["name"] for s in target["stores"]] == ["Leroy Merlin Ivry"]
+
     def test_article_of_another_project_is_not_reachable(
         self, inv_client, writer_token, chiffrage_world, project_id, article
     ):

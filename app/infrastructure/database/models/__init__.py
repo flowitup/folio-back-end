@@ -45,6 +45,7 @@ from app.infrastructure.database.models.chiffrage_poste import ChiffragePosteMod
 from app.infrastructure.database.models.chiffrage_article import ChiffrageArticleModel
 from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
 from app.infrastructure.database.models.chiffrage_unit import ChiffrageUnitModel
+from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
 from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 
 __all__ = [
@@ -88,4 +89,5 @@ __all__ = [
     "ChiffrageArticleModel",
     "ChiffrageQuoteModel",
     "ChiffrageUnitModel",
+    "ChiffrageStoreModel",
 ]

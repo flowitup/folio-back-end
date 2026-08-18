@@ -9,7 +9,7 @@ from app.application.chiffrage.ports import ChiffrageRepositoryPort
 
 
 class GetChiffrageTreeUseCase:
-    """Return postes -> articles -> quotes with totals, in one call.
+    """Return postes -> articles -> quotes with totals and shops, in one call.
 
     Authorization lives entirely in the route decorators (require_permission +
     require_project_access), the same pair that guards the write endpoints.
@@ -24,4 +24,5 @@ class GetChiffrageTreeUseCase:
     def execute(self, *, project_id: UUID) -> ChiffrageTreeResponse:
         """Assemble the project's chiffrage tree."""
         postes, articles_by_poste, quotes_by_article = self._repo.get_tree(project_id)
-        return build_tree_response(project_id, postes, articles_by_poste, quotes_by_article)
+        stores_by_poste = self._repo.stores_for_postes([p.id for p in postes])
+        return build_tree_response(project_id, postes, articles_by_poste, quotes_by_article, stores_by_poste)
