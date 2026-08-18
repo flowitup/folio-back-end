@@ -11,35 +11,25 @@ from uuid import UUID
 from app.application.chiffrage.dtos import UnitResponse
 from app.application.chiffrage.exceptions import (
     InvalidChiffrageInputError,
-    NotProjectMemberError,
     UnitAlreadyExistsError,
     UnitNotFoundError,
 )
-from app.application.chiffrage.ports import (
-    ChiffrageRepositoryPort,
-    ProjectMembershipReaderPort,
-    TransactionalSessionPort,
-)
+from app.application.chiffrage.ports import ChiffrageRepositoryPort, TransactionalSessionPort
 from app.application.chiffrage.units import PRESET_UNITS
 from app.application.chiffrage.validation import MAX_UNIT_SYMBOL
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 
 
 class ListUnitsUseCase:
-    """Return presets followed by the project's custom units."""
+    """Return presets followed by the project's custom units.
 
-    def __init__(
-        self,
-        repo: ChiffrageRepositoryPort,
-        membership_reader: ProjectMembershipReaderPort,
-    ) -> None:
+    Authorization is the route decorators' job (see GetChiffrageTreeUseCase).
+    """
+
+    def __init__(self, repo: ChiffrageRepositoryPort) -> None:
         self._repo = repo
-        self._membership = membership_reader
 
-    def execute(self, *, actor_id: UUID, project_id: UUID) -> list[UnitResponse]:
-        if not self._membership.is_member(actor_id, project_id):
-            raise NotProjectMemberError(f"User {actor_id} is not a member of project {project_id}.")
-
+    def execute(self, *, project_id: UUID) -> list[UnitResponse]:
         units = [UnitResponse(id=None, symbol=symbol, is_preset=True) for symbol in PRESET_UNITS]
         units.extend(
             UnitResponse(id=str(u.id), symbol=u.symbol, is_preset=False) for u in self._repo.list_units(project_id)

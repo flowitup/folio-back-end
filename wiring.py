@@ -955,16 +955,12 @@ def get_container() -> Container:
     from app.infrastructure.database.repositories.sqlalchemy_chiffrage_repository import (
         SqlAlchemyChiffrageRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
-        SqlAlchemyProjectMembershipReader as _ChiffrageMembershipReader,
-    )
 
     _chiffrage_repo = SqlAlchemyChiffrageRepository(_chiffrage_db.session)
-    _chiffrage_membership = _ChiffrageMembershipReader(_chiffrage_db.session)
     _chiffrage_session = _chiffrage_db.session
 
     container.chiffrage_repository = _chiffrage_repo
-    container.get_chiffrage_tree_usecase = GetChiffrageTreeUseCase(_chiffrage_repo, _chiffrage_membership)
+    container.get_chiffrage_tree_usecase = GetChiffrageTreeUseCase(_chiffrage_repo)
     container.create_chiffrage_poste_usecase = CreatePosteUseCase(_chiffrage_repo, _chiffrage_session)
     container.update_chiffrage_poste_usecase = UpdatePosteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_poste_usecase = DeletePosteUseCase(_chiffrage_repo, _chiffrage_session)
@@ -977,7 +973,7 @@ def get_container() -> Container:
     container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
-    container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo, _chiffrage_membership)
+    container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_unit_usecase = DeleteUnitUseCase(_chiffrage_repo, _chiffrage_session)
 
