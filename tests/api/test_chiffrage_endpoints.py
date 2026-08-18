@@ -512,9 +512,7 @@ class TestPosteStores:
         )
         assert resp.status_code == 422
 
-    def test_website_is_saved_and_returned_in_the_tree(
-        self, inv_client, writer_token, reader_token, project_id, poste
-    ):
+    def test_website_is_saved_and_returned_in_the_tree(self, inv_client, writer_token, reader_token, project_id, poste):
         created = inv_client.post(
             f"{_base(project_id)}/postes/{poste['id']}/stores",
             json={
@@ -540,9 +538,7 @@ class TestPosteStores:
         assert resp.status_code == 201
         assert resp.get_json()["website_url"] is None
 
-    def test_patching_only_the_website_keeps_name_and_address(
-        self, inv_client, writer_token, project_id, poste
-    ):
+    def test_patching_only_the_website_keeps_name_and_address(self, inv_client, writer_token, project_id, poste):
         store = inv_client.post(
             f"{_base(project_id)}/postes/{poste['id']}/stores",
             json={"name": "Point P", "address": "12 rue Charles Fourier"},
