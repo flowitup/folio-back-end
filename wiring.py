@@ -137,6 +137,30 @@ from app.application.project_analyses.get_project_analysis_usecase import GetPro
 from app.application.project_analyses.get_project_analysis_content_usecase import GetProjectAnalysisContentUseCase
 from app.application.project_analyses.update_project_analysis_usecase import UpdateProjectAnalysisUseCase
 from app.application.project_analyses.delete_project_analysis_usecase import DeleteProjectAnalysisUseCase
+from app.application.chiffrage.get_chiffrage_tree_usecase import GetChiffrageTreeUseCase
+from app.application.chiffrage.poste_usecases import (
+    CreatePosteUseCase,
+    DeletePosteUseCase,
+    ReorderPosteUseCase,
+    UpdatePosteUseCase,
+)
+from app.application.chiffrage.article_usecases import (
+    CreateArticleUseCase,
+    DeleteArticleUseCase,
+    ReorderArticleUseCase,
+    UpdateArticleUseCase,
+)
+from app.application.chiffrage.quote_usecases import (
+    CreateQuoteUseCase,
+    DeleteQuoteUseCase,
+    SelectQuoteUseCase,
+    UpdateQuoteUseCase,
+)
+from app.application.chiffrage.unit_usecases import (
+    CreateUnitUseCase,
+    DeleteUnitUseCase,
+    ListUnitsUseCase,
+)
 from app.application.notes.create_note_usecase import CreateNoteUseCase
 from app.application.notes.list_project_notes_usecase import ListProjectNotesUseCase
 from app.application.notes.update_note_usecase import UpdateNoteUseCase
@@ -306,6 +330,24 @@ class Container:
     bulk_add_existing_user_usecase: Optional[BulkAddExistingUserUseCase] = None
 
     # Notes repos + use cases (phase 03)
+    # --- chiffrage (per-project material provisioning) ---
+    chiffrage_repository: Optional[Any] = None  # SqlAlchemyChiffrageRepository
+    get_chiffrage_tree_usecase: Optional[GetChiffrageTreeUseCase] = None
+    create_chiffrage_poste_usecase: Optional[CreatePosteUseCase] = None
+    update_chiffrage_poste_usecase: Optional[UpdatePosteUseCase] = None
+    delete_chiffrage_poste_usecase: Optional[DeletePosteUseCase] = None
+    reorder_chiffrage_poste_usecase: Optional[ReorderPosteUseCase] = None
+    create_chiffrage_article_usecase: Optional[CreateArticleUseCase] = None
+    update_chiffrage_article_usecase: Optional[UpdateArticleUseCase] = None
+    delete_chiffrage_article_usecase: Optional[DeleteArticleUseCase] = None
+    reorder_chiffrage_article_usecase: Optional[ReorderArticleUseCase] = None
+    create_chiffrage_quote_usecase: Optional[CreateQuoteUseCase] = None
+    update_chiffrage_quote_usecase: Optional[UpdateQuoteUseCase] = None
+    delete_chiffrage_quote_usecase: Optional[DeleteQuoteUseCase] = None
+    select_chiffrage_quote_usecase: Optional[SelectQuoteUseCase] = None
+    list_chiffrage_units_usecase: Optional[ListUnitsUseCase] = None
+    create_chiffrage_unit_usecase: Optional[CreateUnitUseCase] = None
+    delete_chiffrage_unit_usecase: Optional[DeleteUnitUseCase] = None
     note_repo: Optional[Any] = None  # SqlAlchemyNoteRepository (NoteRepositoryPort + NoteQueryPort)
     note_dismissal_repo: Optional[Any] = None  # SqlAlchemyNoteDismissalRepository
     note_membership_reader: Optional[Any] = None  # SqlAlchemyProjectMembershipReader
@@ -906,4 +948,33 @@ def configure_container(
 
 def get_container() -> Container:
     """Get the current container instance."""
+    # ------------------------------------------------------------------
+    # Chiffrage — project-scoped material provisioning and price comparison
+    # ------------------------------------------------------------------
+    from app import db as _chiffrage_db
+    from app.infrastructure.database.repositories.sqlalchemy_chiffrage_repository import (
+        SqlAlchemyChiffrageRepository,
+    )
+
+    _chiffrage_repo = SqlAlchemyChiffrageRepository(_chiffrage_db.session)
+    _chiffrage_session = _chiffrage_db.session
+
+    container.chiffrage_repository = _chiffrage_repo
+    container.get_chiffrage_tree_usecase = GetChiffrageTreeUseCase(_chiffrage_repo)
+    container.create_chiffrage_poste_usecase = CreatePosteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.update_chiffrage_poste_usecase = UpdatePosteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_poste_usecase = DeletePosteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.reorder_chiffrage_poste_usecase = ReorderPosteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.create_chiffrage_article_usecase = CreateArticleUseCase(_chiffrage_repo, _chiffrage_session)
+    container.update_chiffrage_article_usecase = UpdateArticleUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_article_usecase = DeleteArticleUseCase(_chiffrage_repo, _chiffrage_session)
+    container.reorder_chiffrage_article_usecase = ReorderArticleUseCase(_chiffrage_repo, _chiffrage_session)
+    container.create_chiffrage_quote_usecase = CreateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
+    container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_unit_usecase = DeleteUnitUseCase(_chiffrage_repo, _chiffrage_session)
+
     return container
