@@ -5,9 +5,11 @@ company is persisted. Also safe to call from the Alembic migration for
 existing companies (idempotent: skips if methods already exist).
 
 Builtin seed set:
-  1. "Cash"           — always inserted.
-  2. ``<legal_name>`` — inserted only when legal_name is not None, not blank,
-                        and differs from "Cash" (case-insensitive).
+  1. ``<legal_name>`` — inserted only when legal_name is not None and not blank.
+
+"Cash" is deliberately NOT seeded: it was a poor default for companies that
+never handle cash, and being builtin made it undeletable. Companies that want
+it add it themselves as an ordinary (deletable) method.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from app.domain.payment_methods.payment_method import PaymentMethod
 
 
 class SeedPaymentMethodsForCompanyUseCase:
-    """Insert the two builtin payment methods for a newly-created company.
+    """Insert the builtin payment method for a newly-created company.
 
     Idempotent: if the company already has at least one payment method the
     seed is skipped entirely. This prevents double-seeding when the migration
@@ -44,42 +46,27 @@ class SeedPaymentMethodsForCompanyUseCase:
         if existing:
             return
 
-        now = datetime.now(timezone.utc)
-        methods_to_insert: list[PaymentMethod] = []
+        # Company legal name — the only builtin.
+        # Flagged as company-payment because invoices settled via this method are
+        # funded directly by the company and count toward "spent by company".
+        normalised_name = legal_name.strip() if legal_name else None
+        if not normalised_name:
+            return
 
-        # 1. Cash — always builtin; does NOT count as company-direct payment by default.
-        methods_to_insert.append(
+        now = datetime.now(timezone.utc)
+        methods_to_insert: list[PaymentMethod] = [
             PaymentMethod(
                 id=uuid4(),
                 company_id=company_id,
-                label="Cash",
+                label=normalised_name,
                 is_builtin=True,
                 is_active=True,
-                is_company_payment=False,
+                is_company_payment=True,
                 created_by=created_by,
                 created_at=now,
                 updated_at=now,
             )
-        )
-
-        # 2. Company legal name — only when distinct from "Cash".
-        # Flagged as company-payment because invoices settled via this method are
-        # funded directly by the company and count toward "spent by company".
-        normalised_name = legal_name.strip() if legal_name else None
-        if normalised_name and normalised_name.lower() != "cash":
-            methods_to_insert.append(
-                PaymentMethod(
-                    id=uuid4(),
-                    company_id=company_id,
-                    label=normalised_name,
-                    is_builtin=True,
-                    is_active=True,
-                    is_company_payment=True,
-                    created_by=created_by,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
+        ]
 
         with db_session.begin_nested():
             self._repo.insert_many(methods_to_insert)

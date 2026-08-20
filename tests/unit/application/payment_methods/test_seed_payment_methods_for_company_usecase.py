@@ -18,7 +18,7 @@ def usecase(pm_repo):
 
 
 class TestSeedHappyPath:
-    def test_inserts_cash_and_legal_name(self, usecase, pm_repo, fake_session):
+    def test_inserts_only_the_legal_name(self, usecase, pm_repo, fake_session):
         company_id = uuid4()
         caller_id = uuid4()
 
@@ -30,10 +30,21 @@ class TestSeedHappyPath:
         )
 
         methods = pm_repo.find_all_by_company(company_id)
-        labels = {m.label for m in methods}
-        assert "Cash" in labels
-        assert "Dupont SARL" in labels
-        assert len(methods) == 2
+        assert [m.label for m in methods] == ["Dupont SARL"]
+
+    def test_does_not_seed_cash(self, usecase, pm_repo, fake_session):
+        """Cash is no longer a default — companies add it themselves if they want it."""
+        company_id = uuid4()
+
+        usecase.execute(
+            company_id=company_id,
+            legal_name="Dupont SARL",
+            created_by=None,
+            db_session=fake_session,
+        )
+
+        labels = {m.label.lower() for m in pm_repo.find_all_by_company(company_id)}
+        assert "cash" not in labels
 
     def test_all_seeded_methods_are_builtin(self, usecase, pm_repo, fake_session):
         company_id = uuid4()
@@ -61,8 +72,8 @@ class TestSeedHappyPath:
         methods = pm_repo.find_all_by_company(company_id)
         assert all(m.is_active for m in methods)
 
-    def test_legal_name_is_cash_inserts_only_one_row(self, usecase, pm_repo, fake_session):
-        """legal_name == 'Cash' (case-insensitive) → only Cash inserted (no duplicate)."""
+    def test_legal_name_is_cash_still_seeds_it_as_the_company_builtin(self, usecase, pm_repo, fake_session):
+        """A company literally named "Cash" gets its name as the builtin, as any other would."""
         company_id = uuid4()
 
         usecase.execute(
@@ -75,21 +86,9 @@ class TestSeedHappyPath:
         methods = pm_repo.find_all_by_company(company_id)
         assert len(methods) == 1
         assert methods[0].label == "Cash"
+        assert methods[0].is_company_payment is True
 
-    def test_legal_name_cash_case_insensitive(self, usecase, pm_repo, fake_session):
-        company_id = uuid4()
-
-        usecase.execute(
-            company_id=company_id,
-            legal_name="CASH",
-            created_by=None,
-            db_session=fake_session,
-        )
-
-        methods = pm_repo.find_all_by_company(company_id)
-        assert len(methods) == 1
-
-    def test_legal_name_none_inserts_only_cash(self, usecase, pm_repo, fake_session):
+    def test_legal_name_none_seeds_nothing(self, usecase, pm_repo, fake_session):
         company_id = uuid4()
 
         usecase.execute(
@@ -99,11 +98,9 @@ class TestSeedHappyPath:
             db_session=fake_session,
         )
 
-        methods = pm_repo.find_all_by_company(company_id)
-        assert len(methods) == 1
-        assert methods[0].label == "Cash"
+        assert pm_repo.find_all_by_company(company_id, include_inactive=True) == []
 
-    def test_legal_name_blank_inserts_only_cash(self, usecase, pm_repo, fake_session):
+    def test_legal_name_blank_seeds_nothing(self, usecase, pm_repo, fake_session):
         company_id = uuid4()
 
         usecase.execute(
@@ -113,9 +110,7 @@ class TestSeedHappyPath:
             db_session=fake_session,
         )
 
-        methods = pm_repo.find_all_by_company(company_id)
-        assert len(methods) == 1
-        assert methods[0].label == "Cash"
+        assert pm_repo.find_all_by_company(company_id, include_inactive=True) == []
 
 
 class TestSeedIdempotency:
