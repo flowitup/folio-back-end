@@ -139,8 +139,8 @@ class ChiffrageRepositoryPort(Protocol):
 
     # -- stores ------------------------------------------------------------
 
-    def stores_for_postes(self, poste_ids: list[UUID]) -> dict[UUID, list[ChiffrageStore]]:
-        """Return stores keyed by poste id, ordered by position — one query."""
+    def stores_for_project(self, project_id: UUID) -> list[ChiffrageStore]:
+        """Return the project's shops, ordered by position."""
         ...
 
     def find_store(self, store_id: UUID) -> Optional[ChiffrageStore]:
@@ -159,12 +159,20 @@ class ChiffrageRepositoryPort(Protocol):
         """Delete a store."""
         ...
 
-    def max_store_position(self, poste_id: UUID) -> int:
-        """Return the highest store position within the poste, or 0 when empty."""
+    def clear_store_from_quotes(self, store_id: UUID) -> None:
+        """Detach every quote recorded at this store, keeping the prices."""
+        ...
+
+    def max_store_position(self, project_id: UUID) -> int:
+        """Return the highest store position within the project, or 0 when empty."""
         ...
 
     def project_id_for_store(self, store_id: UUID) -> Optional[UUID]:
-        """Return the owning project id of a store, walking poste -> project."""
+        """Return the owning project id of a store."""
+        ...
+
+    def store_name_exists(self, project_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        """Whether the project already has a shop of this name, case-insensitively."""
         ...
 
     # -- units -------------------------------------------------------------

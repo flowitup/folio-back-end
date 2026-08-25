@@ -1,8 +1,9 @@
-"""Store write use-cases: create, update, delete.
+"""Shop write use-cases: create, update, delete.
 
-A store records *where to go and buy*, which is a different question from the
-quotes' *who sells at what price* — a poste typically needs a run across several
-shops, so these hang off the poste as a list rather than a single field.
+A shop is declared once per project and referenced by the quotes recorded there,
+so every price at that shop aggregates into one comparable basket. Names are
+unique per project, case-insensitively: two spellings of "Leroy Merlin" would
+split one shop's basket in the comparison and quietly make it look cheaper.
 """
 
 from __future__ import annotations
@@ -18,10 +19,12 @@ from app.application.chiffrage.validation import (
     MAX_STORE_NAME,
     clean_name,
     clean_optional_text,
-    owned_poste,
     owned_store,
 )
-from app.application.chiffrage.exceptions import InvalidChiffrageInputError
+from app.application.chiffrage.exceptions import (
+    InvalidChiffrageInputError,
+    StoreAlreadyExistsError,
+)
 from app.domain.entities.chiffrage_store import ChiffrageStore
 
 
@@ -42,8 +45,14 @@ def _clean_website(value: Optional[str]) -> Optional[str]:
     return cleaned
 
 
+def _reject_duplicate_name(repo, project_id, name: str, exclude_id=None) -> None:
+    """Refuse a shop name the project already uses, whatever the casing."""
+    if repo.store_name_exists(project_id, name, exclude_id):
+        raise StoreAlreadyExistsError(f"This project already has a shop named '{name}'.")
+
+
 class CreateStoreUseCase:
-    """Append a shop to a poste's list."""
+    """Add a shop to the project's list."""
 
     def __init__(self, repo: ChiffrageRepositoryPort, db_session: TransactionalSessionPort) -> None:
         self._repo = repo
@@ -53,18 +62,18 @@ class CreateStoreUseCase:
         self,
         *,
         project_id: UUID,
-        poste_id: UUID,
         name: str,
         address: Optional[str] = None,
         website_url: Optional[str] = None,
     ) -> ChiffrageStore:
-        owned_poste(self._repo, poste_id, project_id)
+        cleaned_name = clean_name(name, field="Store name", max_length=MAX_STORE_NAME)
+        _reject_duplicate_name(self._repo, project_id, cleaned_name)
         store = ChiffrageStore.create(
-            poste_id=poste_id,
-            name=clean_name(name, field="Store name", max_length=MAX_STORE_NAME),
+            project_id=project_id,
+            name=cleaned_name,
             address=_clean_address(address),
             website_url=_clean_website(website_url),
-            position=self._repo.max_store_position(poste_id) + POSITION_STEP,
+            position=self._repo.max_store_position(project_id) + POSITION_STEP,
         )
         self._repo.add_store(store)
         self._db.commit()
@@ -83,8 +92,11 @@ class UpdateStoreUseCase:
     ) -> ChiffrageStore:
         store = owned_store(self._repo, store_id, project_id)
         U = ChiffrageStore._UNSET
+        if name is not U:
+            cleaned_name = clean_name(str(name), field="Store name", max_length=MAX_STORE_NAME)
+            _reject_duplicate_name(self._repo, project_id, cleaned_name, store_id)
         updated = store.with_updates(
-            name=(U if name is U else clean_name(str(name), field="Store name", max_length=MAX_STORE_NAME)),
+            name=(U if name is U else cleaned_name),
             address=(U if address is U else _clean_address(address if address is None else str(address))),
             website_url=(
                 U if website_url is U else _clean_website(website_url if website_url is None else str(website_url))
@@ -96,7 +108,12 @@ class UpdateStoreUseCase:
 
 
 class DeleteStoreUseCase:
-    """Remove a shop from a poste."""
+    """Remove a shop from the project.
+
+    Quotes recorded at this shop keep their price and their ``supplier_name``
+    snapshot — the FK is ON DELETE SET NULL. Deleting a shop must never delete
+    the costing work done against it.
+    """
 
     def __init__(self, repo: ChiffrageRepositoryPort, db_session: TransactionalSessionPort) -> None:
         self._repo = repo
@@ -104,5 +121,6 @@ class DeleteStoreUseCase:
 
     def execute(self, *, project_id: UUID, store_id: UUID) -> None:
         owned_store(self._repo, store_id, project_id)
+        self._repo.clear_store_from_quotes(store_id)
         self._repo.delete_store(store_id)
         self._db.commit()

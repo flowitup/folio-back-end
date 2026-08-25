@@ -27,6 +27,14 @@ class StoreNotFoundError(Exception):
     """Raised when a requested store does not exist."""
 
 
+class StoreAlreadyExistsError(Exception):
+    """Raised when adding a shop name the project already has.
+
+    Rejected rather than merged: two spellings of one shop would split its
+    basket in the comparison, which is the failure the shop list prevents.
+    """
+
+
 class UnitNotFoundError(Exception):
     """Raised when a requested custom unit does not exist."""
 

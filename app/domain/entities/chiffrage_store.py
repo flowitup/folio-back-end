@@ -1,4 +1,4 @@
-"""ChiffrageStore domain entity — a shop to visit for a poste's purchases."""
+"""ChiffrageStore domain entity — a shop the project buys from."""
 
 from __future__ import annotations
 
@@ -10,20 +10,22 @@ from uuid import UUID, uuid4
 
 @dataclass(frozen=True)
 class ChiffrageStore:
-    """A physical shop attached to a poste: where to go, see and buy.
+    """A physical shop the project buys from: where to go, see and buy.
 
-    A poste holds several of these — a shopping run for "Lumière" may well mean
-    Leroy Merlin for the spots, Point P for the cable and a local shop for the
-    fittings, and you want all three addresses in front of you.
+    Declared once per project and referenced by any poste's quotes. Scoping
+    these to a poste instead would make "Leroy Merlin" a different record in
+    every section, so no basket could ever be totalled across the chantier —
+    which is the whole point of comparing shops.
 
     Free text rather than a link to a bibliothèque supplier: a chain has many
     branches and which one you drive to depends on the chantier, not on the
-    company's supplier list. The two are related but not the same thing — a
-    quote records who sells at what price, a store records where you go.
+    company's supplier list. The bibliothèque is also company-scoped, and a
+    project may have no company — binding shops to it would break costing for
+    exactly those projects.
     """
 
     id: UUID
-    poste_id: UUID
+    project_id: UUID
     name: str
     address: Optional[str]
     website_url: Optional[str]
@@ -38,17 +40,17 @@ class ChiffrageStore:
     def create(
         cls,
         *,
-        poste_id: UUID,
+        project_id: UUID,
         name: str,
         position: int,
         address: Optional[str] = None,
         website_url: Optional[str] = None,
     ) -> "ChiffrageStore":
-        """Create a new store entry at the given position within its poste."""
+        """Create a new shop at the given position within its project."""
         now = datetime.now(timezone.utc)
         return cls(
             id=uuid4(),
-            poste_id=poste_id,
+            project_id=project_id,
             name=name,
             address=address,
             website_url=website_url,
@@ -79,5 +81,5 @@ class ChiffrageStore:
         )
 
     def with_position(self, position: int) -> "ChiffrageStore":
-        """Return a copy moved to a new ordering position within its poste."""
+        """Return a copy moved to a new ordering position within its project."""
         return replace(self, position=position, updated_at=datetime.now(timezone.utc))

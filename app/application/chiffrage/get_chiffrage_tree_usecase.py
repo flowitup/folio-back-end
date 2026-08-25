@@ -24,7 +24,7 @@ class GetChiffrageTreeUseCase:
     def execute(self, *, project_id: UUID) -> ChiffrageTreeResponse:
         """Assemble the project's chiffrage tree."""
         postes, articles_by_poste, quotes_by_article = self._repo.get_tree(project_id)
-        stores_by_poste = self._repo.stores_for_postes([p.id for p in postes])
+        stores = self._repo.stores_for_project(project_id)
 
         # One keyed lookup for the whole tree: which linked library products
         # actually have an image an article can borrow as its thumbnail.
@@ -41,7 +41,7 @@ class GetChiffrageTreeUseCase:
             postes,
             articles_by_poste,
             quotes_by_article,
-            stores_by_poste,
+            stores,
             library_with_image,
             self._repo.list_rooms(project_id),
         )
