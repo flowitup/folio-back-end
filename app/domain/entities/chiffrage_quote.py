@@ -20,14 +20,17 @@ class ChiffrageQuote:
     Point P quotes are HT) and comparing raw numbers across the two is a 20%
     error. TTC is always derived, never stored.
 
-    A quote identifies its fournisseur either by ``supplier_id`` (a bibliothèque
-    supplier) or by free-text ``supplier_name``; at least one is required. The
-    free-text name also survives as a readable snapshot if the linked supplier
-    row is later deleted.
+    A quote identifies where the price comes from by ``store_id`` — one of the
+    project's shops — and it is the shop that makes prices comparable: two
+    quotes at the same shop aggregate into one basket, which free text never
+    guaranteed. ``supplier_id`` (a bibliothèque supplier) and free-text
+    ``supplier_name`` remain as optional enrichment and as a readable snapshot
+    if a linked row is later deleted; at least one of the three is required.
     """
 
     id: UUID
     article_id: UUID
+    store_id: Optional[UUID]
     supplier_id: Optional[UUID]
     supplier_name: Optional[str]
     library_product_id: Optional[UUID]
@@ -54,6 +57,7 @@ class ChiffrageQuote:
         article_id: UUID,
         unit_price_ht: Decimal,
         tva_rate: Decimal,
+        store_id: Optional[UUID] = None,
         supplier_id: Optional[UUID] = None,
         supplier_name: Optional[str] = None,
         library_product_id: Optional[UUID] = None,
@@ -65,6 +69,7 @@ class ChiffrageQuote:
         return cls(
             id=uuid4(),
             article_id=article_id,
+            store_id=store_id,
             supplier_id=supplier_id,
             supplier_name=supplier_name,
             library_product_id=library_product_id,
@@ -80,6 +85,7 @@ class ChiffrageQuote:
     def with_updates(
         self,
         *,
+        store_id: object = _UNSET,
         supplier_id: object = _UNSET,
         supplier_name: object = _UNSET,
         library_product_id: object = _UNSET,
@@ -92,6 +98,7 @@ class ChiffrageQuote:
         U = ChiffrageQuote._UNSET
         return replace(
             self,
+            store_id=self.store_id if store_id is U else store_id,
             supplier_id=self.supplier_id if supplier_id is U else supplier_id,
             supplier_name=self.supplier_name if supplier_name is U else supplier_name,
             library_product_id=(self.library_product_id if library_product_id is U else library_product_id),

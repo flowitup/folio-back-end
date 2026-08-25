@@ -188,6 +188,7 @@ class SqlAlchemyChiffrageRepository:
         orm = self._session.get(ChiffrageQuoteModel, quote.id)
         if orm is None:
             return
+        orm.store_id = quote.store_id
         orm.supplier_id = quote.supplier_id
         orm.supplier_name = quote.supplier_name
         orm.library_product_id = quote.library_product_id
@@ -292,24 +293,32 @@ class SqlAlchemyChiffrageRepository:
     # Stores
     # ------------------------------------------------------------------
 
-    def stores_for_postes(self, poste_ids: list[UUID]) -> dict[UUID, list[ChiffrageStore]]:
-        """Return stores keyed by poste id in one query (never one per poste)."""
-        result: dict[UUID, list[ChiffrageStore]] = {pid: [] for pid in poste_ids}
-        if not poste_ids:
-            return result
+    def stores_for_project(self, project_id: UUID) -> list[ChiffrageStore]:
+        """Return the project's shops in display order."""
         rows = (
             self._session.execute(
                 select(ChiffrageStoreModel)
-                .where(ChiffrageStoreModel.poste_id.in_(poste_ids))
+                .where(ChiffrageStoreModel.project_id == project_id)
                 .order_by(ChiffrageStoreModel.position, ChiffrageStoreModel.created_at)
             )
             .scalars()
             .all()
         )
-        for row in rows:
-            entity = row.to_entity()
-            result.setdefault(entity.poste_id, []).append(entity)
-        return result
+        return [row.to_entity() for row in rows]
+
+    def store_name_exists(self, project_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        """Whether the project already has a shop under this name, case-insensitively.
+
+        Checked in the use-case so a duplicate returns a readable 409 instead of
+        surfacing as the unique index's IntegrityError.
+        """
+        stmt = select(ChiffrageStoreModel.id).where(
+            ChiffrageStoreModel.project_id == project_id,
+            func.lower(ChiffrageStoreModel.name) == name.strip().lower(),
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(ChiffrageStoreModel.id != exclude_id)
+        return self._session.execute(stmt).first() is not None
 
     def find_store(self, store_id: UUID) -> Optional[ChiffrageStore]:
         orm = self._session.get(ChiffrageStoreModel, store_id)
@@ -330,23 +339,34 @@ class SqlAlchemyChiffrageRepository:
         orm.updated_at = store.updated_at
         self._session.flush()
 
+    def clear_store_from_quotes(self, store_id: UUID) -> None:
+        """Detach every price recorded at this shop, keeping the price itself.
+
+        The FK is ON DELETE SET NULL, but relying on that alone would make the
+        behaviour depend on the engine enforcing foreign keys — SQLite does not
+        by default. Doing it explicitly means a deleted shop leaves the same
+        state everywhere.
+        """
+        self._session.execute(
+            update(ChiffrageQuoteModel).where(ChiffrageQuoteModel.store_id == store_id).values(store_id=None)
+        )
+        self._session.flush()
+
     def delete_store(self, store_id: UUID) -> None:
         orm = self._session.get(ChiffrageStoreModel, store_id)
         if orm is not None:
             self._session.delete(orm)
             self._session.flush()
 
-    def max_store_position(self, poste_id: UUID) -> int:
+    def max_store_position(self, project_id: UUID) -> int:
         value = self._session.execute(
-            select(func.max(ChiffrageStoreModel.position)).where(ChiffrageStoreModel.poste_id == poste_id)
+            select(func.max(ChiffrageStoreModel.position)).where(ChiffrageStoreModel.project_id == project_id)
         ).scalar()
         return int(value) if value is not None else 0
 
     def project_id_for_store(self, store_id: UUID) -> Optional[UUID]:
         return self._session.execute(
-            select(ChiffragePosteModel.project_id)
-            .join(ChiffrageStoreModel, ChiffrageStoreModel.poste_id == ChiffragePosteModel.id)
-            .where(ChiffrageStoreModel.id == store_id)
+            select(ChiffrageStoreModel.project_id).where(ChiffrageStoreModel.id == store_id)
         ).scalar_one_or_none()
 
     # ------------------------------------------------------------------

@@ -12,6 +12,7 @@ from app.application.chiffrage.validation import (
     clean_optional_text,
     owned_article,
     owned_quote,
+    owned_store,
     require_supplier,
     validate_price,
     validate_tva_rate,
@@ -33,6 +34,7 @@ class CreateQuoteUseCase:
         article_id: UUID,
         unit_price_ht: Decimal,
         tva_rate: Decimal,
+        store_id: Optional[UUID] = None,
         supplier_id: Optional[UUID] = None,
         supplier_name: Optional[str] = None,
         library_product_id: Optional[UUID] = None,
@@ -40,12 +42,17 @@ class CreateQuoteUseCase:
         note: Optional[str] = None,
     ) -> ChiffrageQuote:
         owned_article(self._repo, article_id, project_id)
+        # A shop from another project would silently pollute this project's
+        # basket comparison, so it is rejected exactly like any other foreign id.
+        if store_id is not None:
+            owned_store(self._repo, store_id, project_id)
         quote = ChiffrageQuote.create(
             article_id=article_id,
             unit_price_ht=validate_price(unit_price_ht),
             tva_rate=validate_tva_rate(tva_rate),
+            store_id=store_id,
             supplier_id=supplier_id,
-            supplier_name=require_supplier(supplier_id, supplier_name),
+            supplier_name=require_supplier(store_id, supplier_id, supplier_name),
             library_product_id=library_product_id,
             product_url=clean_optional_text(product_url),
             note=clean_optional_text(note),
@@ -67,6 +74,7 @@ class UpdateQuoteUseCase:
         *,
         project_id: UUID,
         quote_id: UUID,
+        store_id: object,
         supplier_id: object,
         supplier_name: object,
         library_product_id: object,
@@ -78,17 +86,22 @@ class UpdateQuoteUseCase:
         quote = owned_quote(self._repo, quote_id, project_id)
         U = ChiffrageQuote._UNSET
 
-        # Resolve the post-update supplier pair before validating it: clearing
-        # one half while the other stays set must remain legal, clearing both
-        # must not.
+        # Resolve the post-update attribution before validating it: clearing
+        # one of the three while another stays set must remain legal, clearing
+        # all three must not.
+        next_store_id = quote.store_id if store_id is U else store_id
+        if next_store_id is not None and isinstance(next_store_id, UUID) and next_store_id != quote.store_id:
+            owned_store(self._repo, next_store_id, project_id)
         next_supplier_id = quote.supplier_id if supplier_id is U else supplier_id
         next_supplier_name = quote.supplier_name if supplier_name is U else supplier_name
         validated_name = require_supplier(
+            next_store_id if isinstance(next_store_id, UUID) or next_store_id is None else None,
             next_supplier_id if isinstance(next_supplier_id, UUID) or next_supplier_id is None else None,
             None if next_supplier_name is None else str(next_supplier_name),
         )
 
         updated = quote.with_updates(
+            store_id=(U if store_id is U else store_id),
             supplier_id=(U if supplier_id is U else supplier_id),
             supplier_name=(U if supplier_name is U else validated_name),
             library_product_id=(U if library_product_id is U else library_product_id),

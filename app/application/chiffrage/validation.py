@@ -97,11 +97,19 @@ def validate_unit(
     raise InvalidChiffrageInputError(f"Unknown unit '{cleaned}' for this project.")
 
 
-def require_supplier(supplier_id: Optional[UUID], supplier_name: Optional[str]) -> Optional[str]:
-    """A quote must name its fournisseur one way or the other."""
+def require_supplier(
+    store_id: Optional[UUID],
+    supplier_id: Optional[UUID],
+    supplier_name: Optional[str],
+) -> Optional[str]:
+    """A quote must say where its price comes from.
+
+    ``store_id`` is the one that makes prices comparable; the other two remain
+    accepted so library-linked quotes and older clients keep working.
+    """
     cleaned = clean_optional_text(supplier_name)
-    if supplier_id is None and cleaned is None:
-        raise InvalidChiffrageInputError("A quote needs either a supplier_id or a supplier_name.")
+    if store_id is None and supplier_id is None and cleaned is None:
+        raise InvalidChiffrageInputError("A quote needs a store_id, a supplier_id or a supplier_name.")
     return cleaned
 
 

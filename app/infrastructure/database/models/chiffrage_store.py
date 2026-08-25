@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,15 +15,28 @@ from app.infrastructure.database.models.base import Base
 
 
 class ChiffrageStoreModel(Base):
-    """SQLAlchemy mapping for chiffrage_stores — shops to visit for a poste."""
+    """SQLAlchemy mapping for chiffrage_stores — shops the project buys from.
+
+    Unique on (project_id, lower(name)) so a shop cannot be entered twice under
+    the same name: two spellings would split one shop's basket in the
+    comparison, which is precisely the failure this table exists to prevent.
+    """
 
     __tablename__ = "chiffrage_stores"
-    __table_args__ = (Index("ix_chiffrage_stores_poste_position", "poste_id", "position"),)
+    __table_args__ = (
+        Index("ix_chiffrage_stores_project_position", "project_id", "position"),
+        Index(
+            "uq_chiffrage_stores_project_name",
+            "project_id",
+            func.lower(text("name")),
+            unique=True,
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    poste_id: Mapped[UUID] = mapped_column(
+    project_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("chiffrage_postes.id", ondelete="CASCADE"),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -40,7 +53,7 @@ class ChiffrageStoreModel(Base):
     def to_entity(self) -> ChiffrageStore:
         return ChiffrageStore(
             id=self.id,
-            poste_id=self.poste_id,
+            project_id=self.project_id,
             name=self.name,
             address=self.address,
             website_url=self.website_url,
@@ -53,7 +66,7 @@ class ChiffrageStoreModel(Base):
     def from_entity(cls, s: ChiffrageStore) -> "ChiffrageStoreModel":
         return cls(
             id=s.id,
-            poste_id=s.poste_id,
+            project_id=s.project_id,
             name=s.name,
             address=s.address,
             website_url=s.website_url,
@@ -63,4 +76,4 @@ class ChiffrageStoreModel(Base):
         )
 
     def __repr__(self) -> str:
-        return f"<ChiffrageStoreModel {self.id} '{self.name}' poste={self.poste_id}>"
+        return f"<ChiffrageStoreModel {self.id} '{self.name}' project={self.project_id}>"

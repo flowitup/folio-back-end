@@ -88,6 +88,7 @@ class QuoteCreateBody(BaseModel):
 
     unit_price_ht: Decimal = Field(ge=0)
     tva_rate: Decimal = Field(default=Decimal("20"), ge=0, le=100)
+    store_id: Optional[UUID] = None
     supplier_id: Optional[UUID] = None
     supplier_name: Optional[str] = Field(default=None, max_length=120)
     library_product_id: Optional[UUID] = None
@@ -96,9 +97,14 @@ class QuoteCreateBody(BaseModel):
 
     @model_validator(mode="after")
     def _supplier_present(self) -> "QuoteCreateBody":
-        """A quote must name its fournisseur one way or the other."""
-        if self.supplier_id is None and not (self.supplier_name or "").strip():
-            raise ValueError("Either supplier_id or supplier_name is required.")
+        """A quote must say where the price comes from.
+
+        ``store_id`` is what the UI sends and what makes the price comparable;
+        the other two stay accepted so older clients and library-linked quotes
+        keep working.
+        """
+        if self.store_id is None and self.supplier_id is None and not (self.supplier_name or "").strip():
+            raise ValueError("A quote needs a store_id, a supplier_id or a supplier_name.")
         return self
 
 
@@ -107,6 +113,7 @@ class QuoteUpdateBody(BaseModel):
 
     unit_price_ht: Optional[Decimal] = Field(default=None, ge=0)
     tva_rate: Optional[Decimal] = Field(default=None, ge=0, le=100)
+    store_id: Optional[UUID] = None
     supplier_id: Optional[UUID] = None
     supplier_name: Optional[str] = Field(default=None, max_length=120)
     library_product_id: Optional[UUID] = None

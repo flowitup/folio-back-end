@@ -23,15 +23,18 @@ class ChiffrageQuoteModel(Base):
     foreign key (breaking SQLite create_all in tests) and would strand a dangling
     pointer whenever the quote is deleted.
 
-    Supplier references into the bibliothèque are ON DELETE SET NULL and the
-    free-text ``supplier_name`` survives as a readable snapshot, so removing a
-    supplier or product from the library never blanks out a costing row.
+    ``store_id`` is what makes a price comparable: it points at one of the
+    project's shops, so every quote at that shop aggregates into one basket.
+    It is ON DELETE SET NULL like the bibliothèque references — deleting a shop
+    must not delete the prices recorded there — and the free-text
+    ``supplier_name`` survives as a readable snapshot, so removing a shop,
+    supplier or product never blanks out a costing row.
     """
 
     __tablename__ = "chiffrage_quotes"
     __table_args__ = (
         CheckConstraint(
-            "supplier_id IS NOT NULL OR supplier_name IS NOT NULL",
+            "store_id IS NOT NULL OR supplier_id IS NOT NULL OR supplier_name IS NOT NULL",
             name="ck_chiffrage_quotes_supplier_present",
         ),
         # Composite covers both "all quotes of an article" and the selection
@@ -44,6 +47,12 @@ class ChiffrageQuoteModel(Base):
         PG_UUID(as_uuid=True),
         ForeignKey("chiffrage_articles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    store_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("chiffrage_stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     supplier_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -72,6 +81,7 @@ class ChiffrageQuoteModel(Base):
         return ChiffrageQuote(
             id=self.id,
             article_id=self.article_id,
+            store_id=self.store_id,
             supplier_id=self.supplier_id,
             supplier_name=self.supplier_name,
             library_product_id=self.library_product_id,
@@ -89,6 +99,7 @@ class ChiffrageQuoteModel(Base):
         return cls(
             id=q.id,
             article_id=q.article_id,
+            store_id=q.store_id,
             supplier_id=q.supplier_id,
             supplier_name=q.supplier_name,
             library_product_id=q.library_product_id,

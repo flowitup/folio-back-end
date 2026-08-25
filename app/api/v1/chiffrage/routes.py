@@ -60,6 +60,7 @@ from app.application.chiffrage.exceptions import (
     PosteNotFoundError,
     QuoteNotFoundError,
     RoomAlreadyExistsError,
+    StoreAlreadyExistsError,
     RoomNotFoundError,
     ImageTooLargeError,
     SsrfBlockedError,
@@ -117,7 +118,7 @@ def _handle(fn: Callable[[], Any]) -> Any:
         UnitNotFoundError,
     ) as e:
         return _err(404, "NotFound", str(e))
-    except (UnitAlreadyExistsError, RoomAlreadyExistsError) as e:
+    except (UnitAlreadyExistsError, RoomAlreadyExistsError, StoreAlreadyExistsError) as e:
         return _err(409, "Conflict", str(e))
     except InvalidChiffrageInputError as e:
         return _err(400, "InvalidInput", str(e))
@@ -149,7 +150,7 @@ def _room_json(r: Any) -> dict[str, Any]:
 def _store_json(s: Any) -> dict[str, Any]:
     return {
         "id": str(s.id),
-        "poste_id": str(s.poste_id),
+        "project_id": str(s.project_id),
         "name": s.name,
         "address": s.address,
         "website_url": s.website_url,
@@ -174,6 +175,7 @@ def _quote_json(q: Any) -> dict[str, Any]:
     return {
         "id": str(q.id),
         "article_id": str(q.article_id),
+        "store_id": str(q.store_id) if q.store_id else None,
         "supplier_id": str(q.supplier_id) if q.supplier_id else None,
         "supplier_name": q.supplier_name,
         "library_product_id": str(q.library_product_id) if q.library_product_id else None,
@@ -344,19 +346,13 @@ def reorder_poste(project_id: str, poste_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/stores")
-@jwt_required()  # type: ignore[untyped-decorator]
-@require_permission("project:manage_invoices")
-@require_project_access(write=True)
-@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def create_store(project_id: str, poste_id: str) -> Any:
-    """Add a shop to visit for this poste."""
+def _create_store(project_id: str) -> Any:
+    """Shared body for the project-scoped route and its deprecated alias."""
 
     def run() -> Any:
         body = _parse(StoreCreateBody)
         store = get_container().create_chiffrage_store_usecase.execute(
             project_id=UUID(project_id),
-            poste_id=UUID(poste_id),
             name=body.name,
             address=body.address,
             website_url=body.website_url,
@@ -364,6 +360,33 @@ def create_store(project_id: str, poste_id: str) -> Any:
         return jsonify(_store_json(store)), 201
 
     return _handle(run)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/stores")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def create_store(project_id: str) -> Any:
+    """Add a shop the project buys from."""
+    return _create_store(project_id)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/stores")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True)
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def create_store_for_poste(project_id: str, poste_id: str) -> Any:
+    """Deprecated alias of the project-scoped create.
+
+    Shops moved from poste scope to project scope. Backend and frontend release
+    in parallel, so a freshly deployed frontend can briefly reach an older
+    backend and vice versa; keeping this path alive means that window cannot
+    break shop creation. ``poste_id`` is ignored beyond identifying the project,
+    which the decorator has already authorised.
+    """
+    return _create_store(project_id)
 
 
 @chiffrage_bp.patch("/projects/<project_id>/chiffrage/stores/<store_id>")
@@ -397,7 +420,7 @@ def update_store(project_id: str, store_id: str) -> Any:
 @require_project_access(write=True)
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_store(project_id: str, store_id: str) -> Any:
-    """Remove a shop from a poste."""
+    """Remove a shop from the project. Prices recorded there keep their value."""
 
     def run() -> Any:
         get_container().delete_chiffrage_store_usecase.execute(project_id=UUID(project_id), store_id=UUID(store_id))
@@ -520,6 +543,7 @@ def create_quote(project_id: str, article_id: str) -> Any:
             article_id=UUID(article_id),
             unit_price_ht=body.unit_price_ht,
             tva_rate=body.tva_rate,
+            store_id=body.store_id,
             supplier_id=body.supplier_id,
             supplier_name=body.supplier_name,
             library_product_id=body.library_product_id,
@@ -547,6 +571,7 @@ def update_quote(project_id: str, quote_id: str) -> Any:
         quote = get_container().update_chiffrage_quote_usecase.execute(
             project_id=UUID(project_id),
             quote_id=UUID(quote_id),
+            store_id=_sentinel(body, "store_id", unset),
             supplier_id=_sentinel(body, "supplier_id", unset),
             supplier_name=_sentinel(body, "supplier_name", unset),
             library_product_id=_sentinel(body, "library_product_id", unset),

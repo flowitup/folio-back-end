@@ -55,6 +55,7 @@ def _quantize(value: Decimal) -> Decimal:
 class QuoteResponse:
     id: str
     article_id: str
+    store_id: Optional[str]
     supplier_id: Optional[str]
     supplier_name: Optional[str]
     library_product_id: Optional[str]
@@ -70,6 +71,7 @@ class QuoteResponse:
         return cls(
             id=str(q.id),
             article_id=str(q.article_id),
+            store_id=str(q.store_id) if q.store_id else None,
             supplier_id=str(q.supplier_id) if q.supplier_id else None,
             supplier_name=q.supplier_name,
             library_product_id=(str(q.library_product_id) if q.library_product_id else None),
@@ -128,10 +130,10 @@ class RoomSubtotal:
 
 @dataclass
 class StoreResponse:
-    """A shop to visit for this poste."""
+    """A shop the project buys from."""
 
     id: str
-    poste_id: str
+    project_id: str
     name: str
     address: Optional[str]
     website_url: Optional[str]
@@ -141,12 +143,32 @@ class StoreResponse:
     def from_entity(cls, s: ChiffrageStore) -> "StoreResponse":
         return cls(
             id=str(s.id),
-            poste_id=str(s.poste_id),
+            project_id=str(s.project_id),
             name=s.name,
             address=s.address,
             website_url=s.website_url,
             position=s.position,
         )
+
+
+@dataclass
+class StoreBasket:
+    """What one shop would cost for a given set of articles.
+
+    ``covers_all`` is not a nicety. A basket that silently skips the articles a
+    shop has no price for ranks the *least* complete shop first — price three
+    of twenty items and that shop "wins". Every consumer must therefore read
+    the coverage alongside the total, and only a shop with ``covers_all`` may
+    be presented as the cheapest option.
+    """
+
+    store_id: str
+    basket_ht: float
+    basket_ttc: float
+    priced_article_count: int
+    total_article_count: int
+    missing_article_ids: list[str]
+    covers_all: bool
 
 
 @dataclass
@@ -157,7 +179,8 @@ class PosteResponse:
     note: Optional[str]
     position: int
     articles: list[ArticleResponse] = field(default_factory=list)
-    stores: list[StoreResponse] = field(default_factory=list)
+    # What each shop would cost for this section alone.
+    store_baskets: list[StoreBasket] = field(default_factory=list)
     # Per-room breakdown inside this poste, so the UI never re-adds money.
     room_subtotals: list[RoomSubtotal] = field(default_factory=list)
     subtotal_ht: float = 0.0
@@ -170,6 +193,10 @@ class ChiffrageTreeResponse:
     postes: list[PosteResponse] = field(default_factory=list)
     # The project's room vocabulary, in display order.
     rooms: list[RoomResponse] = field(default_factory=list)
+    # The project's shops, declared once and shared by every poste.
+    stores: list[StoreResponse] = field(default_factory=list)
+    # What each shop would cost for the whole project.
+    store_baskets: list[StoreBasket] = field(default_factory=list)
     total_ht: float = 0.0
     total_ttc: float = 0.0
     unpriced_article_count: int = 0
@@ -265,12 +292,68 @@ def _room_subtotals(per_room: dict, rooms: Optional[list[ChiffrageRoom]]) -> lis
     ]
 
 
+def _build_store_baskets(
+    scope: list[tuple[ChiffrageArticle, list[ChiffrageQuote]]],
+    stores: list[ChiffrageStore],
+) -> list[StoreBasket]:
+    """Cost the given articles at each shop, one basket per shop.
+
+    Line totals go through the same quantize-then-sum contract as every other
+    figure on the page, so a basket adds up exactly like the item rows do.
+
+    Where a shop has several quotes for one article — a chain sometimes lists
+    two references for the same thing — the cheapest of that shop's own quotes
+    is used, which is what the buyer would actually pay there.
+
+    Every shop is returned, including ones with no price at all: a shop absent
+    from the list would read as "no data", whereas 0 of 12 covered is a fact
+    the user needs in order to trust the comparison.
+    """
+    baskets: list[StoreBasket] = []
+    total_articles = len(scope)
+
+    for store in stores:
+        store_key = store.id
+        basket_ht = Decimal("0")
+        basket_ttc = Decimal("0")
+        priced = 0
+        missing: list[str] = []
+
+        for article, quotes in scope:
+            at_store = [q for q in quotes if q.store_id == store_key]
+            if not at_store:
+                missing.append(str(article.id))
+                continue
+            best = min(at_store, key=lambda q: (q.unit_price_ht, q.created_at))
+            line_ht = _quantize(article.quantity * best.unit_price_ht)
+            basket_ht += line_ht
+            basket_ttc += _quantize(line_ht * (Decimal("1") + best.tva_rate / _HUNDRED))
+            priced += 1
+
+        baskets.append(
+            StoreBasket(
+                store_id=str(store_key),
+                basket_ht=float(basket_ht),
+                basket_ttc=float(basket_ttc),
+                priced_article_count=priced,
+                total_article_count=total_articles,
+                missing_article_ids=missing,
+                covers_all=(priced == total_articles and total_articles > 0),
+            )
+        )
+
+    # Cheapest first among shops that cover everything, then by coverage: the
+    # ordering the UI renders is therefore already the ordering it should show.
+    baskets.sort(key=lambda b: (not b.covers_all, -b.priced_article_count, b.basket_ht))
+    return baskets
+
+
 def build_tree_response(
     project_id: UUID,
     postes: list[ChiffragePoste],
     articles_by_poste: dict[UUID, list[ChiffrageArticle]],
     quotes_by_article: dict[UUID, list[ChiffrageQuote]],
-    stores_by_poste: Optional[dict[UUID, list[ChiffrageStore]]] = None,
+    stores: Optional[list[ChiffrageStore]] = None,
     library_with_image: Optional[set] = None,
     rooms: Optional[list[ChiffrageRoom]] = None,
 ) -> ChiffrageTreeResponse:
@@ -284,17 +367,23 @@ def build_tree_response(
     grand_ht = Decimal("0")
     grand_ttc = Decimal("0")
     unpriced = 0
+    project_stores = stores or []
+    # (article, quotes) for the whole project, reused for the project-wide baskets.
+    project_scope: list[tuple[ChiffrageArticle, list[ChiffrageQuote]]] = []
 
     for poste in postes:
         subtotal_ht = Decimal("0")
         subtotal_ttc = Decimal("0")
         article_responses: list[ArticleResponse] = []
+        poste_scope: list[tuple[ChiffrageArticle, list[ChiffrageQuote]]] = []
         # Keyed by room id (None = unassigned) so the per-room figures come
         # from the same quantized line totals as the poste subtotal.
         per_room: dict = {}
 
         for article in articles_by_poste.get(poste.id, []):
             quotes = quotes_by_article.get(article.id, [])
+            poste_scope.append((article, quotes))
+            project_scope.append((article, quotes))
             if not quotes:
                 unpriced += 1
             article_response, line_ht, line_ttc = _build_article(article, quotes, library_with_image)
@@ -316,7 +405,7 @@ def build_tree_response(
                 note=poste.note,
                 position=poste.position,
                 articles=article_responses,
-                stores=[StoreResponse.from_entity(s) for s in (stores_by_poste or {}).get(poste.id, [])],
+                store_baskets=_build_store_baskets(poste_scope, project_stores),
                 room_subtotals=_room_subtotals(per_room, rooms),
                 subtotal_ht=float(subtotal_ht),
                 subtotal_ttc=float(subtotal_ttc),
@@ -329,6 +418,8 @@ def build_tree_response(
         project_id=str(project_id),
         postes=poste_responses,
         rooms=[RoomResponse.from_entity(r) for r in (rooms or [])],
+        stores=[StoreResponse.from_entity(s) for s in project_stores],
+        store_baskets=_build_store_baskets(project_scope, project_stores),
         total_ht=float(grand_ht),
         total_ttc=float(grand_ttc),
         unpriced_article_count=unpriced,
