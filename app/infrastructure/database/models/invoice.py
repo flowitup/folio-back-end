@@ -146,6 +146,11 @@ class InvoiceModel(Base):
         index=True,
     )
 
+    # Optional row-highlight color — one of the fixed palette or NULL (no highlight).
+    # Plain VARCHAR + CHECK constraint (mirrors settled_via): adding palette values
+    # later needs no ALTER TYPE. Applies to every invoice type; purely visual.
+    highlight_color = Column(String(20), nullable=True)
+
     project = relationship("ProjectModel", foreign_keys=[project_id])
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
@@ -167,6 +172,10 @@ class InvoiceModel(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "invoice_number", name="uq_project_invoice_number"),
         CheckConstraint("settled_via IN ('cash', 'avoir')", name="ck_invoices_settled_via"),
+        CheckConstraint(
+            "highlight_color IN ('red', 'orange', 'yellow', 'green', 'blue', 'purple')",
+            name="ck_invoices_highlight_color",
+        ),
         # Partial index declared in migration 7e20d88b8197; mirrored here for
         # SQLAlchemy schema reflection completeness (matches the house pattern
         # in BillingDocumentModel.__table_args__). Deliberately postgresql-only:

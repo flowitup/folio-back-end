@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.tags.exceptions import InvalidProjectTagError
-from app.domain.entities.invoice import Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
+from app.domain.entities.invoice import HIGHLIGHT_COLORS, Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
     AppliedAmountExceedsTargetError,
     InvalidInvoiceDataError,
@@ -57,6 +57,9 @@ class CreateInvoiceRequest:
     # Worker link — optional; only valid when type == LABOR. When set, the
     # use-case snapshots recipient_name from the worker's display name.
     worker_id: Optional[UUID] = None
+    # Optional row-highlight color — one of HIGHLIGHT_COLORS or None (no highlight).
+    # Applies to every invoice type; validated against the palette.
+    highlight_color: Optional[str] = None
 
 
 class CreateInvoiceUseCase:
@@ -224,6 +227,10 @@ class CreateInvoiceUseCase:
             worker_id = worker.id
             name = worker.display_name
 
+        # highlight_color is optional and palette-validated; applies to any type.
+        if request.highlight_color is not None and request.highlight_color not in HIGHLIGHT_COLORS:
+            raise InvalidInvoiceDataError(f"highlight_color must be one of: {', '.join(sorted(HIGHLIGHT_COLORS))}")
+
         # Generate invoice number via repo
         invoice_number = self._repo.next_invoice_number(request.project_id)
 
@@ -249,6 +256,7 @@ class CreateInvoiceUseCase:
             settled_via=settled_via,
             applied_to_invoice_id=applied_to_invoice_id,
             worker_id=worker_id,
+            highlight_color=request.highlight_color,
         )
 
         saved = self._repo.create(invoice)

@@ -11,6 +11,7 @@ from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error sche
 
 InvoiceTypeLiteral = Literal["released_funds", "labor", "materials_services", "others", "return"]
 SettledViaLiteral = Literal["cash", "avoir"]
+HighlightColorLiteral = Literal["red", "orange", "yellow", "green", "blue", "purple"]
 
 
 def normalize_invoice_type_value(value: object) -> object:
@@ -78,6 +79,7 @@ class CreateInvoiceSchema(BaseModel):
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
+    highlight_color: Optional[HighlightColorLiteral] = None
 
 
 class UpdateInvoiceSchema(BaseModel):
@@ -110,6 +112,7 @@ class UpdateInvoiceSchema(BaseModel):
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
+    highlight_color: Optional[HighlightColorLiteral] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$")

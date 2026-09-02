@@ -21,6 +21,12 @@ class InvoiceType(str, Enum):
 # All other types require unit_price >= 0.
 MIXED_SIGN_TYPES: frozenset = frozenset({InvoiceType.MATERIALS_SERVICES, InvoiceType.RETURN})
 
+# Allowed values for the optional row-highlight color. A fixed palette (stored as
+# a plain lowercase string) so the UI can map each name to a tint; NULL = no
+# highlight. Applies to invoices of every type. Enforced at the schema and
+# use-case layers and mirrored by a DB CHECK constraint.
+HIGHLIGHT_COLORS: frozenset = frozenset({"red", "orange", "yellow", "green", "blue", "purple"})
+
 
 class RefundableStatus(str, Enum):
     """Lifecycle states for company-scoped refund tracking on materials & services expenses."""
@@ -105,6 +111,10 @@ class Invoice:
     # When set, recipient_name is server-snapshotted from the worker's
     # display name (see CreateInvoiceUseCase / UpdateInvoiceUseCase).
     worker_id: Optional[UUID] = None
+    # Optional row-highlight color — one of HIGHLIGHT_COLORS or NULL (no highlight).
+    # Applies to invoices of every type; a purely visual annotation with no financial
+    # meaning. Validated against the palette at the use-case layer.
+    highlight_color: Optional[str] = None
 
     @property
     def total_amount(self) -> Decimal:
