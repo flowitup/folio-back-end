@@ -496,6 +496,7 @@ def create_invoice(project_id: str):
                 settled_via=data.settled_via,
                 applied_to_invoice_id=data.applied_to_invoice_id,
                 worker_id=data.worker_id,
+                highlight_color=data.highlight_color,
             )
         )
     except InvoiceNumberConflictError:
@@ -597,6 +598,7 @@ def update_invoice(project_id: str, invoice_id: str):
         "settled_via",
         "applied_to_invoice_id",
         "worker_id",
+        "highlight_color",
     )
     update_kwargs = {k: v for k, v in provided_fields.items() if k not in sentinel_fields and v is not None}
     # type arrives as a validated string literal; the use case and domain entity
@@ -628,6 +630,7 @@ def update_invoice(project_id: str, invoice_id: str):
     settled_via_val = provided_fields["settled_via"] if "settled_via" in provided_fields else _UNSET
     applied_to_val = provided_fields["applied_to_invoice_id"] if "applied_to_invoice_id" in provided_fields else _UNSET
     worker_id_val = provided_fields["worker_id"] if "worker_id" in provided_fields else _UNSET
+    highlight_color_val = provided_fields["highlight_color"] if "highlight_color" in provided_fields else _UNSET
 
     company_id = _get_project_company_id(project_uuid) if pm_id is not _UNSET else None
 
@@ -641,6 +644,7 @@ def update_invoice(project_id: str, invoice_id: str):
         settled_via=settled_via_val,
         applied_to_invoice_id=applied_to_val,
         worker_id=worker_id_val,
+        highlight_color=highlight_color_val,
         **update_kwargs,
     )
 
