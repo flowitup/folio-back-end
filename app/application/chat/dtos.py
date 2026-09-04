@@ -24,6 +24,8 @@ class ChannelDto:
 class MemberDto:
     id: UUID
     name: str
+    # When the member last read the channel; None until they open it. Drives "seen" avatars.
+    last_read_at: datetime | None = None
 
 
 @dataclass(frozen=True)

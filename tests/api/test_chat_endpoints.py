@@ -119,6 +119,23 @@ class TestMessages:
         admin_channels = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
         assert next(c for c in admin_channels if c["key"] == key)["unread_count"] == 0
 
+    def test_members_expose_read_markers_for_seen_receipts(self, inv_client, member_token, admin_token, invitation_app):
+        key = _project_key(invitation_app)
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "seen?"}, headers=_auth(member_token)
+        )
+        assert sent.status_code == 201
+        # The sender's marker moved to the message time; the admin has not opened the channel yet.
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
+        by_name = {m["name"]: m["last_read_at"] for m in page["members"]}
+        assert by_name["member@invite-test.com"] >= sent.get_json()["created_at"]
+
+        assert inv_client.post(f"/api/v1/chat/channels/{key}/read", headers=_auth(admin_token)).status_code == 204
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
+        by_name = {m["name"]: m["last_read_at"] for m in page["members"]}
+        assert by_name["admin@invite-test.com"] is not None
+        assert by_name["admin@invite-test.com"] >= sent.get_json()["created_at"]
+
     def test_pagination_with_before(self, inv_client, member_token, invitation_app):
         key = _project_key(invitation_app)
         for i in range(3):

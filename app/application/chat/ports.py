@@ -80,6 +80,10 @@ class ChatReadRepositoryPort(Protocol):
 
     def mark_read(self, user_id: UUID, channel: ChannelRef, at: datetime) -> None: ...
 
+    def last_reads_for_channel(self, channel: ChannelRef) -> dict[UUID, datetime]:
+        """Read marker of every user who has read the channel at least once (seen receipts)."""
+        ...
+
 
 class ChatAttachmentStoragePort(Protocol):
     """Binary storage for attachments (the S3 adapter used by invoices / documents satisfies it)."""

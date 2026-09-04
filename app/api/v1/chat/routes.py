@@ -185,7 +185,14 @@ def list_messages(channel_key: str) -> Any:
         jsonify(
             {
                 "items": [_serialize_message(m, actor_id) for m in page.items],
-                "members": [{"id": str(m.id), "name": m.name} for m in page.members],
+                "members": [
+                    {
+                        "id": str(m.id),
+                        "name": m.name,
+                        "last_read_at": _iso(m.last_read_at) if m.last_read_at else None,
+                    }
+                    for m in page.members
+                ],
             }
         ),
         200,

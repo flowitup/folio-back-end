@@ -89,9 +89,15 @@ class ListChannelsUseCase:
 class ListMessagesUseCase:
     """A page of a channel's messages (oldest first) plus its members."""
 
-    def __init__(self, directory: ChatDirectoryPort, message_repo: ChatMessageRepositoryPort) -> None:
+    def __init__(
+        self,
+        directory: ChatDirectoryPort,
+        message_repo: ChatMessageRepositoryPort,
+        read_repo: ChatReadRepositoryPort,
+    ) -> None:
         self._directory = directory
         self._messages = message_repo
+        self._reads = read_repo
 
     def execute(
         self,
@@ -107,7 +113,10 @@ class ListMessagesUseCase:
         messages = self._messages.list_for_channel(channel, before, page_size)
         names = self._directory.display_names([m.sender_id for m in messages])
         items = [MessageDto.from_entity(m, names.get(m.sender_id, "?")) for m in messages]
-        members = [MemberDto(id=m.id, name=m.name) for m in self._directory.list_members(channel)]
+        reads = self._reads.last_reads_for_channel(channel)
+        members = [
+            MemberDto(id=m.id, name=m.name, last_read_at=reads.get(m.id)) for m in self._directory.list_members(channel)
+        ]
         return MessagePageDto(items=items, members=members)
 
 

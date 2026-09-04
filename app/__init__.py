@@ -378,7 +378,7 @@ def _configure_di_container() -> None:
     _chat_repo = SqlAlchemyChatRepository(db.session)
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
-    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo)
+    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
