@@ -23,6 +23,7 @@ from app.infrastructure.database.models.invoice_attachment import InvoiceAttachm
 from app.infrastructure.database.models.task import TaskModel
 from app.infrastructure.database.models.invitation import InvitationModel
 from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOrm
+from app.infrastructure.database.models.chat_message import ChatChannelReadOrm, ChatMessageOrm
 from app.infrastructure.database.models.billing_document import BillingDocumentModel
 from app.infrastructure.database.models.billing_document_template import BillingDocumentTemplateModel
 
@@ -66,6 +67,8 @@ __all__ = [
     "TaskModel",
     "InvitationModel",
     "NoteOrm",
+    "ChatMessageOrm",
+    "ChatChannelReadOrm",
     "NoteDismissalOrm",
     "BillingDocumentModel",
     "BillingDocumentTemplateModel",

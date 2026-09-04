@@ -104,6 +104,10 @@ class Config:
     # post-credential-leak recon; set EXPOSE_DOCS=1 to force-enable.
     EXPOSE_DOCS: bool = get_env("EXPOSE_DOCS", default="0") == "1"
 
+    # Team chat (design 2a) ships only on deployments that opt in (AVN Construction).
+    # Off → chat endpoints answer 404 and the apps hide the chat button.
+    FEATURE_CHAT: bool = get_env("FEATURE_CHAT", default="0") == "1"
+
     def __post_init__(self):
         if self.JWT_TOKEN_LOCATION is None:
             self.JWT_TOKEN_LOCATION = ["headers", "cookies"]

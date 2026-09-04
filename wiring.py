@@ -388,6 +388,14 @@ class Container:
     list_due_notifications_usecase: Optional[ListDueNotificationsUseCase] = None
     dismiss_notification_usecase: Optional[DismissNotificationUseCase] = None
 
+    # Chat (team chat, FEATURE_CHAT) repo + use-cases
+    chat_repo: Optional[Any] = None  # SqlAlchemyChatRepository (messages + reads + directory)
+    list_chat_channels_usecase: Optional[Any] = None
+    list_chat_messages_usecase: Optional[Any] = None
+    send_chat_message_usecase: Optional[Any] = None
+    mark_chat_channel_read_usecase: Optional[Any] = None
+    get_chat_attachment_usecase: Optional[Any] = None
+
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 
