@@ -11,7 +11,7 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-MEMBER_PHONE = "+84900000123"
+MEMBER_PHONE = "+33900000123"
 
 
 def _code_from_sms(app) -> str:
@@ -44,7 +44,7 @@ def member_with_phone(inv_client, superadmin_token, invitation_app):
     ).get_json()
     member_id = next(u["id"] for u in search["items"] if u["email"] == invitation_app._test_member_email)
     resp = inv_client.patch(
-        f"/api/v1/admin/users/{member_id}", json={"phone": "0900 000 123"}, headers=_auth(superadmin_token)
+        f"/api/v1/admin/users/{member_id}", json={"phone": "09 00 00 01 23"}, headers=_auth(superadmin_token)
     )
     assert resp.status_code == 200, resp.get_json()
     assert resp.get_json()["phone"] == MEMBER_PHONE
@@ -105,7 +105,7 @@ class TestOtpLogin:
         assert invitation_app._sms.sent[-1][0] == MEMBER_PHONE
         code = _code_from_sms(invitation_app)
 
-        ok = inv_client.post("/api/v1/auth/otp/verify", json={"phone": "+84 900 000 123", "code": code})
+        ok = inv_client.post("/api/v1/auth/otp/verify", json={"phone": "+33 9 00 00 01 23", "code": code})
         assert ok.status_code == 200, ok.get_json()
         body = ok.get_json()
         assert body["user"]["email"] == invitation_app._test_member_email

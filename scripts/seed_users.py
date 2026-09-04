@@ -48,11 +48,11 @@ TEST_USERS: list[tuple[str, str, str | None, bool]] = [
 
 # Dev phone numbers for SMS-code sign-in (SMS_PROVIDER=log prints the code in the API log).
 TEST_PHONES: dict[str, str] = {
-    "superadmin@example.com": "+84900000001",
-    "admin2@example.com": "+84900000002",
-    "manager.alice@example.com": "+84900000003",
-    "manager.bob@example.com": "+84900000004",
-    "user.dave@example.com": "+33600000005",
+    "superadmin@example.com": "+33600000001",
+    "admin2@example.com": "+33600000002",
+    "manager.alice@example.com": "+33600000003",
+    "manager.bob@example.com": "+33600000004",
+    "user.dave@example.com": "+84900000005",
 }
 
 
@@ -74,7 +74,7 @@ def seed_test_users(role_map: dict[str, RoleModel]) -> dict[str, UserModel]:
         existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
         if existing:
             user_map[email.lower()] = existing
-            if existing.phone is None and email.lower() in TEST_PHONES:
+            if email.lower() in TEST_PHONES and existing.phone != TEST_PHONES[email.lower()]:
                 existing.phone = TEST_PHONES[email.lower()]
                 print(f"  [phone] {email} → {existing.phone}")
             else:
