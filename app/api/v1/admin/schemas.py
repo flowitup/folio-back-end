@@ -41,6 +41,8 @@ class UpdateUserRequest(BaseModel):
 
     email: EmailStr | None = None
     display_name: str | None = Field(default=None, max_length=255)
+    # Phone for SMS-code sign-in; null/empty clears it. Stored in E.164, unique.
+    phone: str | None = Field(default=None, max_length=32)
 
 
 class UserSearchItem(BaseModel):
@@ -49,6 +51,7 @@ class UserSearchItem(BaseModel):
     id: UUID
     email: EmailStr
     display_name: str | None
+    phone: str | None = None
 
 
 class UserSearchResponse(BaseModel):

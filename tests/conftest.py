@@ -1065,6 +1065,28 @@ def invitation_app():
         _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
         _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)
 
+        # ------------------------------------------------------------------
+        # Sign in with a phone number + SMS code — recording sender, no SMS leaves the test.
+        # ------------------------------------------------------------------
+        from app.application.usecases.otp_login import RequestOtpUseCase as _RequestOtpUC
+        from app.application.usecases.otp_login import VerifyOtpUseCase as _VerifyOtpUC
+        from app.infrastructure.adapters.sqlalchemy_login_otp import SQLAlchemyLoginOtpRepository
+
+        class RecordingSmsSender:
+            def __init__(self) -> None:
+                self.sent: list[tuple[str, str]] = []
+
+            def send(self, to: str, text: str) -> None:
+                self.sent.append((to, text))
+
+        _sms = RecordingSmsSender()
+        _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
+        _c.sms_sender = _sms
+        _c.login_otp_repository = _otp_repo
+        _c.request_otp_usecase = _RequestOtpUC(user_repo, _otp_repo, _sms)
+        _c.verify_otp_usecase = _VerifyOtpUC(user_repo, _otp_repo, _c.authorization_service, token_issuer)
+        test_app._sms = _sms
+
         yield test_app
 
         db.session.remove()

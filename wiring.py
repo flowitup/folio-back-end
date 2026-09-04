@@ -322,6 +322,11 @@ class Container:
     # Use cases (configured after domain services)
     login_usecase: Optional[LoginUseCase] = None
     logout_usecase: Optional[LogoutUseCase] = None
+    # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
+    sms_sender: Optional[Any] = None
+    login_otp_repository: Optional[Any] = None
+    request_otp_usecase: Optional[Any] = None
+    verify_otp_usecase: Optional[Any] = None
 
     # Project use cases
     create_project_usecase: Optional[CreateProjectUseCase] = None

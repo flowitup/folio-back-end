@@ -46,6 +46,16 @@ TEST_USERS: list[tuple[str, str, str | None, bool]] = [
 ]
 
 
+# Dev phone numbers for SMS-code sign-in (SMS_PROVIDER=log prints the code in the API log).
+TEST_PHONES: dict[str, str] = {
+    "superadmin@example.com": "+84900000001",
+    "admin2@example.com": "+84900000002",
+    "manager.alice@example.com": "+84900000003",
+    "manager.bob@example.com": "+84900000004",
+    "user.dave@example.com": "+33600000005",
+}
+
+
 def seed_test_users(role_map: dict[str, RoleModel]) -> dict[str, UserModel]:
     """Create the test user roster. Returns dict of email → UserModel.
 
@@ -64,7 +74,11 @@ def seed_test_users(role_map: dict[str, RoleModel]) -> dict[str, UserModel]:
         existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
         if existing:
             user_map[email.lower()] = existing
-            print(f"  [skip] {email} already exists")
+            if existing.phone is None and email.lower() in TEST_PHONES:
+                existing.phone = TEST_PHONES[email.lower()]
+                print(f"  [phone] {email} → {existing.phone}")
+            else:
+                print(f"  [skip] {email} already exists")
             continue
 
         if role_name not in role_map:
@@ -77,6 +91,7 @@ def seed_test_users(role_map: dict[str, RoleModel]) -> dict[str, UserModel]:
             password_hash=password_hash,
             is_active=is_active,
             display_name=display_name,
+            phone=TEST_PHONES.get(email.lower()),
         )
         user.roles.append(role_map[role_name])
         db.session.add(user)

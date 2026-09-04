@@ -11,14 +11,16 @@ class TokenIssuerPort(Protocol):
         """Create short-lived access token."""
         ...
 
-    def create_refresh_token(self, user_id: UUID) -> str:
-        """Create long-lived refresh token."""
+    def create_refresh_token(self, user_id: UUID, persistent: bool = False) -> str:
+        """Create a refresh token. ``persistent`` ones never expire (mobile app sessions) and carry
+        a ``persistent`` claim so revocation can be stored without a TTL."""
         ...
 
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify and decode token. Returns claims or None if invalid."""
         ...
 
-    def revoke_token(self, jti: str, token_type: str = "access") -> None:
-        """Add token to blacklist by JTI. token_type selects the TTL ("access" or "refresh")."""
+    def revoke_token(self, jti: str, token_type: str = "access", persistent: bool = False) -> None:
+        """Add token to blacklist by JTI. token_type selects the TTL ("access" or "refresh");
+        ``persistent`` keeps the entry forever (never-expiring refresh tokens)."""
         ...
