@@ -93,7 +93,7 @@ def login():
     # surfaced post-authentication via the dedicated user-status flow, never on
     # the unauthenticated /login endpoint.
     try:
-        result = container.login_usecase.execute(data.email, data.password, persistent=data.persistent)
+        result = container.login_usecase.execute(data.email, data.password)
     except (InvalidCredentialsError, UserNotFoundError):
         return (
             jsonify(
@@ -173,7 +173,7 @@ def request_otp():
 
 @auth_bp.route("/otp/verify", methods=["POST"])
 @openapi_doc(
-    summary="Exchange a phone number + SMS code for tokens",
+    summary="Exchange a phone number + SMS code for tokens (mobile app: session lasts until sign-out)",
     request=OtpVerifyBody,
     responses={200: LoginResponse},
     tags=["auth"],
@@ -191,7 +191,7 @@ def verify_otp():
     from app import db
 
     try:
-        result = container.verify_otp_usecase.execute(data.phone, data.code, persistent=data.persistent)
+        result = container.verify_otp_usecase.execute(data.phone, data.code)
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except (OtpInvalidError, UserInactiveError):

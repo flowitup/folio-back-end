@@ -146,3 +146,25 @@ class TestOtpLogin:
             )
         # Even the right code is refused once the attempts are used up.
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": code}).status_code == 401
+
+    def test_otp_login_issues_persistent_refresh_token_revoked_on_logout(
+        self, inv_client, invitation_app, member_with_phone
+    ):
+        from flask_jwt_extended import decode_token
+
+        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
+        body = inv_client.post(
+            "/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": _code_from_sms(invitation_app)}
+        ).get_json()
+        with invitation_app.app_context():
+            claims = decode_token(body["refresh_token"], allow_expired=True)
+        assert "exp" not in claims and claims["persistent"] is True
+
+        refreshed = inv_client.post("/api/v1/auth/refresh", headers=_auth(body["refresh_token"]))
+        assert refreshed.status_code == 200
+
+        out = inv_client.post(
+            "/api/v1/auth/logout", headers=_auth(body["access_token"]), json={"refresh_token": body["refresh_token"]}
+        )
+        assert out.status_code == 200
+        assert inv_client.post("/api/v1/auth/refresh", headers=_auth(body["refresh_token"])).status_code == 401

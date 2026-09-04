@@ -11,8 +11,6 @@ class LoginRequest(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
-    # True (mobile app): refresh token never expires, the session lasts until sign-out.
-    persistent: bool = False
 
 
 class OtpRequestBody(BaseModel):
@@ -32,7 +30,6 @@ class OtpVerifyBody(BaseModel):
 
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
-    persistent: bool = False
 
 
 class LogoutBody(BaseModel):

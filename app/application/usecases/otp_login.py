@@ -1,4 +1,8 @@
-"""Sign in with a phone number and a 6-digit code sent by SMS.
+"""Sign in with a phone number and a 6-digit code sent by SMS (mobile app only).
+
+The tokens issued here differ from password login: the refresh token never expires, so the
+app stays signed in until the user signs out (logout revokes it). Password login — the web
+app — keeps its 7-day refresh token and never issues persistent tokens.
 
 ``RequestOtpUseCase`` never reveals whether a phone belongs to an account: unknown or inactive
 numbers are silently ignored. Codes are hashed at rest, expire after ``ttl_seconds``, allow
@@ -115,7 +119,7 @@ class VerifyOtpUseCase:
         self._max_attempts = max_attempts
         self._clock = clock
 
-    def execute(self, raw_phone: str, code: str, persistent: bool = False) -> LoginResult:
+    def execute(self, raw_phone: str, code: str) -> LoginResult:
         phone = normalize_phone(raw_phone)
         now = self._clock()
         otp = self._otps.latest_for_phone(phone)
@@ -135,6 +139,6 @@ class VerifyOtpUseCase:
         return LoginResult(
             user_id=user.id,
             access_token=self._tokens.create_access_token(user.id, {"permissions": permissions}),
-            refresh_token=self._tokens.create_refresh_token(user.id, persistent=persistent),
+            refresh_token=self._tokens.create_refresh_token(user.id, persistent=True),
             permissions=permissions,
         )
