@@ -130,6 +130,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.admin import admin_bp
     from app.api.v1.chiffrage import chiffrage_bp
     from app.api.v1.notes import notes_bp
+    from app.api.v1.chat import chat_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.tags import tags_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
@@ -154,6 +155,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
+    app.register_blueprint(chat_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(tags_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
@@ -361,6 +363,25 @@ def _configure_di_container() -> None:
         membership_reader=_membership_reader,
         db_session=db.session,
     )
+
+    # Wire chat use-cases (team chat, FEATURE_CHAT). Attachments reuse the S3 storage
+    # singleton under the "chat/<kind>/<channel>/<message>" key prefix.
+    from app.infrastructure.database.repositories.sqlalchemy_chat_repository import SqlAlchemyChatRepository
+    from app.application.chat.usecases import (
+        GetAttachmentUseCase as _GetChatAttachmentUseCase,
+        ListChannelsUseCase as _ListChatChannelsUseCase,
+        ListMessagesUseCase as _ListChatMessagesUseCase,
+        MarkChannelReadUseCase as _MarkChatChannelReadUseCase,
+        SendMessageUseCase as _SendChatMessageUseCase,
+    )
+
+    _chat_repo = SqlAlchemyChatRepository(db.session)
+    _c.chat_repo = _chat_repo
+    _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
+    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo)
+    _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
+    _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
+    _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
 
     # -----------------------------------------------------------------------
     # Companies DI wiring (phase 03)

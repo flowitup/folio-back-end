@@ -110,6 +110,7 @@ def invitation_app():
         JWT_TOKEN_LOCATION = ["headers", "cookies"]
         RATELIMIT_ENABLED = False
         RATELIMIT_STORAGE_URI = "memory://"
+        FEATURE_CHAT = True
 
     test_app = create_app(InviteTestConfig)
 
@@ -1041,6 +1042,28 @@ def invitation_app():
                 worker_repo=_c.worker_repository,
                 rate_change_repo=_rate_change_repo,
             )
+
+        # ------------------------------------------------------------------
+        # Wire chat use-cases (team chat) — in-memory attachment storage.
+        # ------------------------------------------------------------------
+        from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.database.repositories.sqlalchemy_chat_repository import SqlAlchemyChatRepository
+        from app.application.chat.usecases import (
+            GetAttachmentUseCase as _GetChatAttachmentUC,
+            ListChannelsUseCase as _ListChatChannelsUC,
+            ListMessagesUseCase as _ListChatMessagesUC,
+            MarkChannelReadUseCase as _MarkChatReadUC,
+            SendMessageUseCase as _SendChatMessageUC,
+        )
+
+        _chat_repo = SqlAlchemyChatRepository(db.session)
+        _chat_storage = InMemoryDocumentStorage()
+        _c.chat_repo = _chat_repo
+        _c.list_chat_channels_usecase = _ListChatChannelsUC(_chat_repo, _chat_repo, _chat_repo)
+        _c.list_chat_messages_usecase = _ListChatMessagesUC(_chat_repo, _chat_repo)
+        _c.send_chat_message_usecase = _SendChatMessageUC(_chat_repo, _chat_repo, _chat_repo, _chat_storage, db.session)
+        _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
+        _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)
 
         yield test_app
 
