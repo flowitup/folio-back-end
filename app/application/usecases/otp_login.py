@@ -115,7 +115,7 @@ class VerifyOtpUseCase:
         self._max_attempts = max_attempts
         self._clock = clock
 
-    def execute(self, raw_phone: str, code: str) -> LoginResult:
+    def execute(self, raw_phone: str, code: str, persistent: bool = False) -> LoginResult:
         phone = normalize_phone(raw_phone)
         now = self._clock()
         otp = self._otps.latest_for_phone(phone)
@@ -135,6 +135,6 @@ class VerifyOtpUseCase:
         return LoginResult(
             user_id=user.id,
             access_token=self._tokens.create_access_token(user.id, {"permissions": permissions}),
-            refresh_token=self._tokens.create_refresh_token(user.id),
+            refresh_token=self._tokens.create_refresh_token(user.id, persistent=persistent),
             permissions=permissions,
         )

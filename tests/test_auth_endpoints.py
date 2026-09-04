@@ -458,3 +458,53 @@ class TestHealthCheck:
         assert response.status_code == 200
         data = response.get_json()
         assert data["status"] == "ok"
+
+
+class TestPersistentSession:
+    """Mobile app sessions: persistent refresh tokens never expire and end only at logout."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_rate_limit(self):
+        # Earlier tests in this module already spent the 5-per-minute login budget.
+        from app.infrastructure.rate_limiter import limiter
+
+        limiter.reset()
+        yield
+
+    def _decode(self, client, token):
+        from flask_jwt_extended import decode_token
+
+        with client.application.app_context():
+            return decode_token(token, allow_expired=True)
+
+    def test_browser_login_refresh_token_still_expires(self, client):
+        login = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
+        claims = self._decode(client, login.get_json()["refresh_token"])
+        assert "exp" in claims and not claims.get("persistent")
+
+    def test_persistent_login_issues_never_expiring_refresh_token(self, client):
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "active@example.com", "password": "password123", "persistent": True},
+        )
+        assert login.status_code == 200
+        refresh_token = login.get_json()["refresh_token"]
+        claims = self._decode(client, refresh_token)
+        assert "exp" not in claims and claims["persistent"] is True
+
+        refreshed = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {refresh_token}"})
+        assert refreshed.status_code == 200 and refreshed.get_json()["access_token"]
+
+    def test_logout_with_refresh_token_in_body_ends_persistent_session(self, client):
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "active@example.com", "password": "password123", "persistent": True},
+        ).get_json()
+        out = client.post(
+            "/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {login['access_token']}"},
+            json={"refresh_token": login["refresh_token"]},
+        )
+        assert out.status_code == 200
+        refreshed = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {login['refresh_token']}"})
+        assert refreshed.status_code == 401

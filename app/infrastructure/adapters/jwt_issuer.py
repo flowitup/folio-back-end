@@ -56,8 +56,18 @@ class JWTTokenIssuer:
             expires_delta=self._access_expires,
         )
 
-    def create_refresh_token(self, user_id: UUID) -> str:
-        """Create long-lived refresh token."""
+    def create_refresh_token(self, user_id: UUID, persistent: bool = False) -> str:
+        """Create a refresh token: 7 days for browsers, never-expiring for persistent (mobile) sessions.
+
+        A persistent token stays valid until the user signs out (logout revokes it for good);
+        the ``persistent`` claim tells ``revoke_token`` to keep the blocklist entry without TTL.
+        """
+        if persistent:
+            return create_refresh_token(
+                identity=str(user_id),
+                expires_delta=False,
+                additional_claims={"persistent": True},
+            )
         return create_refresh_token(
             identity=str(user_id),
             expires_delta=self._refresh_expires,
@@ -74,14 +84,18 @@ class JWTTokenIssuer:
         except (PyJWTError, JWTDecodeError):
             return None
 
-    def revoke_token(self, jti: str, token_type: str = "access") -> None:
+    def revoke_token(self, jti: str, token_type: str = "access", persistent: bool = False) -> None:
         """Add token to blacklist with a TTL matching the token's expiry.
 
         Refresh tokens live ~7 days while access tokens live ~30 minutes;
         using the access TTL for a revoked refresh JTI would let a stolen
-        refresh token become usable again after 30 minutes.
+        refresh token become usable again after 30 minutes. Persistent refresh
+        tokens never expire, so their entry is stored without TTL.
         """
         if self._redis:
+            if persistent:
+                self._redis.set(f"blacklist:{jti}", "1")
+                return
             ttl = self._refresh_expires_seconds if token_type == "refresh" else self._access_expires_seconds
             # Store in Redis with TTL (auto-expires when token would expire)
             self._redis.setex(f"blacklist:{jti}", ttl, "1")

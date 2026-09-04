@@ -19,6 +19,7 @@ from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
     LoginRequest,
     LoginResponse,
+    LogoutBody,
     OtpRequestBody,
     OtpRequestResponse,
     OtpVerifyBody,
@@ -92,7 +93,7 @@ def login():
     # surfaced post-authentication via the dedicated user-status flow, never on
     # the unauthenticated /login endpoint.
     try:
-        result = container.login_usecase.execute(data.email, data.password)
+        result = container.login_usecase.execute(data.email, data.password, persistent=data.persistent)
     except (InvalidCredentialsError, UserNotFoundError):
         return (
             jsonify(
@@ -190,7 +191,7 @@ def verify_otp():
     from app import db
 
     try:
-        result = container.verify_otp_usecase.execute(data.phone, data.code)
+        result = container.verify_otp_usecase.execute(data.phone, data.code, persistent=data.persistent)
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except (OtpInvalidError, UserInactiveError):
@@ -202,7 +203,9 @@ def verify_otp():
 
 
 @auth_bp.route("/logout", methods=["POST"])
-@openapi_doc(summary="Logout user and clear cookies", tags=["auth"])
+@openapi_doc(
+    summary="Logout user, clear cookies, revoke the access and refresh tokens", request=LogoutBody, tags=["auth"]
+)
 @jwt_required(optional=True)
 def logout():
     """Logout user - clear cookies and revoke both access and refresh tokens."""
@@ -219,22 +222,31 @@ def logout():
         if jti:
             token_issuer.revoke_token(jti, token_type="access")
 
-    # Also revoke the refresh-token JTI carried in the refresh cookie so a
-    # captured refresh token cannot be replayed after the user logs out.
-    # The refresh cookie is decoded with verify=False because flask-jwt-extended
-    # only treats one token kind per request and we don't want to fail logout
-    # when the refresh cookie is missing or already expired.
+    # Also revoke the refresh token so it cannot be replayed after the user logs out:
+    # browsers carry it in the refresh cookie, the mobile app sends it in the JSON body
+    # (its persistent refresh tokens never expire, so this revocation is what ends the session).
+    # Decoded with allow_expired because flask-jwt-extended only treats one token kind per
+    # request and logout must not fail when the token is missing or already expired.
     if token_issuer:
         _cookie_name = current_app.config.get("JWT_REFRESH_COOKIE_NAME", "refresh_token_cookie")
-        refresh_cookie = request.cookies.get(_cookie_name)
-        if refresh_cookie:
+        candidates = [request.cookies.get(_cookie_name)]
+        try:
+            body = LogoutBody(**(request.get_json(silent=True) or {}))
+            candidates.append(body.refresh_token)
+        except ValidationError:
+            pass
+        for refresh_token in candidates:
+            if not refresh_token:
+                continue
             try:
                 from flask_jwt_extended import decode_token
 
-                refresh_claims = decode_token(refresh_cookie, allow_expired=True)
+                refresh_claims = decode_token(refresh_token, allow_expired=True)
                 refresh_jti = refresh_claims.get("jti") if refresh_claims else None
                 if refresh_jti:
-                    token_issuer.revoke_token(refresh_jti, token_type="refresh")
+                    token_issuer.revoke_token(
+                        refresh_jti, token_type="refresh", persistent=bool(refresh_claims.get("persistent"))
+                    )
             except Exception:  # pragma: no cover - defensive; logout must not 500
                 logger.info("auth.logout: refresh-token decode failed; access JTI still revoked")
 

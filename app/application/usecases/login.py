@@ -32,7 +32,7 @@ class LoginUseCase:
         self._authz = authorization_service
         self._tokens = token_issuer
 
-    def execute(self, email: str, password: str) -> LoginResult:
+    def execute(self, email: str, password: str, persistent: bool = False) -> LoginResult:
         """
         Execute login flow.
 
@@ -43,6 +43,7 @@ class LoginUseCase:
         Args:
             email: User email
             password: Plaintext password
+            persistent: never-expiring refresh token (mobile app: signed in until sign-out)
 
         Returns:
             LoginResult with tokens and permissions
@@ -57,7 +58,7 @@ class LoginUseCase:
             user_id,
             {"permissions": permissions},
         )
-        refresh_token = self._tokens.create_refresh_token(user_id)
+        refresh_token = self._tokens.create_refresh_token(user_id, persistent=persistent)
 
         return LoginResult(
             user_id=user_id,
