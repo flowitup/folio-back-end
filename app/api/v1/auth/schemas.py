@@ -32,6 +32,13 @@ class OtpVerifyBody(BaseModel):
     code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
 
 
+class AuthConfigResponse(BaseModel):
+    """GET /auth/config — what this deployment offers, read by the apps before sign-in."""
+
+    login_mode: str  # "email" | "phone" | "both"
+    session: str  # "expiring" (7-day refresh token) | "persistent" (until sign-out)
+
+
 class LogoutBody(BaseModel):
     """Optional body of POST /auth/logout: Bearer clients pass their refresh token so it is revoked too."""
 

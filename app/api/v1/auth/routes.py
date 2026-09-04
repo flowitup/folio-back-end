@@ -1,6 +1,8 @@
 """Auth API routes."""
 
 import logging
+from functools import wraps
+from typing import Any, Callable, TypeVar, cast
 from uuid import UUID
 
 from flask import current_app, jsonify, request, make_response
@@ -17,6 +19,7 @@ from pydantic import ValidationError
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
+    AuthConfigResponse,
     LoginRequest,
     LoginResponse,
     LogoutBody,
@@ -43,6 +46,51 @@ from wiring import get_container
 
 logger = logging.getLogger(__name__)
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _persistent_sessions() -> bool:
+    return bool(current_app.config.get("REFRESH_TOKEN_POLICY", "expiring") == "persistent")
+
+
+def require_login_mode(mode: str) -> Callable[[F], F]:
+    """404 unless LOGIN_MODE allows this sign-in method ("both" allows everything)."""
+
+    def decorator(func: F) -> F:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            allowed = current_app.config.get("LOGIN_MODE", "both")
+            if allowed not in (mode, "both"):
+                return (
+                    jsonify(
+                        ErrorResponse(
+                            error="NotFound",
+                            message=f"{mode.capitalize()} sign-in is not enabled on this server",
+                            status_code=404,
+                        ).model_dump()
+                    ),
+                    404,
+                )
+            return func(*args, **kwargs)
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
+@auth_bp.route("/config", methods=["GET"])
+@openapi_doc(
+    summary="Sign-in options of this deployment", responses={200: AuthConfigResponse}, tags=["auth"], auth=False
+)
+def auth_config():
+    """Public: which sign-in the apps should offer and whether sessions persist until sign-out."""
+    return jsonify(
+        AuthConfigResponse(
+            login_mode=str(current_app.config.get("LOGIN_MODE", "both")),
+            session="persistent" if _persistent_sessions() else "expiring",
+        ).model_dump()
+    )
+
 
 @auth_bp.route("/login", methods=["POST"])
 @openapi_doc(
@@ -53,6 +101,7 @@ logger = logging.getLogger(__name__)
     auth=False,
 )
 @limiter.limit("5 per minute")
+@require_login_mode("email")
 def login():
     """
     Authenticate user and return tokens.
@@ -93,7 +142,7 @@ def login():
     # surfaced post-authentication via the dedicated user-status flow, never on
     # the unauthenticated /login endpoint.
     try:
-        result = container.login_usecase.execute(data.email, data.password)
+        result = container.login_usecase.execute(data.email, data.password, persistent=_persistent_sessions())
     except (InvalidCredentialsError, UserNotFoundError):
         return (
             jsonify(
@@ -148,6 +197,7 @@ def _login_response(container, result: LoginResult):
     auth=False,
 )
 @limiter.limit("5 per minute")
+@require_login_mode("phone")
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
@@ -173,13 +223,14 @@ def request_otp():
 
 @auth_bp.route("/otp/verify", methods=["POST"])
 @openapi_doc(
-    summary="Exchange a phone number + SMS code for tokens (mobile app: session lasts until sign-out)",
+    summary="Exchange a phone number + SMS code for tokens",
     request=OtpVerifyBody,
     responses={200: LoginResponse},
     tags=["auth"],
     auth=False,
 )
 @limiter.limit("5 per minute")
+@require_login_mode("phone")
 def verify_otp():
     try:
         data = OtpVerifyBody(**(request.get_json(silent=True) or {}))
@@ -191,7 +242,7 @@ def verify_otp():
     from app import db
 
     try:
-        result = container.verify_otp_usecase.execute(data.phone, data.code)
+        result = container.verify_otp_usecase.execute(data.phone, data.code, persistent=_persistent_sessions())
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except (OtpInvalidError, UserInactiveError):

@@ -460,32 +460,54 @@ class TestHealthCheck:
         assert data["status"] == "ok"
 
 
-class TestPasswordLoginIsNeverPersistent:
-    """Only the mobile SMS-code sign-in issues never-expiring refresh tokens; /login keeps the 7-day token."""
+class TestSessionPolicyAndLoginMode:
+    """REFRESH_TOKEN_POLICY and LOGIN_MODE are deployment switches read at request time."""
 
     @pytest.fixture(autouse=True)
-    def _fresh_rate_limit(self):
+    def _fresh_rate_limit(self, client):
         from app.infrastructure.rate_limiter import limiter
 
         limiter.reset()
+        saved = {k: client.application.config.get(k) for k in ("LOGIN_MODE", "REFRESH_TOKEN_POLICY")}
         yield
+        client.application.config.update(saved)
 
-    def test_login_refresh_token_expires_even_if_persistent_requested(self, client):
+    def _refresh_claims(self, client, token):
         from flask_jwt_extended import decode_token
 
-        login = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "password123", "persistent": True},
-        )
-        assert login.status_code == 200
         with client.application.app_context():
-            claims = decode_token(login.get_json()["refresh_token"], allow_expired=True)
+            return decode_token(token, allow_expired=True)
+
+    def _login(self, client):
+        return client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
+
+    def test_config_endpoint_is_public_and_reflects_settings(self, client):
+        client.application.config.update(LOGIN_MODE="phone", REFRESH_TOKEN_POLICY="persistent")
+        resp = client.get("/api/v1/auth/config")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"login_mode": "phone", "session": "persistent"}
+
+    def test_expiring_policy_issues_seven_day_refresh_token(self, client):
+        client.application.config.update(REFRESH_TOKEN_POLICY="expiring")
+        claims = self._refresh_claims(client, self._login(client).get_json()["refresh_token"])
         assert "exp" in claims and not claims.get("persistent")
 
+    def test_persistent_policy_issues_never_expiring_refresh_token(self, client):
+        client.application.config.update(REFRESH_TOKEN_POLICY="persistent")
+        login = self._login(client).get_json()
+        claims = self._refresh_claims(client, login["refresh_token"])
+        assert "exp" not in claims and claims["persistent"] is True
+        refreshed = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {login['refresh_token']}"})
+        assert refreshed.status_code == 200
+
+    def test_phone_mode_disables_password_login(self, client):
+        client.application.config.update(LOGIN_MODE="phone")
+        assert self._login(client).status_code == 404
+        client.application.config.update(LOGIN_MODE="both")
+        assert self._login(client).status_code == 200
+
     def test_logout_accepts_refresh_token_in_body(self, client):
-        login = client.post(
-            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
-        ).get_json()
+        login = self._login(client).get_json()
         out = client.post(
             "/api/v1/auth/logout",
             headers={"Authorization": f"Bearer {login['access_token']}"},

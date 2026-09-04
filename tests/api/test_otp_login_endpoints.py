@@ -147,22 +147,34 @@ class TestOtpLogin:
         # Even the right code is refused once the attempts are used up.
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": code}).status_code == 401
 
-    def test_otp_login_issues_persistent_refresh_token_revoked_on_logout(
+    def test_email_mode_disables_phone_login(self, inv_client, invitation_app, member_with_phone):
+        invitation_app.config["LOGIN_MODE"] = "email"
+        try:
+            assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 404
+            assert (
+                inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": "123456"}).status_code
+                == 404
+            )
+        finally:
+            invitation_app.config["LOGIN_MODE"] = "both"
+
+    def test_persistent_policy_applies_to_otp_login_and_logout_revokes(
         self, inv_client, invitation_app, member_with_phone
     ):
         from flask_jwt_extended import decode_token
 
-        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
-        body = inv_client.post(
-            "/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": _code_from_sms(invitation_app)}
-        ).get_json()
+        invitation_app.config["REFRESH_TOKEN_POLICY"] = "persistent"
+        try:
+            assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
+            body = inv_client.post(
+                "/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": _code_from_sms(invitation_app)}
+            ).get_json()
+        finally:
+            invitation_app.config["REFRESH_TOKEN_POLICY"] = "expiring"
         with invitation_app.app_context():
             claims = decode_token(body["refresh_token"], allow_expired=True)
         assert "exp" not in claims and claims["persistent"] is True
-
-        refreshed = inv_client.post("/api/v1/auth/refresh", headers=_auth(body["refresh_token"]))
-        assert refreshed.status_code == 200
-
+        assert inv_client.post("/api/v1/auth/refresh", headers=_auth(body["refresh_token"])).status_code == 200
         out = inv_client.post(
             "/api/v1/auth/logout", headers=_auth(body["access_token"]), json={"refresh_token": body["refresh_token"]}
         )
