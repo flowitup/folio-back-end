@@ -48,6 +48,8 @@ class MessageResponse(BaseModel):
 class MemberResponse(BaseModel):
     id: str
     name: str
+    # ISO timestamp of the member's read marker (None until they open the channel); drives "seen" avatars.
+    last_read_at: str | None = None
 
 
 class MessagePageResponse(BaseModel):

@@ -1060,7 +1060,7 @@ def invitation_app():
         _chat_storage = InMemoryDocumentStorage()
         _c.chat_repo = _chat_repo
         _c.list_chat_channels_usecase = _ListChatChannelsUC(_chat_repo, _chat_repo, _chat_repo)
-        _c.list_chat_messages_usecase = _ListChatMessagesUC(_chat_repo, _chat_repo)
+        _c.list_chat_messages_usecase = _ListChatMessagesUC(_chat_repo, _chat_repo, _chat_repo)
         _c.send_chat_message_usecase = _SendChatMessageUC(_chat_repo, _chat_repo, _chat_repo, _chat_storage, db.session)
         _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
         _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)

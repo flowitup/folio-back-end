@@ -96,6 +96,18 @@ class SqlAlchemyChatRepository:
             row.last_read_at = at
         self._session.flush()
 
+    def last_reads_for_channel(self, channel: ChannelRef) -> dict[UUID, datetime]:
+        rows = self._session.execute(
+            select(ChatChannelReadOrm).where(
+                ChatChannelReadOrm.channel_kind == channel.kind,
+                ChatChannelReadOrm.channel_id == channel.id,
+            )
+        ).scalars()
+        return {
+            row.user_id: row.last_read_at if row.last_read_at.tzinfo else row.last_read_at.replace(tzinfo=timezone.utc)
+            for row in rows
+        }
+
     # ------------------------------------------------------------------
     # ChatDirectoryPort
     # ------------------------------------------------------------------
