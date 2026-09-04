@@ -27,6 +27,7 @@ from app.application.admin.exceptions import (
     TooManyProjectsError,
 )
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -186,6 +187,7 @@ def search_users():
                 id=u.id,
                 email=u.email,
                 display_name=u.display_name,
+                phone=u.phone,
             )
             for u in users
         ],
@@ -238,9 +240,26 @@ def update_user(user_id: str):
         dn = provided["display_name"]
         user.display_name = dn.strip() if isinstance(dn, str) and dn.strip() else None
 
+    if "phone" in provided:
+        raw_phone = provided["phone"]
+        if isinstance(raw_phone, str) and raw_phone.strip():
+            try:
+                phone = normalize_phone(raw_phone)
+            except InvalidPhoneNumberError:
+                return _err(400, "BadRequest", "Invalid phone number")
+            owner = container.user_repository.find_by_phone(phone)
+            if owner is not None and owner.id != uid:
+                return _err(409, "Conflict", "Phone already in use")
+            user.phone = phone
+        else:
+            user.phone = None
+
     container.user_repository.save(user)
     from app import db
 
     db.session.commit()
 
-    return jsonify({"id": str(user.id), "email": user.email, "display_name": user.display_name}), 200
+    return (
+        jsonify({"id": str(user.id), "email": user.email, "display_name": user.display_name, "phone": user.phone}),
+        200,
+    )

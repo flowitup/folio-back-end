@@ -18,6 +18,10 @@ class UserRepositoryPort(Protocol):
         """Find a user by email. Returns user or None."""
         ...
 
+    def find_by_phone(self, phone: str) -> Optional["User"]:
+        """Find a user by E.164 phone number. Returns user or None."""
+        ...
+
     def save(self, user: "User") -> "User":
         """Save a user (create or update). Returns saved user."""
         ...

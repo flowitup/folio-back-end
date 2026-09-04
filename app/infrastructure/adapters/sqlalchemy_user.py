@@ -42,6 +42,13 @@ class SQLAlchemyUserRepository:
             return None
         return self._to_entity(user_model)
 
+    def find_by_phone(self, phone: str) -> Optional[User]:
+        """Find a user by E.164 phone number."""
+        user_model = self._session.query(UserModel).filter_by(phone=phone).first()
+        if not user_model:
+            return None
+        return self._to_entity(user_model)
+
     def search_by_email(self, query: str, limit: int = 10) -> List[Tuple[UUID, str]]:
         """Search users by email substring. Returns list of (id, email) tuples.
 
@@ -92,6 +99,7 @@ class SQLAlchemyUserRepository:
             existing.password_hash = user.password_hash
             existing.is_active = user.is_active
             existing.display_name = user.display_name
+            existing.phone = user.phone
         else:
             user_model = UserModel(
                 id=user.id,
@@ -99,6 +107,7 @@ class SQLAlchemyUserRepository:
                 password_hash=user.password_hash,
                 is_active=user.is_active,
                 display_name=user.display_name,
+                phone=user.phone,
             )
             self._session.add(user_model)
         self._session.flush()
@@ -145,4 +154,5 @@ class SQLAlchemyUserRepository:
             updated_at=model.updated_at,
             roles=roles,
             display_name=model.display_name,
+            phone=model.phone,
         )

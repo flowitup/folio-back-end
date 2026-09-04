@@ -1,6 +1,6 @@
 """Pydantic schemas for auth endpoints."""
 
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -13,6 +13,25 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
 
 
+class OtpRequestBody(BaseModel):
+    """POST /auth/otp/request — ask for a 6-digit code by SMS."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+
+
+class OtpRequestResponse(BaseModel):
+    """Always 202: the code (if the phone is known) is valid for ``expires_in`` seconds."""
+
+    expires_in: int
+
+
+class OtpVerifyBody(BaseModel):
+    """POST /auth/otp/verify — exchange phone + code for tokens."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+
+
 class UserResponse(BaseModel):
     """User info response."""
 
@@ -20,6 +39,7 @@ class UserResponse(BaseModel):
     email: str
     permissions: List[str]
     roles: List[str]
+    phone: Optional[str] = None
 
 
 class LoginResponse(BaseModel):

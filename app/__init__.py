@@ -6,8 +6,9 @@ the Flask application following the application factory pattern.
 """
 
 import os
+from typing import Any
 
-from flask import Flask, jsonify
+from flask import Flask, current_app, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
@@ -382,6 +383,39 @@ def _configure_di_container() -> None:
     _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
+
+    # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio).
+    from app.application.usecases.otp_login import RequestOtpUseCase, VerifyOtpUseCase
+    from app.infrastructure.adapters.logging_sms_sender import LoggingSmsSender
+    from app.infrastructure.adapters.sqlalchemy_login_otp import SQLAlchemyLoginOtpRepository
+    from app.infrastructure.adapters.twilio_sms_sender import TwilioSmsSender
+
+    _cfg = current_app.config
+    if _cfg.get("SMS_PROVIDER") == "twilio":
+        _sms: Any = TwilioSmsSender(
+            _cfg.get("TWILIO_ACCOUNT_SID", ""), _cfg.get("TWILIO_AUTH_TOKEN", ""), _cfg.get("TWILIO_FROM", "Folio")
+        )
+    else:
+        _sms = LoggingSmsSender()
+    _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
+    _c.sms_sender = _sms
+    _c.login_otp_repository = _otp_repo
+    if _c.user_repository is not None and _c.authorization_service is not None and _c.token_issuer is not None:
+        _c.request_otp_usecase = RequestOtpUseCase(
+            _c.user_repository,
+            _otp_repo,
+            _sms,
+            ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
+            resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
+            hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
+        )
+        _c.verify_otp_usecase = VerifyOtpUseCase(
+            _c.user_repository,
+            _otp_repo,
+            _c.authorization_service,
+            _c.token_issuer,
+            max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+        )
 
     # -----------------------------------------------------------------------
     # Companies DI wiring (phase 03)

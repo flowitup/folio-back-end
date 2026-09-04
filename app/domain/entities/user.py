@@ -34,6 +34,8 @@ class User:
     updated_at: Optional[datetime] = None
     roles: List[Role] = field(default_factory=list)
     display_name: Optional[str] = None
+    # E.164 number for SMS-code sign-in; assigned by an admin, unique across users.
+    phone: Optional[str] = None
 
     def __eq__(self, other: object) -> bool:
         """Users are equal if they have the same ID."""

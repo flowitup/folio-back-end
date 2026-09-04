@@ -25,6 +25,18 @@ class UserInactiveError(AuthenticationError):
     pass
 
 
+class OtpInvalidError(AuthenticationError):
+    """SMS code is wrong, expired, consumed, or locked after too many attempts."""
+
+    pass
+
+
+class OtpThrottledError(AuthenticationError):
+    """Too many SMS codes requested for this phone recently."""
+
+    pass
+
+
 class AuthorizationError(Exception):
     """Base authorization exception."""
 
