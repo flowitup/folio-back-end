@@ -34,6 +34,7 @@ from app.api.v1.labor.schemas import (
     CrossProjectConflictEntryResponse,
 )
 from app.api.v1.projects.decorators import require_permission, require_project_access
+from app.api.v1.projects.labor_scope import labor_scope_for, require_full_project_view
 from app.application.labor import (
     LogAttendanceRequest as LogAttendanceDTO,
     BulkLogAttendanceRequest as BulkLogAttendanceDTO,
@@ -97,6 +98,13 @@ def list_labor_entries(project_id: str):
     status_raw = request.args.get("status")
     if status_raw is not None and status_raw not in ("pending", "validated"):
         return _error_response("ValidationError", "status must be 'pending' or 'validated'", 400)
+
+    # Restricted members only see their own rows; an unlinked account sees none.
+    scope = labor_scope_for(project_id)
+    if scope.restricted:
+        if scope.worker_id is None:
+            return jsonify(LaborEntryListResponse(entries=[], total=0).model_dump())
+        worker_id = str(scope.worker_id)
 
     try:
         entries = get_container().list_labor_entries_usecase.execute(
@@ -201,6 +209,7 @@ def log_attendance(project_id: str):
 @jwt_required()
 @require_permission("project:read")
 @require_project_access(write=False)
+@require_full_project_view
 def get_cross_project_conflicts(project_id: str):
     """Return cross-project labor conflicts on a given date (Phase 4).
 
@@ -492,6 +501,22 @@ def get_labor_summary(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
+    scope = labor_scope_for(project_id)
+    rows = [r for r in result.rows if scope.allows_worker(r.worker_id)]
+    if scope.restricted:
+        # Totals re-derived from the caller's own row so nothing about other workers leaks.
+        total_days = sum(r.days_worked for r in rows)
+        total_cost = sum(r.total_cost for r in rows)
+        total_banked_hours = sum(r.banked_hours for r in rows)
+        total_bonus_days = sum(r.bonus_full_days + 0.5 * r.bonus_half_days for r in rows)
+        total_bonus_cost = sum(r.bonus_cost for r in rows)
+    else:
+        total_days = result.total_days
+        total_cost = result.total_cost
+        total_banked_hours = result.total_banked_hours
+        total_bonus_days = result.total_bonus_days
+        total_bonus_cost = result.total_bonus_cost
+
     return jsonify(
         LaborSummaryResponse(
             rows=[
@@ -505,13 +530,13 @@ def get_labor_summary(project_id: str):
                     bonus_half_days=r.bonus_half_days,
                     bonus_cost=r.bonus_cost,
                 )
-                for r in result.rows
+                for r in rows
             ],
-            total_days=result.total_days,
-            total_cost=result.total_cost,
-            total_banked_hours=result.total_banked_hours,
-            total_bonus_days=result.total_bonus_days,
-            total_bonus_cost=result.total_bonus_cost,
+            total_days=total_days,
+            total_cost=total_cost,
+            total_banked_hours=total_banked_hours,
+            total_bonus_days=total_bonus_days,
+            total_bonus_cost=total_bonus_cost,
         ).model_dump()
     )
 
@@ -536,25 +561,28 @@ def get_labor_monthly_summary(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    return jsonify(
-        LaborMonthlySummaryResponse(
-            rows=[
-                MonthlySummaryRowResponse(
-                    year=r.year,
-                    month=r.month,
-                    total_days=r.total_days,
-                    total_cost=r.total_cost,
-                    workers=[
-                        MonthlyWorkerSubRowResponse(
-                            worker_id=w.worker_id,
-                            worker_name=w.worker_name,
-                            days_worked=w.days_worked,
-                            total_cost=w.total_cost,
-                        )
-                        for w in r.workers
-                    ],
-                )
-                for r in result.rows
-            ],
-        ).model_dump()
-    )
+    scope = labor_scope_for(project_id)
+    month_rows = []
+    for r in result.rows:
+        workers = [w for w in r.workers if scope.allows_worker(w.worker_id)]
+        if scope.restricted and not workers:
+            continue  # months where the caller did not work carry nothing they may see
+        month_rows.append(
+            MonthlySummaryRowResponse(
+                year=r.year,
+                month=r.month,
+                total_days=sum(w.days_worked for w in workers) if scope.restricted else r.total_days,
+                total_cost=sum(w.total_cost for w in workers) if scope.restricted else r.total_cost,
+                workers=[
+                    MonthlyWorkerSubRowResponse(
+                        worker_id=w.worker_id,
+                        worker_name=w.worker_name,
+                        days_worked=w.days_worked,
+                        total_cost=w.total_cost,
+                    )
+                    for w in workers
+                ],
+            )
+        )
+
+    return jsonify(LaborMonthlySummaryResponse(rows=month_rows).model_dump())

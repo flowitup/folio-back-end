@@ -20,6 +20,7 @@ from app.api.v1.labor.schemas import (
     WorkerListResponse,
 )
 from app.api.v1.projects.decorators import require_permission, require_project_access
+from app.api.v1.projects.labor_scope import labor_scope_for
 from app.application.labor import (
     CreateWorkerRequest as CreateWorkerDTO,
     UpdateWorkerRequest as UpdateWorkerDTO,
@@ -90,6 +91,11 @@ def list_workers(project_id: str):
         workers = get_container().list_workers_usecase.execute(ListWorkersRequest(project_id=UUID(project_id)))
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+
+    # A restricted member (no project:manage_labor) only sees the worker linked to their account.
+    scope = labor_scope_for(project_id)
+    if scope.restricted:
+        workers = [w for w in workers if scope.allows_worker(w.id)]
 
     return jsonify(WorkerListResponse(workers=[_worker_response(w) for w in workers], total=len(workers)).model_dump())
 

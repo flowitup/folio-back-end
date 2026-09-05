@@ -6,7 +6,7 @@ from typing import Tuple
 from uuid import UUID
 
 from flask import Response, jsonify, request, send_file
-from flask_jwt_extended import get_jwt, jwt_required
+from flask_jwt_extended import get_jwt_identity, get_jwt, jwt_required
 
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
@@ -16,6 +16,8 @@ from app.api.v1.projects.decorators import (
     require_attachment_access,
 )
 from app.api.v1.projects.schemas import ErrorResponse
+from app.api.v1.projects.decorators import _is_company_admin_for_project
+from app.api.v1.projects.labor_scope import labor_scope_for
 from app.application.invoice import (
     AttachmentNotFoundError,
     FileTooLargeError,
@@ -55,8 +57,27 @@ def list_attachments(project_id: str, invoice_id: str):
         return _error_response("INVALID_ID", "Invalid invoice id", 400)
 
     container = get_container()
+    if not _own_labor_invoice_or_manager(project_id, inv_uuid):
+        return _error_response("NOT_FOUND", "Invoice not found", 404)
     items = container.list_attachments_usecase.execute(inv_uuid)
     return jsonify([_serialize(a) for a in items]), 200
+
+
+def _own_labor_invoice_or_manager(project_id: str, invoice_id: UUID) -> bool:
+    """Restricted members only reach attachments of their own labor payments.
+
+    Company admins keep their read access (they reach these routes without a project
+    membership through ``allow_company_admin``); everyone with project:manage_labor is unrestricted.
+    """
+    scope = labor_scope_for(project_id)
+    if not scope.restricted:
+        return True
+    container = get_container()
+    project = container.project_repository.find_by_id(UUID(project_id))
+    if project is not None and _is_company_admin_for_project(project, UUID(str(get_jwt_identity()))):
+        return True
+    invoice = container.invoice_repository.find_by_id(invoice_id)
+    return invoice is not None and invoice.worker_id is not None and scope.allows_worker(invoice.worker_id)
 
 
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>/attachments", methods=["POST"])
@@ -121,6 +142,9 @@ def download_attachment(attachment_id: str):
         att, stream, length = container.get_attachment_usecase.execute(att_uuid)
     except AttachmentNotFoundError as e:
         return _error_response("NOT_FOUND", str(e), 404)
+    invoice = container.invoice_repository.find_by_id(att.invoice_id)
+    if invoice is not None and not _own_labor_invoice_or_manager(str(invoice.project_id), att.invoice_id):
+        return _error_response("NOT_FOUND", "Attachment not found", 404)
 
     # Inline preview only for PDF + images; everything else forced to download.
     # nosniff prevents browsers from MIME-sniffing user-controlled bytes into
