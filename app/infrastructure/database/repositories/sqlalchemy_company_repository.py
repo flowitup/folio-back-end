@@ -29,6 +29,11 @@ class SqlAlchemyCompanyRepository:
     # Reads
     # ------------------------------------------------------------------
 
+    def find_by_join_code(self, code: str) -> Optional[Company]:
+        """Company with this join code, or None."""
+        row = self._session.execute(select(CompanyModel).where(CompanyModel.join_code == code)).scalar_one_or_none()
+        return deserialize_company_orm(row) if row is not None else None
+
     def find_by_id(self, company_id: UUID) -> Optional[Company]:
         """Return company by UUID, or None if not found."""
         row = self._session.get(CompanyModel, company_id)

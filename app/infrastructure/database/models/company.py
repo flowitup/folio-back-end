@@ -44,6 +44,8 @@ class CompanyModel(Base):
     # Billing defaults (per-company)
     default_payment_terms = Column(Text, nullable=True)
     prefix_override = Column(String(8), nullable=True)
+    # Shared short code (8 chars, unique) used by the mobile app to join the company as a member.
+    join_code = Column(String(16), nullable=True, unique=True)
 
     # Audit
     created_by = Column(

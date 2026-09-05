@@ -18,8 +18,8 @@ class LoginOtpOrm(Base):
     __table_args__ = (Index("ix_login_otps_phone_created", "phone", "created_at"),)
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-    user_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)

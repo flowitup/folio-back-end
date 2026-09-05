@@ -27,6 +27,8 @@ from app.api.v1.auth.schemas import (
     OtpRequestResponse,
     OtpVerifyBody,
     RefreshResponse,
+    SignupRequestBody,
+    SignupVerifyBody,
     UserResponse,
     ErrorResponse,
     LogoutResponse,
@@ -37,6 +39,7 @@ from app.domain.exceptions.auth_exceptions import (
     InvalidCredentialsError,
     OtpInvalidError,
     OtpThrottledError,
+    PhoneAlreadyRegisteredError,
     UserInactiveError,
     UserNotFoundError,
 )
@@ -88,6 +91,7 @@ def auth_config():
         AuthConfigResponse(
             login_mode=str(current_app.config.get("LOGIN_MODE", "both")),
             session="persistent" if _persistent_sessions() else "expiring",
+            signup=current_app.config.get("LOGIN_MODE", "both") in ("phone", "both"),
         ).model_dump()
     )
 
@@ -353,3 +357,75 @@ def get_current_user():
             phone=user.phone,
         ).model_dump()
     )
+
+
+@auth_bp.route("/signup/request", methods=["POST"])
+@openapi_doc(
+    summary="Text a sign-up code to a phone number that has no account yet",
+    request=SignupRequestBody,
+    responses={202: OtpRequestResponse},
+    tags=["auth"],
+    auth=False,
+)
+@limiter.limit("5 per minute")
+@require_login_mode("phone")
+def request_signup_otp():
+    try:
+        data = SignupRequestBody(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: phone")
+    container = get_container()
+    if container.request_signup_otp_usecase is None:
+        return _error(500, "ServerError", "Sign-up not configured")
+    try:
+        result = container.request_signup_otp_usecase.execute(data.phone)
+    except InvalidPhoneNumberError:
+        return _error(400, "ValidationError", "Invalid phone number")
+    except PhoneAlreadyRegisteredError:
+        return _error(409, "Conflict", "This phone number already has an account. Sign in instead.")
+    except OtpThrottledError:
+        return _error(429, "TooManyRequests", "A code was sent recently. Wait a minute and try again.")
+    except SmsSendError:
+        return _error(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
+    from app import db
+
+    db.session.commit()
+    return jsonify(OtpRequestResponse(expires_in=result.expires_in).model_dump()), 202
+
+
+@auth_bp.route("/signup/verify", methods=["POST"])
+@openapi_doc(
+    summary="Create an account from a phone number + sign-up code + display name",
+    request=SignupVerifyBody,
+    responses={201: LoginResponse},
+    tags=["auth"],
+    auth=False,
+)
+@limiter.limit("5 per minute")
+@require_login_mode("phone")
+def verify_signup_otp():
+    try:
+        data = SignupVerifyBody(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: phone, code, display_name")
+    container = get_container()
+    if container.verify_signup_otp_usecase is None:
+        return _error(500, "ServerError", "Sign-up not configured")
+    from app import db
+
+    try:
+        result = container.verify_signup_otp_usecase.execute(
+            data.phone, data.code, data.display_name, persistent=_persistent_sessions()
+        )
+    except InvalidPhoneNumberError:
+        return _error(400, "ValidationError", "Invalid phone number")
+    except OtpInvalidError:
+        db.session.commit()
+        return _error(401, "Unauthorized", "Invalid or expired code")
+    except PhoneAlreadyRegisteredError:
+        db.session.commit()
+        return _error(409, "Conflict", "This phone number already has an account. Sign in instead.")
+    db.session.commit()
+    response = _login_response(container, result)
+    response.status_code = 201
+    return response

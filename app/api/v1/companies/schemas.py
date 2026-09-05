@@ -110,6 +110,18 @@ class UpdateCompanyRequest(_StrictBase):
 # ---------------------------------------------------------------------------
 
 
+class JoinCompanyRequest(_StrictBase):
+    """Request body for POST /companies/join (shared join code, member role)."""
+
+    code: str = Field(..., min_length=4, max_length=32)
+
+
+class JoinCodeResponse(_StrictBase):
+    """Response of POST /companies/<id>/join-code."""
+
+    join_code: str
+
+
 class RedeemInviteTokenRequest(_StrictBase):
     """Request body for POST /companies/attach-by-token."""
 

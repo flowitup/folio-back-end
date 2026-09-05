@@ -49,6 +49,7 @@ def deserialize_company_orm(row: CompanyModel) -> Company:
         logo_url=row.logo_url,
         default_payment_terms=row.default_payment_terms,
         prefix_override=row.prefix_override,
+        join_code=row.join_code,
         created_by=row.created_by,
         created_at=_ensure_utc(row.created_at),
         updated_at=_ensure_utc(row.updated_at),
@@ -67,6 +68,7 @@ def serialize_company_to_orm(company: Company, row: CompanyModel) -> None:
     row.logo_url = company.logo_url
     row.default_payment_terms = company.default_payment_terms
     row.prefix_override = company.prefix_override
+    row.join_code = company.join_code
     row.created_by = company.created_by
     row.created_at = company.created_at
     row.updated_at = company.updated_at

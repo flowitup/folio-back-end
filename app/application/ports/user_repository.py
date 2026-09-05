@@ -25,3 +25,7 @@ class UserRepositoryPort(Protocol):
     def save(self, user: "User") -> "User":
         """Save a user (create or update). Returns saved user."""
         ...
+
+    def assign_role(self, user_id: UUID, role_id: UUID) -> None:
+        """Grant a global role to a user (no-op when already granted)."""
+        ...

@@ -385,7 +385,12 @@ def _configure_di_container() -> None:
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
 
     # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio).
-    from app.application.usecases.otp_login import RequestOtpUseCase, VerifyOtpUseCase
+    from app.application.usecases.otp_login import (
+        RequestOtpUseCase,
+        RequestSignupOtpUseCase,
+        VerifyOtpUseCase,
+        VerifySignupOtpUseCase,
+    )
     from app.infrastructure.adapters.logging_sms_sender import LoggingSmsSender
     from app.infrastructure.adapters.sqlalchemy_login_otp import SQLAlchemyLoginOtpRepository
     from app.infrastructure.adapters.twilio_sms_sender import TwilioSmsSender
@@ -416,6 +421,25 @@ def _configure_di_container() -> None:
             _c.token_issuer,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
         )
+        # Phone self-registration (LOGIN_MODE phone/both): same code store, no user until verified.
+        _c.request_signup_otp_usecase = RequestSignupOtpUseCase(
+            _c.user_repository,
+            _otp_repo,
+            _sms,
+            ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
+            resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
+            hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
+        )
+        if _c.role_repository is not None and _c.password_hasher is not None:
+            _c.verify_signup_otp_usecase = VerifySignupOtpUseCase(
+                _c.user_repository,
+                _otp_repo,
+                _c.role_repository,
+                _c.password_hasher,
+                _c.authorization_service,
+                _c.token_issuer,
+                max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+            )
 
     # -----------------------------------------------------------------------
     # Companies DI wiring (phase 03)
@@ -533,6 +557,13 @@ def _configure_di_container() -> None:
     )
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
+    )
+    # Company join code (mobile onboarding): superadmin issues it, anyone with it joins as member.
+    from app.application.companies.join_code_usecases import JoinCompanyByCodeUseCase, SetJoinCodeUseCase
+
+    _c.set_join_code_usecase = SetJoinCodeUseCase(company_repo=_company_repo, clock=_clock)
+    _c.join_company_by_code_usecase = JoinCompanyByCodeUseCase(
+        company_repo=_company_repo, access_repo=_access_repo, clock=_clock
     )
 
     # -----------------------------------------------------------------------
