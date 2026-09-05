@@ -42,8 +42,10 @@ logger = logging.getLogger(__name__)
 # ASCII on purpose: one GSM-7 segment, no Unicode surcharge.
 DEFAULT_MESSAGE = "Folio: ma dang nhap cua ban la {code}. Ma het han sau {minutes} phut."
 SIGNUP_MESSAGE = "Folio: ma dang ky tai khoan cua ban la {code}. Ma het han sau {minutes} phut."
-# Users created from a phone number have no email; this placeholder keeps the NOT NULL/unique column happy.
-SIGNUP_EMAIL_DOMAIN = "signup.folio.local"
+# Users created from a phone number have no email; this placeholder keeps the NOT NULL/unique column
+# happy. It must pass strict email validation (admin responses use EmailStr), so no reserved TLD
+# (.local/.invalid/.test are rejected); the host has no mailbox, nothing is ever sent to it.
+SIGNUP_EMAIL_DOMAIN = "no-email.folio.flowitup.com"
 DEFAULT_SIGNUP_ROLE = "user"
 
 

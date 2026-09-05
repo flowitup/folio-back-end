@@ -56,6 +56,7 @@ class TestPhoneSignup:
         assert body["user"]["phone"] == "+33600001122"
         me = inv_client.get("/api/v1/auth/me", headers=_auth(body["access_token"])).get_json()
         assert me["phone"] == "+33600001122"
+        assert me["email"].endswith("@no-email.folio.flowitup.com")
         # A fresh account belongs to no company yet: the app shows the join screen.
         mine = inv_client.get("/api/v1/companies", headers=_auth(body["access_token"])).get_json()
         assert mine["items"] == []
@@ -73,6 +74,15 @@ class TestPhoneSignup:
             "/api/v1/auth/otp/verify", json={"phone": phone, "code": _code_from_sms(invitation_app)}
         )
         assert login.status_code == 200
+
+    def test_signed_up_users_appear_in_admin_search(self, inv_client, invitation_app, superadmin_token):
+        # The placeholder email must survive the strict EmailStr of the admin search response.
+        _signup(inv_client, invitation_app, "0600002233", "Search Me")
+        resp = inv_client.get(
+            "/api/v1/admin/users", query_string={"search": "Search Me"}, headers=_auth(superadmin_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)[:200]
+        assert any(u["display_name"] == "Search Me" and u["phone"] == "+33600002233" for u in resp.get_json()["items"])
 
     def test_signup_refuses_registered_phone(self, inv_client, invitation_app):
         _signup(inv_client, invitation_app, "0600003344", "Someone")
