@@ -14,6 +14,7 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.requester_identity import get_requester_email
 from app.api.openapi import openapi_doc
 from app.api.v1.projects.decorators import require_permission, require_project_access
+from app.api.v1.projects.labor_scope import labor_scope_for, require_full_project_view, restricted_forbidden
 from app.application.labor.export_labor_usecase import ExportLaborRequest
 from app.api.v1.labor.schemas import ExportLaborQuery
 from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
@@ -34,6 +35,7 @@ labor_export_bp = Blueprint("labor_export", __name__)
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
 @require_project_access()
+@require_full_project_view
 def export_labor(project_id: str):
     """Stream xlsx or pdf export for a project's labor data.
 
@@ -117,6 +119,8 @@ def export_worker_labor(project_id: str, worker_id: str):
         worker_uuid = UUID(worker_id)
     except ValueError:
         return jsonify({"error": "invalid_worker_id", "message": f"Invalid worker id: {worker_id}"}), 422
+    if not labor_scope_for(project_id).allows_worker(worker_uuid):
+        return restricted_forbidden()
 
     # --- Validate query string via Pydantic ---
     try:

@@ -11,7 +11,8 @@ Scenarios:
   - Company admin (no project membership, non-superadmin global role) → 200 on list and download
   - Company admin of a DIFFERENT company → 403 on list and download (cross-company leak guard)
   - Company admin → 403 on upload, delete, rename (write paths not widened)
-  - Project member (no company admin role) → still 200 on list and download (regression)
+  - Project member without project:manage_labor → 404 on list and download: a restricted
+    member only reaches attachments of their own labor payments (worker scope)
   - Non-member non-company-admin → still 403 on list and download (regression)
 """
 
@@ -437,7 +438,8 @@ class TestCompanyAdminWritePathsDenied:
 
 
 class TestProjectMemberAccessRegression:
-    """A project member should still be able to list and download attachments."""
+    """A plain member (no project:manage_labor, no linked worker) is a restricted member:
+    attachments of invoices that are not their own labor payment stay hidden (404)."""
 
     def test_project_member_can_list_attachments(self, att_client, member_tok, att_app):
         inv_id = str(att_app._invoice_id)
@@ -446,7 +448,7 @@ class TestProjectMemberAccessRegression:
             f"/api/v1/projects/{proj_id}/invoices/{inv_id}/attachments",
             headers=_auth_header(member_tok),
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 404
 
     def test_project_member_can_download_attachment(self, att_client, member_tok, att_app):
         att_id = str(att_app._attachment_id)
@@ -454,7 +456,7 @@ class TestProjectMemberAccessRegression:
             f"/api/v1/attachments/{att_id}/download",
             headers=_auth_header(member_tok),
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

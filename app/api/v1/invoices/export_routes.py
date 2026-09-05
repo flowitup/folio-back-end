@@ -15,6 +15,7 @@ from app.api._helpers.requester_identity import get_requester_email
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices.schemas import ExportInvoicesQuery
 from app.api.v1.projects.decorators import require_permission, require_project_access
+from app.api.v1.projects.labor_scope import require_full_project_view
 from app.application.invoice.export_invoices_usecase import ExportInvoicesRequest
 from app.domain.entities.invoice import InvoiceType
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
@@ -34,6 +35,7 @@ invoice_export_bp = Blueprint("invoice_export", __name__)
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
 @require_project_access()
+@require_full_project_view
 def export_invoices(project_id: str):
     """Stream xlsx or pdf export for a project's invoices.
 

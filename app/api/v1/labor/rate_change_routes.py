@@ -24,6 +24,7 @@ from app.api.v1.labor.rate_change_schemas import (
     RateChangeResponse,
 )
 from app.api.v1.projects.decorators import require_permission, require_project_access
+from app.api.v1.projects.labor_scope import labor_scope_for, restricted_forbidden
 from app.application.labor.delete_worker_rate_change import DeleteWorkerRateChangeRequest
 from app.application.labor.list_worker_rate_changes import ListWorkerRateChangesRequest
 from app.application.labor.set_worker_rate_change import SetWorkerRateChangeRequest
@@ -53,6 +54,8 @@ def _rc_response(dto) -> RateChangeResponse:
 @require_project_access(write=False)
 def list_worker_rate_changes(project_id: str, worker_id: str):
     """List all effective-dated rate changes for a worker, newest first."""
+    if not labor_scope_for(project_id).allows_worker(worker_id):
+        return restricted_forbidden()
     try:
         dtos = get_container().list_worker_rate_changes_usecase.execute(
             ListWorkerRateChangesRequest(
