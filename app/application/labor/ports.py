@@ -93,7 +93,8 @@ class MonthlyLaborSummaryRow:
 
 @dataclass
 class PendingAttendanceItem:
-    """One worker-submitted day awaiting a manager's validation (bell payload)."""
+    """One item awaiting a manager in the bell: a worker-submitted day (``attendance_pending``)
+    or a worker's change request on a validated day (``attendance_change``, with ``proposed_*``)."""
 
     entry_id: UUID
     project_id: UUID
@@ -105,6 +106,10 @@ class PendingAttendanceItem:
     supplement_hours: int
     note: Optional[str]
     submitted_at: datetime
+    kind: str = "attendance_pending"
+    proposed_shift_type: Optional[str] = None
+    proposed_supplement_hours: Optional[int] = None
+    proposed_note: Optional[str] = None
 
 
 class IPendingAttendanceQuery(ABC):

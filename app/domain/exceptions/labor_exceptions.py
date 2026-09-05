@@ -126,3 +126,11 @@ class AttendanceAlreadyValidatedError(LaborError):
     def __init__(self, entry_id: str):
         self.entry_id = entry_id
         super().__init__(f"Labor entry already validated: {entry_id}")
+
+
+class NoChangeRequestError(LaborError):
+    """Raised when settling a change request on an entry that has none open."""
+
+    def __init__(self, entry_id: str):
+        self.entry_id = entry_id
+        super().__init__(f"Labor entry has no pending change request: {entry_id}")

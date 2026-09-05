@@ -70,12 +70,17 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 LaborEntryModel.supplement_hours.label("supplement_hours"),
                 LaborEntryModel.note.label("note"),
                 LaborEntryModel.created_at.label("submitted_at"),
+                LaborEntryModel.status.label("status"),
+                LaborEntryModel.proposed_shift_type.label("proposed_shift_type"),
+                LaborEntryModel.proposed_supplement_hours.label("proposed_supplement_hours"),
+                LaborEntryModel.proposed_note.label("proposed_note"),
+                LaborEntryModel.change_requested_at.label("change_requested_at"),
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
             .join(ProjectModel, ProjectModel.id == WorkerModel.project_id)
             .outerjoin(PersonModel, PersonModel.id == WorkerModel.person_id)
             .filter(
-                LaborEntryModel.status == "pending",
+                or_(LaborEntryModel.status == "pending", LaborEntryModel.change_requested_at.isnot(None)),
                 or_(ProjectModel.owner_id == user_id, membership_grants, is_member & global_grants),
             )
             .order_by(LaborEntryModel.date.desc(), LaborEntryModel.created_at.desc())
@@ -93,7 +98,15 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 shift_type=r.shift_type,
                 supplement_hours=r.supplement_hours or 0,
                 note=r.note,
-                submitted_at=r.submitted_at,
+                # A validated row with an open proposal is a change request; its "submitted"
+                # moment is when the worker asked, not when the day was first logged.
+                submitted_at=(
+                    r.change_requested_at if r.status != "pending" and r.change_requested_at else r.submitted_at
+                ),
+                kind="attendance_pending" if r.status == "pending" else "attendance_change",
+                proposed_shift_type=r.proposed_shift_type,
+                proposed_supplement_hours=r.proposed_supplement_hours,
+                proposed_note=r.proposed_note,
             )
             for r in rows
         ]

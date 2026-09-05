@@ -47,9 +47,19 @@ class LaborEntry:
     submitted_by_user_id: Optional[UUID] = None
     validated_by_user_id: Optional[UUID] = None
     validated_at: Optional[datetime] = None
+    # Worker-requested change on a validated day: the priced values above stay as they
+    # are until a manager applies (validate) or drops (reject) the proposal.
+    proposed_shift_type: Optional[str] = None
+    proposed_supplement_hours: Optional[int] = None
+    proposed_note: Optional[str] = None
+    change_requested_at: Optional[datetime] = None
+    change_requested_by_user_id: Optional[UUID] = None
 
     def __post_init__(self) -> None:
-        """Validate domain invariants."""
+        self.check_invariants()
+
+    def check_invariants(self) -> None:
+        """Validate domain invariants (also re-run after an in-place edit)."""
         if not isinstance(self.supplement_hours, int):
             raise InvalidLaborEntryError("supplement_hours must be an integer")
         if not (0 <= self.supplement_hours <= 12):
@@ -64,6 +74,46 @@ class LaborEntry:
     @property
     def is_pending(self) -> bool:
         return self.status == STATUS_PENDING
+
+    @property
+    def has_change_request(self) -> bool:
+        return self.change_requested_at is not None
+
+    def propose_change(
+        self,
+        shift_type: Optional[str],
+        supplement_hours: int,
+        note: Optional[str],
+        by_user_id: UUID,
+        at: datetime,
+    ) -> None:
+        """Record what the worker wants this (validated) day to become; values stay untouched."""
+        if shift_type is None and supplement_hours == 0:
+            raise InvalidLaborEntryError("Empty change: must set shift_type or supplement_hours > 0")
+        if not (0 <= supplement_hours <= 12):
+            raise InvalidLaborEntryError(f"supplement_hours must be 0..12, got {supplement_hours}")
+        self.proposed_shift_type = shift_type
+        self.proposed_supplement_hours = supplement_hours
+        self.proposed_note = note
+        self.change_requested_at = at
+        self.change_requested_by_user_id = by_user_id
+
+    def apply_change(self, by_user_id: UUID, at: datetime) -> None:
+        """Manager accepts the proposal: it becomes the priced day, re-validated by them."""
+        self.shift_type = self.proposed_shift_type
+        self.supplement_hours = self.proposed_supplement_hours or 0
+        self.note = self.proposed_note
+        self.validated_by_user_id = by_user_id
+        self.validated_at = at
+        self.discard_change()
+        self.check_invariants()
+
+    def discard_change(self) -> None:
+        self.proposed_shift_type = None
+        self.proposed_supplement_hours = None
+        self.proposed_note = None
+        self.change_requested_at = None
+        self.change_requested_by_user_id = None
 
     def validate(self, by_user_id: UUID, at: datetime) -> None:
         """Mark a pending entry as validated by a manager. No-op when already validated."""

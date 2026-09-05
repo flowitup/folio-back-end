@@ -242,7 +242,9 @@ class TestSelfLog:
         assert _submit(client, linked_h, ids).status_code == 201
         assert _submit(client, linked_h, ids).status_code == 409
 
-    def test_yesterday_ok_but_two_days_back_rejected(self, client, linked_h, ids):
+    def test_yesterday_ok_but_two_days_back_rejected(self, client, linked_h, ids, monkeypatch):
+        # The window is env-tunable (default 31 days); pin it to 1 to exercise the boundary.
+        monkeypatch.setenv("SELF_ATTENDANCE_MAX_BACKDATE_DAYS", "1")
         # The backdate window is measured in UTC on the server; a local clock past midnight
         # (Europe/Paris) would otherwise count "two days back" as yesterday.
         today = datetime.now(timezone.utc).date()
