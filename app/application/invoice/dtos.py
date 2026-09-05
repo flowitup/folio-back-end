@@ -70,6 +70,8 @@ class InvoiceResponse:
     applied_to_invoice_number: Optional[str] = None
     # Worker link for labor invoices — present only when a worker is recorded.
     worker_id: Optional[str] = None
+    # Company cash advance flag — released_funds rows only (see Invoice.is_cash_advance).
+    is_cash_advance: bool = False
     # Optional row-highlight color — one of the fixed palette, or null (no highlight).
     highlight_color: Optional[str] = None
 
@@ -116,5 +118,6 @@ class InvoiceResponse:
             # applied_to_invoice_number is None here; the route enriches it via a lookup.
             applied_to_invoice_number=None,
             worker_id=str(inv.worker_id) if inv.worker_id is not None else None,
+            is_cash_advance=inv.is_cash_advance,
             highlight_color=inv.highlight_color,
         )

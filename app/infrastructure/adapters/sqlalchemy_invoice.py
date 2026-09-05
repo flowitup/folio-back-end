@@ -105,6 +105,7 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         settled_via=m.settled_via,
         applied_to_invoice_id=m.applied_to_invoice_id,
         worker_id=m.worker_id,
+        is_cash_advance=bool(m.is_cash_advance),
         highlight_color=m.highlight_color,
     )
 
@@ -141,6 +142,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             settled_via=invoice.settled_via,
             applied_to_invoice_id=invoice.applied_to_invoice_id,
             worker_id=invoice.worker_id,
+            is_cash_advance=invoice.is_cash_advance,
             highlight_color=invoice.highlight_color,
         )
         self._session.add(model)
@@ -202,6 +204,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.settled_via = invoice.settled_via
         model.applied_to_invoice_id = invoice.applied_to_invoice_id
         model.worker_id = invoice.worker_id
+        model.is_cash_advance = invoice.is_cash_advance
         model.highlight_color = invoice.highlight_color
         self._session.commit()
         return _model_to_entity(model)
@@ -394,6 +397,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
     def sum_funds_released(self, project_id: UUID) -> Decimal:
         """Sum total_amount for all released_funds invoices in a project.
 
+        Cash-advance rows (is_cash_advance) are internal company→person transfers,
+        not fund releases into the project, so they are excluded here — mirroring
+        sum_funds_released_split, which reports them as its third component.
         items is JSONB — we compute in Python to stay DB-agnostic.
         """
         rows = (
@@ -401,6 +407,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             .filter(
                 InvoiceModel.project_id == project_id,
                 InvoiceModel.type == InvoiceType.RELEASED_FUNDS.value,
+                InvoiceModel.is_cash_advance.is_(False),
             )
             .all()
         )
@@ -409,14 +416,20 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             total += _items_total(m.items)
         return total
 
-    def sum_funds_released_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
-        """Split sum_funds_released into (company_total, personal_total).
+    def sum_funds_released_split(self, project_id: UUID) -> tuple[Decimal, Decimal, Decimal]:
+        """Split released_funds rows into (company_total, personal_total, cash_advanced_total).
 
         personal_total: released_funds invoices whose payment_method_id belongs to a
         method flagged is_personal_payment. company_total: every other released_funds
         invoice (company-flagged, unflagged, or NULL payment_method_id). Soft-deleted
         (is_active=false) personal-payment methods still count, mirroring
         sum_company_spent. items is JSONB — computed in Python to stay DB-agnostic.
+
+        cash_advanced_total: rows flagged is_cash_advance — company money handed to a
+        person, an internal transfer rather than a release. They are EXCLUDED from
+        both company_total and personal_total (whatever their payment method) so no
+        purse's "released" grows from a handover; the company purse renders them as
+        spend ("incl. X cash advance").
 
         Invariant: company_total + personal_total == sum_funds_released(project_id).
         """
@@ -435,13 +448,16 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         company_total = Decimal("0")
         personal_total = Decimal("0")
+        cash_advanced_total = Decimal("0")
         for m in rows:
             amount = _items_total(m.items)
-            if m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
+            if m.is_cash_advance:
+                cash_advanced_total += amount
+            elif m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
                 personal_total += amount
             else:
                 company_total += amount
-        return company_total, personal_total
+        return company_total, personal_total, cash_advanced_total
 
     def sum_spent_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
         """Compute (company_spent_total, personal_spent_total) in a single scan.

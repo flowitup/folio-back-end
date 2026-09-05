@@ -61,6 +61,12 @@ class WorkerLinkNotAllowedError(InvalidInvoiceDataError):
     pass
 
 
+class CashAdvanceNotAllowedError(InvalidInvoiceDataError):
+    """Raised when is_cash_advance is set on an invoice whose type is not 'released_funds'."""
+
+    pass
+
+
 class WorkerNotInProjectError(InvalidInvoiceDataError):
     """Raised when worker_id does not reference a worker in the invoice's project.
 

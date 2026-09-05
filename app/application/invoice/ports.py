@@ -162,13 +162,16 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
-    def sum_funds_released_split(self, project_id: UUID) -> tuple[Decimal, Decimal]:
-        """Split sum_funds_released into (company_total, personal_total).
+    def sum_funds_released_split(self, project_id: UUID) -> tuple[Decimal, Decimal, Decimal]:
+        """Split released_funds rows into (company_total, personal_total, cash_advanced_total).
 
         personal_total: released_funds invoices whose payment_method_id belongs to a
         method flagged is_personal_payment.
         company_total: every other released_funds invoice (company-flagged, unflagged,
         or NULL payment_method_id).
+        cash_advanced_total: released_funds invoices flagged is_cash_advance (company
+        money handed to a person). Excluded from the two totals above — a handover is
+        an internal transfer, not a release into the project.
 
         Invariant: company_total + personal_total == sum_funds_released(project_id).
         """

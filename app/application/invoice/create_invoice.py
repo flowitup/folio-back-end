@@ -12,6 +12,7 @@ from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import HIGHLIGHT_COLORS, Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
     AppliedAmountExceedsTargetError,
+    CashAdvanceNotAllowedError,
     InvalidInvoiceDataError,
     RefundExceedsSourceError,
     ServiceMonthNotAllowedError,
@@ -60,6 +61,9 @@ class CreateInvoiceRequest:
     # Optional row-highlight color — one of HIGHLIGHT_COLORS or None (no highlight).
     # Applies to every invoice type; validated against the palette.
     highlight_color: Optional[str] = None
+    # Company cash advance — only valid when type == RELEASED_FUNDS. Marks the
+    # release as company money handed to a person (excluded from released totals).
+    is_cash_advance: bool = False
 
 
 class CreateInvoiceUseCase:
@@ -231,6 +235,12 @@ class CreateInvoiceUseCase:
         if request.highlight_color is not None and request.highlight_color not in HIGHLIGHT_COLORS:
             raise InvalidInvoiceDataError(f"highlight_color must be one of: {', '.join(sorted(HIGHLIGHT_COLORS))}")
 
+        # is_cash_advance only makes sense on a released_funds row: it reclassifies a
+        # release as company money handed to a person. The spend aggregations ignore
+        # it on expense rows, so a stray flag there would only mislead readers.
+        if request.is_cash_advance and request.type != InvoiceType.RELEASED_FUNDS:
+            raise CashAdvanceNotAllowedError("is_cash_advance may only be set on invoices of type 'released_funds'")
+
         # Generate invoice number via repo
         invoice_number = self._repo.next_invoice_number(request.project_id)
 
@@ -257,6 +267,7 @@ class CreateInvoiceUseCase:
             applied_to_invoice_id=applied_to_invoice_id,
             worker_id=worker_id,
             highlight_color=request.highlight_color,
+            is_cash_advance=bool(request.is_cash_advance),
         )
 
         saved = self._repo.create(invoice)

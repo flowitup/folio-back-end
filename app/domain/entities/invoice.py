@@ -111,6 +111,11 @@ class Invoice:
     # When set, recipient_name is server-snapshotted from the worker's
     # display name (see CreateInvoiceUseCase / UpdateInvoiceUseCase).
     worker_id: Optional[UUID] = None
+    # Company cash advance — released_funds type only. True when this release records
+    # money the company handed to a person (typically cash) to pay site expenses on
+    # its behalf: an internal transfer, not client money, so it is excluded from the
+    # funds_released totals and surfaced as the company purse's cash advanced.
+    is_cash_advance: bool = False
     # Optional row-highlight color — one of HIGHLIGHT_COLORS or NULL (no highlight).
     # Applies to invoices of every type; a purely visual annotation with no financial
     # meaning. Validated against the palette at the use-case layer.
