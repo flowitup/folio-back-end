@@ -1,6 +1,5 @@
 """Labor entry API routes."""
 
-from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -13,6 +12,7 @@ from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
+    parse_iso_date as _parse_date,
     validation_error_response as _validation_error_response,
 )
 from app.api.v1.labor.schemas import (
@@ -56,14 +56,6 @@ from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 
-def _parse_date(date_str: str) -> date:
-    """Parse ISO date string to date object."""
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
-        raise ValueError(f"Invalid date format: {date_str}. Expected YYYY-MM-DD")
-
-
 # Default cap on the unbounded list endpoint. Anything larger should use the
 # month filter or the export endpoint. 500 keeps a year of daily entries for
 # ~1.5 workers in scope, which covers the typical attendance-table view.
@@ -94,13 +86,17 @@ def list_labor_entries(project_id: str):
 
     A default ``limit`` of 500 most-recent rows is applied so callers that
     omit the date filters (the attendance table's "all history" view) stay
-    bounded. Pass ``?limit=N`` (1–1000) to override.
+    bounded. Pass ``?limit=N`` (1–1000) to override. ``?status=pending`` (or
+    ``validated``) narrows to one validation status; omitted returns both.
     """
     date_from = request.args.get("from")
     date_to = request.args.get("to")
     worker_id = request.args.get("worker_id")
     tag_id_raw = request.args.get("tag_id")
     limit_raw = request.args.get("limit")
+    status_raw = request.args.get("status")
+    if status_raw is not None and status_raw not in ("pending", "validated"):
+        return _error_response("ValidationError", "status must be 'pending' or 'validated'", 400)
 
     try:
         entries = get_container().list_labor_entries_usecase.execute(
@@ -111,6 +107,7 @@ def list_labor_entries(project_id: str):
                 worker_id=UUID(worker_id) if worker_id else None,
                 limit=_parse_list_limit(limit_raw),
                 tag_id=UUID(tag_id_raw) if tag_id_raw else None,
+                status=status_raw,
             )
         )
     except ValueError as e:
@@ -132,6 +129,10 @@ def list_labor_entries(project_id: str):
                     created_at=e.created_at,
                     role_color=e.role_color,
                     tag_id=e.tag_id,
+                    status=e.status,
+                    submitted_by_user_id=e.submitted_by_user_id,
+                    validated_by_user_id=e.validated_by_user_id,
+                    validated_at=e.validated_at,
                 )
                 for e in entries
             ],

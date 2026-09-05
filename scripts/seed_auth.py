@@ -17,6 +17,7 @@ DEFAULT_PERMISSIONS = [
     {"name": "project:invite", "resource": "project", "action": "invite"},
     {"name": "project:manage_users", "resource": "project", "action": "manage_users"},
     {"name": "project:manage_labor", "resource": "project", "action": "manage_labor"},
+    {"name": "project:log_own_attendance", "resource": "project", "action": "log_own_attendance"},
     {"name": "project:manage_invoices", "resource": "project", "action": "manage_invoices"},
     {"name": "bibliotheque:manage", "resource": "bibliotheque", "action": "manage"},
     {"name": "user:read", "resource": "user", "action": "read"},
@@ -47,12 +48,12 @@ DEFAULT_ROLES = [
     {
         "name": "member",
         "description": "Default project member",
-        "permissions": ["project:read", "user:read"],
+        "permissions": ["project:read", "user:read", "project:log_own_attendance"],
     },
     {
         "name": "user",
         "description": "Basic user access",
-        "permissions": ["project:read", "user:read"],
+        "permissions": ["project:read", "user:read", "project:log_own_attendance"],
     },
 ]
 

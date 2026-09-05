@@ -46,6 +46,10 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             supplement_hours=entry.supplement_hours,
             created_at=entry.created_at,
             tag_id=entry.tag_id,
+            status=entry.status,
+            submitted_by_user_id=entry.submitted_by_user_id,
+            validated_by_user_id=entry.validated_by_user_id,
+            validated_at=entry.validated_at,
         )
         try:
             self._session.add(model)
@@ -67,8 +71,11 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         worker_id: Optional[UUID] = None,
         limit: Optional[int] = None,
         tag_id: Optional[UUID] = None,
+        status: Optional[str] = None,
     ) -> List[LaborEntry]:
         query = self._session.query(LaborEntryModel).join(WorkerModel).filter(WorkerModel.project_id == project_id)
+        if status is not None:
+            query = query.filter(LaborEntryModel.status == status)
         if date_from:
             query = query.filter(LaborEntryModel.date >= date_from)
         if date_to:
@@ -92,6 +99,10 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.shift_type = entry.shift_type
             model.supplement_hours = entry.supplement_hours
             model.tag_id = entry.tag_id
+            model.status = entry.status
+            model.submitted_by_user_id = entry.submitted_by_user_id
+            model.validated_by_user_id = entry.validated_by_user_id
+            model.validated_at = entry.validated_at
             self._session.commit()
             return self._to_entity(model)
         return entry
@@ -183,7 +194,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             )
             .join(LaborEntryModel, WorkerModel.id == LaborEntryModel.worker_id)
             .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
-            .filter(WorkerModel.project_id == project_id)
+            .filter(WorkerModel.project_id == project_id, LaborEntryModel.status == "validated")
             .group_by(WorkerModel.id, display_name, WorkerModel.daily_rate)
         )
 
@@ -263,7 +274,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
             .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
-            .filter(WorkerModel.project_id == project_id)
+            .filter(WorkerModel.project_id == project_id, LaborEntryModel.status == "validated")
             .group_by(year_expr, month_expr, WorkerModel.id, display_name)
             .order_by(year_expr.desc(), month_expr.desc(), display_name.asc())
         )
@@ -310,7 +321,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_from: date,
         date_to: date,
     ) -> List[LaborEntry]:
-        """List all entries for a project within the inclusive date range.
+        """List validated entries for a project within the inclusive date range.
 
         Ordered by date ASC, then worker name ASC for deterministic export output.
         """
@@ -319,6 +330,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             .join(WorkerModel)
             .filter(
                 WorkerModel.project_id == project_id,
+                LaborEntryModel.status == "validated",
                 LaborEntryModel.date >= date_from,
                 LaborEntryModel.date <= date_to,
             )
@@ -434,4 +446,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             supplement_hours=model.supplement_hours if model.supplement_hours is not None else 0,
             created_at=model.created_at,
             tag_id=model.tag_id,
+            status=model.status or "validated",
+            submitted_by_user_id=model.submitted_by_user_id,
+            validated_by_user_id=model.validated_by_user_id,
+            validated_at=model.validated_at,
         )

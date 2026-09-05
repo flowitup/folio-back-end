@@ -31,20 +31,29 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("120 per minute", key_func=jwt_user_key)
 def list_notifications() -> Any:
-    """Lazy-compute due notifications for the current user. Hard cap: 100 items."""
+    """Lazy-compute the current user's notifications. Hard cap: 100 per kind.
+
+    ``items`` keeps its note-only shape (existing clients index ``item.note``);
+    worker-submitted attendance awaiting this user's validation ships in the
+    separate ``attendance_pending`` list. ``count`` covers both.
+    """
     user_id = UUID(get_jwt_identity())
     container = get_container()
     if container.list_due_notifications_usecase is None:
         raise RuntimeError("list_due_notifications_usecase not wired in container")
+    if container.list_pending_attendance_usecase is None:
+        raise RuntimeError("list_pending_attendance_usecase not wired in container")
 
     try:
         dtos = container.list_due_notifications_usecase.execute(user_id=user_id)
+        pending = container.list_pending_attendance_usecase.execute(user_id=user_id)
     except Exception:
         logger.exception("list_notifications unexpected error user_id=%s", user_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     items = [
         {
+            "kind": "note_due",
             "note": {
                 "id": str(dto.note.id),
                 "project_id": str(dto.note.project_id),
@@ -60,7 +69,26 @@ def list_notifications() -> Any:
         for dto in dtos
     ]
 
-    response = jsonify({"items": items, "count": len(items)})
+    attendance_pending = [
+        {
+            "kind": "attendance_pending",
+            "entry_id": p.entry_id,
+            "project_id": p.project_id,
+            "project_name": p.project_name,
+            "worker_id": p.worker_id,
+            "worker_name": p.worker_name,
+            "date": p.date,
+            "shift_type": p.shift_type,
+            "supplement_hours": p.supplement_hours,
+            "note": p.note,
+            "submitted_at": p.submitted_at,
+        }
+        for p in pending
+    ]
+
+    response = jsonify(
+        {"items": items, "attendance_pending": attendance_pending, "count": len(items) + len(attendance_pending)}
+    )
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response, 200
 

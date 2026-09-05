@@ -4,11 +4,26 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.application.labor.ports import IWorkerRepository
 from app.domain.entities.worker import Worker
+from app.domain.exceptions.labor_exceptions import InvalidWorkerDataError
 from app.infrastructure.database.models import WorkerModel
+
+_USER_ALREADY_LINKED = "This account is already linked to another worker on this project"
+_USER_ID_INVALID = "user_id does not reference an existing user"
+
+
+def _integrity_error_to_domain(exc: IntegrityError) -> InvalidWorkerDataError:
+    """Map the violated constraint to a message the operator can act on."""
+    detail = str(getattr(exc, "orig", exc))
+    if "uq_workers_project_user" in detail:
+        return InvalidWorkerDataError(_USER_ALREADY_LINKED)
+    if "fk_workers_user_id" in detail:
+        return InvalidWorkerDataError(_USER_ID_INVALID)
+    return InvalidWorkerDataError(f"Worker could not be saved: {detail.splitlines()[0][:200]}")
 
 
 class SQLAlchemyWorkerRepository(IWorkerRepository):
@@ -28,9 +43,14 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             daily_rate=worker.daily_rate,
             is_active=worker.is_active,
             created_at=worker.created_at,
+            user_id=worker.user_id,
         )
         self._session.add(model)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise _integrity_error_to_domain(exc)
         return self._to_entity(model)
 
     def find_by_id(self, worker_id: UUID) -> Optional[Worker]:
@@ -48,6 +68,10 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
         models = query.order_by(WorkerModel.name).all()
         return [self._to_entity(m) for m in models]
 
+    def find_by_project_and_user(self, project_id: UUID, user_id: UUID) -> Optional[Worker]:
+        model = self._session.query(WorkerModel).filter_by(project_id=project_id, user_id=user_id).first()
+        return self._to_entity(model) if model else None
+
     def update(self, worker: Worker) -> Worker:
         model = self._session.query(WorkerModel).filter_by(id=worker.id).first()
         if model:
@@ -56,8 +80,13 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             model.daily_rate = worker.daily_rate
             model.role_id = worker.role_id
             model.is_active = worker.is_active
+            model.user_id = worker.user_id
             model.updated_at = worker.updated_at
-            self._session.commit()
+            try:
+                self._session.commit()
+            except IntegrityError as exc:
+                self._session.rollback()
+                raise _integrity_error_to_domain(exc)
             return self._to_entity(model)
         return worker
 
@@ -65,6 +94,8 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
         model = self._session.query(WorkerModel).filter_by(id=worker_id).first()
         if model:
             model.is_active = False
+            # Free the (project, user) slot so the same account can be re-added later.
+            model.user_id = None
             self._session.commit()
             return True
         return False
@@ -91,4 +122,5 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             role_id=model.role_id,
             role_name=role.name if role else None,
             role_color=role.color if role else None,
+            user_id=model.user_id,
         )

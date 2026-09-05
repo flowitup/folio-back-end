@@ -29,6 +29,8 @@ class WorkerSummary:
     role_color: Optional[str] = None
     # Resolved current effective rate (latest rate change <= today, else base).
     current_daily_rate: Optional[float] = None
+    # App account linked for self-logged attendance.
+    user_id: Optional[str] = None
 
 
 @dataclass
@@ -83,6 +85,7 @@ class ListWorkersUseCase:
                 role_name=w.role_name,
                 role_color=w.role_color,
                 current_daily_rate=_resolve_current_rate(w),
+                user_id=str(w.user_id) if w.user_id else None,
             )
             for w in workers
         ]

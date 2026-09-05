@@ -25,6 +25,10 @@ class LaborEntryDetail:
     created_at: str
     role_color: Optional[str] = None
     tag_id: Optional[str] = None
+    status: str = "validated"
+    submitted_by_user_id: Optional[str] = None
+    validated_by_user_id: Optional[str] = None
+    validated_at: Optional[str] = None
 
 
 @dataclass
@@ -39,6 +43,8 @@ class ListLaborEntriesRequest:
     limit: Optional[int] = None
     # Phase tag filter — when set, returns only entries with this tag_id.
     tag_id: Optional[UUID] = None
+    # Validation status filter ("pending" | "validated"); None = every status.
+    status: Optional[str] = None
 
 
 def _resolve_rate(worker: Worker, entry_date: date, rate_changes: List[WorkerRateChange]) -> Decimal:
@@ -90,6 +96,7 @@ class ListLaborEntriesUseCase:
             worker_id=request.worker_id,
             limit=request.limit,
             tag_id=request.tag_id,
+            status=request.status,
         )
 
         result = []
@@ -101,7 +108,10 @@ class ListLaborEntriesUseCase:
             # Resolve effective rate for this entry's date, then delegate cost
             # computation to the domain entity (amount_override still wins there).
             resolved_rate = _resolve_rate(worker, entry.date, rate_map.get(entry.worker_id, []))
-            effective_cost = float(entry.effective_cost(resolved_rate))
+            # Pending (worker-submitted, not yet validated) rows are unpriced everywhere:
+            # the web table, calendar cells and the mobile panel sum this field client-side,
+            # so it must be 0 until a manager validates — matching the server-side summaries.
+            effective_cost = 0.0 if entry.is_pending else float(entry.effective_cost(resolved_rate))
 
             result.append(
                 LaborEntryDetail(
@@ -117,6 +127,10 @@ class ListLaborEntriesUseCase:
                     created_at=entry.created_at.isoformat(),
                     role_color=worker.role_color,
                     tag_id=str(entry.tag_id) if entry.tag_id is not None else None,
+                    status=entry.status,
+                    submitted_by_user_id=str(entry.submitted_by_user_id) if entry.submitted_by_user_id else None,
+                    validated_by_user_id=str(entry.validated_by_user_id) if entry.validated_by_user_id else None,
+                    validated_at=entry.validated_at.isoformat() if entry.validated_at else None,
                 )
             )
 

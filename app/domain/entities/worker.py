@@ -39,6 +39,10 @@ class Worker:
     role_name: Optional[str] = None
     role_color: Optional[str] = None
 
+    # Signed-in account allowed to log its own attendance for this worker.
+    # None for the (common) case of a worker without an app account.
+    user_id: Optional[UUID] = None
+
     # Transient — resolved by ListWorkersUseCase from the rate-change timeline.
     # None until the use case populates it; the API falls back to daily_rate.
     current_daily_rate: Optional[Decimal] = None

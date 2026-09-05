@@ -26,6 +26,8 @@ class UpdateWorkerRequest:
     # Use a sentinel so callers can explicitly clear the role assignment
     # (role_id=None means "clear"; omit the field to leave unchanged).
     role_id: object = _ROLE_SENTINEL
+    # Same sentinel semantics: None unlinks the app account, omit to leave unchanged.
+    user_id: object = _ROLE_SENTINEL
 
 
 @dataclass
@@ -45,6 +47,7 @@ class UpdateWorkerResponse:
     role_id: Optional[str] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class UpdateWorkerUseCase:
@@ -71,6 +74,13 @@ class UpdateWorkerUseCase:
         if request.role_id is not _ROLE_SENTINEL:
             worker.role_id = request.role_id  # type: ignore[assignment]
 
+        if request.user_id is not _ROLE_SENTINEL:
+            if request.user_id is not None and request.user_id != worker.user_id:
+                linked = self._repo.find_by_project_and_user(worker.project_id, request.user_id)  # type: ignore[arg-type]
+                if linked is not None and linked.id != worker.id:
+                    raise InvalidWorkerDataError("This account is already linked to another worker on this project")
+            worker.user_id = request.user_id  # type: ignore[assignment]
+
         worker.updated_at = datetime.now(timezone.utc)
         saved = self._repo.update(worker)
 
@@ -88,4 +98,5 @@ class UpdateWorkerUseCase:
             role_id=str(saved.role_id) if saved.role_id else None,
             role_name=saved.role_name,
             role_color=saved.role_color,
+            user_id=str(saved.user_id) if saved.user_id else None,
         )

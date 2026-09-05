@@ -91,6 +91,22 @@ from app.application.labor.tag_day_usecase import (
     TagDayRequest,
     TagDayResponse,
 )
+from app.application.labor.submit_own_attendance import (
+    SubmitOwnAttendanceUseCase,
+    SubmitOwnAttendanceRequest,
+    SubmitOwnAttendanceResponse,
+)
+from app.application.labor.validate_attendance import (
+    ValidateAttendanceUseCase,
+    ValidateAttendanceRequest,
+    ValidateAttendanceResponse,
+    RejectAttendanceUseCase,
+    RejectAttendanceRequest,
+)
+from app.application.labor.list_pending_attendance import (
+    ListPendingAttendanceUseCase,
+    PendingAttendanceDto,
+)
 
 __all__ = [
     # Ports
@@ -156,4 +172,15 @@ __all__ = [
     "TagDayUseCase",
     "TagDayRequest",
     "TagDayResponse",
+    # Attendance validation (worker self-log → manager validate/reject)
+    "SubmitOwnAttendanceUseCase",
+    "SubmitOwnAttendanceRequest",
+    "SubmitOwnAttendanceResponse",
+    "ValidateAttendanceUseCase",
+    "ValidateAttendanceRequest",
+    "ValidateAttendanceResponse",
+    "RejectAttendanceUseCase",
+    "RejectAttendanceRequest",
+    "ListPendingAttendanceUseCase",
+    "PendingAttendanceDto",
 ]

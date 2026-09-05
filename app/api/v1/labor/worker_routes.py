@@ -34,6 +34,16 @@ from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 
+def _user_id_or_error(raw: str | None):
+    """Resolve a client-supplied user_id; returns (UUID|None, error_response|None)."""
+    if not raw:
+        return None, None
+    user_uuid = UUID(raw)
+    if get_container().user_repository.find_by_id(user_uuid) is None:
+        return None, _error_response("ValidationError", "user_id does not reference an existing user", 400)
+    return user_uuid, None
+
+
 def _worker_response(w) -> WorkerResponse:
     """Convert worker entity/summary to response schema.
 
@@ -65,6 +75,7 @@ def _worker_response(w) -> WorkerResponse:
         role_name=w.role_name,
         role_color=w.role_color,
         current_daily_rate=float(_current) if _current is not None else float(w.daily_rate),
+        user_id=str(w.user_id) if getattr(w, "user_id", None) else None,
     )
 
 
@@ -110,6 +121,9 @@ def create_worker(project_id: str):
         return _error_response("ValidationError", "Invalid JWT identity", 401)
 
     try:
+        linked_user_id, err = _user_id_or_error(data.user_id)
+        if err is not None:
+            return err
         result = get_container().create_worker_usecase.execute(
             CreateWorkerDTO(
                 project_id=UUID(project_id),
@@ -119,6 +133,7 @@ def create_worker(project_id: str):
                 person_id=UUID(data.person_id) if data.person_id else None,
                 created_by_user_id=creator_id,
                 role_id=UUID(data.role_id) if data.role_id else None,
+                user_id=linked_user_id,
             )
         )
     except (ValueError, InvalidWorkerDataError) as e:
@@ -156,6 +171,11 @@ def update_worker(project_id: str, worker_id: str):
         )
         if "role_id" in data.model_fields_set:
             update_kwargs["role_id"] = UUID(data.role_id) if data.role_id else None
+        if "user_id" in data.model_fields_set:
+            linked_user_id, err = _user_id_or_error(data.user_id)
+            if err is not None:
+                return err
+            update_kwargs["user_id"] = linked_user_id
         result = get_container().update_worker_usecase.execute(UpdateWorkerDTO(**update_kwargs))
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)

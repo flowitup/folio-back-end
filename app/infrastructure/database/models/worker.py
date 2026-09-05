@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -39,12 +39,21 @@ class WorkerModel(Base):
         index=True,
     )
     is_active = Column(Boolean, default=True, nullable=False)
+    # App account that may self-log attendance for this worker (nullable —
+    # most workers have no account). One account is one worker per project.
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_workers_user_id"),
+        nullable=True,
+    )
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_workers_project_user"),)
 
     # Relationships
     project = relationship("ProjectModel")
