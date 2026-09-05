@@ -327,6 +327,10 @@ class Container:
     login_otp_repository: Optional[Any] = None
     request_otp_usecase: Optional[Any] = None
     verify_otp_usecase: Optional[Any] = None
+    request_signup_otp_usecase: Optional[Any] = None
+    verify_signup_otp_usecase: Optional[Any] = None
+    set_join_code_usecase: Optional[Any] = None
+    join_company_by_code_usecase: Optional[Any] = None
 
     # Project use cases
     create_project_usecase: Optional[CreateProjectUseCase] = None

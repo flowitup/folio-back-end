@@ -25,6 +25,8 @@ from app.api.openapi import openapi_doc
 from app.api.v1.companies import companies_bp, users_me_bp
 from app.api.v1.companies.decorators import require_admin, require_attached_company
 from app.api.v1.companies.schemas import (
+    JoinCompanyRequest,
+    JoinCodeResponse,
     CreateCompanyRequest,
     RedeemInviteTokenRequest,
     SetPrimaryCompanyRequest,
@@ -55,6 +57,7 @@ from app.application.companies import (
     MissingPrimaryCompanyError,
     UserCompanyAccessNotFoundError,
 )
+from app.application.companies.join_code_usecases import JoinCodeNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -74,7 +77,11 @@ def _has_superadmin() -> bool:
 
 
 def _company_to_dict(dto: CompanyResponse) -> dict:
-    return dataclasses.asdict(dto)
+    data = dataclasses.asdict(dto)
+    # The join code lets anyone become a member: only superadmins (who manage it) may read it.
+    if not _has_superadmin():
+        data.pop("join_code", None)
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +628,76 @@ def set_member_role(company_id: str, target_user_id: str):
         )
 
     return jsonify(dataclasses.asdict(result))
+
+
+# ---------------------------------------------------------------------------
+# Join code — shared short code, reusable until revoked, attaches as member
+# ---------------------------------------------------------------------------
+
+
+@companies_bp.route("/companies/<company_id>/join-code", methods=["POST"])
+@openapi_doc(
+    summary="Create or renew the company's join code (admin only)",
+    responses={200: JoinCodeResponse},
+    tags=["companies"],
+)
+@jwt_required()
+@limiter.limit("20 per minute", key_func=jwt_user_key)
+@require_admin
+def set_join_code(company_id: str):
+    """Issue a new 8-character join code (replaces the previous one)."""
+    try:
+        company_uuid = UUID(company_id)
+    except ValueError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    from app import db
+
+    try:
+        code = get_container().set_join_code_usecase.execute(company_uuid, True, db.session)
+    except CompanyNotFoundError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    return jsonify(JoinCodeResponse(join_code=code or "").model_dump()), 200
+
+
+@companies_bp.route("/companies/<company_id>/join-code", methods=["DELETE"])
+@openapi_doc(summary="Revoke the company's join code (admin only)", tags=["companies"])
+@jwt_required()
+@limiter.limit("20 per minute", key_func=jwt_user_key)
+@require_admin
+def revoke_join_code(company_id: str):
+    try:
+        company_uuid = UUID(company_id)
+    except ValueError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    from app import db
+
+    try:
+        get_container().set_join_code_usecase.execute(company_uuid, False, db.session)
+    except CompanyNotFoundError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    return "", 204
+
+
+@companies_bp.route("/companies/join", methods=["POST"])
+@openapi_doc(summary="Join a company as member with its join code", request=JoinCompanyRequest, tags=["companies"])
+@jwt_required()
+@limiter.limit("10 per minute", key_func=jwt_user_key)
+def join_company_by_code():
+    """Attach the caller to the company owning the code (role member; primary when it is their first)."""
+    try:
+        body = JoinCompanyRequest(**(request.get_json(silent=True) or {}))
+    except ValidationError as exc:
+        return _err("ValidationError", format_validation_error(exc), 400)
+    caller_id = UUID(get_jwt_identity())
+    from app import db
+
+    try:
+        result = get_container().join_company_by_code_usecase.execute(caller_id, body.code, db.session)
+    except JoinCodeNotFoundError:
+        return _err("NotFound", "Unknown or revoked company code", 404)
+    except CompanyAlreadyAttachedError:
+        return _err("Conflict", "You already belong to this company", 409)
+    return jsonify(_company_to_dict(result)), 200
 
 
 # ---------------------------------------------------------------------------

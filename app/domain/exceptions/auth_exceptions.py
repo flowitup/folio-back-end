@@ -37,6 +37,12 @@ class OtpThrottledError(AuthenticationError):
     pass
 
 
+class PhoneAlreadyRegisteredError(AuthenticationError):
+    """Sign-up with a phone that already belongs to an account."""
+
+    pass
+
+
 class AuthorizationError(Exception):
     """Base authorization exception."""
 

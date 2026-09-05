@@ -21,6 +21,10 @@ from app.domain.companies.user_company_access import UserCompanyAccess
 class CompanyRepositoryPort(Protocol):
     """Persistence contract for Company aggregates."""
 
+    def find_by_join_code(self, code: str) -> Optional[Company]:
+        """Company whose join code equals ``code`` (already normalised), or None."""
+        ...
+
     def find_by_id(self, company_id: UUID) -> Optional[Company]:
         """Return company by UUID, or None if not found."""
         ...

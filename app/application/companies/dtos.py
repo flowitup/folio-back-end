@@ -217,6 +217,8 @@ class CompanyResponse:
     logo_url: Optional[str] = None
     default_payment_terms: Optional[str] = None
     prefix_override: Optional[str] = None
+    # Only serialised for superadmins (see routes._company_to_dict).
+    join_code: Optional[str] = None
 
     @staticmethod
     def from_entity(company: Company) -> "CompanyResponse":
@@ -235,6 +237,7 @@ class CompanyResponse:
             logo_url=company.logo_url,
             default_payment_terms=company.default_payment_terms,
             prefix_override=company.prefix_override,
+            join_code=company.join_code,
         )
 
 

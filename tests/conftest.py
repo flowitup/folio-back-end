@@ -402,6 +402,15 @@ def invitation_app():
         _c.company_repo = _company_repo
         _c.user_company_access_repo = _access_repo
         _c.company_invite_token_repo = _token_repo
+        from app.application.companies.join_code_usecases import (
+            JoinCompanyByCodeUseCase as _JoinByCodeUC,
+            SetJoinCodeUseCase as _SetJoinCodeUC,
+        )
+
+        _c.set_join_code_usecase = _SetJoinCodeUC(company_repo=_company_repo, clock=_clock)
+        _c.join_company_by_code_usecase = _JoinByCodeUC(
+            company_repo=_company_repo, access_repo=_access_repo, clock=_clock
+        )
 
         _c.create_company_usecase = _CreateCompanyUseCase(
             company_repo=_company_repo,
@@ -1085,6 +1094,13 @@ def invitation_app():
         _c.login_otp_repository = _otp_repo
         _c.request_otp_usecase = _RequestOtpUC(user_repo, _otp_repo, _sms)
         _c.verify_otp_usecase = _VerifyOtpUC(user_repo, _otp_repo, _c.authorization_service, token_issuer)
+        from app.application.usecases.otp_login import RequestSignupOtpUseCase as _RequestSignupUC
+        from app.application.usecases.otp_login import VerifySignupOtpUseCase as _VerifySignupUC
+
+        _c.request_signup_otp_usecase = _RequestSignupUC(user_repo, _otp_repo, _sms)
+        _c.verify_signup_otp_usecase = _VerifySignupUC(
+            user_repo, _otp_repo, role_repo, hasher, _c.authorization_service, token_issuer
+        )
         test_app._sms = _sms
 
         yield test_app

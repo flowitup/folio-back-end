@@ -49,6 +49,9 @@ class Company:
     created_at: datetime
     updated_at: datetime
 
+    # --- onboarding: short reusable code that attaches whoever types it as a member ---
+    join_code: Optional[str] = None
+
     # ------------------------------------------------------------------
     # Mutation helper
     # ------------------------------------------------------------------

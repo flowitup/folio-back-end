@@ -485,7 +485,7 @@ class TestSessionPolicyAndLoginMode:
         client.application.config.update(LOGIN_MODE="phone", REFRESH_TOKEN_POLICY="persistent")
         resp = client.get("/api/v1/auth/config")
         assert resp.status_code == 200
-        assert resp.get_json() == {"login_mode": "phone", "session": "persistent"}
+        assert resp.get_json() == {"login_mode": "phone", "session": "persistent", "signup": True}
 
     def test_expiring_policy_issues_seven_day_refresh_token(self, client):
         client.application.config.update(REFRESH_TOKEN_POLICY="expiring")

@@ -11,7 +11,8 @@ from uuid import UUID
 @dataclass(slots=True)
 class LoginOtp:
     id: UUID
-    user_id: UUID
+    # None for sign-up codes: the account does not exist until the code is verified.
+    user_id: Optional[UUID]
     phone: str
     # SHA-256 of "<phone>:<code>"; the clear code only ever lives in the SMS.
     code_hash: str

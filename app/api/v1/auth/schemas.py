@@ -37,6 +37,21 @@ class AuthConfigResponse(BaseModel):
 
     login_mode: str  # "email" | "phone" | "both"
     session: str  # "expiring" (7-day refresh token) | "persistent" (until sign-out)
+    signup: bool  # phone self-registration offered (LOGIN_MODE phone/both)
+
+
+class SignupRequestBody(BaseModel):
+    """POST /auth/signup/request — text a sign-up code to a phone without an account."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+
+
+class SignupVerifyBody(BaseModel):
+    """POST /auth/signup/verify — create the account and sign in."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+    display_name: str = Field(..., min_length=1, max_length=80)
 
 
 class LogoutBody(BaseModel):
