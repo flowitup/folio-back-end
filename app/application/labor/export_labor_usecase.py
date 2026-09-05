@@ -160,6 +160,7 @@ class ExportLaborUseCase:
                     date_from=month_start,
                     date_to=month_end,
                     worker_id=req.worker_id,
+                    status="validated",
                 )
             )
 

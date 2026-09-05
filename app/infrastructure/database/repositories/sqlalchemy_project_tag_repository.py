@@ -117,7 +117,7 @@ class SqlAlchemyProjectTagRepository:
                 func.count(LaborEntryModel.id).label("entry_count"),
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
-            .filter(WorkerModel.project_id == project_id)
+            .filter(WorkerModel.project_id == project_id, LaborEntryModel.status == "validated")
             .group_by(LaborEntryModel.tag_id)
             .all()
         )

@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, List, Optional
 from uuid import UUID
@@ -91,6 +91,36 @@ class MonthlyLaborSummaryRow:
     workers: List[MonthlyWorkerSubRow]
 
 
+@dataclass
+class PendingAttendanceItem:
+    """One worker-submitted day awaiting a manager's validation (bell payload)."""
+
+    entry_id: UUID
+    project_id: UUID
+    project_name: str
+    worker_id: UUID
+    worker_name: str
+    date: date
+    shift_type: Optional[str]
+    supplement_hours: int
+    note: Optional[str]
+    submitted_at: datetime
+
+
+class IPendingAttendanceQuery(ABC):
+    """Read port: pending entries the given user is allowed to validate.
+
+    A user validates a project's entries when they can read the project
+    (owner or member) AND hold ``project:manage_labor`` there — through
+    their membership role or a global role (``*:*`` and ``project:*`` count).
+    """
+
+    @abstractmethod
+    def list_pending_for_validator(self, user_id: UUID, limit: int = 100) -> List[PendingAttendanceItem]:
+        """Newest submissions first (date DESC, submitted_at DESC), capped at ``limit``."""
+        ...
+
+
 class IWorkerRepository(ABC):
     """Port for worker persistence operations."""
 
@@ -107,6 +137,11 @@ class IWorkerRepository(ABC):
     @abstractmethod
     def list_by_project(self, project_id: UUID, active_only: bool = True) -> List[Worker]:
         """List workers for a project."""
+        ...
+
+    @abstractmethod
+    def find_by_project_and_user(self, project_id: UUID, user_id: UUID) -> Optional[Worker]:
+        """The worker linked to ``user_id`` on ``project_id`` (any is_active), or None."""
         ...
 
     @abstractmethod
@@ -142,12 +177,15 @@ class ILaborEntryRepository(ABC):
         worker_id: Optional[UUID] = None,
         limit: Optional[int] = None,
         tag_id: Optional[UUID] = None,
+        status: Optional[str] = None,
     ) -> List[LaborEntry]:
         """List entries for a project with optional filters.
 
         When ``limit`` is set, returns at most that many rows ordered by date
         descending — i.e. the most recent ``limit`` entries.
         When ``tag_id`` is set, returns only entries with that tag_id.
+        When ``status`` is set, returns only entries in that validation status;
+        None returns every status (the attendance table shows pending rows).
         """
         ...
 
@@ -169,7 +207,7 @@ class ILaborEntryRepository(ABC):
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
     ) -> List[LaborSummaryRow]:
-        """Get aggregated labor summary per worker.
+        """Get aggregated labor summary per worker — validated entries only.
 
         When worker_id is provided, only that worker's rows are returned.
         """
@@ -182,7 +220,7 @@ class ILaborEntryRepository(ABC):
         date_from: date,
         date_to: date,
     ) -> List[LaborEntry]:
-        """List all entries for a project within the inclusive date range.
+        """List validated entries for a project within the inclusive date range.
 
         Ordered by date ASC, then worker_id ASC for deterministic export output.
         """
@@ -193,7 +231,7 @@ class ILaborEntryRepository(ABC):
         self,
         project_id: UUID,
     ) -> List[MonthlyLaborSummaryRow]:
-        """Aggregate labor totals per (year, month) for the whole project.
+        """Aggregate validated labor totals per (year, month) for the whole project.
 
         Ordered (year DESC, month DESC) — most recent month first.
         """

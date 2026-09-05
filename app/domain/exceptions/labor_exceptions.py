@@ -103,3 +103,26 @@ class RateChangeNotFoundError(LaborError):
     def __init__(self, rc_id: object) -> None:
         self.rc_id = rc_id
         super().__init__(f"Rate change not found: {rc_id}")
+
+
+class WorkerNotLinkedError(LaborError):
+    """Raised when the signed-in user has no worker row on the project (self-logging)."""
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        super().__init__(f"No worker is linked to your account on project {project_id}")
+
+
+class AttendanceDateOutOfRangeError(LaborError):
+    """Raised when a worker tries to self-log a day outside the allowed window."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
+class AttendanceAlreadyValidatedError(LaborError):
+    """Raised when rejecting an entry that a manager already validated."""
+
+    def __init__(self, entry_id: str):
+        self.entry_id = entry_id
+        super().__init__(f"Labor entry already validated: {entry_id}")

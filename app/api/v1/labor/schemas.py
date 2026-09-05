@@ -6,6 +6,8 @@ from uuid import UUID
 
 # Shift type constraint shared by request and response schemas.
 ShiftTypeLiteral = Literal["full", "half", "overtime"]
+# Validation workflow status of a labor entry.
+EntryStatusLiteral = Literal["pending", "validated"]
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +30,7 @@ class CreateWorkerRequest(BaseModel):
     phone: Optional[str] = Field(None, max_length=50)
     person_id: Optional[str] = Field(None, min_length=36, max_length=36)
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)
+    user_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
 
 class UpdateWorkerRequest(BaseModel):
@@ -43,6 +46,8 @@ class UpdateWorkerRequest(BaseModel):
     # Pydantic v2: distinguishing "unset" from "explicit None" needs model_fields_set.
     # The route layer reads model_fields_set to decide whether to forward role_id.
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)
+    # App account allowed to self-log attendance for this worker; null unlinks.
+    user_id: Optional[str] = Field(None, min_length=36, max_length=36)
 
 
 class LogAttendanceRequest(BaseModel):
@@ -71,6 +76,25 @@ class LogAttendanceRequest(BaseModel):
             raise ValueError("Empty entry: must set shift_type or supplement_hours > 0")
         if self.shift_type is None and self.amount_override is not None:
             raise ValueError("amount_override requires a shift_type")
+        return self
+
+
+class SelfLogAttendanceRequest(BaseModel):
+    """Request body for POST /labor-entries/self — a worker logging their own day.
+
+    No worker_id (resolved from the caller's account), no amount_override and no
+    tag_id (manager-only fields). Same non-empty rule as LogAttendanceRequest.
+    """
+
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    shift_type: Optional[ShiftTypeLiteral] = None
+    supplement_hours: int = Field(default=0, ge=0, le=12)
+    note: Optional[str] = Field(None, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_non_empty(self) -> "SelfLogAttendanceRequest":
+        if self.shift_type is None and self.supplement_hours == 0:
+            raise ValueError("Empty entry: must set shift_type or supplement_hours > 0")
         return self
 
 
@@ -227,6 +251,9 @@ class WorkerResponse(BaseModel):
     # Always present on list responses; may fall back to daily_rate on create/update.
     current_daily_rate: float = 0.0
 
+    # App account linked for self-logged attendance (workers.user_id).
+    user_id: Optional[str] = None
+
 
 class WorkerListResponse(BaseModel):
     """List of workers response."""
@@ -250,6 +277,37 @@ class LaborEntryResponse(BaseModel):
     created_at: str
     role_color: Optional[str] = None
     tag_id: Optional[str] = None
+    # Validation workflow — pending rows are worker-submitted and not yet priced.
+    status: EntryStatusLiteral = "validated"
+    submitted_by_user_id: Optional[str] = None
+    validated_by_user_id: Optional[str] = None
+    validated_at: Optional[str] = None
+
+
+class SelfLoggedEntryResponse(BaseModel):
+    """Response for POST /labor-entries/self (201)."""
+
+    id: str
+    worker_id: str
+    worker_name: str
+    date: str
+    shift_type: Optional[ShiftTypeLiteral]
+    supplement_hours: int
+    note: Optional[str]
+    status: EntryStatusLiteral
+    submitted_by_user_id: str
+    created_at: str
+
+
+class ValidatedEntryResponse(BaseModel):
+    """Response for POST /labor-entries/<id>/validate (200)."""
+
+    id: str
+    worker_id: str
+    date: str
+    status: EntryStatusLiteral
+    validated_by_user_id: Optional[str] = None
+    validated_at: Optional[str] = None
 
 
 class LaborEntryListResponse(BaseModel):

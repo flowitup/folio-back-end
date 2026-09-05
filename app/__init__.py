@@ -365,6 +365,26 @@ def _configure_di_container() -> None:
         db_session=db.session,
     )
 
+    # Attendance validation: worker self-log → pending → manager validate/reject;
+    # the bell reads pending entries through the dedicated query adapter.
+    from app.infrastructure.adapters.sqlalchemy_pending_attendance_query import (
+        SQLAlchemyPendingAttendanceQuery,
+    )
+    from app.application.labor.submit_own_attendance import SubmitOwnAttendanceUseCase
+    from app.application.labor.validate_attendance import RejectAttendanceUseCase, ValidateAttendanceUseCase
+    from app.application.labor.list_pending_attendance import ListPendingAttendanceUseCase
+
+    _c.submit_own_attendance_usecase = SubmitOwnAttendanceUseCase(
+        worker_repo=_c.worker_repository, entry_repo=_c.labor_entry_repository
+    )
+    _c.validate_attendance_usecase = ValidateAttendanceUseCase(
+        entry_repo=_c.labor_entry_repository, worker_repo=_c.worker_repository
+    )
+    _c.reject_attendance_usecase = RejectAttendanceUseCase(
+        entry_repo=_c.labor_entry_repository, worker_repo=_c.worker_repository
+    )
+    _c.list_pending_attendance_usecase = ListPendingAttendanceUseCase(SQLAlchemyPendingAttendanceQuery(db.session))
+
     # Wire chat use-cases (team chat, FEATURE_CHAT). Attachments reuse the S3 storage
     # singleton under the "chat/<kind>/<channel>/<message>" key prefix.
     from app.infrastructure.database.repositories.sqlalchemy_chat_repository import SqlAlchemyChatRepository

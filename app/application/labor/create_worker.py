@@ -37,6 +37,8 @@ class CreateWorkerRequest:
     person_id: Optional[UUID] = None
     created_by_user_id: Optional[UUID] = None
     role_id: Optional[UUID] = None
+    # App account allowed to self-log attendance for this worker.
+    user_id: Optional[UUID] = None
 
 
 @dataclass
@@ -56,6 +58,7 @@ class CreateWorkerResponse:
     role_id: Optional[str] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class CreateWorkerUseCase:
@@ -96,6 +99,11 @@ class CreateWorkerUseCase:
         if request.daily_rate <= 0:
             raise InvalidWorkerDataError("Daily rate must be greater than 0")
 
+        if request.user_id is not None:
+            linked = self._repo.find_by_project_and_user(request.project_id, request.user_id)
+            if linked is not None:
+                raise InvalidWorkerDataError("This account is already linked to another worker on this project")
+
         person_id: Optional[UUID] = request.person_id
 
         # Inline-create branch: no person_id → make a Person owned by
@@ -127,6 +135,7 @@ class CreateWorkerUseCase:
             created_at=datetime.now(timezone.utc),
             person_id=person_id,
             role_id=request.role_id,
+            user_id=request.user_id,
         )
 
         saved = self._repo.create(worker)
@@ -145,4 +154,5 @@ class CreateWorkerUseCase:
             role_id=str(saved.role_id) if saved.role_id else None,
             role_name=saved.role_name,
             role_color=saved.role_color,
+            user_id=str(saved.user_id) if saved.user_id else None,
         )

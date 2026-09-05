@@ -353,6 +353,16 @@ def invitation_app():
             db_session=db.session,
         )
 
+        # Attendance validation — mirrors app/__init__.py (bell reads pending entries).
+        from app.infrastructure.adapters.sqlalchemy_pending_attendance_query import (
+            SQLAlchemyPendingAttendanceQuery as _PendingAttendanceQuery,
+        )
+        from app.application.labor.list_pending_attendance import (
+            ListPendingAttendanceUseCase as _ListPendingAttendanceUC,
+        )
+
+        _c.list_pending_attendance_usecase = _ListPendingAttendanceUC(_PendingAttendanceQuery(db.session))
+
         # ------------------------------------------------------------------
         # Wire companies use-cases (phase 03) — mirrors app/__init__.py wiring.
         # These were already wired by _configure_di_container() during create_app,

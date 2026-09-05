@@ -52,6 +52,9 @@ from app.application.labor import (
     DeleteWorkerRateChangeUseCase,
 )
 from app.application.labor.export_labor_usecase import ExportLaborUseCase
+from app.application.labor.submit_own_attendance import SubmitOwnAttendanceUseCase
+from app.application.labor.validate_attendance import RejectAttendanceUseCase, ValidateAttendanceUseCase
+from app.application.labor.list_pending_attendance import ListPendingAttendanceUseCase
 from app.application.labor.labor_role_ports import ILaborRoleRepository
 from app.application.labor.create_labor_role_usecase import CreateLaborRoleUseCase
 from app.application.labor.update_labor_role_usecase import UpdateLaborRoleUseCase
@@ -529,6 +532,11 @@ class Container:
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
     get_monthly_labor_summary_usecase: Optional[GetMonthlyLaborSummaryUseCase] = None
     export_labor_usecase: Optional[ExportLaborUseCase] = None
+    # Attendance validation — worker self-log → manager validate / reject, bell feed.
+    submit_own_attendance_usecase: Optional[SubmitOwnAttendanceUseCase] = None
+    validate_attendance_usecase: Optional[ValidateAttendanceUseCase] = None
+    reject_attendance_usecase: Optional[RejectAttendanceUseCase] = None
+    list_pending_attendance_usecase: Optional[ListPendingAttendanceUseCase] = None
     tag_day_usecase: Optional[Any] = None  # TagDayUseCase — wired in app/__init__.py once tag_repo exists
 
     # Labor role use cases

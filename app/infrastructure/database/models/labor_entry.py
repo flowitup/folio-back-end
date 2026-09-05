@@ -3,7 +3,19 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -32,7 +44,27 @@ class LaborEntryModel(Base):
         index=True,
     )
 
-    __table_args__ = (UniqueConstraint("worker_id", "date", name="uq_worker_date"),)
+    # Validation workflow: manager-logged rows are born 'validated'; rows a
+    # worker logs for themselves start 'pending' until a manager validates
+    # (or rejects, which deletes the row). Only validated rows are priced.
+    status = Column(String(20), nullable=False, default="validated", server_default="validated")
+    submitted_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_labor_entries_submitted_by"),
+        nullable=True,
+    )
+    validated_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_labor_entries_validated_by"),
+        nullable=True,
+    )
+    validated_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("worker_id", "date", name="uq_worker_date"),
+        CheckConstraint("status IN ('pending', 'validated')", name="ck_labor_entries_status"),
+        Index("ix_labor_entries_pending", "worker_id", postgresql_where=text("status = 'pending'")),
+    )
 
     # Relationships
     worker = relationship("WorkerModel", back_populates="labor_entries")

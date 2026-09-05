@@ -9,6 +9,10 @@ from uuid import UUID
 from app.domain.exceptions.labor_exceptions import InvalidLaborEntryError
 from app.domain.labor.shift_multipliers import SHIFT_MULTIPLIERS
 
+STATUS_PENDING = "pending"
+STATUS_VALIDATED = "validated"
+LABOR_ENTRY_STATUSES = frozenset({STATUS_PENDING, STATUS_VALIDATED})
+
 
 @dataclass(slots=True)
 class LaborEntry:
@@ -23,6 +27,9 @@ class LaborEntry:
     - supplement_hours must be in [0, 12].
     - At least one of (shift_type, supplement_hours > 0) must be set.
     - amount_override is only meaningful when shift_type is not None.
+    - status is "validated" for manager-logged days and "pending" for days a
+      worker logged themselves until a manager validates; only validated
+      entries are priced into summaries, exports and budgets.
     """
 
     id: UUID
@@ -35,6 +42,11 @@ class LaborEntry:
     supplement_hours: int = 0
     # Phase tag — optional; NULL when entry has no tag assignment.
     tag_id: Optional[UUID] = None
+    # Validation workflow — see class docstring.
+    status: str = STATUS_VALIDATED
+    submitted_by_user_id: Optional[UUID] = None
+    validated_by_user_id: Optional[UUID] = None
+    validated_at: Optional[datetime] = None
 
     def __post_init__(self) -> None:
         """Validate domain invariants."""
@@ -46,6 +58,20 @@ class LaborEntry:
             raise InvalidLaborEntryError("Empty entry: must set shift_type or supplement_hours > 0")
         if self.shift_type is None and self.amount_override is not None:
             raise InvalidLaborEntryError("amount_override requires a shift_type")
+        if self.status not in LABOR_ENTRY_STATUSES:
+            raise InvalidLaborEntryError(f"Unknown labor entry status: {self.status}")
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == STATUS_PENDING
+
+    def validate(self, by_user_id: UUID, at: datetime) -> None:
+        """Mark a pending entry as validated by a manager. No-op when already validated."""
+        if self.status == STATUS_VALIDATED:
+            return
+        self.status = STATUS_VALIDATED
+        self.validated_by_user_id = by_user_id
+        self.validated_at = at
 
     def effective_cost(self, daily_rate: Decimal) -> Decimal:
         """

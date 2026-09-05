@@ -94,7 +94,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
                 func.sum(effective_cost).label("labor_cost"),
             )
             .join(LaborEntryModel, LaborEntryModel.worker_id == WorkerModel.id)
-            .filter(WorkerModel.project_id.in_(project_ids))
+            .filter(WorkerModel.project_id.in_(project_ids), LaborEntryModel.status == "validated")
             .group_by(WorkerModel.project_id)
             .all()
         )
