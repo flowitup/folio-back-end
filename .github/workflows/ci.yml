@@ -177,7 +177,8 @@ jobs:
   # skip it via its own `if`). Mirrors the FE workflow's pattern.
   lint-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # ruff + black + mypy + ~3100 pytest cases; 10 minutes started timing out in 2026-09.
+    timeout-minutes: 15
     needs: [version-bump]
     if: always() && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
     steps:
@@ -237,7 +238,7 @@ jobs:
 
       - name: Run pytest
         id: pytest
-        timeout-minutes: 10
+        timeout-minutes: 12
         run: uv run pytest --tb=short -q --color=yes
 
       - name: Write job summary
