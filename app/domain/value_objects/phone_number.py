@@ -2,7 +2,8 @@
 
 Users type numbers the way they see them on their phone: with spaces, dots, a leading ``0`` or
 ``+``. ``normalize_phone`` turns those into one canonical string so lookups and the unique
-constraint behave. Numbers without a country code are assumed to be from ``default_region``.
+constraint behave. Numbers without a country code are assumed to be from ``default_region``
+(France by default: ``06 12 34 56 78`` → ``+33612345678``; Vietnamese numbers need ``+84``).
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import re
 
 # Country calling code used when the number has a national prefix only ("0912…").
-DEFAULT_COUNTRY_CODES: dict[str, str] = {"VN": "84", "FR": "33"}
+DEFAULT_COUNTRY_CODES: dict[str, str] = {"FR": "33", "VN": "84"}
 
 _E164 = re.compile(r"^\+[1-9]\d{7,14}$")
 
@@ -19,11 +20,11 @@ class InvalidPhoneNumberError(ValueError):
     """The input cannot be read as a phone number."""
 
 
-def normalize_phone(raw: str, default_region: str = "VN") -> str:
+def normalize_phone(raw: str, default_region: str = "FR") -> str:
     """Return the E.164 form of ``raw`` or raise ``InvalidPhoneNumberError``.
 
-    * ``+84 912 345 678`` / ``0084912345678`` → ``+84912345678``
-    * ``0912345678`` (VN default) → ``+84912345678``; ``06 12 34 56 78`` (FR) → ``+33612345678``
+    * ``06 12 34 56 78`` / ``0612345678`` (FR default) → ``+33612345678``
+    * ``+84 912 345 678`` / ``0084912345678`` → ``+84912345678``; ``0912345678`` with ``VN`` → ``+84912345678``
     """
     text = raw.strip()
     if not text:
