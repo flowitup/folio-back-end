@@ -13,7 +13,7 @@ Covers:
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -243,8 +243,11 @@ class TestSelfLog:
         assert _submit(client, linked_h, ids).status_code == 409
 
     def test_yesterday_ok_but_two_days_back_rejected(self, client, linked_h, ids):
-        assert _submit(client, linked_h, ids, day=date.today() - timedelta(days=1)).status_code == 201
-        r = _submit(client, linked_h, ids, day=date.today() - timedelta(days=2))
+        # The backdate window is measured in UTC on the server; a local clock past midnight
+        # (Europe/Paris) would otherwise count "two days back" as yesterday.
+        today = datetime.now(timezone.utc).date()
+        assert _submit(client, linked_h, ids, day=today - timedelta(days=1)).status_code == 201
+        r = _submit(client, linked_h, ids, day=today - timedelta(days=2))
         assert r.status_code == 400
 
     def test_empty_row_is_rejected(self, client, linked_h, ids):

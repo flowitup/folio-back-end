@@ -24,6 +24,7 @@ from app.api.v1.projects.decorators import (
     can_read_project,
     can_mutate_project,
     _effective_perms_for,
+    _has_permission,
 )
 from app.application.projects import CreateProjectRequest as CreateDTO
 from app.application.projects.ports import ProjectSpent
@@ -46,6 +47,11 @@ _NO_SPEND = ProjectSpent(
 def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
     """Look up a project's spend rollup, defaulting to zero on every figure."""
     return spent_map.get(project_id, _NO_SPEND)
+
+
+def _money_visible(perms: list, owner_id, user_id: UUID) -> bool:
+    """Budget and spend are for the owner and holders of project:manage_labor only."""
+    return str(owner_id) == str(user_id) or _has_permission(perms, "project:manage_labor")
 
 
 def _spend_fields(rollup: ProjectSpent) -> dict:
@@ -99,30 +105,26 @@ def list_projects():
             budget_map[row.id] = (row.budget, row.budget_source)
 
     user_uuid = UUID(user_id)
-    return jsonify(
-        ProjectListResponse(
-            projects=[
-                ProjectResponse(
-                    id=p.id,
-                    name=p.name,
-                    address=p.address,
-                    owner_id=p.owner_id,
-                    user_count=p.user_count,
-                    created_at="",
-                    my_permissions=sorted(_effective_perms_for(UUID(str(p.id)), user_uuid)),
-                    budget=(
-                        float(budget_map[UUID(str(p.id))][0])
-                        if budget_map.get(UUID(str(p.id)), (None,))[0] is not None
-                        else None
-                    ),
-                    budget_source=budget_map.get(UUID(str(p.id)), (None, None))[1],
-                    **_spend_fields(_spent_for(spent_map, UUID(str(p.id)))),
-                )
-                for p in projects
-            ],
-            total=len(projects),
-        ).model_dump()
-    )
+    items = []
+    for p in projects:
+        pid = UUID(str(p.id))
+        perms = sorted(_effective_perms_for(pid, user_uuid))
+        visible = _money_visible(perms, p.owner_id, user_uuid)
+        items.append(
+            ProjectResponse(
+                id=p.id,
+                name=p.name,
+                address=p.address,
+                owner_id=p.owner_id,
+                user_count=p.user_count,
+                created_at="",
+                my_permissions=perms,
+                budget=(float(budget_map[pid][0]) if visible and budget_map.get(pid, (None,))[0] is not None else None),
+                budget_source=budget_map.get(pid, (None, None))[1] if visible else None,
+                **_spend_fields(_spent_for(spent_map, pid) if visible else _NO_SPEND),
+            )
+        )
+    return jsonify(ProjectListResponse(projects=items, total=len(projects)).model_dump())
 
 
 @projects_bp.route("", methods=["POST"])
@@ -223,6 +225,8 @@ def get_project(project_id: str):
         spent_map = container.project_spent_reader.sum_spent_by_projects([project.id])
         spent_rollup = _spent_for(spent_map, project.id)
 
+    perms = sorted(_effective_perms_for(project.id, user_id))
+    visible = _money_visible(perms, project.owner_id, user_id)
     return jsonify(
         ProjectResponse(
             id=str(project.id),
@@ -233,10 +237,10 @@ def get_project(project_id: str):
             created_at=project.created_at.isoformat(),
             company_id=company_id_str,
             invoice_prefix=project.invoice_prefix,
-            my_permissions=sorted(_effective_perms_for(project.id, user_id)),
-            budget=float(project.budget) if project.budget is not None else None,
-            budget_source=project.budget_source,
-            **_spend_fields(spent_rollup),
+            my_permissions=perms,
+            budget=float(project.budget) if visible and project.budget is not None else None,
+            budget_source=project.budget_source if visible else None,
+            **_spend_fields(spent_rollup if visible else _NO_SPEND),
         ).model_dump()
     )
 

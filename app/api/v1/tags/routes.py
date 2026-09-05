@@ -15,6 +15,7 @@ from app.api._helpers.validation_error import safe_validation_fields
 from app.api.openapi import openapi_doc
 from app.api.v1.tags import tags_bp
 from app.api.v1.tags.schemas import TagCreateBody, TagUpdateBody
+from app.api.v1.projects.labor_scope import require_full_project_view
 from app.application.tags.dtos import CreateTagDto, UpdateTagDto
 from app.application.tags.exceptions import (
     DuplicateProjectTagNameError,
@@ -207,6 +208,7 @@ def delete_tag(project_id: UUID, tag_id: UUID) -> Any:
 @openapi_doc(summary="Per-tag cost rollup (labor + expenses) for a project", tags=["tags"])
 @jwt_required()  # type: ignore[untyped-decorator]
 @limiter.limit("60 per minute", key_func=jwt_user_key)
+@require_full_project_view
 def get_tag_summary(project_id: UUID) -> Any:
     """Return per-tag labor cost + expense total rollup.
 

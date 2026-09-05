@@ -25,6 +25,7 @@ from app.api.v1.projects.decorators import (
     require_project_access,
     require_invoice_access,
 )
+from app.api.v1.projects.labor_scope import labor_scope_for
 from app.api.v1.projects.schemas import ErrorResponse
 from app.application.invoice import (
     CreateInvoiceRequest,
@@ -318,6 +319,15 @@ def list_invoices(project_id: str):
         datetime.strptime(filters.service_month[:7], "%Y-%m").date().replace(day=1) if filters.service_month else None
     )
 
+    # A restricted member (no project:manage_labor) only sees their own labor payments and
+    # none of the project's money aggregates; an unlinked account sees nothing at all.
+    scope = labor_scope_for(project_id)
+    worker_filter = filters.worker_id
+    if scope.restricted:
+        if scope.worker_id is None:
+            return jsonify(_empty_invoice_list())
+        worker_filter = scope.worker_id
+
     container = get_container()
     try:
         results = container.list_invoices_usecase.execute(
@@ -326,7 +336,7 @@ def list_invoices(project_id: str):
                 invoice_type=parsed_type,
                 tag_id=UUID(tag_id_param) if tag_id_param else None,
                 service_month=service_month_date,
-                worker_id=filters.worker_id,
+                worker_id=worker_filter,
             )
         )
     except ValueError as e:
@@ -421,6 +431,8 @@ def list_invoices(project_id: str):
     for d, r in zip(invoice_dicts, results):
         d["paid_with_returns"] = applied_summaries.get(UUID(r.id), [])
 
+    if scope.restricted:
+        return jsonify({**_empty_invoice_list(), "invoices": invoice_dicts, "total": len(invoice_dicts)})
     return jsonify(
         {
             "invoices": invoice_dicts,
@@ -433,6 +445,26 @@ def list_invoices(project_id: str):
             "company_name": company_name,
         }
     )
+
+
+def _invoice_visible_to_caller(project_id: str, worker_id) -> bool:
+    """Restricted members see an invoice only when it is their own labor payment."""
+    scope = labor_scope_for(project_id)
+    return not scope.restricted or (worker_id is not None and scope.allows_worker(worker_id))
+
+
+def _empty_invoice_list() -> dict:
+    """List body with zeroed project aggregates (restricted members never see project money)."""
+    return {
+        "invoices": [],
+        "total": 0,
+        "funds_released_total": 0.0,
+        "company_spent_total": 0.0,
+        "funds_released_company_total": 0.0,
+        "funds_released_personal_total": 0.0,
+        "personal_spent_total": 0.0,
+        "company_name": None,
+    }
 
 
 @invoice_bp.route("/projects/<project_id>/labor-payments-summary", methods=["GET"])
@@ -449,6 +481,26 @@ def get_labor_payments_summary(project_id: str):
     result = get_container().get_labor_payments_summary_usecase.execute(
         GetLaborPaymentsSummaryRequest(project_id=UUID(project_id))
     )
+    scope = labor_scope_for(project_id)
+    if scope.restricted:
+        # Keep only the caller's own worker line per month; the bucket totals follow it.
+        months = []
+        for m in result.months:
+            own = [w for w in m.workers if scope.allows_worker(w.worker_id)]
+            if not own:
+                continue
+            months.append(
+                dataclasses.replace(
+                    m,
+                    workers=own,
+                    total_paid=sum(w.paid for w in own),
+                    unassigned_paid=0.0,
+                    unassigned_count=0,
+                    company_paid=0.0,
+                    personal_paid=0.0,
+                )
+            )
+        result = dataclasses.replace(result, months=months)
     schema = LaborPaymentsSummarySchema.model_validate(dataclasses.asdict(result))
     return jsonify(schema.model_dump())
 
@@ -552,6 +604,9 @@ def get_invoice(project_id: str, invoice_id: str):
 
     # Verify invoice belongs to the requested project (prevents cross-project access)
     if result.project_id != project_id:
+        return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
+    # Restricted members may only open their own labor payments.
+    if not _invoice_visible_to_caller(project_id, result.worker_id):
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
 
     project_uuid = UUID(project_id)
