@@ -133,6 +133,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.notes import notes_bp
     from app.api.v1.chat import chat_bp
     from app.api.v1.notifications import notifications_bp
+    from app.api.v1.push import push_bp
     from app.api.v1.tags import tags_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
     from app.api.v1.companies import companies_bp, users_me_bp
@@ -158,6 +159,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
     app.register_blueprint(chat_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
+    app.register_blueprint(push_bp, url_prefix="/api/v1")
     app.register_blueprint(tags_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
@@ -432,6 +434,28 @@ def _configure_di_container() -> None:
         _sms = LoggingSmsSender()
     _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
     _c.sms_sender = _sms
+
+    # Push notifications around attendance (PUSH_PROVIDER log | expo).
+    from app.application.push.attendance_push_notifier import AttendancePushNotifier
+    from app.infrastructure.adapters.expo_push_sender import ExpoPushSender
+    from app.infrastructure.adapters.logging_push_sender import LoggingPushSender
+    from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository
+
+    _c.push_device_repository = SQLAlchemyPushDeviceRepository(db.session)
+    _c.push_sender = (
+        ExpoPushSender(_cfg.get("EXPO_ACCESS_TOKEN", ""))
+        if _cfg.get("PUSH_PROVIDER") == "expo"
+        else LoggingPushSender()
+    )
+    if _c.worker_repository is not None and _c.project_repository is not None:
+        _c.attendance_push_notifier = AttendancePushNotifier(
+            devices=_c.push_device_repository,
+            sender=_c.push_sender,
+            worker_repo=_c.worker_repository,
+            project_repo=_c.project_repository,
+            locale=_cfg.get("PUSH_LOCALE", "vi"),
+            run_async=not _cfg.get("TESTING", False),
+        )
     _c.login_otp_repository = _otp_repo
     if _c.user_repository is not None and _c.authorization_service is not None and _c.token_issuer is not None:
         _c.request_otp_usecase = RequestOtpUseCase(

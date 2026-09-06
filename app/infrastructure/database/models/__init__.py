@@ -25,6 +25,7 @@ from app.infrastructure.database.models.invitation import InvitationModel
 from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOrm
 from app.infrastructure.database.models.chat_message import ChatChannelReadOrm, ChatMessageOrm
 from app.infrastructure.database.models.login_otp import LoginOtpOrm
+from app.infrastructure.database.models.push_device import PushDeviceOrm
 from app.infrastructure.database.models.billing_document import BillingDocumentModel
 from app.infrastructure.database.models.billing_document_template import BillingDocumentTemplateModel
 
@@ -70,6 +71,7 @@ __all__ = [
     "NoteOrm",
     "ChatMessageOrm",
     "LoginOtpOrm",
+    "PushDeviceOrm",
     "ChatChannelReadOrm",
     "NoteDismissalOrm",
     "BillingDocumentModel",

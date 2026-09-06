@@ -328,6 +328,10 @@ class Container:
     logout_usecase: Optional[LogoutUseCase] = None
     # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
     sms_sender: Optional[Any] = None
+    # Push notifications (attendance): device registry, provider adapter, notifier
+    push_device_repository: Optional[Any] = None
+    push_sender: Optional[Any] = None
+    attendance_push_notifier: Optional[Any] = None
     login_otp_repository: Optional[Any] = None
     request_otp_usecase: Optional[Any] = None
     verify_otp_usecase: Optional[Any] = None
