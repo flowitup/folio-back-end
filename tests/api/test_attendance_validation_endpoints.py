@@ -50,9 +50,6 @@ def av_app():
         SqlAlchemyProjectMembershipRepository,
     )
     from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
-    from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
-        SqlAlchemyProjectTagRepository,
-    )
     from app.application.labor import (
         ListPendingAttendanceUseCase,
         LogAttendanceUseCase,
@@ -133,13 +130,8 @@ def av_app():
         c.validate_attendance_usecase = ValidateAttendanceUseCase(entry_repo=entry_repo, worker_repo=worker_repo)
         c.reject_attendance_usecase = RejectAttendanceUseCase(entry_repo=entry_repo, worker_repo=worker_repo)
         c.list_pending_attendance_usecase = ListPendingAttendanceUseCase(SQLAlchemyPendingAttendanceQuery(db.session))
-        tag_repo = SqlAlchemyProjectTagRepository(db.session)
-        c.log_attendance_usecase = LogAttendanceUseCase(
-            worker_repo=worker_repo, entry_repo=entry_repo, tag_repo=tag_repo
-        )
-        c.update_attendance_usecase = UpdateAttendanceUseCase(
-            entry_repo=entry_repo, worker_repo=worker_repo, tag_repo=tag_repo
-        )
+        c.log_attendance_usecase = LogAttendanceUseCase(worker_repo=worker_repo, entry_repo=entry_repo)
+        c.update_attendance_usecase = UpdateAttendanceUseCase(entry_repo=entry_repo, worker_repo=worker_repo)
 
         # The note due-reminder query is Postgres-only SQL (covered by PG-gated tests);
         # the bell test only asserts the attendance half, so feed it an empty note list.

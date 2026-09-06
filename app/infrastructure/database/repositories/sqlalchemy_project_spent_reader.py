@@ -15,7 +15,7 @@ by_credits/personal, because that money really did leave someone's account.
 
 Invariant: ``by_credits + personal + labor_unpaid == total``.
 
-Labor cost mirrors the effective_cost expression in SqlAlchemyProjectTagRepository:
+Labor cost uses the effective_cost expression shared with the labor summary endpoints:
   - shift_type IS NULL  → 0 (supplement-only rows contribute no cost)
   - shift_type = 'half' → daily_rate * 0.5
   - shift_type = 'overtime' → daily_rate * 1.5
@@ -72,7 +72,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
         # ------------------------------------------------------------------
         # Query 1: labor cost grouped by project_id
         # labor_entries has no project_id column; must join via workers.
-        # Mirrors the effective_cost case expression in sum_labor_cost_by_tag.
+        # Same effective_cost case expression as the labor summary rollups.
         # ------------------------------------------------------------------
         shift_multiplier = sa_case(
             (LaborEntryModel.shift_type == "half", Decimal("0.5")),

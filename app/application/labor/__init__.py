@@ -86,11 +86,6 @@ from app.application.labor.delete_worker_rate_change import (
     DeleteWorkerRateChangeUseCase,
     DeleteWorkerRateChangeRequest,
 )
-from app.application.labor.tag_day_usecase import (
-    TagDayUseCase,
-    TagDayRequest,
-    TagDayResponse,
-)
 from app.application.labor.submit_own_attendance import (
     SubmitOwnAttendanceUseCase,
     SubmitOwnAttendanceRequest,
@@ -168,10 +163,6 @@ __all__ = [
     "ListWorkerRateChangesRequest",
     "DeleteWorkerRateChangeUseCase",
     "DeleteWorkerRateChangeRequest",
-    # Day-tag use case
-    "TagDayUseCase",
-    "TagDayRequest",
-    "TagDayResponse",
     # Attendance validation (worker self-log → manager validate/reject)
     "SubmitOwnAttendanceUseCase",
     "SubmitOwnAttendanceRequest",

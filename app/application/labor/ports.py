@@ -181,14 +181,12 @@ class ILaborEntryRepository(ABC):
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
         limit: Optional[int] = None,
-        tag_id: Optional[UUID] = None,
         status: Optional[str] = None,
     ) -> List[LaborEntry]:
         """List entries for a project with optional filters.
 
         When ``limit`` is set, returns at most that many rows ordered by date
         descending — i.e. the most recent ``limit`` entries.
-        When ``tag_id`` is set, returns only entries with that tag_id.
         When ``status`` is set, returns only entries in that validation status;
         None returns every status (the attendance table shows pending rows).
         """
@@ -259,23 +257,6 @@ class ILaborEntryRepository(ABC):
 
         Ordered by ``person_name`` ASC then ``project_name`` ASC for
         deterministic output. Returns an empty list when no conflicts.
-        """
-        ...
-
-    @abstractmethod
-    def set_tag_for_date(
-        self,
-        project_id: UUID,
-        date: date,
-        tag_id: Optional[UUID],
-    ) -> int:
-        """Bulk set (or clear, when ``tag_id`` is None) ``tag_id`` on every
-        labor entry of ``date`` whose worker belongs to ``project_id``.
-
-        Scoped via a worker→project join so entries belonging to other
-        projects' workers on the same date are never touched (IDOR guard).
-        Returns the number of rows updated; 0 is a valid, non-error result
-        for a day with no entries.
         """
         ...
 

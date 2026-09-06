@@ -35,14 +35,6 @@ class LaborEntryModel(Base):
     shift_type = Column(String(20), nullable=True)
     supplement_hours = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    # Phase tag — optional; NULL when entry has no tag. ON DELETE SET NULL keeps
-    # the entry when a tag is removed (cost data must not be lost on tag deletion).
-    tag_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("project_tags.id", ondelete="SET NULL", name="fk_labor_entries_tag_id"),
-        nullable=True,
-        index=True,
-    )
 
     # Validation workflow: manager-logged rows are born 'validated'; rows a
     # worker logs for themselves start 'pending' until a manager validates
@@ -83,7 +75,6 @@ class LaborEntryModel(Base):
 
     # Relationships
     worker = relationship("WorkerModel", back_populates="labor_entries")
-    tag = relationship("ProjectTagModel", back_populates="labor_entries", foreign_keys=[tag_id])
 
     def __repr__(self) -> str:
         return f"<LaborEntry worker={self.worker_id} date={self.date}>"

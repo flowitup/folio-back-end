@@ -44,9 +44,6 @@ def rate_app():
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
-    from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
-        SqlAlchemyProjectTagRepository,
-    )
     from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
     from app.application.labor.delete_worker_rate_change import DeleteWorkerRateChangeUseCase as _DelRateUC
     from app.application.labor.list_labor_entries import ListLaborEntriesUseCase as _ListEntriesUC
@@ -134,14 +131,11 @@ def rate_app():
             rate_change_repo=rate_change_repo,
         )
 
-        # Wire attendance write use-cases (need tag_repo)
-        _tag_repo = SqlAlchemyProjectTagRepository(db.session)
-        _c.log_attendance_usecase = _LogAttendUC(worker_repo=worker_repo, entry_repo=entry_repo, tag_repo=_tag_repo)
-        _c.update_attendance_usecase = _UpdateAttendUC(
-            entry_repo=entry_repo, worker_repo=worker_repo, tag_repo=_tag_repo
-        )
+        # Wire attendance write use-cases
+        _c.log_attendance_usecase = _LogAttendUC(worker_repo=worker_repo, entry_repo=entry_repo)
+        _c.update_attendance_usecase = _UpdateAttendUC(entry_repo=entry_repo, worker_repo=worker_repo)
         _c.bulk_log_attendance_usecase = _BulkLogUC(
-            worker_repo=worker_repo, entry_repo=entry_repo, db_session=db.session, tag_repo=_tag_repo
+            worker_repo=worker_repo, entry_repo=entry_repo, db_session=db.session
         )
 
         # Wire labor role use-cases

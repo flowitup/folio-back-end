@@ -702,8 +702,8 @@ def invitation_app():
             payment_method_repo=_pm_repo,
         )
 
-        # Note: invoice write use-cases are constructed once in the tags block below
-        # so tag_repo is included from the start (single construction site).
+        # Note: invoice write use-cases are constructed once below, after the
+        # worker reader they depend on exists (single construction site).
         if _c.invoice_repository is None:
             from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository as _InvRepo
 
@@ -899,80 +899,27 @@ def invitation_app():
         )
 
         # ------------------------------------------------------------------
-        # Wire tags use-cases — mirrors app/__init__.py wiring.
+        # Single construction of labor write use-cases. Mirrors app/__init__.py.
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the invitation_app test fixture will drift from prod.
-        # ------------------------------------------------------------------
-        from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
-            SqlAlchemyProjectTagRepository as _ProjectTagRepo,
-        )
-        from app.infrastructure.database.repositories.sqlalchemy_project_membership_reader import (
-            SqlAlchemyProjectMembershipReader as _TagMembershipReader,
-        )
-        from app.application.tags.create_project_tag_usecase import CreateProjectTagUseCase as _CreateTagUC
-        from app.application.tags.list_project_tags_usecase import ListProjectTagsUseCase as _ListTagsUC
-        from app.application.tags.update_project_tag_usecase import UpdateProjectTagUseCase as _UpdateTagUC
-        from app.application.tags.delete_project_tag_usecase import DeleteProjectTagUseCase as _DeleteTagUC
-        from app.application.tags.tag_summary_usecase import TagSummaryUseCase as _TagSummaryUC
-
-        _tag_repo = _ProjectTagRepo(db.session)
-        _tag_membership_reader = _TagMembershipReader(db.session)
-
-        _c.create_project_tag_usecase = _CreateTagUC(
-            tag_repo=_tag_repo,
-            membership_reader=_tag_membership_reader,
-            db_session=db.session,
-        )
-        _c.list_project_tags_usecase = _ListTagsUC(
-            tag_repo=_tag_repo,
-            membership_reader=_tag_membership_reader,
-        )
-        _c.update_project_tag_usecase = _UpdateTagUC(
-            tag_repo=_tag_repo,
-            membership_reader=_tag_membership_reader,
-            db_session=db.session,
-        )
-        _c.delete_project_tag_usecase = _DeleteTagUC(
-            tag_repo=_tag_repo,
-            membership_reader=_tag_membership_reader,
-            db_session=db.session,
-        )
-        _c.tag_summary_usecase = _TagSummaryUC(
-            tag_repo=_tag_repo,
-            labor_reader=_tag_repo,
-            expense_reader=_tag_repo,
-            membership_reader=_tag_membership_reader,
-        )
-
-        # ------------------------------------------------------------------
-        # Single construction of labor write use-cases — tag_repo is required;
-        # built here once alongside tag_repo. Mirrors app/__init__.py.
         # ------------------------------------------------------------------
         from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
         from app.application.labor.update_attendance import UpdateAttendanceUseCase as _UpdateAttendUC
         from app.application.labor.bulk_log_attendance import BulkLogAttendanceUseCase as _BulkLogUC
-        from app.application.labor.tag_day_usecase import TagDayUseCase as _TagDayUC
 
         if _c.worker_repository is not None and _c.labor_entry_repository is not None:
             _c.log_attendance_usecase = _LogAttendUC(
                 worker_repo=_c.worker_repository,
                 entry_repo=_c.labor_entry_repository,
-                tag_repo=_tag_repo,
             )
             _c.update_attendance_usecase = _UpdateAttendUC(
                 entry_repo=_c.labor_entry_repository,
                 worker_repo=_c.worker_repository,
-                tag_repo=_tag_repo,
             )
             _c.bulk_log_attendance_usecase = _BulkLogUC(
                 worker_repo=_c.worker_repository,
                 entry_repo=_c.labor_entry_repository,
                 db_session=db.session,
-                tag_repo=_tag_repo,
-            )
-            _c.tag_day_usecase = _TagDayUC(
-                entry_repo=_c.labor_entry_repository,
-                tag_repo=_tag_repo,
             )
 
         # Read-only worker lookup for validating/snapshotting invoice worker links.
@@ -984,7 +931,7 @@ def invitation_app():
         _worker_reader = _WorkerReader(db.session)
         _c.worker_reader = _worker_reader
 
-        # Single construction of invoice write use-cases — includes tag_repo from the start.
+        # Single construction of invoice write use-cases — includes the worker reader from the start.
         from app.application.invoice.create_invoice import CreateInvoiceUseCase as _CreateInvUC
         from app.application.invoice.update_invoice import UpdateInvoiceUseCase as _UpdateInvUC
 
@@ -993,13 +940,11 @@ def invitation_app():
             _c.create_invoice_usecase = _CreateInvUC(
                 invoice_repo=_c.invoice_repository,
                 payment_method_repo=_pm,
-                tag_repo=_tag_repo,
                 worker_reader=_worker_reader,
             )
             _c.update_invoice_usecase = _UpdateInvUC(
                 invoice_repo=_c.invoice_repository,
                 payment_method_repo=_pm,
-                tag_repo=_tag_repo,
                 worker_reader=_worker_reader,
             )
 

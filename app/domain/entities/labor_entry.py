@@ -40,8 +40,6 @@ class LaborEntry:
     note: Optional[str] = None
     shift_type: Optional[str] = None  # "full" | "half" | "overtime" | None
     supplement_hours: int = 0
-    # Phase tag — optional; NULL when entry has no tag assignment.
-    tag_id: Optional[UUID] = None
     # Validation workflow — see class docstring.
     status: str = STATUS_VALIDATED
     submitted_by_user_id: Optional[UUID] = None

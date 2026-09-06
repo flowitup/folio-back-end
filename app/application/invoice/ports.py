@@ -123,11 +123,10 @@ class IInvoiceRepository(ABC):
         self,
         project_id: UUID,
         invoice_type: Optional[InvoiceType] = None,
-        tag_id: Optional[UUID] = None,
         service_month: Optional[date] = None,
         worker_id: Optional[UUID] = None,
     ) -> list[Invoice]:
-        """List a project's invoices, optionally filtered by type/tag/service_month/worker_id.
+        """List a project's invoices, optionally filtered by type/service_month/worker_id.
 
         service_month matches labor rows whose service_month equals the given
         (already first-of-month-normalized) date exactly. worker_id matches

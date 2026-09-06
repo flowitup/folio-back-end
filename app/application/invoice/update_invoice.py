@@ -9,7 +9,6 @@ from uuid import UUID
 
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
-from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import (
     HIGHLIGHT_COLORS,
     Invoice,
@@ -57,8 +56,6 @@ class UpdateInvoiceRequest:
     # company_id is used to cross-validate that the payment method belongs to
     # the same company as the invoice's project. Optional: when None, skipped.
     company_id: Optional[UUID] = None
-    # tag_id uses sentinel: _UNSET = not provided, None = clear tag, UUID = assign tag.
-    tag_id: object = dataclasses.field(default_factory=lambda: _UNSET)
     # refunds_invoice_id uses sentinel: _UNSET = keep existing, None = clear link, UUID = set link.
     refunds_invoice_id: object = dataclasses.field(default_factory=lambda: _UNSET)
     # service_month uses sentinel: _UNSET = not provided, None = clear, date = set (normalized to day=1).
@@ -94,7 +91,6 @@ def _is_release_payment_method_only_edit(invoice: Invoice, request: UpdateInvoic
         and request.items is None
         and request.recipient_address is None
         and request.notes is None
-        and request.tag_id is _UNSET
         and request.refunds_invoice_id is _UNSET
         and request.service_month is _UNSET
         and request.settled_via is _UNSET
@@ -112,12 +108,10 @@ class UpdateInvoiceUseCase:
         self,
         invoice_repo: IInvoiceRepository,
         payment_method_repo: object = None,  # IPaymentMethodRepository | None
-        tag_repo=None,  # ProjectTagRepositoryPort | None
         worker_reader: object = None,  # WorkerReaderPort | None
     ) -> None:
         self._repo = invoice_repo
         self._pm_repo = payment_method_repo
-        self._tag_repo = tag_repo
         self._worker_reader = worker_reader
 
     def execute(self, request: UpdateInvoiceRequest) -> InvoiceResponse:
@@ -212,16 +206,6 @@ class UpdateInvoiceUseCase:
 
                 updates["payment_method_id"] = method.id
                 updates["payment_method_label"] = method.label
-
-        # tag_id: only process if explicitly provided (not _UNSET).
-        if request.tag_id is not _UNSET:
-            # Guard: when assigning a tag (not clearing), it must belong to this project.
-            if request.tag_id is not None and self._tag_repo is not None:
-                tag_uuid: UUID = request.tag_id  # type: ignore[assignment]
-                tag = self._tag_repo.get_by_id(tag_uuid)
-                if tag is None or tag.project_id != invoice.project_id:
-                    raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
-            updates["tag_id"] = request.tag_id  # None = clear, UUID = assign
 
         # service_month sentinel: absent = keep existing (unless cleared below), None = clear,
         # date = set (normalized to day=1, only valid when effective_type is labor).

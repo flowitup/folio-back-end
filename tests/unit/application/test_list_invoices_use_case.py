@@ -44,7 +44,7 @@ class TestListInvoicesBasic:
         assert len(result) == 2
         assert result[0].invoice_number == "INV-2026-0001"
         assert result[1].invoice_number == "INV-2026-0002"
-        repo.list_by_project.assert_called_once_with(project_id, None, tag_id=None, service_month=None, worker_id=None)
+        repo.list_by_project.assert_called_once_with(project_id, None, service_month=None, worker_id=None)
 
     def test_list_returns_empty_list(self):
         """Should return empty list when no invoices found."""
@@ -57,7 +57,7 @@ class TestListInvoicesBasic:
         result = use_case.execute(request)
 
         assert result == []
-        repo.list_by_project.assert_called_once_with(project_id, None, tag_id=None, service_month=None, worker_id=None)
+        repo.list_by_project.assert_called_once_with(project_id, None, service_month=None, worker_id=None)
 
 
 class TestListInvoicesFiltering:
@@ -76,9 +76,7 @@ class TestListInvoicesFiltering:
 
         assert len(result) == 1
         assert result[0].type == "labor"
-        repo.list_by_project.assert_called_once_with(
-            project_id, InvoiceType.LABOR, tag_id=None, service_month=None, worker_id=None
-        )
+        repo.list_by_project.assert_called_once_with(project_id, InvoiceType.LABOR, service_month=None, worker_id=None)
 
     def test_list_client_invoices(self):
         """Should filter and return client invoices."""
@@ -127,37 +125,13 @@ class TestListInvoicesLaborPaymentsFilters:
         request = ListInvoicesRequest(
             project_id=project_id,
             invoice_type=InvoiceType.LABOR,
-            tag_id=None,
             service_month=month,
             worker_id=worker_id,
         )
         use_case.execute(request)
 
         repo.list_by_project.assert_called_once_with(
-            project_id, InvoiceType.LABOR, tag_id=None, service_month=month, worker_id=worker_id
-        )
-
-    def test_filters_compose_with_type_and_tag(self):
-        repo = MagicMock(spec=IInvoiceRepository)
-        repo.list_by_project.return_value = []
-
-        use_case = ListInvoicesUseCase(repo)
-        project_id = uuid4()
-        tag_id = uuid4()
-        worker_id = uuid4()
-        month = date(2026, 3, 1)
-        use_case.execute(
-            ListInvoicesRequest(
-                project_id=project_id,
-                invoice_type=InvoiceType.LABOR,
-                tag_id=tag_id,
-                service_month=month,
-                worker_id=worker_id,
-            )
-        )
-
-        repo.list_by_project.assert_called_once_with(
-            project_id, InvoiceType.LABOR, tag_id=tag_id, service_month=month, worker_id=worker_id
+            project_id, InvoiceType.LABOR, service_month=month, worker_id=worker_id
         )
 
 

@@ -83,8 +83,6 @@ class Invoice:
     payment_method_label: Optional[str] = None
     source_billing_document_id: Optional[UUID] = None
     is_auto_generated: bool = False
-    # Phase tag — optional; NULL when invoice has no tag assignment.
-    tag_id: Optional[UUID] = None
     # Refund tracking — optional; NULL means not marked refundable.
     # Only applicable to materials_services invoices.
     refundable_status: Optional[str] = None

@@ -24,7 +24,6 @@ class LaborEntryDetail:
     supplement_hours: int
     created_at: str
     role_color: Optional[str] = None
-    tag_id: Optional[str] = None
     status: str = "validated"
     submitted_by_user_id: Optional[str] = None
     validated_by_user_id: Optional[str] = None
@@ -46,8 +45,6 @@ class ListLaborEntriesRequest:
     # (500) and an upper bound (1000) — keep this Optional so callers that
     # genuinely want everything (e.g. exports) can pass None.
     limit: Optional[int] = None
-    # Phase tag filter — when set, returns only entries with this tag_id.
-    tag_id: Optional[UUID] = None
     # Validation status filter ("pending" | "validated"); None = every status.
     status: Optional[str] = None
 
@@ -100,7 +97,6 @@ class ListLaborEntriesUseCase:
             date_to=request.date_to,
             worker_id=request.worker_id,
             limit=request.limit,
-            tag_id=request.tag_id,
             status=request.status,
         )
 
@@ -131,7 +127,6 @@ class ListLaborEntriesUseCase:
                     supplement_hours=entry.supplement_hours,
                     created_at=entry.created_at.isoformat(),
                     role_color=worker.role_color,
-                    tag_id=str(entry.tag_id) if entry.tag_id is not None else None,
                     status=entry.status,
                     submitted_by_user_id=str(entry.submitted_by_user_id) if entry.submitted_by_user_id else None,
                     validated_by_user_id=str(entry.validated_by_user_id) if entry.validated_by_user_id else None,

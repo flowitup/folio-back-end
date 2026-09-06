@@ -283,7 +283,7 @@ def _enrich_invoice_with_personal_payment(
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["GET"])
 @openapi_doc(
-    summary="List invoices for a project, optionally filtered by ?type=/?tag_id=/?service_month=/?worker_id=",
+    summary="List invoices for a project, optionally filtered by ?type=/?service_month=/?worker_id=",
     query=ListInvoicesFilterQuery,
     tags=["invoices"],
 )
@@ -291,9 +291,8 @@ def _enrich_invoice_with_personal_payment(
 @require_permission("project:read")
 @require_project_access(write=False)
 def list_invoices(project_id: str):
-    """List invoices for a project, optionally filtered by ?type=/?tag_id=/?service_month=/?worker_id=."""
+    """List invoices for a project, optionally filtered by ?type=/?service_month=/?worker_id=."""
     invoice_type_param = normalize_invoice_type_value(request.args.get("type"))
-    tag_id_param = request.args.get("tag_id")
     try:
         parsed_type = InvoiceType(invoice_type_param) if invoice_type_param else None
     except ValueError:
@@ -335,7 +334,6 @@ def list_invoices(project_id: str):
             ListInvoicesRequest(
                 project_id=UUID(project_id),
                 invoice_type=parsed_type,
-                tag_id=UUID(tag_id_param) if tag_id_param else None,
                 service_month=service_month_date,
                 worker_id=worker_filter,
             )
@@ -550,7 +548,6 @@ def create_invoice(project_id: str):
                 items=[item.model_dump() for item in data.items],
                 payment_method_id=data.payment_method_id,
                 company_id=company_id,
-                tag_id=data.tag_id,
                 refunds_invoice_id=data.refunds_invoice_id,
                 service_month=data.service_month,
                 settled_via=data.settled_via,
@@ -654,13 +651,12 @@ def update_invoice(project_id: str, invoice_id: str):
 
     # Build kwargs — only pass fields the caller provided.
     # issue_date is already a date object from Pydantic (no manual conversion needed).
-    # payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via,
+    # payment_method_id, refunds_invoice_id, service_month, settled_via,
     # applied_to_invoice_id, and worker_id are handled separately: use exclude_unset
     # so we can distinguish "not provided" (absent) from "explicitly null".
     provided_fields = data.model_dump(exclude_unset=True)
     sentinel_fields = (
         "payment_method_id",
-        "tag_id",
         "refunds_invoice_id",
         "service_month",
         "settled_via",
@@ -687,13 +683,12 @@ def update_invoice(project_id: str, invoice_id: str):
     invoice_uuid = UUID(invoice_id)
     project_uuid = UUID(project_id)
 
-    # Determine payment_method, tag_id, refunds_invoice_id, service_month, settled_via,
+    # Determine payment_method, refunds_invoice_id, service_month, settled_via,
     # applied_to_invoice_id, and worker_id sentinels: _UNSET if not in request body;
     # else the provided value (which may be None = clear).
     from app.application.invoice.update_invoice import _UNSET
 
     pm_id = provided_fields["payment_method_id"] if "payment_method_id" in provided_fields else _UNSET
-    tag_id_val = provided_fields["tag_id"] if "tag_id" in provided_fields else _UNSET
     refunds_id_val = provided_fields["refunds_invoice_id"] if "refunds_invoice_id" in provided_fields else _UNSET
     service_month_val = provided_fields["service_month"] if "service_month" in provided_fields else _UNSET
     settled_via_val = provided_fields["settled_via"] if "settled_via" in provided_fields else _UNSET
@@ -708,7 +703,6 @@ def update_invoice(project_id: str, invoice_id: str):
         invoice_id=invoice_uuid,
         payment_method_id=pm_id,
         company_id=company_id,
-        tag_id=tag_id_val,
         refunds_invoice_id=refunds_id_val,
         service_month=service_month_val,
         settled_via=settled_via_val,

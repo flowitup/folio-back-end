@@ -50,7 +50,6 @@ class InvoiceResponse:
     payment_method_label: Optional[str] = None
     source_billing_document_id: Optional[str] = None
     is_auto_generated: bool = False
-    tag_id: Optional[str] = None
     refundable_status: Optional[str] = None
     # Who issued the refund ('company' | 'bank') — only meaningful when
     # refundable_status == 'refunded'; NULL otherwise.
@@ -106,7 +105,6 @@ class InvoiceResponse:
                 str(inv.source_billing_document_id) if inv.source_billing_document_id is not None else None
             ),
             is_auto_generated=inv.is_auto_generated,
-            tag_id=str(inv.tag_id) if inv.tag_id is not None else None,
             refundable_status=inv.refundable_status,
             refunded_by=inv.refunded_by,
             refunds_invoice_id=str(inv.refunds_invoice_id) if inv.refunds_invoice_id is not None else None,

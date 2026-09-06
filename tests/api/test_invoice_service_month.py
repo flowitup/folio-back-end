@@ -111,8 +111,8 @@ def inv_sm_app():
 
         _c = get_container()
         # Mirror production wiring shape (create/update use-cases take the invoice
-        # repo plus optional payment_method_repo / tag_repo — neither is exercised
-        # by these tests, so they are left at their default None).
+        # repo plus an optional payment_method_repo — not exercised by these
+        # tests, so it is left at its default None).
         _c.create_invoice_usecase = CreateInvoiceUseCase(invoice_repo=invoice_repo)
         _c.update_invoice_usecase = UpdateInvoiceUseCase(invoice_repo=invoice_repo)
         _c.list_invoices_usecase = ListInvoicesUseCase(invoice_repo)
@@ -252,7 +252,6 @@ class TestUpdateInvoiceServiceMonth:
         assert data["recipient_name"] == "Original Recipient"
         assert data["notes"] == "Keep me"
         assert data["items"] == created["items"]
-        assert data["tag_id"] == created["tag_id"]
         assert data["type"] == "labor"
 
     def test_patch_service_month_null_clears_it(self, inv_sm_client, inv_sm_app, admin_token):

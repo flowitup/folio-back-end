@@ -6,7 +6,6 @@ from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import case as sa_case, func, select
-from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -45,7 +44,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             shift_type=entry.shift_type,
             supplement_hours=entry.supplement_hours,
             created_at=entry.created_at,
-            tag_id=entry.tag_id,
             status=entry.status,
             submitted_by_user_id=entry.submitted_by_user_id,
             validated_by_user_id=entry.validated_by_user_id,
@@ -70,7 +68,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         date_to: Optional[date] = None,
         worker_id: Optional[UUID] = None,
         limit: Optional[int] = None,
-        tag_id: Optional[UUID] = None,
         status: Optional[str] = None,
     ) -> List[LaborEntry]:
         query = self._session.query(LaborEntryModel).join(WorkerModel).filter(WorkerModel.project_id == project_id)
@@ -82,8 +79,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             query = query.filter(LaborEntryModel.date <= date_to)
         if worker_id:
             query = query.filter(LaborEntryModel.worker_id == worker_id)
-        if tag_id is not None:
-            query = query.filter(LaborEntryModel.tag_id == tag_id)
 
         query = query.order_by(LaborEntryModel.date.desc())
         if limit is not None and limit > 0:
@@ -98,7 +93,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.note = entry.note
             model.shift_type = entry.shift_type
             model.supplement_hours = entry.supplement_hours
-            model.tag_id = entry.tag_id
             model.status = entry.status
             model.submitted_by_user_id = entry.submitted_by_user_id
             model.validated_by_user_id = entry.validated_by_user_id
@@ -416,30 +410,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             )
         return [buckets[k] for k in order]
 
-    def set_tag_for_date(
-        self,
-        project_id: UUID,
-        date: date,
-        tag_id: Optional[UUID],
-    ) -> int:
-        """Bulk set/clear tag_id for every entry of a project day.
-
-        Single UPDATE scoped via a worker-id subquery joined to project_id —
-        never touches another project's workers on the same date (IDOR
-        guard). synchronize_session=False is safe here: no ORM-loaded
-        LaborEntry instances are read back or mutated in this call.
-        """
-        worker_ids_subq = select(WorkerModel.id).where(WorkerModel.project_id == project_id)
-        stmt = (
-            sa_update(LaborEntryModel)
-            .where(LaborEntryModel.date == date, LaborEntryModel.worker_id.in_(worker_ids_subq))
-            .values(tag_id=tag_id)
-            .execution_options(synchronize_session=False)
-        )
-        result = self._session.execute(stmt)
-        self._session.commit()
-        return result.rowcount
-
     def _to_entity(self, model: LaborEntryModel) -> LaborEntry:
         return LaborEntry(
             id=model.id,
@@ -450,7 +420,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             shift_type=model.shift_type,  # pass-through; may be None for supplement-only entries
             supplement_hours=model.supplement_hours if model.supplement_hours is not None else 0,
             created_at=model.created_at,
-            tag_id=model.tag_id,
             status=model.status or "validated",
             submitted_by_user_id=model.submitted_by_user_id,
             validated_by_user_id=model.validated_by_user_id,

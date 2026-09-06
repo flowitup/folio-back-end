@@ -7,7 +7,6 @@ Covers:
 - PATCH budget → null → budget cleared.
 - GET list + GET detail include budget/budget_source/spent.
 - Spent reader: labor + non-released_funds invoices; refunds net down; batch map; no-rows → 0.
-- Cross-check: spent == Σ tag-summary rows for same seed data.
 """
 
 from __future__ import annotations
@@ -372,91 +371,6 @@ def test_spent_reader_empty_list_returns_empty_dict(invitation_app):
         reader = SqlAlchemyProjectSpentReader(db.session)
         result = reader.sum_spent_by_projects([])
         assert result == {}
-
-
-def test_spent_cross_check_equals_tag_summary_totals(invitation_app, spent_reader_project):
-    """spent == Σ tag-summary rows (labor_cost + expense_total) for VAT-free invoices.
-
-    The two aggregations use different VAT bases: the spent reader is TTC (it shares
-    ``items_total`` with the Expense-page KPIs), while the tag summary is still HT. They
-    therefore agree only while every invoice carries vat_rate 0, which is the case for
-    this fixture. See ``test_spent_reader_is_ttc_where_tag_summary_is_ht`` for the
-    divergence this leaves behind.
-    """
-    from app import db
-    from app.infrastructure.database.repositories.sqlalchemy_project_spent_reader import (
-        SqlAlchemyProjectSpentReader,
-    )
-    from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
-        SqlAlchemyProjectTagRepository,
-    )
-
-    with invitation_app.app_context():
-        pid = spent_reader_project["project_id"]
-
-        reader = SqlAlchemyProjectSpentReader(db.session)
-        tag_repo = SqlAlchemyProjectTagRepository(db.session)
-
-        spent_result = reader.sum_spent_by_projects([pid])
-        project_spent = spent_result[pid]
-
-        # Tag-summary aggregates
-        labor_by_tag = tag_repo.sum_labor_cost_by_tag(pid)
-        expense_by_tag = tag_repo.sum_expense_by_tag(pid)
-
-        tag_labor_total = sum(v[0] for v in labor_by_tag.values())
-        tag_expense_total = sum(v[0] for v in expense_by_tag.values())
-        tag_total = tag_labor_total + tag_expense_total
-
-        assert project_spent.total == pytest.approx(
-            tag_total
-        ), f"spent reader {project_spent.total} != tag-summary total {tag_total}"
-
-
-def test_spent_reader_is_ttc_where_tag_summary_is_ht(invitation_app, spent_reader_project):
-    """A VAT-bearing invoice counts TTC in the spent reader, HT in the tag summary.
-
-    Pins the known, deliberate divergence introduced when the projects card moved to TTC
-    so it matches the Expense-page KPIs. The tag summary was left on HT; if it is ever
-    migrated too, this test is the one that should fail and be deleted.
-    """
-    from app import db
-    from app.infrastructure.database.models.invoice import InvoiceModel
-    from app.infrastructure.database.repositories.sqlalchemy_project_spent_reader import (
-        SqlAlchemyProjectSpentReader,
-    )
-    from app.infrastructure.database.repositories.sqlalchemy_project_tag_repository import (
-        SqlAlchemyProjectTagRepository,
-    )
-
-    with invitation_app.app_context():
-        pid = spent_reader_project["project_id"]
-
-        vat_invoice = InvoiceModel(
-            id=uuid4(),
-            project_id=pid,
-            invoice_number="VAT-001",
-            type="materials_services",
-            issue_date=date(2025, 4, 1),
-            recipient_name="Supplier",
-            items=[{"quantity": "1", "unit_price": "100", "vat_rate": "20"}],
-        )
-        db.session.add(vat_invoice)
-        db.session.commit()
-
-        reader = SqlAlchemyProjectSpentReader(db.session)
-        tag_repo = SqlAlchemyProjectTagRepository(db.session)
-
-        # 550 baseline + 120 TTC (100 HT + 20% VAT)
-        assert reader.sum_spent_by_projects([pid])[pid].total == pytest.approx(Decimal("670.00"))
-
-        # Tag summary still sums HT: 550 baseline + 100
-        tag_expense_total = sum(v[0] for v in tag_repo.sum_expense_by_tag(pid).values())
-        tag_labor_total = sum(v[0] for v in tag_repo.sum_labor_cost_by_tag(pid).values())
-        assert tag_expense_total + tag_labor_total == pytest.approx(Decimal("650.00"))
-
-        db.session.delete(vat_invoice)
-        db.session.commit()
 
 
 # ---------------------------------------------------------------------------

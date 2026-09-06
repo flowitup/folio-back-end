@@ -7,7 +7,7 @@ Three callers on one project:
 
 Endpoints covered: workers, labor-entries, labor-summary, labor-monthly-summary,
 rate-changes, labor exports, conflicts, invoices (list/detail), labor-payments-summary,
-invoices export, tag-summary, project money fields.
+invoices export, project money fields.
 """
 
 from __future__ import annotations
@@ -209,7 +209,6 @@ def test_whole_project_views_are_forbidden_to_restricted_members(client, ids, li
         f"/api/v1/projects/{p}/workers/{ids['other']}/labor-export?from=2026-03&to=2026-03&format=xlsx",
         f"/api/v1/projects/{p}/labor-entries/conflicts?date=2026-03-02&person_ids=",
         f"/api/v1/projects/{p}/invoices-export?from=2026-03&to=2026-03&format=xlsx",
-        f"/api/v1/projects/{p}/tag-summary",
     ):
         r = client.get(url, headers=linked_h)
         assert r.status_code == 403 and r.get_json()["message"] == "Only project managers may view this", url

@@ -73,7 +73,6 @@ class CreateInvoiceSchema(BaseModel):
     notes: Optional[str] = None
     items: List[InvoiceItemSchema] = Field(..., min_length=1)
     payment_method_id: Optional[UUID] = None
-    tag_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
     service_month: Optional[date] = None
     settled_via: Optional[SettledViaLiteral] = None
@@ -87,7 +86,7 @@ class CreateInvoiceSchema(BaseModel):
 class UpdateInvoiceSchema(BaseModel):
     """Request body for partially updating an invoice.
 
-    payment_method_id, tag_id, refunds_invoice_id, service_month, settled_via,
+    payment_method_id, refunds_invoice_id, service_month, settled_via,
     applied_to_invoice_id, and worker_id use exclude_unset semantics:
       - field absent  → do not touch that field
       - field = null  → clear the field
@@ -108,7 +107,6 @@ class UpdateInvoiceSchema(BaseModel):
     notes: Optional[str] = None
     items: Optional[List[InvoiceItemSchema]] = None
     payment_method_id: Optional[UUID] = None
-    tag_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
     service_month: Optional[date] = None
     settled_via: Optional[SettledViaLiteral] = None
@@ -127,10 +125,10 @@ _YYYY_MM_PATTERN = _YYYY_MM.pattern
 class ListInvoicesFilterQuery(BaseModel):
     """Optional drill-down query filters for GET /projects/<id>/invoices.
 
-    ``type``/``tag_id`` keep their pre-existing manual-parse/400 error path
-    unchanged; these two are new (Labor Payments Hub) and are validated here,
-    returning 422 on malformed input — mirrors ExportLaborQuery's month-format
-    pattern. Both compose with the existing ``type``/``tag_id`` filters.
+    ``type`` keeps its pre-existing manual-parse/400 error path unchanged;
+    these two are new (Labor Payments Hub) and are validated here, returning
+    422 on malformed input — mirrors ExportLaborQuery's month-format pattern.
+    Both compose with the existing ``type`` filter.
     """
 
     service_month: Optional[str] = Field(
