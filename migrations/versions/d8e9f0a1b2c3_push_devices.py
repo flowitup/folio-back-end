@@ -5,7 +5,7 @@ edits a day; the worker gets one when a manager settles it. Tokens the provider 
 as unregistered are deleted.
 
 Revision ID: d8e9f0a1b2c3
-Revises: c7d8e9f0a1b2
+Revises: c4a7d2e9b1f0
 Create Date: 2026-09-06
 """
 
@@ -14,7 +14,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "d8e9f0a1b2c3"
-down_revision = "c7d8e9f0a1b2"
+down_revision = "c4a7d2e9b1f0"
 branch_labels = None
 depends_on = None
 
