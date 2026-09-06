@@ -97,7 +97,6 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
         payment_method_label=m.payment_method_label,
         source_billing_document_id=m.source_billing_document_id,
         is_auto_generated=m.is_auto_generated or False,
-        tag_id=m.tag_id,
         refundable_status=m.refundable_status,
         refunded_by=m.refunded_by,
         refunds_invoice_id=m.refunds_invoice_id,
@@ -134,7 +133,6 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             payment_method_label=invoice.payment_method_label,
             source_billing_document_id=invoice.source_billing_document_id,
             is_auto_generated=invoice.is_auto_generated,
-            tag_id=invoice.tag_id,
             refundable_status=invoice.refundable_status,
             refunded_by=invoice.refunded_by,
             refunds_invoice_id=invoice.refunds_invoice_id,
@@ -165,15 +163,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         self,
         project_id: UUID,
         invoice_type: Optional[InvoiceType] = None,
-        tag_id: Optional[UUID] = None,
         service_month: Optional[date] = None,
         worker_id: Optional[UUID] = None,
     ) -> List[Invoice]:
         query = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
         if invoice_type is not None:
             query = query.filter(InvoiceModel.type == invoice_type.value)
-        if tag_id is not None:
-            query = query.filter(InvoiceModel.tag_id == tag_id)
         if service_month is not None:
             query = query.filter(InvoiceModel.service_month == service_month)
         if worker_id is not None:
@@ -196,7 +191,6 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model.updated_at = datetime.now(timezone.utc)
         model.payment_method_id = invoice.payment_method_id
         model.payment_method_label = invoice.payment_method_label
-        model.tag_id = invoice.tag_id
         model.refundable_status = invoice.refundable_status
         model.refunded_by = invoice.refunded_by
         model.refunds_invoice_id = invoice.refunds_invoice_id

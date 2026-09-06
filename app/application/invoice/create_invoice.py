@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceRepository
-from app.application.tags.exceptions import InvalidProjectTagError
 from app.domain.entities.invoice import HIGHLIGHT_COLORS, Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
     AppliedAmountExceedsTargetError,
@@ -43,8 +42,6 @@ class CreateInvoiceRequest:
     # the same company as the invoice's project. Optional: when None, the
     # cross-company check is skipped (e.g. payment_method_repo unavailable).
     company_id: Optional[UUID] = None
-    # Phase tag — optional; validated (project scope) in the route layer.
-    tag_id: Optional[UUID] = None
     # Supplier-refund link — optional; only valid when type == REFUND.
     refunds_invoice_id: Optional[UUID] = None
     # Payment month for labor invoices — optional; only valid when type == LABOR.
@@ -73,12 +70,10 @@ class CreateInvoiceUseCase:
         self,
         invoice_repo: IInvoiceRepository,
         payment_method_repo: object = None,  # IPaymentMethodRepository | None
-        tag_repo=None,  # ProjectTagRepositoryPort | None
         worker_reader: object = None,  # WorkerReaderPort | None
     ) -> None:
         self._repo = invoice_repo
         self._pm_repo = payment_method_repo
-        self._tag_repo = tag_repo
         self._worker_reader = worker_reader
 
     def execute(self, request: CreateInvoiceRequest) -> InvoiceResponse:
@@ -130,12 +125,6 @@ class CreateInvoiceUseCase:
 
             payment_method_id = method.id
             payment_method_label = method.label
-
-        # Guard: tag must belong to the same project as the invoice.
-        if request.tag_id is not None and self._tag_repo is not None:
-            tag = self._tag_repo.get_by_id(request.tag_id)
-            if tag is None or tag.project_id != request.project_id:
-                raise InvalidProjectTagError(f"Tag {request.tag_id} does not belong to this project")
 
         # Refund link validation + cap (only when refunds_invoice_id is provided).
         refunds_invoice_id: Optional[UUID] = None
@@ -260,7 +249,6 @@ class CreateInvoiceUseCase:
             updated_at=now,
             payment_method_id=payment_method_id,
             payment_method_label=payment_method_label,
-            tag_id=request.tag_id,
             refunds_invoice_id=refunds_invoice_id,
             service_month=service_month,
             settled_via=settled_via,

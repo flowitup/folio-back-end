@@ -544,7 +544,6 @@ class Container:
     list_pending_attendance_usecase: Optional[ListPendingAttendanceUseCase] = None
     edit_own_attendance_usecase: Optional[EditOwnAttendanceUseCase] = None
     decide_attendance_change_usecase: Optional[DecideAttendanceChangeUseCase] = None
-    tag_day_usecase: Optional[Any] = None  # TagDayUseCase — wired in app/__init__.py once tag_repo exists
 
     # Labor role use cases
     create_labor_role_usecase: Optional[CreateLaborRoleUseCase] = None
@@ -566,15 +565,6 @@ class Container:
     set_worker_rate_change_usecase: Optional[SetWorkerRateChangeUseCase] = None
     list_worker_rate_changes_usecase: Optional[ListWorkerRateChangesUseCase] = None
     delete_worker_rate_change_usecase: Optional[DeleteWorkerRateChangeUseCase] = None
-
-    # -----------------------------------------------------------------------
-    # Tags repo + use-cases (project-scoped phase tags)
-    # -----------------------------------------------------------------------
-    create_project_tag_usecase: Optional[Any] = None  # CreateProjectTagUseCase
-    list_project_tags_usecase: Optional[Any] = None  # ListProjectTagsUseCase
-    update_project_tag_usecase: Optional[Any] = None  # UpdateProjectTagUseCase
-    delete_project_tag_usecase: Optional[Any] = None  # DeleteProjectTagUseCase
-    tag_summary_usecase: Optional[Any] = None  # TagSummaryUseCase
 
     # -----------------------------------------------------------------------
     # Project spent reader (labor + non-released_funds invoices)
@@ -765,7 +755,7 @@ def configure_container(
 
     if worker_repository and labor_entry_repository:
         # log_attendance_usecase, update_attendance_usecase, and bulk_log_attendance_usecase
-        # are wired in app/__init__.py after tag_repo is constructed, so they require tag_repo.
+        # are wired in app/__init__.py alongside the other late-wired labor use-cases.
         # rate_change_repo is None here; it is re-wired in app/__init__.py once the repo
         # is constructed (same late-wiring pattern as other repos in _configure_di_container).
         container.list_labor_entries_usecase = ListLaborEntriesUseCase(

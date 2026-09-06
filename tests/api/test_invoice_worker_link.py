@@ -345,7 +345,6 @@ class TestUpdateInvoiceWorkerLink:
         # All other fields must be untouched.
         assert data["notes"] == "Keep me"
         assert data["items"] == created["items"]
-        assert data["tag_id"] == created["tag_id"]
         assert data["type"] == "labor"
 
     def test_patch_worker_id_null_clears_it(self, inv_worker_client, inv_worker_app, admin_token):

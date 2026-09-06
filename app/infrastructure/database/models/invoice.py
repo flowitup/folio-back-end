@@ -89,14 +89,6 @@ class InvoiceModel(Base):
         unique=True,
     )
     is_auto_generated = Column(Boolean, nullable=False, default=False, server_default="false")
-    # Phase tag — optional; NULL when invoice has no tag. ON DELETE SET NULL keeps
-    # the invoice when a tag is removed (financial data must not be lost on tag deletion).
-    tag_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("project_tags.id", ondelete="SET NULL", name="fk_invoices_tag_id"),
-        nullable=True,
-        index=True,
-    )
     # Refund tracking — optional; NULL means not marked refundable.
     # Only applicable to materials_services invoices; other types must stay NULL.
     refundable_status = Column(String(20), nullable=True)
@@ -162,7 +154,6 @@ class InvoiceModel(Base):
     creator = relationship("UserModel", foreign_keys=[created_by])
     payment_method = relationship("PaymentMethodModel", foreign_keys=[payment_method_id])
     source_billing_document = relationship("BillingDocumentModel", foreign_keys=[source_billing_document_id])
-    tag = relationship("ProjectTagModel", back_populates="invoices", foreign_keys=[tag_id])
     # Self-referential: many refunds may link one source M&S invoice.
     refunds_invoice = relationship(
         "InvoiceModel",
