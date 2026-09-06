@@ -29,6 +29,11 @@ class LaborEntryDetail:
     submitted_by_user_id: Optional[str] = None
     validated_by_user_id: Optional[str] = None
     validated_at: Optional[str] = None
+    # Open worker change request on a validated day (None when none).
+    change_requested_at: Optional[str] = None
+    proposed_shift_type: Optional[str] = None
+    proposed_supplement_hours: Optional[int] = None
+    proposed_note: Optional[str] = None
 
 
 @dataclass
@@ -131,6 +136,10 @@ class ListLaborEntriesUseCase:
                     submitted_by_user_id=str(entry.submitted_by_user_id) if entry.submitted_by_user_id else None,
                     validated_by_user_id=str(entry.validated_by_user_id) if entry.validated_by_user_id else None,
                     validated_at=entry.validated_at.isoformat() if entry.validated_at else None,
+                    change_requested_at=entry.change_requested_at.isoformat() if entry.change_requested_at else None,
+                    proposed_shift_type=entry.proposed_shift_type,
+                    proposed_supplement_hours=entry.proposed_supplement_hours,
+                    proposed_note=entry.proposed_note,
                 )
             )
 

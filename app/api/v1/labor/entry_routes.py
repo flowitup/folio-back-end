@@ -141,6 +141,10 @@ def list_labor_entries(project_id: str):
                     submitted_by_user_id=e.submitted_by_user_id,
                     validated_by_user_id=e.validated_by_user_id,
                     validated_at=e.validated_at,
+                    change_requested_at=e.change_requested_at,
+                    proposed_shift_type=e.proposed_shift_type,
+                    proposed_supplement_hours=e.proposed_supplement_hours,
+                    proposed_note=e.proposed_note,
                 )
                 for e in entries
             ],

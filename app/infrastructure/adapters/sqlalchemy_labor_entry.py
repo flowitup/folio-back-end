@@ -103,6 +103,11 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             model.submitted_by_user_id = entry.submitted_by_user_id
             model.validated_by_user_id = entry.validated_by_user_id
             model.validated_at = entry.validated_at
+            model.proposed_shift_type = entry.proposed_shift_type
+            model.proposed_supplement_hours = entry.proposed_supplement_hours
+            model.proposed_note = entry.proposed_note
+            model.change_requested_at = entry.change_requested_at
+            model.change_requested_by_user_id = entry.change_requested_by_user_id
             self._session.commit()
             return self._to_entity(model)
         return entry
@@ -450,4 +455,9 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             submitted_by_user_id=model.submitted_by_user_id,
             validated_by_user_id=model.validated_by_user_id,
             validated_at=model.validated_at,
+            proposed_shift_type=model.proposed_shift_type,
+            proposed_supplement_hours=model.proposed_supplement_hours,
+            proposed_note=model.proposed_note,
+            change_requested_at=model.change_requested_at,
+            change_requested_by_user_id=model.change_requested_by_user_id,
         )

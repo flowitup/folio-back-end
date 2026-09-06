@@ -71,7 +71,11 @@ def list_notifications() -> Any:
 
     attendance_pending = [
         {
-            "kind": "attendance_pending",
+            # attendance_pending = new day to validate; attendance_change = proposed edit on a validated day
+            "kind": p.kind,
+            "proposed_shift_type": p.proposed_shift_type,
+            "proposed_supplement_hours": p.proposed_supplement_hours,
+            "proposed_note": p.proposed_note,
             "entry_id": p.entry_id,
             "project_id": p.project_id,
             "project_name": p.project_name,

@@ -384,6 +384,14 @@ def _configure_di_container() -> None:
         entry_repo=_c.labor_entry_repository, worker_repo=_c.worker_repository
     )
     _c.list_pending_attendance_usecase = ListPendingAttendanceUseCase(SQLAlchemyPendingAttendanceQuery(db.session))
+    from app.application.labor.edit_own_attendance import DecideAttendanceChangeUseCase, EditOwnAttendanceUseCase
+
+    _c.edit_own_attendance_usecase = EditOwnAttendanceUseCase(
+        worker_repo=_c.worker_repository, entry_repo=_c.labor_entry_repository
+    )
+    _c.decide_attendance_change_usecase = DecideAttendanceChangeUseCase(
+        entry_repo=_c.labor_entry_repository, worker_repo=_c.worker_repository
+    )
 
     # Wire chat use-cases (team chat, FEATURE_CHAT). Attachments reuse the S3 storage
     # singleton under the "chat/<kind>/<channel>/<message>" key prefix.

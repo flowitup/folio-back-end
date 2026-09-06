@@ -59,11 +59,26 @@ class LaborEntryModel(Base):
         nullable=True,
     )
     validated_at = Column(DateTime(timezone=True), nullable=True)
+    # Worker-requested change on a validated day (see migration c7d8e9f0a1b2).
+    proposed_shift_type = Column(String(20), nullable=True)
+    proposed_supplement_hours = Column(Integer, nullable=True)
+    proposed_note = Column(String(500), nullable=True)
+    change_requested_at = Column(DateTime(timezone=True), nullable=True)
+    change_requested_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_labor_entries_change_requested_by"),
+        nullable=True,
+    )
 
     __table_args__ = (
         UniqueConstraint("worker_id", "date", name="uq_worker_date"),
         CheckConstraint("status IN ('pending', 'validated')", name="ck_labor_entries_status"),
         Index("ix_labor_entries_pending", "worker_id", postgresql_where=text("status = 'pending'")),
+        Index(
+            "ix_labor_entries_change_requested",
+            "worker_id",
+            postgresql_where=text("change_requested_at IS NOT NULL"),
+        ),
     )
 
     # Relationships

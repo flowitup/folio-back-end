@@ -282,6 +282,45 @@ class LaborEntryResponse(BaseModel):
     submitted_by_user_id: Optional[str] = None
     validated_by_user_id: Optional[str] = None
     validated_at: Optional[str] = None
+    # Open worker change request on a validated day; None when there is none.
+    change_requested_at: Optional[str] = None
+    proposed_shift_type: Optional[ShiftTypeLiteral] = None
+    proposed_supplement_hours: Optional[int] = None
+    proposed_note: Optional[str] = None
+
+
+class SelfEditAttendanceRequest(BaseModel):
+    """Request body for PUT /labor-entries/<id>/self — a worker correcting one of their days.
+
+    Same fields and non-empty rule as SelfLogAttendanceRequest; the date is fixed by the entry.
+    """
+
+    shift_type: Optional[ShiftTypeLiteral] = None
+    supplement_hours: int = Field(default=0, ge=0, le=12)
+    note: Optional[str] = Field(None, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_non_empty(self) -> "SelfEditAttendanceRequest":
+        if self.shift_type is None and self.supplement_hours == 0:
+            raise ValueError("Empty entry: must set shift_type or supplement_hours > 0")
+        return self
+
+
+class OwnAttendanceEntryResponse(BaseModel):
+    """Response for PUT /labor-entries/<id>/self and the change validate / reject routes."""
+
+    id: str
+    worker_id: str
+    date: str
+    status: EntryStatusLiteral
+    shift_type: Optional[ShiftTypeLiteral]
+    supplement_hours: int
+    note: Optional[str]
+    change_pending: bool
+    proposed_shift_type: Optional[ShiftTypeLiteral] = None
+    proposed_supplement_hours: Optional[int] = None
+    proposed_note: Optional[str] = None
+    change_requested_at: Optional[str] = None
 
 
 class SelfLoggedEntryResponse(BaseModel):

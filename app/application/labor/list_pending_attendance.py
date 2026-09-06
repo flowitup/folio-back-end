@@ -21,6 +21,10 @@ class PendingAttendanceDto:
     supplement_hours: int
     note: Optional[str]
     submitted_at: str
+    kind: str = "attendance_pending"
+    proposed_shift_type: Optional[str] = None
+    proposed_supplement_hours: Optional[int] = None
+    proposed_note: Optional[str] = None
 
 
 class ListPendingAttendanceUseCase:
@@ -43,6 +47,10 @@ class ListPendingAttendanceUseCase:
                 supplement_hours=i.supplement_hours,
                 note=i.note,
                 submitted_at=i.submitted_at.isoformat(),
+                kind=i.kind,
+                proposed_shift_type=i.proposed_shift_type,
+                proposed_supplement_hours=i.proposed_supplement_hours,
+                proposed_note=i.proposed_note,
             )
             for i in items
         ]
