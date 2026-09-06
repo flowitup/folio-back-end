@@ -146,6 +146,13 @@ class InvoiceModel(Base):
         index=True,
     )
 
+    # Company cash advance: a released_funds row recording money the company handed
+    # to a person (typically cash) to pay site expenses on its behalf. An internal
+    # transfer, not a fund release — excluded from every funds_released total and
+    # reported separately so the company purse can show "incl. X cash advance".
+    # Only settable when type == 'released_funds' (enforced at the application layer).
+    is_cash_advance = Column(Boolean, nullable=False, default=False, server_default="false")
+
     # Optional row-highlight color — one of the fixed palette or NULL (no highlight).
     # Plain VARCHAR + CHECK constraint (mirrors settled_via): adding palette values
     # later needs no ALTER TYPE. Applies to every invoice type; purely visual.

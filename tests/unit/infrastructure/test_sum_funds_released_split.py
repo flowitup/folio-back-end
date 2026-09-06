@@ -98,6 +98,7 @@ def _make_invoice(
     inv_type: str,
     amount: float,
     payment_method_id: "UUID | None" = None,
+    is_cash_advance: bool = False,
 ) -> UUID:
     inv = InvoiceModel(
         id=uuid4(),
@@ -108,6 +109,7 @@ def _make_invoice(
         recipient_name="Recipient",
         items=[{"description": "Line", "quantity": 1, "unit_price": amount, "vat_rate": 0}],
         payment_method_id=payment_method_id,
+        is_cash_advance=is_cash_advance,
     )
     session.add(inv)
     session.flush()
@@ -123,7 +125,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 300.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == Decimal("0")
         assert personal_total == pytest.approx(Decimal("300.00"), abs=Decimal("0.01"))
@@ -136,7 +138,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 400.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == pytest.approx(Decimal("400.00"), abs=Decimal("0.01"))
         assert personal_total == Decimal("0")
@@ -150,7 +152,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 150.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == pytest.approx(Decimal("150.00"), abs=Decimal("0.01"))
         assert personal_total == Decimal("0")
@@ -163,7 +165,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 500.0, payment_method_id=None)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == pytest.approx(Decimal("500.00"), abs=Decimal("0.01"))
         assert personal_total == Decimal("0")
@@ -177,7 +179,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "materials_services", 999.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == Decimal("0")
         assert personal_total == Decimal("0")
@@ -191,7 +193,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 220.0, payment_method_id=pm_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == Decimal("0")
         assert personal_total == pytest.approx(Decimal("220.00"), abs=Decimal("0.01"))
@@ -208,7 +210,7 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 100.0, payment_method_id=None)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
         grand_total = repo.sum_funds_released(project_id)
 
         assert company_total == pytest.approx(Decimal("500.00"), abs=Decimal("0.01"))
@@ -221,7 +223,7 @@ class TestSumFundsReleasedSplit:
         project_id = _make_project(session, user_id, company_id)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == Decimal("0")
         assert personal_total == Decimal("0")
@@ -233,7 +235,73 @@ class TestSumFundsReleasedSplit:
         _make_invoice(session, project_id, "released_funds", 100.0)
 
         repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total = repo.sum_funds_released_split(project_id)
+        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert company_total == pytest.approx(Decimal("100.00"), abs=Decimal("0.01"))
         assert personal_total == Decimal("0")
+
+
+class TestSumFundsReleasedSplitCashAdvance:
+    """Cash-advance releases (company money handed to a person) are internal transfers:
+    they must never grow any purse's released total, whatever payment method they carry."""
+
+    def test_cash_advance_with_personal_method_is_excluded_from_personal(self, session):
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        personal_pm = _make_payment_method(session, company_id, is_personal_payment=True)
+        _make_invoice(
+            session, project_id, "released_funds", 3000.0, payment_method_id=personal_pm, is_cash_advance=True
+        )
+        _make_invoice(session, project_id, "released_funds", 250.0, payment_method_id=personal_pm)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, cash_advanced = repo.sum_funds_released_split(project_id)
+
+        assert company_total == Decimal("0")
+        assert personal_total == pytest.approx(Decimal("250.00"), abs=Decimal("0.01"))
+        assert cash_advanced == pytest.approx(Decimal("3000.00"), abs=Decimal("0.01"))
+
+    def test_cash_advance_with_company_method_is_excluded_from_company(self, session):
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        company_pm = _make_payment_method(session, company_id, is_company_payment=True)
+        _make_invoice(session, project_id, "released_funds", 3000.0, payment_method_id=company_pm, is_cash_advance=True)
+        _make_invoice(session, project_id, "released_funds", 1000.0, payment_method_id=company_pm)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, cash_advanced = repo.sum_funds_released_split(project_id)
+
+        assert company_total == pytest.approx(Decimal("1000.00"), abs=Decimal("0.01"))
+        assert personal_total == Decimal("0")
+        assert cash_advanced == pytest.approx(Decimal("3000.00"), abs=Decimal("0.01"))
+
+    def test_sum_funds_released_excludes_cash_advances_and_invariant_holds(self, session):
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        personal_pm = _make_payment_method(session, company_id, is_personal_payment=True)
+        _make_invoice(session, project_id, "released_funds", 3000.0, payment_method_id=None, is_cash_advance=True)
+        _make_invoice(session, project_id, "released_funds", 300.0, payment_method_id=personal_pm)
+        _make_invoice(session, project_id, "released_funds", 100.0, payment_method_id=None)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, cash_advanced = repo.sum_funds_released_split(project_id)
+        grand_total = repo.sum_funds_released(project_id)
+
+        assert grand_total == pytest.approx(Decimal("400.00"), abs=Decimal("0.01"))
+        assert company_total + personal_total == pytest.approx(grand_total, abs=Decimal("0.01"))
+        assert cash_advanced == pytest.approx(Decimal("3000.00"), abs=Decimal("0.01"))
+
+    def test_cash_advance_flag_on_expense_rows_is_ignored(self, session):
+        """The flag is released_funds-only; a stray flag on an expense row must not be summed."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        _make_invoice(session, project_id, "labor", 500.0, payment_method_id=None, is_cash_advance=True)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, cash_advanced = repo.sum_funds_released_split(project_id)
+
+        assert (company_total, personal_total, cash_advanced) == (Decimal("0"), Decimal("0"), Decimal("0"))

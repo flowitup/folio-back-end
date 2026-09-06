@@ -206,6 +206,7 @@ def _seed_invoice(
     refunded_by=None,
     payment_method_id=None,
     items=None,
+    is_cash_advance=False,
 ) -> str:
     """Insert an InvoiceModel row directly and return the string UUID."""
     from app import db
@@ -224,6 +225,7 @@ def _seed_invoice(
             refundable_status=refundable_status,
             refunded_by=refunded_by,
             payment_method_id=UUID(payment_method_id) if payment_method_id else None,
+            is_cash_advance=is_cash_advance,
         )
         db.session.add(row)
         db.session.commit()
@@ -457,3 +459,146 @@ class TestPaidByPersonalPerInvoice:
         assert body["paid_by_personal"] is True
         assert "paid_by_company" in body
         assert body["paid_by_company"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: company_cash_advanced_total (company money handed to a person)
+# ---------------------------------------------------------------------------
+
+
+class TestCompanyCashAdvancedTotal:
+    def _meta(self, client, project_id, token):
+        resp = client.get(_list_url(project_id), headers=_auth(token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def test_cash_advance_release_is_reported_separately_and_excluded_from_released_totals(
+        self, ps_client, ps_app, admin_token
+    ):
+        project_id = ps_app._test_project_id
+        before = self._meta(ps_client, project_id, admin_token)
+
+        _seed_invoice(
+            ps_app,
+            project_id,
+            "released_funds",
+            payment_method_id=ps_app._test_personal_pm_id,
+            items=[{"description": "ANN → Cash", "quantity": 1, "unit_price": 3000.0, "vat_rate": 0}],
+            is_cash_advance=True,
+        )
+
+        after = self._meta(ps_client, project_id, admin_token)
+        assert after["company_cash_advanced_total"] == pytest.approx(before["company_cash_advanced_total"] + 3000.0)
+        # A handover is not a fund release — no released figure moves, even with a personal method.
+        assert after["funds_released_total"] == pytest.approx(before["funds_released_total"])
+        assert after["funds_released_personal_total"] == pytest.approx(before["funds_released_personal_total"])
+        assert after["funds_released_company_total"] == pytest.approx(before["funds_released_company_total"])
+        # Nor is it company spend at the meta level; the FE adds it to the purse card itself.
+        assert after["company_spent_total"] == pytest.approx(before["company_spent_total"])
+        assert after["personal_spent_total"] == pytest.approx(before["personal_spent_total"])
+
+    def test_post_released_funds_with_cash_advance_round_trips_flag(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        payload = {
+            "type": "released_funds",
+            "issue_date": "2026-09-06",
+            "recipient_name": "ANN ECO CONSTRUCTION → CASH Trung",
+            "items": [{"description": "Cash advance", "quantity": 1, "unit_price": 3000.0, "vat_rate": 0}],
+            "payment_method_id": ps_app._test_company_pm_id,
+            "is_cash_advance": True,
+        }
+        resp = ps_client.post(_list_url(project_id), json=payload, headers=_auth(admin_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        created = resp.get_json()
+        assert created["is_cash_advance"] is True
+
+        single = ps_client.get(_invoice_url(project_id, created["id"]), headers=_auth(admin_token))
+        assert single.status_code == 200
+        assert single.get_json()["is_cash_advance"] is True
+
+        listed = self._meta(ps_client, project_id, admin_token)
+        row = next(i for i in listed["invoices"] if i["id"] == created["id"])
+        assert row["is_cash_advance"] is True
+
+    def test_post_defaults_flag_to_false(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        payload = {
+            "type": "others",
+            "issue_date": "2026-09-06",
+            "recipient_name": "Plain expense",
+            "items": [{"description": "x", "quantity": 1, "unit_price": 10.0, "vat_rate": 0}],
+        }
+        resp = ps_client.post(_list_url(project_id), json=payload, headers=_auth(admin_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["is_cash_advance"] is False
+
+    def test_post_cash_advance_on_expense_type_is_rejected(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        payload = {
+            "type": "labor",
+            "issue_date": "2026-09-06",
+            "recipient_name": "Worker",
+            "items": [{"description": "Day", "quantity": 1, "unit_price": 100.0, "vat_rate": 0}],
+            "is_cash_advance": True,
+        }
+        resp = ps_client.post(_list_url(project_id), json=payload, headers=_auth(admin_token))
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "cash_advance_not_allowed"
+
+    def test_put_sets_and_clears_flag_on_released_funds(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        inv_id = _seed_invoice(
+            ps_app,
+            project_id,
+            "released_funds",
+            items=[{"description": "Release", "quantity": 1, "unit_price": 500.0, "vat_rate": 0}],
+        )
+        resp = ps_client.put(
+            _invoice_url(project_id, inv_id), json={"is_cash_advance": True}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["is_cash_advance"] is True
+
+        resp = ps_client.put(
+            _invoice_url(project_id, inv_id), json={"is_cash_advance": False}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["is_cash_advance"] is False
+
+    def test_put_cash_advance_on_expense_type_is_rejected(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        inv_id = _seed_invoice(ps_app, project_id, "others")
+        resp = ps_client.put(
+            _invoice_url(project_id, inv_id), json={"is_cash_advance": True}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "cash_advance_not_allowed"
+
+    def test_put_type_change_away_from_released_funds_clears_flag(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        inv_id = _seed_invoice(
+            ps_app,
+            project_id,
+            "released_funds",
+            items=[{"description": "Release", "quantity": 1, "unit_price": 500.0, "vat_rate": 0}],
+            is_cash_advance=True,
+        )
+        resp = ps_client.put(_invoice_url(project_id, inv_id), json={"type": "others"}, headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["type"] == "others"
+        assert resp.get_json()["is_cash_advance"] is False
+
+    def test_put_null_clears_flag(self, ps_client, ps_app, admin_token):
+        project_id = ps_app._test_project_id
+        inv_id = _seed_invoice(
+            ps_app,
+            project_id,
+            "released_funds",
+            items=[{"description": "Release", "quantity": 1, "unit_price": 500.0, "vat_rate": 0}],
+            is_cash_advance=True,
+        )
+        resp = ps_client.put(
+            _invoice_url(project_id, inv_id), json={"is_cash_advance": None}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["is_cash_advance"] is False

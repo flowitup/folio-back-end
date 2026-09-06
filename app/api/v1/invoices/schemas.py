@@ -80,6 +80,8 @@ class CreateInvoiceSchema(BaseModel):
     applied_to_invoice_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
     highlight_color: Optional[HighlightColorLiteral] = None
+    # Company cash advance — only valid when type='released_funds' (use-case enforced).
+    is_cash_advance: bool = False
 
 
 class UpdateInvoiceSchema(BaseModel):
@@ -113,6 +115,9 @@ class UpdateInvoiceSchema(BaseModel):
     applied_to_invoice_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
     highlight_color: Optional[HighlightColorLiteral] = None
+    # exclude_unset semantics: absent → keep; true → set (released_funds only);
+    # false or null → clear (null is accepted for clients that send nulls uniformly).
+    is_cash_advance: Optional[bool] = None
 
 
 _YYYY_MM = re.compile(r"^(19|20|21)\d{2}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$")

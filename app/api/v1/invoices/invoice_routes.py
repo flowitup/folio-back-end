@@ -43,6 +43,7 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
     RefundExceedsSourceError,
+    CashAdvanceNotAllowedError,
     ServiceMonthNotAllowedError,
     WorkerLinkNotAllowedError,
     WorkerNotInProjectError,
@@ -349,12 +350,18 @@ def list_invoices(project_id: str):
     # sum_company_spent + sum_personal_spent) to two. funds_released_total is derived
     # from the RAW (pre-quantization) split components so it exactly reconciles with
     # their sum, per the port's documented invariant.
-    funds_released_company_raw, funds_released_personal_raw = container.invoice_repository.sum_funds_released_split(
-        project_uuid
-    )
+    (
+        funds_released_company_raw,
+        funds_released_personal_raw,
+        company_cash_advanced_raw,
+    ) = container.invoice_repository.sum_funds_released_split(project_uuid)
     funds_released_total = money(funds_released_company_raw + funds_released_personal_raw)
     funds_released_company_total = money(funds_released_company_raw)
     funds_released_personal_total = money(funds_released_personal_raw)
+    # Company money handed to a person (cash-advance releases). Kept OUT of the
+    # released totals above and of company_spent_total; the FE adds it to the company
+    # purse's spend and labels it "incl. X cash advance".
+    company_cash_advanced_total = money(company_cash_advanced_raw)
 
     company_spent_raw, personal_spent_raw = container.invoice_repository.sum_spent_split(project_uuid)
     company_spent_total = money(company_spent_raw)
@@ -442,6 +449,7 @@ def list_invoices(project_id: str):
             "funds_released_company_total": funds_released_company_total,
             "funds_released_personal_total": funds_released_personal_total,
             "personal_spent_total": personal_spent_total,
+            "company_cash_advanced_total": company_cash_advanced_total,
             "company_name": company_name,
         }
     )
@@ -549,6 +557,7 @@ def create_invoice(project_id: str):
                 applied_to_invoice_id=data.applied_to_invoice_id,
                 worker_id=data.worker_id,
                 highlight_color=data.highlight_color,
+                is_cash_advance=data.is_cash_advance,
             )
         )
     except InvoiceNumberConflictError:
@@ -569,6 +578,10 @@ def create_invoice(project_id: str):
         return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
     except WorkerLinkNotAllowedError:
         return _error_response("worker_link_not_allowed", "worker_id is only allowed on labor invoices", 400)
+    except CashAdvanceNotAllowedError:
+        return _error_response(
+            "cash_advance_not_allowed", "is_cash_advance is only allowed on released_funds invoices", 400
+        )
     except WorkerNotInProjectError:
         return _error_response("worker_not_in_project", "Worker does not belong to this project", 400)
     except ValueError as e:
@@ -654,6 +667,7 @@ def update_invoice(project_id: str, invoice_id: str):
         "applied_to_invoice_id",
         "worker_id",
         "highlight_color",
+        "is_cash_advance",
     )
     update_kwargs = {k: v for k, v in provided_fields.items() if k not in sentinel_fields and v is not None}
     # type arrives as a validated string literal; the use case and domain entity
@@ -686,6 +700,7 @@ def update_invoice(project_id: str, invoice_id: str):
     applied_to_val = provided_fields["applied_to_invoice_id"] if "applied_to_invoice_id" in provided_fields else _UNSET
     worker_id_val = provided_fields["worker_id"] if "worker_id" in provided_fields else _UNSET
     highlight_color_val = provided_fields["highlight_color"] if "highlight_color" in provided_fields else _UNSET
+    cash_advance_val = provided_fields["is_cash_advance"] if "is_cash_advance" in provided_fields else _UNSET
 
     company_id = _get_project_company_id(project_uuid) if pm_id is not _UNSET else None
 
@@ -700,6 +715,7 @@ def update_invoice(project_id: str, invoice_id: str):
         applied_to_invoice_id=applied_to_val,
         worker_id=worker_id_val,
         highlight_color=highlight_color_val,
+        is_cash_advance=cash_advance_val,
         **update_kwargs,
     )
 
@@ -725,6 +741,10 @@ def update_invoice(project_id: str, invoice_id: str):
         return _error_response("service_month_not_allowed", "service_month is only allowed on labor invoices", 400)
     except WorkerLinkNotAllowedError:
         return _error_response("worker_link_not_allowed", "worker_id is only allowed on labor invoices", 400)
+    except CashAdvanceNotAllowedError:
+        return _error_response(
+            "cash_advance_not_allowed", "is_cash_advance is only allowed on released_funds invoices", 400
+        )
     except WorkerNotInProjectError:
         return _error_response("worker_not_in_project", "Worker does not belong to this project", 400)
     except (ValueError, InvalidInvoiceDataError) as e:
