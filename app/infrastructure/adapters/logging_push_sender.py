@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 class LoggingPushSender:
     def send(self, messages: List[PushMessage], on_invalid_token: Optional[Callable[[str], None]] = None) -> None:
+        # WARNING like the SMS log adapter: the API's root logger drops INFO, and the point
+        # of this provider is to make the message visible in the log.
         for m in messages:
-            logger.info(
+            logger.warning(
                 "PUSH (not sent, PUSH_PROVIDER=log) to=%s title=%r body=%r data=%s", m.token, m.title, m.body, m.data
             )
