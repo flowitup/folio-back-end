@@ -104,7 +104,21 @@ def submit_own_attendance(project_id: str):
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
 
+    _notify(lambda n: n.worker_submitted(UUID(result.worker_id), _parse_date(result.date), UUID(result.id)))
     return jsonify(SelfLoggedEntryResponse(**result.__dict__).model_dump()), 201
+
+
+def _notify(call) -> None:
+    """Fire a push (validators or worker) without ever failing the request."""
+    notifier = get_container().attendance_push_notifier
+    if notifier is None:
+        return
+    try:
+        call(notifier)
+    except Exception:  # pragma: no cover - defensive
+        import logging
+
+        logging.getLogger(__name__).exception("attendance push failed")
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>/validate", methods=["POST"])
@@ -136,6 +150,7 @@ def validate_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
+    _notify(lambda n: n.decision(UUID(result.worker_id), _parse_date(result.date), UUID(result.id), "validated"))
     return jsonify(ValidatedEntryResponse(**result.__dict__).model_dump())
 
 
@@ -153,6 +168,9 @@ def reject_attendance(project_id: str, entry_id: str):
     usecase = get_container().reject_attendance_usecase
     if usecase is None:
         raise RuntimeError("reject_attendance_usecase not wired in container")
+    # The row is deleted by the use case: capture who/when first for the worker's push.
+    entry_repo = get_container().labor_entry_repository
+    doomed = entry_repo.find_by_id(UUID(entry_id)) if entry_repo is not None else None
 
     try:
         usecase.execute(
@@ -169,6 +187,8 @@ def reject_attendance(project_id: str, entry_id: str):
     except AttendanceAlreadyValidatedError as e:
         return _error_response("Conflict", str(e), 409)
 
+    if doomed is not None:
+        _notify(lambda n: n.decision(doomed.worker_id, doomed.date, doomed.id, "rejected"))
     return "", 204
 
 
@@ -209,6 +229,10 @@ def edit_own_attendance(project_id: str, entry_id: str):
         return _error_response("WorkerNotLinked", str(e), 404)
     except (WorkerNotFoundError, LaborEntryNotFoundError):
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
+    if result.change_pending:
+        _notify(
+            lambda n: n.worker_submitted(UUID(result.worker_id), _parse_date(result.date), UUID(result.id), change=True)
+        )
     return jsonify(OwnAttendanceEntryResponse(**result.__dict__).model_dump())
 
 
@@ -231,6 +255,14 @@ def _decide_change(project_id: str, entry_id: str, approve: bool):
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
     except NoChangeRequestError as e:
         return _error_response("Conflict", str(e), 409)
+    _notify(
+        lambda n: n.decision(
+            UUID(result.worker_id),
+            _parse_date(result.date),
+            UUID(result.id),
+            "change_applied" if approve else "change_refused",
+        )
+    )
     return jsonify(OwnAttendanceEntryResponse(**result.__dict__).model_dump())
 
 
