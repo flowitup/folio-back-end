@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.application.companies._helpers import _assert_admin
+from app.application.companies._helpers import _assert_company_admin
 from app.application.companies.dtos import SetMemberRoleInput, UserCompanyAccessResponse
 from app.application.companies.ports import (
     RoleCheckerPort,
@@ -15,17 +15,16 @@ from app.domain.companies.exceptions import (
 )
 from app.domain.companies.roles import CompanyRole
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class SetMemberRoleUseCase:
-    """Change a company member's per-company role (admin | member). Admin only.
+    """Change a company member's per-company role. Company or platform admin only.
 
     Guards:
-      - Caller must hold the global *:* admin permission.
+      - Caller must be a platform admin ('*:*') or an admin of this company.
       - Target user must be attached to the company.
-      - Demoting the company's last admin is rejected (LastCompanyAdminError) so
-        every company keeps at least one admin who can manage its billing.
+      - Changing the company's last admin to any non-admin role is rejected
+        (LastCompanyAdminError) so every company keeps at least one admin who
+        can manage its billing and members.
     """
 
     def __init__(
@@ -41,9 +40,8 @@ class SetMemberRoleUseCase:
         inp: SetMemberRoleInput,
         db_session: TransactionalSessionPort,
     ) -> UserCompanyAccessResponse:
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
-        _assert_admin(inp.caller_id, inp.company_id, is_admin)
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        _assert_company_admin(self._role_checker, inp.caller_id, inp.company_id)
 
         # 2. Validate role
         if inp.role not in CompanyRole.values():
@@ -58,11 +56,11 @@ class SetMemberRoleUseCase:
         if access.role == inp.role:
             return UserCompanyAccessResponse.from_entity(access)
 
-        # 5. Last-admin guard: block demoting the only admin of the company
-        if access.role == CompanyRole.ADMIN.value and inp.role == CompanyRole.MEMBER.value:
-            admins = [
-                a for a in self._access_repo.list_for_company(inp.company_id) if a.role == CompanyRole.ADMIN.value
-            ]
+        # 5. Last-admin guard: block any change away from admin that would leave
+        # the company with zero admins. Locks the admin rows (FOR UPDATE) so a
+        # concurrent demote/boot/self-detach cannot race past this count.
+        if access.role == CompanyRole.ADMIN.value and inp.role != CompanyRole.ADMIN.value:
+            admins = self._access_repo.list_admins_for_update(inp.company_id)
             if len(admins) <= 1:
                 raise LastCompanyAdminError(inp.company_id)
 

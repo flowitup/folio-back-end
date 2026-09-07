@@ -20,14 +20,17 @@ from app.api.v1.projects.schemas import (
 )
 from app.api.v1.projects.decorators import (
     require_permission,
-    has_permission,
     can_read_project,
     can_mutate_project,
     _effective_perms_for,
     _has_permission,
+    _is_platform_admin,
 )
+from app.application.billing.ports import admin_company_ids
 from app.application.projects import CreateProjectRequest as CreateDTO
 from app.application.projects.ports import ProjectSpent
+from app.domain.authz.resolver import effective_permissions as _authz_effective_permissions
+from app.domain.entities.project_membership import ProjectMembership
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError, InvalidProjectDataError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -50,8 +53,12 @@ def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
 
 
 def _money_visible(perms: list, owner_id, user_id: UUID) -> bool:
-    """Budget and spend are for the owner and holders of project:manage_labor only."""
-    return str(owner_id) == str(user_id) or _has_permission(perms, "project:manage_labor")
+    """Budget and spend are for the owner and holders of manage_labor or view_pay."""
+    return (
+        str(owner_id) == str(user_id)
+        or _has_permission(perms, "project:manage_labor")
+        or _has_permission(perms, "project:view_pay")
+    )
 
 
 def _spend_fields(rollup: ProjectSpent) -> dict:
@@ -72,12 +79,22 @@ def _spend_fields(rollup: ProjectSpent) -> dict:
 @jwt_required()
 @require_permission("project:read")
 def list_projects():
-    """List projects for current user (or all if admin)."""
+    """List projects visible to current user.
+
+    Visible = projects of companies where the caller is company admin ∪
+    projects the caller owns or is a member of ∪ every project when the
+    caller holds the legacy global `*:*` claim. A raw `project:create` JWT
+    claim no longer implies "see every project" (the tenancy hole this
+    phase closes) — company admin-ship is resolved per company, never global.
+    """
     container = get_container()
     user_id = get_jwt_identity()
-    is_admin = has_permission("project:create")
+    is_platform_admin = _is_platform_admin()
+    admin_ids = admin_company_ids(container.user_company_access_repo, UUID(user_id)) if not is_platform_admin else []
 
-    projects = container.list_projects_usecase.execute(UUID(user_id), is_admin=is_admin)
+    projects = container.list_projects_usecase.execute(
+        UUID(user_id), admin_company_ids=admin_ids, is_platform_admin=is_platform_admin
+    )
 
     # Batch-load budget+source from project entities (carried via repo→entity)
     # and spent via a single aggregation call (no N+1).
@@ -136,9 +153,24 @@ def list_projects():
 )
 @jwt_required()
 @limiter.limit("10 per minute")
-@require_permission("project:create")
 def create_project():
-    """Create a new project."""
+    """Create a new project.
+
+    No longer gated by the raw JWT `project:create` claim — that flag is now
+    only meaningful *per company*. Target company resolution:
+      1. body `company_id`, if given — must be a company the caller admins
+         (403 otherwise).
+      2. else the caller's primary company, if they admin it.
+      3. else the single company the caller admins.
+      4. else 400 ("no company") — UNLESS the caller holds the legacy global
+         `*:*` claim, which may still create an orphaned (company_id=None)
+         project (back-compat for the pre-companies flow).
+    `project:create` is then required from the resolver for the resolved
+    company (legacy `*:*` always passes). The creator is added to the new
+    project's `user_projects` as the legacy `manager` role, so the existing
+    per-project-role union (`_membership_role_permissions`) keeps working for
+    them without waiting on Phase 3's resolver-authoritative cutover.
+    """
     try:
         data = CreateProjectRequest(**request.get_json())
     except ValidationError as e:
@@ -155,20 +187,95 @@ def create_project():
         )
 
     container = get_container()
-    user_id = get_jwt_identity()
+    user_id = UUID(get_jwt_identity())
+    is_platform_admin = _is_platform_admin()
+    access_repo = container.user_company_access_repo
+    admin_ids = admin_company_ids(access_repo, user_id)
+
+    target_company_id: "UUID | None" = None
+    if data.company_id:
+        try:
+            body_company_id = UUID(data.company_id)
+        except ValueError:
+            return (
+                jsonify(
+                    ErrorResponse(error="ValidationError", message="Invalid company_id", status_code=400).model_dump()
+                ),
+                400,
+            )
+        if body_company_id not in admin_ids and not is_platform_admin:
+            return (
+                jsonify(
+                    ErrorResponse(
+                        error="Forbidden", message="Not an admin of that company", status_code=403
+                    ).model_dump()
+                ),
+                403,
+            )
+        target_company_id = body_company_id
+    else:
+        if access_repo is not None:
+            for access in access_repo.list_for_user(user_id):
+                if access.is_primary and access.company_id in admin_ids:
+                    target_company_id = access.company_id
+                    break
+        if target_company_id is None and len(admin_ids) == 1:
+            target_company_id = admin_ids[0]
+        if target_company_id is None and not is_platform_admin:
+            return (
+                jsonify(
+                    ErrorResponse(
+                        error="ValidationError",
+                        message="No company to attach this project to — pass company_id",
+                        status_code=400,
+                    ).model_dump()
+                ),
+                400,
+            )
+
+    if target_company_id is not None:
+        reader = container.authz_reader
+        perms = (
+            _authz_effective_permissions(
+                reader, user_id, company_id=target_company_id, is_platform_admin=is_platform_admin
+            )
+            if reader is not None
+            else (frozenset({"*:*"}) if is_platform_admin else frozenset())
+        )
+        if not _has_permission(list(perms), "project:create"):
+            return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     try:
         result = container.create_project_usecase.execute(
             CreateDTO(
                 name=data.name,
                 address=data.address,
-                owner_id=UUID(user_id),
+                owner_id=user_id,
                 budget=data.budget,
                 budget_source=data.budget_source,
+                company_id=target_company_id,
             )
         )
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
+
+    # Assign the creator as the legacy per-project "manager" role so the
+    # existing membership-role union keeps granting them full project rights
+    # (see app.api.v1.projects.decorators._membership_role_permissions).
+    # Silently skipped if the legacy roles table has no "manager" row (fresh
+    # DB before scripts/seed_auth.py has run) — no per-project role table is
+    # a hard requirement for project creation.
+    if container.role_repository is not None and container.project_membership_repo is not None:
+        manager_role = container.role_repository.find_by_name("manager")
+        if manager_role is not None:
+            container.project_membership_repo.add(
+                ProjectMembership.create(user_id=user_id, project_id=UUID(result.id), role_id=manager_role.id)
+            )
+            # ProjectMembership.add() only flushes (mirrors BulkAddExistingUserUseCase);
+            # commit explicitly so the row survives past this request's teardown.
+            from app import db as _db
+
+            _db.session.commit()
 
     return (
         jsonify(
@@ -179,6 +286,7 @@ def create_project():
                 owner_id=result.owner_id,
                 user_count=0,
                 created_at=result.created_at,
+                company_id=result.company_id,
                 invoice_prefix=result.invoice_prefix,
                 budget=float(result.budget) if result.budget is not None else None,
                 budget_source=result.budget_source,

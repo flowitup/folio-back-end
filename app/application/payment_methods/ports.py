@@ -84,6 +84,17 @@ class RoleCheckerPort(Protocol):
         """Return True if user_id holds *permission* (or '*:*')."""
         ...
 
+    def is_platform_admin(self, user_id: UUID) -> bool:
+        """Return True if user_id holds the legacy global '*:*' wildcard permission."""
+        ...
+
+    def is_company_admin(self, user_id: UUID, company_id: UUID) -> bool:
+        """Return True if user_id's per-company role for company_id is 'admin'.
+
+        Mirrors the equivalent port in ``app.application.companies.ports``.
+        """
+        ...
+
 
 class TransactionalSessionPort(Protocol):
     """Minimal session contract for mutating payment_methods use-cases.

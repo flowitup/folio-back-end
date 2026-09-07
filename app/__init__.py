@@ -538,9 +538,30 @@ def _configure_di_container() -> None:
     # Reuse authorization_service as RoleCheckerPort (structurally compatible)
     _role_checker = _c.authorization_service
 
+    # AuthorizationService is constructed in wiring.py before _access_repo
+    # exists (it only takes a UserRepositoryPort there), so the per-company
+    # role lookup used by is_company_admin() is injected here instead, once
+    # SqlAlchemyUserCompanyAccessRepository is available.
+    if _role_checker is not None and hasattr(_role_checker, "set_company_role_lookup"):
+
+        def _company_role_for(user_id, company_id):
+            access = _access_repo.find(user_id, company_id)
+            return access.role if access is not None else None
+
+        _role_checker.set_company_role_lookup(_company_role_for)
+
     _c.company_repo = _company_repo
     _c.user_company_access_repo = _access_repo
     _c.company_invite_token_repo = _token_repo
+
+    # Company-aware authz resolver read port (app/domain/authz/resolver.py).
+    # Wired here, alongside the other company repos, so every route that goes
+    # through create_app() gets resolver-derived permissions for free.
+    from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
+        SqlAlchemyAuthzReader,
+    )
+
+    _c.authz_reader = SqlAlchemyAuthzReader(db.session)
 
     # admin use-cases
     _c.create_company_usecase = _CreateCompanyUseCase(
@@ -611,7 +632,7 @@ def _configure_di_container() -> None:
     # Company join code (mobile onboarding): superadmin issues it, anyone with it joins as member.
     from app.application.companies.join_code_usecases import JoinCompanyByCodeUseCase, SetJoinCodeUseCase
 
-    _c.set_join_code_usecase = SetJoinCodeUseCase(company_repo=_company_repo, clock=_clock)
+    _c.set_join_code_usecase = SetJoinCodeUseCase(company_repo=_company_repo, clock=_clock, role_checker=_role_checker)
     _c.join_company_by_code_usecase = JoinCompanyByCodeUseCase(
         company_repo=_company_repo, access_repo=_access_repo, clock=_clock
     )

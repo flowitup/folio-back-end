@@ -67,21 +67,36 @@ class InMemoryPaymentMethodRepository:
 
 
 class FakeRoleService:
-    """Controls admin status per user_id for tests."""
+    """Controls platform-admin and per-company-admin status for tests."""
 
     def __init__(self, admin_ids: set[UUID] | None = None):
         self._admin_ids: set[UUID] = admin_ids or set()
+        self._company_admins: set[tuple[UUID, UUID]] = set()
 
     def set_admin(self, user_id: UUID, is_admin: bool = True) -> None:
+        """Grant/revoke the legacy global '*:*' wildcard permission."""
         if is_admin:
             self._admin_ids.add(user_id)
         else:
             self._admin_ids.discard(user_id)
 
+    def set_company_admin(self, user_id: UUID, company_id: UUID, is_admin: bool = True) -> None:
+        """Grant/revoke a per-company 'admin' role for (user_id, company_id)."""
+        if is_admin:
+            self._company_admins.add((user_id, company_id))
+        else:
+            self._company_admins.discard((user_id, company_id))
+
     def has_permission(self, user_id: UUID, permission: str) -> bool:
         if permission == "*:*":
             return user_id in self._admin_ids
         return False
+
+    def is_platform_admin(self, user_id: UUID) -> bool:
+        return user_id in self._admin_ids
+
+    def is_company_admin(self, user_id: UUID, company_id: UUID) -> bool:
+        return (user_id, company_id) in self._company_admins
 
 
 class FakeUserCompanyAccessRepository:

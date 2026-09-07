@@ -135,8 +135,8 @@ class TestGetProjectUseCase:
 class TestListProjectsUseCase:
     """Test ListProjectsUseCase."""
 
-    def test_list_projects_for_admin(self):
-        """Admin sees all projects."""
+    def test_list_projects_for_platform_admin(self):
+        """Legacy global `*:*` holder sees every project."""
         mock_repo = Mock()
         mock_repo.list_all.return_value = [
             Project(id=uuid4(), name="P1", address=None, owner_id=uuid4(), created_at=datetime.now(timezone.utc)),
@@ -144,16 +144,17 @@ class TestListProjectsUseCase:
         ]
 
         usecase = ListProjectsUseCase(mock_repo)
-        result = usecase.execute(uuid4(), is_admin=True)
+        result = usecase.execute(uuid4(), is_platform_admin=True)
 
         assert len(result) == 2
         mock_repo.list_all.assert_called_once()
 
     def test_list_projects_for_user(self):
-        """Regular user sees only assigned projects."""
+        """Regular user sees owned/assigned projects and their admin companies' projects."""
         user_id = uuid4()
+        company_id = uuid4()
         mock_repo = Mock()
-        mock_repo.list_by_user.return_value = [
+        mock_repo.list_for_user_and_companies.return_value = [
             Project(
                 id=uuid4(),
                 name="P1",
@@ -165,10 +166,21 @@ class TestListProjectsUseCase:
         ]
 
         usecase = ListProjectsUseCase(mock_repo)
-        result = usecase.execute(user_id, is_admin=False)
+        result = usecase.execute(user_id, admin_company_ids=[company_id], is_platform_admin=False)
 
         assert len(result) == 1
-        mock_repo.list_by_user.assert_called_once_with(user_id)
+        mock_repo.list_for_user_and_companies.assert_called_once_with(user_id, [company_id])
+
+    def test_list_projects_defaults_to_no_admin_companies(self):
+        """`admin_company_ids` defaults to an empty list, not None, at the repo boundary."""
+        user_id = uuid4()
+        mock_repo = Mock()
+        mock_repo.list_for_user_and_companies.return_value = []
+
+        usecase = ListProjectsUseCase(mock_repo)
+        usecase.execute(user_id)
+
+        mock_repo.list_for_user_and_companies.assert_called_once_with(user_id, [])
 
 
 class TestUpdateProjectUseCase:

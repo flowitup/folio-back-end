@@ -33,7 +33,9 @@ class UserCompanyAccessModel(Base):
         nullable=False,
     )
     is_primary = Column(Boolean, nullable=False, default=False, server_default="FALSE")
-    # Per-company role: "admin" (billing + member management) or "member".
+    # Per-company role: "admin" (billing + member management), "manager"
+    # (per-project assignment, full project read-write), or "member"
+    # (per-project assignment, read-only). See app.domain.companies.roles.CompanyRole.
     role = Column(Text, nullable=False, default="member", server_default="member")
     attached_at = Column(
         DateTime(timezone=True),
@@ -49,7 +51,7 @@ class UserCompanyAccessModel(Base):
         # Regular index for company-side lookups (who has access to a company)
         Index("ix_user_company_access_company_id", "company_id"),
         CheckConstraint(
-            "role IN ('admin','member')",
+            "role IN ('admin','manager','member')",
             name="ck_user_company_access_role",
         ),
         # Partial unique is defined in the migration; declared here for reflection
@@ -58,4 +60,4 @@ class UserCompanyAccessModel(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<UserCompanyAccess user={self.user_id} " f"company={self.company_id} primary={self.is_primary}>"
+        return f"<UserCompanyAccess user={self.user_id} company={self.company_id} primary={self.is_primary}>"

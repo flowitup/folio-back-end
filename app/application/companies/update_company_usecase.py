@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.application.companies._helpers import (
-    _assert_admin,
+    _assert_company_admin,
     _validate_address,
     _validate_legal_name,
     _validate_prefix_override,
@@ -18,11 +18,9 @@ from app.application.companies.ports import (
 )
 from app.domain.companies.exceptions import CompanyNotFoundError
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class UpdateCompanyUseCase:
-    """Partially update an existing company (admin only).
+    """Partially update an existing company (company admin or platform admin).
 
     Only fields that are not None in the input are applied.
     legal_name and address cannot be set to blank if supplied.
@@ -41,9 +39,8 @@ class UpdateCompanyUseCase:
         inp: UpdateCompanyInput,
         db_session: TransactionalSessionPort,
     ) -> CompanyResponse:
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
-        _assert_admin(inp.caller_id, inp.id, is_admin)
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        _assert_company_admin(self._role_checker, inp.caller_id, inp.id)
 
         # 2. Load entity (no FOR UPDATE needed — admin-only, low contention)
         company = self._company_repo.find_by_id(inp.id)

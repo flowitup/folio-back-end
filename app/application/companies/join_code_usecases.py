@@ -9,10 +9,12 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
+from app.application.companies._helpers import _assert_company_admin
 from app.application.companies.dtos import CompanyResponse
 from app.application.companies.ports import (
     ClockPort,
     CompanyRepositoryPort,
+    RoleCheckerPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
@@ -35,14 +37,41 @@ def normalize_join_code(raw: str) -> str:
 
 
 class SetJoinCodeUseCase:
-    def __init__(self, company_repo: CompanyRepositoryPort, clock: ClockPort) -> None:
+    """Issue or revoke a company's join code (company or platform admin).
+
+    ``role_checker`` is optional so existing call sites that only enforce
+    authorization at the route decorator (``@require_company_role("admin")``)
+    keep working unchanged; passing both ``role_checker`` and ``caller_id``
+    adds the same use-case-level guard as every other company-management
+    use-case (defence in depth).
+    """
+
+    def __init__(
+        self,
+        company_repo: CompanyRepositoryPort,
+        clock: ClockPort,
+        role_checker: Optional[RoleCheckerPort] = None,
+    ) -> None:
         self._companies = company_repo
         self._clock = clock
+        self._role_checker = role_checker
 
-    def execute(self, company_id: UUID, enable: bool, db_session: TransactionalSessionPort) -> Optional[str]:
+    def execute(
+        self,
+        company_id: UUID,
+        enable: bool,
+        db_session: TransactionalSessionPort,
+        *,
+        caller_id: Optional[UUID] = None,
+    ) -> Optional[str]:
         company = self._companies.find_by_id(company_id)
         if company is None:
             raise CompanyNotFoundError(company_id)
+
+        # Use-case-level guard: only checked when both a role_checker was wired
+        # and a caller_id was supplied (see class docstring).
+        if self._role_checker is not None and caller_id is not None:
+            _assert_company_admin(self._role_checker, caller_id, company_id)
         code: Optional[str] = None
         if enable:
             for _ in range(10):

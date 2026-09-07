@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from app.infrastructure.database.repositories.company_serializers import (
@@ -67,6 +68,24 @@ class SqlAlchemyUserCompanyAccessRepository:
             select(UserCompanyAccessModel)
             .where(UserCompanyAccessModel.company_id == company_id)
             .order_by(UserCompanyAccessModel.attached_at)
+        )
+        rows = self._session.execute(stmt).scalars().all()
+        return [deserialize_access_orm(r) for r in rows]
+
+    def list_admins_for_update(self, company_id: UUID) -> list[UserCompanyAccess]:
+        """Return the company's admin-role access rows with SELECT FOR UPDATE.
+
+        Locks only the admin rows so concurrent last-admin removals (demote,
+        boot, self-detach) serialise on Postgres. SQLite ignores FOR UPDATE
+        (single-writer), which is fine for the test suite.
+        """
+        stmt = (
+            select(UserCompanyAccessModel)
+            .where(
+                UserCompanyAccessModel.company_id == company_id,
+                UserCompanyAccessModel.role == CompanyRole.ADMIN.value,
+            )
+            .with_for_update()
         )
         rows = self._session.execute(stmt).scalars().all()
         return [deserialize_access_orm(r) for r in rows]

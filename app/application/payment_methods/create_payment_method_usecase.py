@@ -16,8 +16,6 @@ from app.domain.payment_methods.exceptions import (
 )
 from app.domain.payment_methods.payment_method import PaymentMethod
 
-_ADMIN_PERMISSION = "*:*"
-
 
 def _validate_label(label: str) -> str:
     """Strip and validate label. Raises ValueError if blank after stripping."""
@@ -30,10 +28,11 @@ def _validate_label(label: str) -> str:
 
 
 class CreatePaymentMethodUseCase:
-    """Create a new active payment method for a company (admin only).
+    """Create a new active payment method for a company (company or platform admin).
 
     Raises:
-        ForbiddenCompanyError: Caller does not hold admin permission.
+        ForbiddenCompanyError: Caller is neither a platform admin nor an
+            admin of this company.
         PaymentMethodAlreadyExistsError: A case-insensitive label collision
             exists among active rows for the same company.
         ValueError: Label is blank or exceeds 120 characters.
@@ -54,9 +53,11 @@ class CreatePaymentMethodUseCase:
     ) -> PaymentMethodResponse:
         from app.domain.companies.exceptions import ForbiddenCompanyError
 
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.requester_id, _ADMIN_PERMISSION)
-        if not is_admin:
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        is_authorized = self._role_checker.is_platform_admin(inp.requester_id) or self._role_checker.is_company_admin(
+            inp.requester_id, inp.company_id
+        )
+        if not is_authorized:
             raise ForbiddenCompanyError(inp.requester_id, inp.company_id)
 
         # 2. Validate label

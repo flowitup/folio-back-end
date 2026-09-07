@@ -85,14 +85,38 @@ def _membership_role_permissions(user_id: UUID, project_id: UUID) -> set:
     return {perm.name for perm in role.permissions}
 
 
-def _effective_permissions(kwargs: dict) -> list:
-    """Caller's effective permissions for this request.
+def _is_platform_admin() -> bool:
+    """True when the caller's JWT carries the legacy global `*:*` claim."""
+    return "*:*" in set(get_jwt().get("permissions", []))
 
-    Global-role permissions (from the JWT) UNION the permissions granted by the
-    caller's membership role on the request's target project. The union is
-    monotonic (only adds) so global-role behavior is never reduced; it lets a
-    user invited as a project admin/manager exercise that project's capabilities
-    even though their global role is the read-only default.
+
+def _resolver_permissions_for_project(user_id: UUID, project_id: UUID) -> frozenset:
+    """Company-matrix permissions (admin/manager/member) for a specific project.
+
+    Delegates to the request-memoized resolver (app.api.v1.authz_context) so
+    multiple decorator/serializer calls in the same request share one lookup.
+    Local import avoids a hard dependency at module load (mirrors the existing
+    `from wiring import get_container` pattern in this file).
+    """
+    from app.api.v1.authz_context import resolve_for_request
+
+    return resolve_for_request(user_id, project_id=project_id, is_platform_admin=_is_platform_admin())
+
+
+def _effective_permissions(kwargs: dict) -> list:
+    """Caller's effective permissions for this request: legacy union ∪ resolver output.
+
+    Legacy union — global-role JWT permissions UNION the caller's membership-role
+    permissions on the request's target project — is unchanged and stays monotonic
+    (only adds), so a user invited as a project admin/manager keeps working exactly
+    as before. The resolver additively contributes the company-derived matrix
+    permissions (admin/manager/member) for that same project.
+
+    This raw union is used by the generic `require_permission()` decorator for
+    permissions other than the read/mutate gate — `can_read_project` and
+    `can_mutate_project` below do NOT consult it for `project:create`, because a
+    *global* JWT `project:create` claim must not become an implicit "see every
+    project" bit (the tenancy hole Phase 1 closes).
     """
     permissions = set(get_jwt().get("permissions", []))
     project_id = _resolve_project_id(kwargs)
@@ -103,6 +127,7 @@ def _effective_permissions(kwargs: dict) -> list:
         except (ValueError, TypeError):
             return list(permissions)
         permissions |= _membership_role_permissions(user_id, project_id)
+        permissions |= _resolver_permissions_for_project(user_id, project_id)
     return list(permissions)
 
 
@@ -151,30 +176,42 @@ def has_permission(permission: str) -> bool:
 
 
 def _effective_perms_for(project_id: UUID, user_id: UUID) -> list:
-    """Global-role permissions UNION the caller's membership-role permissions on a project."""
+    """Legacy union (global-role ∪ membership-role permissions) ∪ resolver output for a project."""
     permissions = set(get_jwt().get("permissions", []))
     permissions |= _membership_role_permissions(user_id, project_id)
+    permissions |= _resolver_permissions_for_project(user_id, project_id)
     return list(permissions)
 
 
 def can_read_project(project, user_id: UUID) -> bool:
-    """Owner, project member, or any admin (effective project:create) may read a project."""
+    """Owner, project member, or resolver `project:read` (company admin, or an
+    assigned manager/member) may read a project.
+
+    No longer consults the raw JWT `project:create` claim — that was the
+    tenancy hole where any legacy-admin token could read every project in the
+    database regardless of company. `project:create` on this project's
+    company is a *creation* capability only.
+    """
     if project.owner_id == user_id or user_id in project.user_ids:
         return True
-    return _has_permission(_effective_perms_for(project.id, user_id), "project:create")
+    return _has_permission(list(_resolver_permissions_for_project(user_id, project.id)), "project:read")
 
 
 def can_mutate_project(project, user_id: UUID) -> bool:
-    """Project owner or an admin (effective project:create — global OR per-project role) may modify a project.
+    """Project owner, resolver `project:update`, or a legacy per-project `manager`/`admin`
+    membership role (`user_projects.role_id` → `project:create`) may modify a project.
 
-    "Effective" means the caller's global-role permissions unioned with their
-    membership-role permissions on this specific project, so a user invited as a
-    project admin/manager can write within that project (per-project scope) even
-    when their global role is the read-only default.
+    The membership-role branch is intentionally scoped to THIS project's row in
+    `user_projects` (monotonic, additive, matches pre-Phase-1 behavior for users
+    invited as a project admin/manager) — it never reads the raw global JWT claim,
+    which would grant mutate rights on every other company's project too.
     """
     if project.owner_id == user_id:
         return True
-    return _has_permission(_effective_perms_for(project.id, user_id), "project:create")
+    if _has_permission(list(_resolver_permissions_for_project(user_id, project.id)), "project:update"):
+        return True
+    membership_perms = _membership_role_permissions(user_id, project.id)
+    return _has_permission(list(membership_perms), "project:create")
 
 
 # ---------------------------------------------------------------------------

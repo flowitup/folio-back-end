@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.application.companies._helpers import _assert_admin
+from app.application.companies._helpers import _assert_company_admin
 from app.application.companies.ports import (
     CompanyInviteTokenRepositoryPort,
     CompanyRepositoryPort,
@@ -13,11 +13,9 @@ from app.application.companies.ports import (
 )
 from app.domain.companies.exceptions import CompanyNotFoundError, InviteTokenNotFoundError
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class RevokeInviteTokenUseCase:
-    """Delete the active invite token for a company (admin only).
+    """Delete the active invite token for a company (company or platform admin).
 
     Raises InviteTokenNotFoundError if no active token exists.
     """
@@ -38,9 +36,8 @@ class RevokeInviteTokenUseCase:
         company_id: UUID,
         db_session: TransactionalSessionPort,
     ) -> None:
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(caller_id, _ADMIN_PERMISSION)
-        _assert_admin(caller_id, company_id, is_admin)
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        _assert_company_admin(self._role_checker, caller_id, company_id)
 
         # 2. Assert company exists
         company = self._company_repo.find_by_id(company_id)

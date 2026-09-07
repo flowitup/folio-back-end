@@ -427,6 +427,11 @@ class Container:
     user_company_access_repo: Optional[Any] = None  # SqlAlchemyUserCompanyAccessRepository
     company_invite_token_repo: Optional[Any] = None  # SqlAlchemyCompanyInviteTokenRepository
 
+    # Company-aware authz resolver read port (app.application.authz.ports.AuthzReaderPort).
+    # Wired in app/__init__.py alongside the other company repos; None in test fixtures
+    # that don't need resolver-derived permissions — callers must degrade gracefully.
+    authz_reader: Optional[Any] = None  # SqlAlchemyAuthzReader
+
     # companies use-cases: admin
     create_company_usecase: Optional[CreateCompanyUseCase] = None
     update_company_usecase: Optional[UpdateCompanyUseCase] = None

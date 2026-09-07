@@ -18,6 +18,12 @@ class CreateProjectRequest:
     address: Optional[str] = None
     budget: Optional[Decimal] = None
     budget_source: Optional[str] = None
+    # Tenant the project belongs to. Resolved by the route (body company_id →
+    # caller's primary company → the single company they admin) before this
+    # DTO is built; None means the caller could not be tied to any company
+    # (legacy `*:*` holder creating without one — allowed, orphaned by design
+    # until an admin assigns a company via project settings).
+    company_id: Optional[UUID] = None
 
 
 @dataclass
@@ -30,6 +36,7 @@ class CreateProjectResponse:
     invoice_prefix: Optional[str] = None
     budget: Optional[Decimal] = None
     budget_source: Optional[str] = None
+    company_id: Optional[str] = None
 
 
 class CreateProjectUseCase:
@@ -54,7 +61,7 @@ class CreateProjectUseCase:
             budget_source=request.budget_source.strip() if request.budget_source else None,
         )
 
-        saved = self._repo.create(project)
+        saved = self._repo.create(project, company_id=request.company_id)
 
         return CreateProjectResponse(
             id=str(saved.id),
@@ -66,4 +73,5 @@ class CreateProjectUseCase:
             invoice_prefix=getattr(saved, "invoice_prefix", None),
             budget=saved.budget,
             budget_source=saved.budget_source,
+            company_id=str(request.company_id) if request.company_id else None,
         )

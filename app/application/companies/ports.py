@@ -65,6 +65,16 @@ class UserCompanyAccessRepositoryPort(Protocol):
         """Return all access rows for a company."""
         ...
 
+    def list_admins_for_update(self, company_id: UUID) -> list[UserCompanyAccess]:
+        """Return the company's admin-role access rows with SELECT FOR UPDATE.
+
+        Used to atomically count remaining admins before demoting, booting, or
+        self-detaching an admin, so concurrent last-admin removals cannot both
+        succeed and leave the company with zero admins. On SQLite ``FOR UPDATE``
+        is a no-op (single-writer), which is acceptable for tests.
+        """
+        ...
+
     def save(self, access: UserCompanyAccess) -> UserCompanyAccess:
         """Insert or update an access row. Returns the persisted instance."""
         ...
@@ -175,6 +185,18 @@ class RoleCheckerPort(Protocol):
 
     def has_permission(self, user_id: UUID, permission: str) -> bool:
         """Return True if user_id holds *permission* (or '*:*')."""
+        ...
+
+    def is_platform_admin(self, user_id: UUID) -> bool:
+        """Return True if user_id holds the legacy global '*:*' wildcard permission."""
+        ...
+
+    def is_company_admin(self, user_id: UUID, company_id: UUID) -> bool:
+        """Return True if user_id's per-company role for company_id is 'admin'.
+
+        Does NOT imply platform admin — callers combine both checks when a
+        platform-admin bypass is also desired (see _helpers._assert_company_admin).
+        """
         ...
 
 

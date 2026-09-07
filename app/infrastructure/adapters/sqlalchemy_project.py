@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.application.projects.ports import IProjectRepository
@@ -17,7 +18,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
     def __init__(self, session: Session):
         self._session = session
 
-    def create(self, project: Project) -> Project:
+    def create(self, project: Project, company_id: Optional[UUID] = None) -> Project:
         model = ProjectModel(
             id=project.id,
             name=project.name,
@@ -27,6 +28,7 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             created_at=project.created_at,
             budget=project.budget,
             budget_source=project.budget_source,
+            company_id=company_id,
         )
         self._session.add(model)
         self._session.commit()
@@ -50,6 +52,19 @@ class SQLAlchemyProjectRepository(IProjectRepository):
 
     def list_all(self) -> List[Project]:
         models = self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).all()
+        return [self._to_entity(m) for m in models]
+
+    def list_for_user_and_companies(self, user_id: UUID, company_ids: List[UUID]) -> List[Project]:
+        member_project_ids = self._session.query(user_projects.c.project_id).filter(user_projects.c.user_id == user_id)
+        conditions = [
+            ProjectModel.owner_id == user_id,
+            ProjectModel.id.in_(member_project_ids),
+        ]
+        if company_ids:
+            conditions.append(ProjectModel.company_id.in_(company_ids))
+        models = (
+            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter(or_(*conditions)).all()
+        )
         return [self._to_entity(m) for m in models]
 
     def update(self, project: Project) -> Project:

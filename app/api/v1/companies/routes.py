@@ -23,7 +23,7 @@ from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.companies import companies_bp, users_me_bp
-from app.api.v1.companies.decorators import require_admin, require_attached_company
+from app.api.v1.companies.decorators import require_admin, require_attached_company, require_company_role
 from app.api.v1.companies.schemas import (
     JoinCompanyRequest,
     JoinCodeResponse,
@@ -225,9 +225,9 @@ def get_company(company_id: str):
 )
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def update_company(company_id: str):
-    """Update a company (admin only)."""
+    """Update a company (company admin or platform admin)."""
     try:
         company_uuid = UUID(company_id)
     except ValueError:
@@ -309,9 +309,9 @@ def delete_company(company_id: str):
 @openapi_doc(summary="Generate an invite token for a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def generate_invite_token(company_id: str):
-    """Generate an invite token for a company (admin only).
+    """Generate an invite token for a company (company admin or platform admin).
 
     ?regenerate=true atomically deletes the existing active token and creates a new one.
     Without the flag, returns 409 if an active token already exists.
@@ -391,9 +391,9 @@ def generate_invite_token(company_id: str):
 @openapi_doc(summary="Revoke the active invite token for a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def revoke_invite_token(company_id: str):
-    """Revoke the active invite token for a company (admin only)."""
+    """Revoke the active invite token for a company (company admin or platform admin)."""
     try:
         company_uuid = UUID(company_id)
     except ValueError:
@@ -519,6 +519,11 @@ def detach_company(company_id: str):
         get_container().detach_company_usecase.execute(inp, db.session)
     except UserCompanyAccessNotFoundError:
         return _err("NotFound", "You are not attached to this company", 404)
+    except LastCompanyAdminError:
+        return (
+            jsonify({"error": "Conflict", "message": "Company must keep at least one admin", "reason": "last_admin"}),
+            409,
+        )
 
     return "", 204
 
@@ -532,9 +537,9 @@ def detach_company(company_id: str):
 @openapi_doc(summary="Remove a user from a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def boot_attached_user(company_id: str, target_user_id: str):
-    """Remove a user from a company (admin only)."""
+    """Remove a user from a company (company admin or platform admin)."""
     try:
         company_uuid = UUID(company_id)
     except ValueError:
@@ -561,6 +566,11 @@ def boot_attached_user(company_id: str, target_user_id: str):
         return _err("NotFound", f"User {target_user_id} is not attached to this company", 404)
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
+    except LastCompanyAdminError:
+        return (
+            jsonify({"error": "Conflict", "message": "Company must keep at least one admin", "reason": "last_admin"}),
+            409,
+        )
     except IntegrityError:
         # H1: concurrent boot / auto-promote race
         return (
@@ -586,9 +596,9 @@ def boot_attached_user(company_id: str, target_user_id: str):
 @openapi_doc(summary="Change a company member's role (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def set_member_role(company_id: str, target_user_id: str):
-    """Promote/demote a company member between 'admin' and 'member' (admin only)."""
+    """Promote/demote a company member's role (company admin or platform admin)."""
     try:
         company_uuid = UUID(company_id)
     except ValueError:
@@ -643,19 +653,22 @@ def set_member_role(company_id: str, target_user_id: str):
 )
 @jwt_required()
 @limiter.limit("20 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def set_join_code(company_id: str):
     """Issue a new 8-character join code (replaces the previous one)."""
     try:
         company_uuid = UUID(company_id)
     except ValueError:
         return _err("NotFound", f"Company {company_id} not found", 404)
+    caller_id = UUID(get_jwt_identity())
     from app import db
 
     try:
-        code = get_container().set_join_code_usecase.execute(company_uuid, True, db.session)
+        code = get_container().set_join_code_usecase.execute(company_uuid, True, db.session, caller_id=caller_id)
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
+    except ForbiddenCompanyError:
+        return _err("Forbidden", "Admin permission required", 403)
     return jsonify(JoinCodeResponse(join_code=code or "").model_dump()), 200
 
 
@@ -663,18 +676,21 @@ def set_join_code(company_id: str):
 @openapi_doc(summary="Revoke the company's join code (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("20 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def revoke_join_code(company_id: str):
     try:
         company_uuid = UUID(company_id)
     except ValueError:
         return _err("NotFound", f"Company {company_id} not found", 404)
+    caller_id = UUID(get_jwt_identity())
     from app import db
 
     try:
-        get_container().set_join_code_usecase.execute(company_uuid, False, db.session)
+        get_container().set_join_code_usecase.execute(company_uuid, False, db.session, caller_id=caller_id)
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
+    except ForbiddenCompanyError:
+        return _err("Forbidden", "Admin permission required", 403)
     return "", 204
 
 
@@ -709,9 +725,9 @@ def join_company_by_code():
 @openapi_doc(summary="List users attached to a company (admin only)", tags=["companies"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_admin
+@require_company_role("admin")
 def list_attached_users(company_id: str):
-    """List users attached to a company (admin only).
+    """List users attached to a company (company admin or platform admin).
 
     Supports pagination via ?limit (default 50, max 200) and ?offset (default 0).
     Returns { items: [...], total: int }.
