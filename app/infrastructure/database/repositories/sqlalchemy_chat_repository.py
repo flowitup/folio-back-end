@@ -184,6 +184,11 @@ class SqlAlchemyChatRepository:
         model = CompanyModel if channel.kind == "company" else ProjectModel
         return bool(self._session.execute(select(exists().where(model.id == channel.id))).scalar())
 
+    def channel_name(self, channel: ChannelRef) -> str:
+        """Display name of the company / project behind the key ("" when it vanished)."""
+        model = CompanyModel if channel.kind == "company" else ProjectModel
+        return self._session.execute(select(model.name).where(model.id == channel.id)).scalar() or ""
+
     def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
         if channel.kind == "company":
             return (

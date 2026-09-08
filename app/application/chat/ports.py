@@ -50,6 +50,10 @@ class ChatDirectoryPort(Protocol):
         """Members of the channel, sorted by name."""
         ...
 
+    def channel_name(self, channel: ChannelRef) -> str:
+        """Display name of the company / project behind the key."""
+        ...
+
     def display_names(self, user_ids: list[UUID]) -> dict[UUID, str]:
         """Display name (or e-mail) for each user id."""
         ...

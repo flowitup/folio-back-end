@@ -130,12 +130,16 @@ class SendMessageUseCase:
         read_repo: ChatReadRepositoryPort,
         storage: ChatAttachmentStoragePort,
         db_session: TransactionalSessionPort,
+        notifier=None,
     ) -> None:
+        # Public: the push stack is constructed after the chat use cases in create_app(),
+        # so it is attached afterwards rather than passed in here.
         self._directory = directory
         self._messages = message_repo
         self._reads = read_repo
         self._storage = storage
         self._db = db_session
+        self.notifier = notifier
 
     def execute(
         self,
@@ -194,6 +198,14 @@ class SendMessageUseCase:
         # Sending implies having seen the channel up to now.
         self._reads.mark_read(actor_id, channel, message.created_at)
         self._db.commit()
+        # After the commit: a push must never be able to roll back the message.
+        if self.notifier is not None:
+            self.notifier.message_sent(
+                channel=channel,
+                sender_id=actor_id,
+                preview=message.body,
+                sent_at=message.created_at,
+            )
         names = self._directory.display_names([actor_id])
         return MessageDto.from_entity(message, names.get(actor_id, "?"))
 

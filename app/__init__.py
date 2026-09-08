@@ -445,9 +445,20 @@ def _configure_di_container() -> None:
     from app.application.push.attendance_push_notifier import AttendancePushNotifier
     from app.infrastructure.adapters.expo_push_sender import ExpoPushSender
     from app.infrastructure.adapters.logging_push_sender import LoggingPushSender
+    from app.infrastructure.adapters.sqlalchemy_notification_preference import (
+        SQLAlchemyNotificationPreferenceRepository,
+    )
     from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository
 
+    from app.application.push.chat_push_notifier import ChatPushNotifier
+    from app.application.push.dispatcher import PushDispatcher
+    from app.application.push.billing_push_notifier import BillingPushNotifier
+    from app.application.push.membership_push_notifier import MembershipPushNotifier
+    from app.application.push.task_push_notifier import TaskPushNotifier
+    from app.infrastructure.adapters.sqlalchemy_chat_push_marker import SQLAlchemyChatPushMarkerRepository
+
     _c.push_device_repository = SQLAlchemyPushDeviceRepository(db.session)
+    _c.notification_preference_repository = SQLAlchemyNotificationPreferenceRepository(db.session)
     _c.push_sender = (
         ExpoPushSender(_cfg.get("EXPO_ACCESS_TOKEN", ""))
         if _cfg.get("PUSH_PROVIDER") == "expo"
@@ -461,7 +472,31 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             locale=_cfg.get("PUSH_LOCALE", "vi"),
             run_async=not _cfg.get("TESTING", False),
+            preferences=_c.notification_preference_repository,
         )
+    # Chat pushes are coalesced per (user, channel); the notifier is attached to the
+    # already-constructed send use case because the push stack is wired later than chat.
+    _c.push_dispatcher = PushDispatcher(
+        devices=_c.push_device_repository,
+        sender=_c.push_sender,
+        preferences=_c.notification_preference_repository,
+        locale=_cfg.get("PUSH_LOCALE", "vi"),
+        run_async=not _cfg.get("TESTING", False),
+    )
+    _c.chat_push_marker_repository = SQLAlchemyChatPushMarkerRepository(db.session)
+    if _c.send_chat_message_usecase is not None:
+        _c.send_chat_message_usecase.notifier = ChatPushNotifier(
+            dispatcher=_c.push_dispatcher,
+            directory=_chat_repo,
+            markers=_c.chat_push_marker_repository,
+            reads=_chat_repo,
+            messages=_chat_repo,
+            names=_chat_repo,
+        )
+
+    if _c.project_repository is not None:
+        _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)
+
     _c.login_otp_repository = _otp_repo
     if _c.user_repository is not None and _c.authorization_service is not None and _c.token_issuer is not None:
         _c.request_otp_usecase = RequestOtpUseCase(
@@ -560,6 +595,20 @@ def _configure_di_container() -> None:
     _c.company_repo = _company_repo
     _c.user_company_access_repo = _access_repo
     _c.company_invite_token_repo = _token_repo
+
+    # Membership pushes need both name sources, so they are wired here rather than in the
+    # push block above, where the company repo does not exist yet.
+    if _c.push_dispatcher is not None and _c.project_repository is not None:
+        _c.membership_push_notifier = MembershipPushNotifier(
+            dispatcher=_c.push_dispatcher,
+            project_repo=_c.project_repository,
+            company_repo=_company_repo,
+        )
+        _c.billing_push_notifier = BillingPushNotifier(
+            dispatcher=_c.push_dispatcher,
+            project_repo=_c.project_repository,
+            access_repo=_access_repo,
+        )
 
     # Company-aware authz resolver read port (app/domain/authz/resolver.py).
     # Wired here, alongside the other company repos, so every route that goes

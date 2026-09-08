@@ -178,6 +178,8 @@ class AcceptInvitationUseCase:
             user=fresh_user or user,
             access_token=access_token,
             refresh_token=refresh_token,
+            invited_by=accepted_inv.invited_by,
+            project_id=accepted_inv.project_id,
         )
 
     # ------------------------------------------------------------------

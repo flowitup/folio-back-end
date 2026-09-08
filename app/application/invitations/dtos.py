@@ -46,6 +46,9 @@ class AcceptInvitationResultDto:
     user: User
     access_token: str
     refresh_token: str
+    # Who invited, and to which project — the API layer notifies the inviter.
+    invited_by: Optional[UUID] = None
+    project_id: Optional[UUID] = None
 
 
 @dataclass(frozen=True)

@@ -284,6 +284,17 @@ def accept_invitation():
     except Exception:
         return _err(500, "InternalError", "An unexpected error occurred.")
 
+    # After the transaction: the inviter learns their invitation was taken up. A push
+    # failure here must never undo an acceptance.
+    notifier = container.membership_push_notifier
+    if notifier is not None and result.invited_by is not None and result.project_id is not None:
+        notifier.notify(
+            "invitation_accepted",
+            user_id=result.invited_by,
+            actor_id=result.user.id,
+            entity_id=result.project_id,
+        )
+
     user_data = AcceptedUserResponse(
         id=result.user.id,
         email=result.user.email,

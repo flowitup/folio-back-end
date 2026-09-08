@@ -203,4 +203,13 @@ def set_materials_expense_refundable_status(invoice_id: str):
     except InvoiceNumberConflictError:
         return _err("Conflict", "Concurrent request generated the same invoice number, please retry", 409)
 
+    notifier = get_container().billing_push_notifier
+    if notifier is not None and body.refundable_status in ("refund_pending", "refunded"):
+        notifier.refund_status_changed(
+            status=body.refundable_status,
+            payer_id=UUID(updated.created_by),
+            actor_id=user_id,
+            project_id=UUID(updated.project_id),
+            invoice_id=invoice_uuid,
+        )
     return jsonify(dataclasses.asdict(updated))

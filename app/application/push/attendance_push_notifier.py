@@ -1,19 +1,21 @@
 """Push notifications around attendance: workers ↔ the managers who validate them.
 
-Delivery happens on a daemon thread so a slow provider never delays the API response;
-recipients and tokens are resolved synchronously (cheap queries) before handing off.
+This module owns only the attendance semantics — who cares about which event and what it
+reads like. Preference filtering, token lookup, off-thread delivery and invalid-token
+cleanup belong to `PushDispatcher`.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import date
 from typing import Dict, List, Protocol
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository
-from app.application.ports.push_sender import PushMessage, PushSenderPort
+from app.application.ports.push_sender import PushSenderPort
+from app.application.push.dispatcher import PushDispatcher
+from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +74,31 @@ class AttendancePushNotifier:
         project_repo: ProjectNameReader,
         locale: str = "vi",
         run_async: bool = True,
+        preferences=None,
     ) -> None:
         self._devices = devices
-        self._sender = sender
         self._workers = worker_repo
         self._projects = project_repo
-        self._locale = locale if locale in ("vi", "fr", "en") else "vi"
-        self._run_async = run_async
+        self._dispatcher = PushDispatcher(
+            devices=devices,
+            sender=sender,
+            preferences=preferences,
+            locale=locale,
+            run_async=run_async,
+        )
+
+    @property
+    def _locale(self) -> str:
+        return self._dispatcher.locale
+
+    @property
+    def sender(self):
+        return self._dispatcher.sender
+
+    @sender.setter
+    def sender(self, value) -> None:
+        """Injection seam — see `PushDispatcher.sender`."""
+        self._dispatcher.sender = value
 
     # -- events -----------------------------------------------------------------
 
@@ -118,32 +138,14 @@ class AttendancePushNotifier:
     ) -> None:
         if not recipients:
             return
-        tokens = self._devices.tokens_for_users(recipients)
-        if not tokens:
-            return
         project = self._projects.find_by_id(project_id)
         project_name = project.name if project is not None else ""
         title, body = _TEXT[event][self._locale]
         text = body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name)
-        data = {"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)}
-        messages = [
-            PushMessage(token=t, title=title, body=text, data=data)
-            for user_tokens in tokens.values()
-            for t in user_tokens
-        ]
-        if self._run_async:
-            threading.Thread(target=self._send, args=(messages,), daemon=True).start()
-        else:
-            self._send(messages)
-
-    def _send(self, messages: List[PushMessage]) -> None:
-        try:
-            self._sender.send(messages, on_invalid_token=self._forget_token)
-        except Exception:  # never let a push failure surface
-            logger.exception("push.send failed count=%s", len(messages))
-
-    def _forget_token(self, token: str) -> None:
-        try:
-            self._devices.delete_token(token)
-        except Exception:
-            logger.exception("push.forget_token failed")
+        self._dispatcher.dispatch(
+            category=NotificationCategory.ATTENDANCE.value,
+            recipients=recipients,
+            title=title,
+            body=text,
+            data={"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)},
+        )

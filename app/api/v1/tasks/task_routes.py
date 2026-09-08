@@ -35,6 +35,17 @@ def _validation_error(e: ValidationError) -> Tuple[Response, int]:
     return _error_response("ValidationError", str(e), 400)
 
 
+def _notify_task(event: str, task, actor_id: UUID) -> None:
+    """Fire-and-forget: the notifier swallows its own failures, this guards the unwired case."""
+    notifier = get_container().task_push_notifier
+    if notifier is None:
+        return
+    if event == "assigned":
+        notifier.task_assigned(task=task, actor_id=actor_id)
+    else:
+        notifier.task_moved(task=task, actor_id=actor_id)
+
+
 def _serialize(task) -> dict:
     return {
         "id": str(task.id),
@@ -103,6 +114,7 @@ def create_task(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    _notify_task("assigned", result, created_by)
     return jsonify(_serialize(result)), 201
 
 
@@ -135,6 +147,14 @@ def update_task(task_id: str):
     except ValidationError as e:
         return _validation_error(e)
 
+    # Captured before the write so a no-op re-save does not re-notify the assignee.
+    previous_assignee = None
+    if data.assignee_id is not None:
+        try:
+            previous_assignee = get_container().get_task_usecase.execute(UUID(task_id)).assignee_id
+        except TaskNotFoundError:
+            previous_assignee = None
+
     try:
         result = get_container().update_task_usecase.execute(
             UUID(task_id),
@@ -151,6 +171,8 @@ def update_task(task_id: str):
         return _error_response("NotFound", str(e), 404)
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    if data.assignee_id is not None and data.assignee_id != previous_assignee:
+        _notify_task("assigned", result, UUID(get_jwt()["sub"]))
     return jsonify(_serialize(result))
 
 
@@ -173,6 +195,7 @@ def move_task(task_id: str):
         )
     except TaskNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
+    _notify_task("moved", result, UUID(get_jwt()["sub"]))
     return jsonify(_serialize(result))
 
 

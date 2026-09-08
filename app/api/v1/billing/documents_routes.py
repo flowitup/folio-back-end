@@ -482,6 +482,16 @@ def update_billing_document_status(doc_id: str, billing_doc):
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
+    notifier = get_container().billing_push_notifier
+    if notifier is not None:
+        notifier.document_status_changed(
+            status=body.new_status,
+            author_id=result.user_id,
+            actor_id=user_id,
+            document_id=result.id,
+            company_id=getattr(result, "company_id", None),
+            number=getattr(result, "document_number", "") or "",
+        )
     return jsonify(_doc_to_json(result))
 
 
