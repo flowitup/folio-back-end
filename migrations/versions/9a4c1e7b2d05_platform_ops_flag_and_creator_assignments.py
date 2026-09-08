@@ -66,11 +66,12 @@ _INSERT_ASSIGNMENT_SQL = text(
 )
 
 
-def _insert_assignment_with_legacy_role(conn: Connection, user_id, project_id, assigned_at) -> None:
+def _insert_assignment_with_legacy_role(conn: Connection, user_id, project_id, assigned_at) -> bool:
     """Write a `user_projects` row while `role_id` is still NOT NULL.
 
     Any legacy role satisfies the constraint — the column grants nothing by
-    this revision and a later one drops it.
+    this revision and a later one drops it. An unseeded database has no role to
+    point at: skip the row rather than fail the deploy (the count is reported).
     """
     role_id = None
     for role_name in ("manager", "admin", "member"):
@@ -79,11 +80,12 @@ def _insert_assignment_with_legacy_role(conn: Connection, user_id, project_id, a
             role_id = row[0]
             break
     if role_id is None:
-        raise RuntimeError("no legacy role row to satisfy user_projects.role_id — is the database seeded?")
+        return False
     conn.execute(
         _INSERT_ASSIGNMENT_SQL,
         {"user_id": user_id, "project_id": project_id, "role_id": role_id, "assigned_at": assigned_at},
     )
+    return True
 
 
 def backfill_platform_ops(conn: Connection, report: BackfillReport) -> None:

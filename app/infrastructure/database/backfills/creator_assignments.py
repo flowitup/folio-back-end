@@ -53,12 +53,13 @@ _INSERT_ACCESS_SQL = text(
 )
 
 
-def _insert_assignment(conn: Connection, user_id, project_id, assigned_at: datetime) -> None:
-    """Write one `user_projects` row on the current schema."""
+def _insert_assignment(conn: Connection, user_id, project_id, assigned_at: datetime) -> bool:
+    """Write one `user_projects` row on the current schema. True when written."""
     conn.execute(
         _INSERT_ASSIGNMENT_SQL,
         {"user_id": user_id, "project_id": project_id, "assigned_at": assigned_at},
     )
+    return True
 
 
 def _warn_projects_without_company(conn: Connection, report: BackfillReport) -> None:
@@ -81,13 +82,14 @@ def _warn_projects_without_company(conn: Connection, report: BackfillReport) -> 
 def backfill_creator_assignments(
     conn: Connection,
     report: BackfillReport,
-    insert_assignment: "Callable[[Connection, Any, Any, datetime], None]" = _insert_assignment,
+    insert_assignment: "Callable[[Connection, Any, Any, datetime], bool]" = _insert_assignment,
 ) -> None:
     """Every project owner gets an assignment + at least `manager` in the project's company.
 
     `insert_assignment` is overridable for a caller running against an older
     schema than the current models (migration 9a4c1e7b2d05, where
-    `user_projects` still carries a NOT NULL role reference).
+    `user_projects` still carries a NOT NULL role reference). It returns False
+    when it could not write the row, and the count reflects that.
     """
     _warn_projects_without_company(conn, report)
 
@@ -97,8 +99,10 @@ def backfill_creator_assignments(
             _ASSIGNMENT_EXISTS_SQL, {"user_id": str(owner_id), "project_id": str(project_id)}
         ).fetchone()
         if exists is None:
-            insert_assignment(conn, owner_id, project_id, now)
-            report.creator_assignments += 1
+            if insert_assignment(conn, owner_id, project_id, now):
+                report.creator_assignments += 1
+            else:
+                report.assignments_skipped += 1
 
         if company_id is None:
             continue

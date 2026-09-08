@@ -232,8 +232,6 @@ def test_upgrade_aborts_when_a_project_has_no_company(alembic_cfg, pg_engine, mi
     """A project with no company would be unreachable — say which one, and stop."""
     from alembic import command
 
-    from migrations.versions.c2b8f1a0d743_drop_legacy_roles import OrphanProjectsError
-
     _reset_to_previous(migration_app, alembic_cfg)
 
     orphan_id = uuid4()
@@ -250,8 +248,11 @@ def test_upgrade_aborts_when_a_project_has_no_company(alembic_cfg, pg_engine, mi
         conn.commit()
 
     try:
-        with pytest.raises(OrphanProjectsError) as excinfo:
+        # `migrations/` is not an importable package (alembic loads revisions by
+        # path), so the class is identified by name rather than imported.
+        with pytest.raises(RuntimeError) as excinfo:
             _run(migration_app, command.upgrade, alembic_cfg, _TARGET)
+        assert type(excinfo.value).__name__ == "OrphanProjectsError"
         assert str(orphan_id) in str(excinfo.value)
 
         with pg_engine.connect() as conn:
