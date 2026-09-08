@@ -808,6 +808,10 @@ def _configure_di_container() -> None:
             authz_reader=_c.authz_reader,
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
+            # role="manager" is a company-wide promotion: it goes through the
+            # same use case (and guards) as PATCH /companies/<id>/members/<uid>.
+            role_setter=_c.set_member_role_usecase,
+            db_session=db.session,
         )
         _c.unassign_project_member_usecase = _UnassignProjectMemberUseCase(
             authz_reader=_c.authz_reader,

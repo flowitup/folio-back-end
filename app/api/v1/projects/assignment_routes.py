@@ -15,21 +15,34 @@ from uuid import UUID
 
 from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from pydantic import BaseModel, Field, ValidationError
 
+from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.decorators import require_project_access
-from app.application.companies._helpers import ForbiddenCompanyError
-from app.application.companies.dtos import SetMemberRoleInput
 from app.application.projects.assignments import (
     AssignmentForbiddenError,
     AssignProjectMemberInput,
     ProjectCompanyUnresolvedError,
     TargetNotCompanyMemberError,
 )
+from app.domain.companies.exceptions import UserCompanyAccessNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+
+class AssignMemberRequest(BaseModel):
+    """PUT /projects/<id>/assignments/<user_id> body.
+
+    `role` is COMPANY-WIDE, not per project: `manager` raises the target's
+    company role to manager (company admins only), which grants manager
+    permissions on every project they are assigned to in that company.
+    `member` is the default and never demotes anyone.
+    """
+
+    role: str = Field(default="member", pattern=r"^(member|manager)$")
 
 
 def _err(error: str, message: str, status: int):
@@ -39,6 +52,7 @@ def _err(error: str, message: str, status: int):
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["PUT"])
 @openapi_doc(
     summary="Assign a company member to a project; a company admin may pass role=manager to promote the target",
+    request=AssignMemberRequest,
     tags=["projects"],
 )
 @jwt_required()
@@ -51,67 +65,53 @@ def assign_project_member(project_id: str, user_id: str):
     target's COMPANY role to manager (company admins only — the role lives on
     the company, the assignment only says who works on this project); `member`
     never demotes anyone. The response echoes the target's company role.
+
+    A refused promotion rolls the assignment back: the request either performs
+    both writes or neither.
     """
-    body = request.get_json(force=True, silent=True) or {}
-    wanted_role = body.get("role", "member")
-    if wanted_role not in ("member", "manager"):
-        return _err("ValidationError", "role must be 'member' or 'manager'", 400)
     try:
         target_uuid = UUID(user_id)
     except ValueError:
         return _err("NotFound", f"User {user_id} not found", 404)
 
+    try:
+        body = AssignMemberRequest.model_validate(request.get_json(force=True, silent=True) or {})
+    except ValidationError as exc:
+        return format_validation_error(exc)
+
     caller_id = UUID(get_jwt_identity())
     container = get_container()
 
+    from app import db
+
     try:
-        container.assign_project_member_usecase.execute(
+        company_role = container.assign_project_member_usecase.execute(
             AssignProjectMemberInput(
                 caller_id=caller_id,
                 project_id=UUID(project_id),
                 target_user_id=target_uuid,
+                role=body.role,
             )
         )
     except ProjectCompanyUnresolvedError:
-        return _err("NotFound", f"Project {project_id} not found", 404)
-    except AssignmentForbiddenError as exc:
-        return _err("Forbidden", str(exc), 403)
-    except TargetNotCompanyMemberError:
-        return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
-
-    from app import db
-
-    company_role = _company_role_after_assignment(container, caller_id, UUID(project_id), target_uuid, wanted_role)
-    if company_role is None:
         db.session.rollback()
-        return _err("Forbidden", "Only a company admin can assign as manager", 403)
+        return _err("NotFound", f"Project {project_id} not found", 404)
+    except TargetNotCompanyMemberError:
+        db.session.rollback()
+        return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
+    except UserCompanyAccessNotFoundError:
+        # The access row was detached between the read and the promotion.
+        db.session.rollback()
+        return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
+    except AssignmentForbiddenError as exc:
+        db.session.rollback()
+        return _err("Forbidden", str(exc), 403)
+    except ValueError as exc:
+        db.session.rollback()
+        return _err("ValidationError", str(exc), 400)
 
     db.session.commit()
     return jsonify({"project_id": project_id, "user_id": user_id, "role": company_role}), 200
-
-
-def _company_role_after_assignment(container, caller_id: UUID, project_id: UUID, target_id: UUID, wanted_role: str):
-    """Promote a company `member` to `manager` when asked; return the target's company role.
-
-    Returns None when the promotion was refused (caller is not a company admin).
-    """
-    from app import db
-    from app.infrastructure.database.models import ProjectModel
-    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
-
-    project = db.session.get(ProjectModel, project_id)
-    access = db.session.get(UserCompanyAccessModel, (target_id, project.company_id))
-    current = access.role if access is not None else "member"
-    if wanted_role != "manager" or current != "member":
-        return current
-    try:
-        container.set_member_role_usecase.execute(
-            SetMemberRoleInput(caller_id=caller_id, company_id=project.company_id, user_id=target_id, role="manager"),
-            db.session,
-        )
-    except ForbiddenCompanyError:
-        return None
-    return "manager"
 
 
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["DELETE"])

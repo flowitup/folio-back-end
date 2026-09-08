@@ -230,8 +230,37 @@ class TestUnassign:
             ).fetchone()
             assert row is None
 
+    def test_unassigning_a_stranger_answers_404_like_assigning_does(self, assign_client, assign_app):
+        """Same state, same answer for both callers and both verbs."""
+        admin_id = _make_user(assign_app, "asg_admin7@test.com")
+        manager_id = _make_user(assign_app, "asg_manager7@test.com")
+        stranger_id = _make_user(assign_app, "asg_stranger7@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, manager_id, company_id, "manager")
+        admin_token = _login(assign_client, "asg_admin7@test.com")
+        assign_client.put(f"/api/v1/projects/{project_id}/assignments/{manager_id}", headers=_auth(admin_token))
+
+        for token in (admin_token, _login(assign_client, "asg_manager7@test.com")):
+            resp = assign_client.delete(
+                f"/api/v1/projects/{project_id}/assignments/{stranger_id}",
+                headers=_auth(token),
+            )
+            assert resp.status_code == 404, resp.get_data(as_text=True)
+
 
 class TestAssignWithRole:
+    def _assignment_exists(self, app, user_id, project_id) -> bool:
+        from sqlalchemy import text
+
+        from app import db
+
+        with app.app_context():
+            row = db.session.execute(
+                text("SELECT 1 FROM user_projects WHERE user_id=:u AND project_id=:p"),
+                {"u": str(user_id), "p": str(project_id)},
+            ).fetchone()
+            return row is not None
+
     def _company_role(self, app, user_id, company_id):
         from app import db
         from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -290,8 +319,11 @@ class TestAssignWithRole:
         )
         assert resp.status_code == 403
         assert self._company_role(assign_app, target_id, company_id) == "member"
+        # The refused promotion rolls the assignment back too — a manager
+        # cannot use the old payload to assign someone as a side effect.
+        assert not self._assignment_exists(assign_app, target_id, project_id)
 
-    def test_invalid_role_is_400(self, assign_client, assign_app):
+    def test_invalid_role_is_rejected(self, assign_client, assign_app):
         admin_id = _make_user(assign_app, "asg_admin_r4@test.com")
         target_id = _make_user(assign_app, "asg_target_r4@test.com")
         company_id, project_id = _make_company_and_project(assign_app, admin_id)
@@ -302,4 +334,6 @@ class TestAssignWithRole:
             json={"role": "owner"},
             headers=_auth(token),
         )
-        assert resp.status_code == 400
+        # 422 is the repo-wide body-validation answer (format_validation_error).
+        assert resp.status_code == 422
+        assert not self._assignment_exists(assign_app, target_id, project_id)

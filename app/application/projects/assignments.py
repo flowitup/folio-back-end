@@ -14,14 +14,23 @@ Authorization is resolved through the resolver
   - anyone else: 403.
   - the person must already be a member of the project's company (404
     otherwise — a stranger cannot be assigned, that is the invitation's job).
+
+Assigning may also carry an optional `role`. It does NOT live on the
+assignment: `role="manager"` asks to raise the target's COMPANY role to
+manager (company admins only), which is a company-wide promotion. `member`
+never demotes anyone. The use case returns the target's company role after
+the call so the endpoint can echo it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from app.application.companies._helpers import ForbiddenCompanyError
+from app.application.companies.dtos import SetMemberRoleInput
+from app.domain.companies.roles import CompanyRole
 from app.domain.entities.project_membership import ProjectMembership
 
 if TYPE_CHECKING:
@@ -52,6 +61,8 @@ class AssignProjectMemberInput:
     caller_id: UUID
     project_id: UUID
     target_user_id: UUID
+    # Company-wide: "manager" promotes the target's company role (admins only).
+    role: str = CompanyRole.MEMBER.value
 
 
 def _resolve_caller_scope(
@@ -92,15 +103,31 @@ class AssignProjectMemberUseCase:
         authz_reader: "AuthzReaderPort",
         access_repo: "UserCompanyAccessRepositoryPort",
         membership_repo: "ProjectMembershipRepositoryPort",
+        role_setter: Any = None,  # SetMemberRoleUseCase — needed for role="manager"
+        db_session: Any = None,  # TransactionalSessionPort, handed to the role setter
     ) -> None:
         self._authz = authz_reader
         self._access = access_repo
         self._membership = membership_repo
+        self._role_setter = role_setter
+        self._db = db_session
 
-    def execute(self, inp: AssignProjectMemberInput) -> None:
+    def execute(self, inp: AssignProjectMemberInput) -> str:
+        """Assign the target and return their company role afterwards.
+
+        Raises `AssignmentForbiddenError` when the caller may not assign (or
+        may not promote), `TargetNotCompanyMemberError` when the target has no
+        access row, `ValueError` for an unknown role and
+        `UserCompanyAccessNotFoundError` when the access row disappears
+        under a concurrent detach.
+        """
+        if inp.role not in CompanyRole.values():
+            raise ValueError(f"Invalid company role: {inp.role!r} (expected one of {CompanyRole.values()})")
+
         company_id, caller_role = _resolve_caller_scope(self._authz, inp.caller_id, inp.project_id)
 
-        if self._access.find(inp.target_user_id, company_id) is None:
+        access = self._access.find(inp.target_user_id, company_id)
+        if access is None:
             raise TargetNotCompanyMemberError(f"user {inp.target_user_id} is not a member of company {company_id}")
 
         _forbid_manager_on_a_non_member(self._authz, caller_role, inp.target_user_id, company_id)
@@ -113,6 +140,34 @@ class AssignProjectMemberUseCase:
                 invited_by=inp.caller_id,
             )
         )
+
+        return self._apply_requested_role(inp, company_id, access.role)
+
+    def _apply_requested_role(self, inp: AssignProjectMemberInput, company_id: UUID, current_role: str) -> str:
+        """Promote the target's COMPANY role when asked; never demote.
+
+        The promotion goes through `SetMemberRoleUseCase`, so its company-admin
+        guard, last-admin guard and locking apply unchanged. A caller who is
+        not a company admin gets `AssignmentForbiddenError` and the whole
+        request (assignment included) is rolled back by the endpoint.
+        """
+        if inp.role != CompanyRole.MANAGER.value or current_role != CompanyRole.MEMBER.value:
+            return current_role
+        if self._role_setter is None or self._db is None:
+            raise AssignmentForbiddenError("Company-role promotion is not available on this deployment")
+        try:
+            updated = self._role_setter.execute(
+                SetMemberRoleInput(
+                    caller_id=inp.caller_id,
+                    company_id=company_id,
+                    user_id=inp.target_user_id,
+                    role=CompanyRole.MANAGER.value,
+                ),
+                self._db,
+            )
+        except ForbiddenCompanyError as exc:
+            raise AssignmentForbiddenError("Only a company admin can assign as manager") from exc
+        return updated.role
 
 
 class UnassignProjectMemberUseCase:
@@ -131,9 +186,12 @@ class UnassignProjectMemberUseCase:
     def execute(self, caller_id: UUID, project_id: UUID, target_user_id: UUID) -> None:
         company_id, caller_role = _resolve_caller_scope(self._authz, caller_id, project_id)
 
-        _forbid_manager_on_a_non_member(self._authz, caller_role, target_user_id, company_id)
-
+        # Same order as assigning: "not a member of this company" is answered
+        # with 404 for every caller, so an admin and a manager get the same
+        # answer for the same state.
         if self._access.find(target_user_id, company_id) is None:
             raise TargetNotCompanyMemberError(f"user {target_user_id} is not a member of company {company_id}")
+
+        _forbid_manager_on_a_non_member(self._authz, caller_role, target_user_id, company_id)
 
         self._membership.remove(target_user_id, project_id)
