@@ -540,3 +540,24 @@ def test_uuid_converter_kwargs_are_accepted(monkeypatch, app_ctx):
         return "ok"
 
     assert view(project_id=project_id) == "ok"
+
+
+def test_url_id_helpers_degrade_instead_of_raising(monkeypatch, app_ctx):
+    """Unparseable or absent ids resolve to "no project", never to an exception."""
+    reader, user_id, _project_id = _ctx()
+    _wire(monkeypatch, reader, user_id, invoice=None, task=None)
+
+    assert dec._as_uuid(None) is None
+    assert dec._missing_ref_message({}) == "Not found"
+    # A malformed child id yields no project context (the permission check
+    # answers), not a 404 pretending the row is gone.
+    assert dec._resolve_project_ref({"invoice_id": "not-a-uuid"}) == (None, False)
+    assert dec._resolve_project_ref({"task_id": "not-a-uuid"}) == (None, False)
+
+
+def test_effective_permissions_without_a_usable_identity_is_empty(monkeypatch, app_ctx):
+    reader, user_id, _project_id = _ctx()
+    _wire(monkeypatch, reader, user_id)
+    monkeypatch.setattr(dec, "get_jwt_identity", lambda: "not-a-uuid")
+
+    assert dec._effective_permissions({}) == []
