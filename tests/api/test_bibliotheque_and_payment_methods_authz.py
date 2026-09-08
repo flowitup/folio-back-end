@@ -110,9 +110,7 @@ def biblio_app(invitation_app):
                 ),
             ]
         )
-        db.session.execute(
-            user_projects.insert().values(user_id=manager.id, project_id=project_uuid, role_id=None, assigned_at=now)
-        )
+        db.session.execute(user_projects.insert().values(user_id=manager.id, project_id=project_uuid, assigned_at=now))
         db.session.commit()
 
     return invitation_app

@@ -10,6 +10,14 @@
      ``member``; an existing ``admin`` row is never downgraded.
 
 Both steps are idempotent: re-running changes nothing.
+
+This lives outside ``app/`` because it reads ``user_roles`` /
+``role_permissions`` / ``roles`` / ``permissions``, which revision
+``c2b8f1a0d743`` drops: the queries are only valid while upgrading through
+``9a4c1e7b2d05``, its one caller. It stays an importable module (rather than
+inline in that revision) so the mapping keeps its unit tests. It is not under
+``migrations/`` because that package name is shadowed by ``tests/migrations``
+when pytest puts ``tests/`` on ``sys.path``.
 """
 
 from __future__ import annotations

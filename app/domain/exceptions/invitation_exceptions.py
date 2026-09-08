@@ -35,9 +35,3 @@ class InvalidInvitationTokenError(Exception):
     """Supplied token does not match any invitation or is malformed."""
 
     pass
-
-
-class RoleNotAllowedError(Exception):
-    """The requested role is not permitted for invitation in this context."""
-
-    pass

@@ -20,6 +20,7 @@ from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepo
 from app.infrastructure.database.models import CompanyModel, PersonModel, ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+from tests.company_tenancy_helper import company_for_projects
 
 
 def _items(*, quantity=1, unit_price=100, vat_rate=0):
@@ -37,7 +38,12 @@ def owner_user(session):
 
 @pytest.fixture
 def project(session, owner_user):
-    p = ProjectModel(id=uuid4(), name="Payments Summary Project", owner_id=owner_user.id)
+    p = ProjectModel(
+        id=uuid4(),
+        name="Payments Summary Project",
+        owner_id=owner_user.id,
+        company_id=company_for_projects(session, owner_user.id),
+    )
     session.add(p)
     session.commit()
     return p
@@ -45,7 +51,12 @@ def project(session, owner_user):
 
 @pytest.fixture
 def other_project(session, owner_user):
-    p = ProjectModel(id=uuid4(), name="Other Project", owner_id=owner_user.id)
+    p = ProjectModel(
+        id=uuid4(),
+        name="Other Project",
+        owner_id=owner_user.id,
+        company_id=company_for_projects(session, owner_user.id),
+    )
     session.add(p)
     session.commit()
     return p

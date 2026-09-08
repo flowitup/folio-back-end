@@ -10,9 +10,9 @@ from app.application.invitations.dtos import InvitationListItemDto
 from app.application.invitations.exceptions import PermissionDeniedError
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
-    RoleRepositoryPort,
     UserWriteRepositoryPort,
 )
+from app.domain.companies.roles import CompanyRole
 from app.domain.entities.invitation import InvitationStatus
 
 
@@ -22,12 +22,10 @@ class ListInvitationsUseCase:
     def __init__(
         self,
         invitation_repo: InvitationRepositoryPort,
-        role_repo: RoleRepositoryPort,
         user_repo: UserWriteRepositoryPort,
         authz_reader: Any = None,  # AuthzReaderPort — resolves project:invite
     ) -> None:
         self._inv_repo = invitation_repo
-        self._role_repo = role_repo
         self._user_repo = user_repo
         self._authz_reader = authz_reader
 
@@ -70,9 +68,6 @@ class ListInvitationsUseCase:
 
         result: list[InvitationListItemDto] = []
         for inv in invitations:
-            role = self._role_repo.find_by_id(inv.role_id)
-            role_name = role.name if role else str(inv.role_id)
-
             inviter = self._user_repo.find_by_id(inv.invited_by)
             inviter_name = inviter.display_or_email if inviter else str(inv.invited_by)
 
@@ -80,7 +75,9 @@ class ListInvitationsUseCase:
                 InvitationListItemDto(
                     id=inv.id,
                     email=inv.email,
-                    role_name=role_name,
+                    # Every pending invitation grants the same thing: company
+                    # `member` plus an assignment to the invited project.
+                    role_name=CompanyRole.MEMBER.value,
                     status=inv.status,
                     expires_at=inv.expires_at,
                     created_at=inv.created_at,

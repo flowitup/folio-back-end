@@ -9,9 +9,9 @@ from app.application.invitations.dtos import VerifyInvitationDto
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
     ProjectRepositoryPort,
-    RoleRepositoryPort,
     UserWriteRepositoryPort,
 )
+from app.domain.companies.roles import CompanyRole
 from app.domain.entities.invitation import InvitationStatus
 from app.domain.exceptions.invitation_exceptions import (
     InvalidInvitationTokenError,
@@ -29,12 +29,10 @@ class VerifyInvitationUseCase:
         self,
         invitation_repo: InvitationRepositoryPort,
         project_repo: ProjectRepositoryPort,
-        role_repo: RoleRepositoryPort,
         user_repo: UserWriteRepositoryPort,
     ) -> None:
         self._inv_repo = invitation_repo
         self._project_repo = project_repo
-        self._role_repo = role_repo
         self._user_repo = user_repo
 
     # ------------------------------------------------------------------
@@ -74,16 +72,15 @@ class VerifyInvitationUseCase:
         project = self._project_repo.find_by_id(inv.project_id)
         project_name = project.name if project else str(inv.project_id)
 
-        role = self._role_repo.find_by_id(inv.role_id)
-        role_name = role.name if role else str(inv.role_id)
-
         inviter = self._user_repo.find_by_id(inv.invited_by)
         inviter_name = inviter.display_or_email if inviter else str(inv.invited_by)
 
         return VerifyInvitationDto(
             email=inv.email,
             project_name=project_name,
-            role_name=role_name,
+            # Accepting makes the invitee a company `member`; the invitation
+            # itself carries no role.
+            role_name=CompanyRole.MEMBER.value,
             inviter_name=inviter_name,
             expires_at=inv.expires_at,
         )

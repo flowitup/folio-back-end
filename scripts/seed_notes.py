@@ -199,10 +199,10 @@ def seed_notes() -> None:
         print("  No projects found. Run seed.py with --with-admin --with-projects first.")
         return
 
-    # Fall-back creator: any user (preferably one with the admin role)
-    from app.infrastructure.database.models import RoleModel  # local import to avoid cycle
+    # Fall-back creator: preferably a company admin, else any user.
+    from scripts.seed_memberships import _first_company_admin  # local import to avoid cycle
 
-    admin = db.session.query(UserModel).join(UserModel.roles).filter(RoleModel.name == "admin").first()
+    admin = _first_company_admin()
     if not admin:
         admin = db.session.query(UserModel).first()
     if not admin:

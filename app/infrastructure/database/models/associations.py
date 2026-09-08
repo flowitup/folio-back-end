@@ -7,47 +7,9 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from app.infrastructure.database.models.base import Base
 
-# Association table: users <-> roles (many-to-many)
-user_roles = Table(
-    "user_roles",
-    Base.metadata,
-    Column(
-        "user_id",
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "role_id",
-        UUID(as_uuid=True),
-        ForeignKey("roles.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column("assigned_at", DateTime, default=lambda: datetime.now(timezone.utc)),
-)
-
-# Association table: roles <-> permissions (many-to-many)
-role_permissions = Table(
-    "role_permissions",
-    Base.metadata,
-    Column(
-        "role_id",
-        UUID(as_uuid=True),
-        ForeignKey("roles.id", ondelete="CASCADE"),
-        primary_key=True,
-        index=True,
-    ),
-    Column(
-        "permission_id",
-        UUID(as_uuid=True),
-        ForeignKey("permissions.id", ondelete="CASCADE"),
-        primary_key=True,
-        index=True,
-    ),
-)
-
-# Association table: users <-> projects (many-to-many)
-# role_id and invited_by_user_id columns added in phase-01 migration
+# Association table: users <-> projects (many-to-many).
+# A row means "assigned to this project"; what the user may do there comes from
+# their company role plus their grant/deny rows, never from this table.
 user_projects = Table(
     "user_projects",
     Base.metadata,
@@ -64,12 +26,6 @@ user_projects = Table(
         primary_key=True,
     ),
     Column("assigned_at", DateTime, default=lambda: datetime.now(timezone.utc)),
-    Column(
-        "role_id",
-        UUID(as_uuid=True),
-        ForeignKey("roles.id", ondelete="RESTRICT"),
-        nullable=True,  # nullable in ORM mapping; DB enforces NOT NULL after backfill
-    ),
     Column(
         "invited_by_user_id",
         UUID(as_uuid=True),

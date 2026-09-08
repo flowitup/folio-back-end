@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 def _auth(token: str) -> dict:
@@ -34,40 +34,23 @@ def chiffrage_world(invitation_app):
     """
     from app import db
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
-    from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+    from app.infrastructure.database.models import ProjectModel, UserModel
 
     hasher = Argon2PasswordHasher()
     with invitation_app.app_context():
 
-        def perm(name: str) -> PermissionModel:
-            existing = db.session.query(PermissionModel).filter_by(name=name).one_or_none()
-            if existing:
-                return existing
-            resource, action = name.split(":", 1)
-            created = PermissionModel(name=name, resource=resource, action=action)
-            db.session.add(created)
-            return created
-
-        writer_role = RoleModel(name="chiffrage-writer", description="Chiffrage writer")
-        reader_role = RoleModel(name="chiffrage-reader", description="Chiffrage reader")
-        # Add the roles before wiring permissions so the association writes are
-        # not attempted against detached objects during autoflush.
-        db.session.add_all([writer_role, reader_role])
-        writer_role.permissions.append(perm("project:read"))
-        writer_role.permissions.append(perm("project:manage_invoices"))
-
-        reader_role.permissions.append(perm("project:read"))
-
         writer = UserModel(email="chiffrage-writer@test.com", password_hash=hasher.hash("Writer1234!"), is_active=True)
-        writer.roles.append(writer_role)
         reader = UserModel(email="chiffrage-reader@test.com", password_hash=hasher.hash("Reader1234!"), is_active=True)
-        reader.roles.append(reader_role)
         db.session.add_all([writer, reader])
         db.session.flush()
 
-        project = ProjectModel(name="Chiffrage Test Project", owner_id=writer.id)
+        project = ProjectModel(
+            name="Chiffrage Test Project", owner_id=writer.id, company_id=company_for_projects(db.session, writer.id)
+        )
         project.users.append(reader)  # ORM append -> project.user_ids is populated
-        other = ProjectModel(name="Chiffrage Other Project", owner_id=writer.id)
+        other = ProjectModel(
+            name="Chiffrage Other Project", owner_id=writer.id, company_id=company_for_projects(db.session, writer.id)
+        )
         db.session.add_all([project, other])
         db.session.commit()
 

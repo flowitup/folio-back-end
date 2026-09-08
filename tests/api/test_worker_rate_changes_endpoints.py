@@ -23,12 +23,10 @@ from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRol
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
 from app.infrastructure.adapters.sqlalchemy_worker_rate_change import SQLAlchemyWorkerRateChangeRepository
 from app.infrastructure.database.models import (
-    PermissionModel,
     ProjectModel,
-    RoleModel,
     UserModel,
 )
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -72,31 +70,20 @@ def rate_app():
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
-        # Permissions
-        manage_labor_perm = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-
-        # Admin has all perms; reader has only read (no manage_labor)
-        admin_role = RoleModel(name="rc_admin", description="Rate Change Admin")
-        admin_role.permissions.extend([manage_labor_perm, read_perm, star_perm])
-
-        reader_role = RoleModel(name="rc_reader", description="Rate Change Reader")
-        reader_role.permissions.append(read_perm)
-
-        db.session.add_all([manage_labor_perm, read_perm, star_perm, admin_role, reader_role])
         db.session.flush()
 
         admin_user = UserModel(email="rc_admin@test.com", password_hash=hasher.hash("Admin1234!"), is_active=True)
-        admin_user.roles.append(admin_role)
 
         reader_user = UserModel(email="rc_reader@test.com", password_hash=hasher.hash("Reader1234!"), is_active=True)
-        reader_user.roles.append(reader_role)
 
         db.session.add_all([admin_user, reader_user])
         db.session.flush()
 
-        project = ProjectModel(name="Rate Change Test Project", owner_id=admin_user.id)
+        project = ProjectModel(
+            name="Rate Change Test Project",
+            owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
+        )
         db.session.add(project)
         db.session.commit()
 

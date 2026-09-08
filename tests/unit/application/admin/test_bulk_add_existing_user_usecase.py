@@ -13,13 +13,10 @@ from app.application.admin.dtos import BulkAddStatus
 from app.application.admin.exceptions import (
     EmptyProjectListError,
     PermissionDeniedError,
-    RoleNotAllowedError,
-    RoleNotFoundError,
     TargetUserNotFoundError,
     TooManyProjectsError,
 )
 from app.domain.entities.project import Project
-from app.domain.entities.role import Role
 from app.domain.entities.user import User
 
 # ---------------------------------------------------------------------------
@@ -35,7 +32,6 @@ def _make_superadmin(id=None) -> User:
         password_hash="hashed",
         is_active=True,
         created_at=datetime.now(timezone.utc),
-        roles=[],
         display_name="Super Admin",
     )
 
@@ -57,7 +53,6 @@ def _make_user(id=None, email="target@example.com") -> User:
         password_hash="hashed",
         is_active=True,
         created_at=datetime.now(timezone.utc),
-        roles=[],
     )
 
 
@@ -68,10 +63,6 @@ def _make_project(name="Test Project") -> Project:
         owner_id=uuid4(),
         created_at=datetime.now(timezone.utc),
     )
-
-
-def _make_role(name="member") -> Role:
-    return Role(id=uuid4(), name=name)
 
 
 class _FakeSession:
@@ -102,7 +93,6 @@ class _FakeSession:
 def _make_usecase(
     user_repo=None,
     project_repo=None,
-    role_repo=None,
     membership_repo=None,
     renderer=None,
     queue=None,
@@ -115,7 +105,6 @@ def _make_usecase(
     return BulkAddExistingUserUseCase(
         user_repo=user_repo or MagicMock(),
         project_repo=project_repo or MagicMock(),
-        role_repo=role_repo or MagicMock(),
         membership_repo=membership_repo or MagicMock(),
         email_renderer=renderer,
         queue_port=queue or MagicMock(),
@@ -134,7 +123,6 @@ class TestHappyPath:
     def test_all_added_returns_added_status(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project("Project One")
         p2 = _make_project("Project Two")
 
@@ -144,24 +132,18 @@ class TestHappyPath:
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = lambda pid: p1 if pid == p1.id else p2
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = None  # not yet a member
         membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
         )
         result = uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[p1.id, p2.id],
-            role_id=role.id,
         )
 
         assert len(result.results) == 2
@@ -170,7 +152,6 @@ class TestHappyPath:
     def test_membership_repo_add_called_once_per_project(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project("P1")
         p2 = _make_project("P2")
 
@@ -180,24 +161,18 @@ class TestHappyPath:
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = lambda pid: p1 if pid == p1.id else p2
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = None
         membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
         )
         uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[p1.id, p2.id],
-            role_id=role.id,
         )
 
         assert membership_repo.add.call_count == 2
@@ -205,7 +180,6 @@ class TestHappyPath:
     def test_queue_enqueue_called_once_for_consolidated_email(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project("P1")
         p2 = _make_project("P2")
 
@@ -215,18 +189,13 @@ class TestHappyPath:
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = lambda pid: p1 if pid == p1.id else p2
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = None
         membership_repo.add.return_value = True
 
         queue = MagicMock()
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
             queue=queue,
         )
@@ -234,7 +203,6 @@ class TestHappyPath:
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[p1.id, p2.id],
-            role_id=role.id,
         )
 
         queue.enqueue.assert_called_once()
@@ -247,10 +215,9 @@ class TestHappyPath:
 
 
 class TestAlreadyMember:
-    def test_same_role_returns_already_member_same_role(self):
+    def test_existing_assignment_returns_already_member(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project()
 
         user_repo = MagicMock()
@@ -259,35 +226,28 @@ class TestAlreadyMember:
         project_repo = MagicMock()
         project_repo.find_by_id.return_value = p1
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = role.id  # same role
         membership_repo.add.return_value = False
 
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
         )
         result = uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[p1.id],
-            role_id=role.id,
         )
 
-        assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
+        assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER
         # H1 — under the new contract `add()` IS called every iteration; the bool return
         # (False, here) signals "row already existed, no INSERT performed".
         membership_repo.add.assert_called_once()
 
-    def test_same_role_not_in_email_recap(self):
+    def test_already_member_not_in_email_recap(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project()
 
         user_repo = MagicMock()
@@ -296,18 +256,13 @@ class TestAlreadyMember:
         project_repo = MagicMock()
         project_repo.find_by_id.return_value = p1
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = role.id
         membership_repo.add.return_value = False
 
         queue = MagicMock()
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
             queue=queue,
         )
@@ -315,95 +270,20 @@ class TestAlreadyMember:
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[p1.id],
-            role_id=role.id,
         )
 
         # No added projects → no email
-        queue.enqueue.assert_not_called()
-
-    def test_different_role_returns_already_member_different_role(self):
-        requester = _make_superadmin()
-        target = _make_user()
-        role = _make_role()
-        p1 = _make_project()
-
-        user_repo = MagicMock()
-        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
-
-        project_repo = MagicMock()
-        project_repo.find_by_id.return_value = p1
-
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
-        membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = uuid4()  # different role
-        membership_repo.add.return_value = False
-
-        uc = _make_usecase(
-            user_repo=user_repo,
-            project_repo=project_repo,
-            role_repo=role_repo,
-            membership_repo=membership_repo,
-        )
-        result = uc.execute(
-            requester_id=requester.id,
-            target_user_id=target.id,
-            project_ids=[p1.id],
-            role_id=role.id,
-        )
-
-        assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER_DIFFERENT_ROLE
-        # H1 — `add()` IS called; `False` return tells us the conflict happened and
-        # we left the existing row untouched (no role override).
-        membership_repo.add.assert_called_once()
-
-    def test_different_role_not_in_email_recap(self):
-        requester = _make_superadmin()
-        target = _make_user()
-        role = _make_role()
-        p1 = _make_project()
-
-        user_repo = MagicMock()
-        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
-
-        project_repo = MagicMock()
-        project_repo.find_by_id.return_value = p1
-
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
-        membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = uuid4()
-        membership_repo.add.return_value = False
-
-        queue = MagicMock()
-        uc = _make_usecase(
-            user_repo=user_repo,
-            project_repo=project_repo,
-            role_repo=role_repo,
-            membership_repo=membership_repo,
-            queue=queue,
-        )
-        uc.execute(
-            requester_id=requester.id,
-            target_user_id=target.id,
-            project_ids=[p1.id],
-            role_id=role.id,
-        )
-
         queue.enqueue.assert_not_called()
 
     def test_h1_race_regression_add_returning_false_does_not_yield_added(self):
         """H1 — if the repo's `add()` returns False (ON CONFLICT — row already existed),
         the use-case must NOT report ADDED, must NOT include the project in the email recap.
 
-        Simulates the concurrent-bulk-add race: the use-case looked up `find_role_id` and saw
-        None (a moment before another caller inserted), then `add()` runs but returns False.
+        Simulates the concurrent-bulk-add race: another caller inserted the row a
+        moment earlier, so `add()` runs but returns False.
         """
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project()
 
         user_repo = MagicMock()
@@ -412,21 +292,14 @@ class TestAlreadyMember:
         project_repo = MagicMock()
         project_repo.find_by_id.return_value = p1
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        # Pre-add view says "no membership" (race-window observation)
-        # Post-add `find_role_id` (the use-case calls it on conflict) reports the now-existing role.
-        membership_repo.find_role_id.return_value = role.id
-        # add() reports the conflict — row was inserted by someone else mid-flight.
+        # add() reports the conflict — the row was inserted by someone else mid-flight.
         membership_repo.add.return_value = False
 
         queue = MagicMock()
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
             queue=queue,
         )
@@ -434,11 +307,10 @@ class TestAlreadyMember:
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[p1.id],
-            role_id=role.id,
         )
 
-        # Must report ALREADY_MEMBER_*, not ADDED
-        assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
+        # Must report ALREADY_MEMBER, not ADDED
+        assert result.results[0].status == BulkAddStatus.ALREADY_MEMBER
         # Must NOT enqueue the consolidated email (no actual additions)
         queue.enqueue.assert_not_called()
 
@@ -452,7 +324,6 @@ class TestProjectNotFound:
     def test_missing_project_returns_project_not_found_status(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         missing_pid = uuid4()
 
         user_repo = MagicMock()
@@ -461,19 +332,14 @@ class TestProjectNotFound:
         project_repo = MagicMock()
         project_repo.find_by_id.return_value = None
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
         )
         result = uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[missing_pid],
-            role_id=role.id,
         )
 
         assert result.results[0].status == BulkAddStatus.PROJECT_NOT_FOUND
@@ -483,7 +349,6 @@ class TestProjectNotFound:
     def test_loop_continues_after_missing_project(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         missing_pid = uuid4()
         good_project = _make_project("Good Project")
 
@@ -493,24 +358,18 @@ class TestProjectNotFound:
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = lambda pid: None if pid == missing_pid else good_project
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = None
         membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
         )
         result = uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[missing_pid, good_project.id],
-            role_id=role.id,
         )
 
         assert len(result.results) == 2
@@ -527,60 +386,16 @@ class TestProjectNotFound:
 class TestMissingEntities:
     def test_target_user_not_found_raises(self):
         requester = _make_superadmin()
-        role = _make_role()
 
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else None
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
-        uc = _make_usecase(user_repo=user_repo, role_repo=role_repo)
+        uc = _make_usecase(user_repo=user_repo)
         with pytest.raises(TargetUserNotFoundError):
             uc.execute(
                 requester_id=requester.id,
                 target_user_id=uuid4(),
                 project_ids=[uuid4()],
-                role_id=role.id,
-            )
-
-    def test_role_not_found_raises(self):
-        requester = _make_superadmin()
-        target = _make_user()
-
-        user_repo = MagicMock()
-        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
-
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = None
-
-        uc = _make_usecase(user_repo=user_repo, role_repo=role_repo)
-        with pytest.raises(RoleNotFoundError):
-            uc.execute(
-                requester_id=requester.id,
-                target_user_id=target.id,
-                project_ids=[uuid4()],
-                role_id=uuid4(),
-            )
-
-    def test_superadmin_role_raises_role_not_allowed(self):
-        requester = _make_superadmin()
-        target = _make_user()
-        superadmin_role = _make_role("superadmin")
-
-        user_repo = MagicMock()
-        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
-
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = superadmin_role
-
-        uc = _make_usecase(user_repo=user_repo, role_repo=role_repo)
-        with pytest.raises(RoleNotAllowedError):
-            uc.execute(
-                requester_id=requester.id,
-                target_user_id=target.id,
-                project_ids=[uuid4()],
-                role_id=superadmin_role.id,
             )
 
 
@@ -600,7 +415,6 @@ class TestPermissionGuard:
                 requester_id=uuid4(),
                 target_user_id=uuid4(),
                 project_ids=[uuid4()],
-                role_id=uuid4(),
             )
 
     def test_requester_without_the_ops_flag_raises_permission_denied(self):
@@ -616,7 +430,6 @@ class TestPermissionGuard:
                 requester_id=requester.id,
                 target_user_id=uuid4(),
                 project_ids=[uuid4()],
-                role_id=uuid4(),
             )
 
     def test_missing_role_checker_fails_closed(self):
@@ -633,7 +446,6 @@ class TestPermissionGuard:
                 requester_id=requester.id,
                 target_user_id=uuid4(),
                 project_ids=[uuid4()],
-                role_id=uuid4(),
             )
 
 
@@ -646,47 +458,36 @@ class TestInputValidation:
     def test_empty_project_ids_raises(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
 
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
-        uc = _make_usecase(user_repo=user_repo, role_repo=role_repo)
+        uc = _make_usecase(user_repo=user_repo)
         with pytest.raises(EmptyProjectListError):
             uc.execute(
                 requester_id=requester.id,
                 target_user_id=target.id,
                 project_ids=[],
-                role_id=role.id,
             )
 
     def test_too_many_project_ids_raises(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
 
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
-        uc = _make_usecase(user_repo=user_repo, role_repo=role_repo)
+        uc = _make_usecase(user_repo=user_repo)
         with pytest.raises(TooManyProjectsError):
             uc.execute(
                 requester_id=requester.id,
                 target_user_id=target.id,
                 project_ids=[uuid4() for _ in range(51)],
-                role_id=role.id,
             )
 
     def test_duplicate_project_ids_are_deduped(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
         p1 = _make_project()
         dup_id = p1.id
 
@@ -696,17 +497,12 @@ class TestInputValidation:
         project_repo = MagicMock()
         project_repo.find_by_id.return_value = p1
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = None
         membership_repo.add.return_value = True
 
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
         )
         # Send the same project id three times
@@ -714,7 +510,6 @@ class TestInputValidation:
             requester_id=requester.id,
             target_user_id=target.id,
             project_ids=[dup_id, dup_id, dup_id],
-            role_id=role.id,
         )
 
         # Deduped to 1 unique project
@@ -731,38 +526,24 @@ class TestMixedBatch:
     def test_mixed_batch_results_populated_correctly(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
 
         p_add = _make_project("Will Be Added")
-        p_same = _make_project("Same Role Already")
-        p_diff = _make_project("Different Role Already")
+        p_existing = _make_project("Already Assigned")
         missing_pid = uuid4()
 
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
 
-        same_role_id = role.id
-        diff_role_id = uuid4()
-
         def project_side_effect(pid):
             if pid == p_add.id:
                 return p_add
-            if pid == p_same.id:
-                return p_same
-            if pid == p_diff.id:
-                return p_diff
+            if pid == p_existing.id:
+                return p_existing
             return None  # missing_pid
 
-        def membership_side_effect(uid, pid):
-            if pid == p_same.id:
-                return same_role_id
-            if pid == p_diff.id:
-                return diff_role_id
-            return None  # not a member
-
         # H1 — repo.add returns True only on actual INSERT (no conflict).
-        # In a real DB, a row at p_same/p_diff already exists; the INSERT...ON CONFLICT
-        # DO NOTHING reports False. p_add has no row → True.
+        # In a real DB, a row at p_existing already exists; the INSERT ... ON
+        # CONFLICT DO NOTHING reports False. p_add has no row → True.
         def add_side_effect(membership):
             if membership.project_id == p_add.id:
                 return True
@@ -771,11 +552,7 @@ class TestMixedBatch:
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = project_side_effect
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.side_effect = membership_side_effect
         membership_repo.add.side_effect = add_side_effect
 
         queue = MagicMock()
@@ -785,7 +562,6 @@ class TestMixedBatch:
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
             queue=queue,
             renderer=renderer,
@@ -793,23 +569,20 @@ class TestMixedBatch:
         result = uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
-            project_ids=[p_add.id, p_same.id, p_diff.id, missing_pid],
-            role_id=role.id,
+            project_ids=[p_add.id, p_existing.id, missing_pid],
         )
 
         statuses = {r.project_id: r.status for r in result.results}
         assert statuses[p_add.id] == BulkAddStatus.ADDED
-        assert statuses[p_same.id] == BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
-        assert statuses[p_diff.id] == BulkAddStatus.ALREADY_MEMBER_DIFFERENT_ROLE
+        assert statuses[p_existing.id] == BulkAddStatus.ALREADY_MEMBER
         assert statuses[missing_pid] == BulkAddStatus.PROJECT_NOT_FOUND
 
     def test_consolidated_email_only_contains_added_projects(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
 
         p_add = _make_project("Added Project")
-        p_same = _make_project("Same Role")
+        p_existing = _make_project("Already Assigned")
         missing_pid = uuid4()
 
         user_repo = MagicMock()
@@ -818,13 +591,8 @@ class TestMixedBatch:
         def project_side_effect(pid):
             if pid == p_add.id:
                 return p_add
-            if pid == p_same.id:
-                return p_same
-            return None
-
-        def membership_side_effect(uid, pid):
-            if pid == p_same.id:
-                return role.id
+            if pid == p_existing.id:
+                return p_existing
             return None
 
         def add_side_effect(membership):
@@ -833,11 +601,7 @@ class TestMixedBatch:
         project_repo = MagicMock()
         project_repo.find_by_id.side_effect = project_side_effect
 
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         membership_repo = MagicMock()
-        membership_repo.find_role_id.side_effect = membership_side_effect
         membership_repo.add.side_effect = add_side_effect
 
         queue = MagicMock()
@@ -847,7 +611,6 @@ class TestMixedBatch:
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
             queue=queue,
             renderer=renderer,
@@ -855,8 +618,7 @@ class TestMixedBatch:
         uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
-            project_ids=[p_add.id, p_same.id, missing_pid],
-            role_id=role.id,
+            project_ids=[p_add.id, p_existing.id, missing_pid],
         )
 
         # Email enqueued exactly once (only for p_add)
@@ -871,35 +633,28 @@ class TestMixedBatch:
     def test_no_added_projects_no_email_enqueued(self):
         requester = _make_superadmin()
         target = _make_user()
-        role = _make_role()
-        p_same = _make_project()
+        p_existing = _make_project()
 
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
 
         project_repo = MagicMock()
-        project_repo.find_by_id.return_value = p_same
-
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
+        project_repo.find_by_id.return_value = p_existing
 
         membership_repo = MagicMock()
-        membership_repo.find_role_id.return_value = role.id  # already member same role
         membership_repo.add.return_value = False
 
         queue = MagicMock()
         uc = _make_usecase(
             user_repo=user_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             membership_repo=membership_repo,
             queue=queue,
         )
         uc.execute(
             requester_id=requester.id,
             target_user_id=target.id,
-            project_ids=[p_same.id],
-            role_id=role.id,
+            project_ids=[p_existing.id],
         )
 
         queue.enqueue.assert_not_called()

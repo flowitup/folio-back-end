@@ -19,6 +19,7 @@ from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEn
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
+from tests.company_tenancy_helper import company_for_projects
 
 
 @pytest.fixture
@@ -33,7 +34,13 @@ def owner_user(session):
 @pytest.fixture
 def sample_project(session, owner_user):
     """Create a sample project for labor tests."""
-    project = ProjectModel(id=uuid4(), name="Labor Test Project", address="123 Labor St", owner_id=owner_user.id)
+    project = ProjectModel(
+        id=uuid4(),
+        name="Labor Test Project",
+        address="123 Labor St",
+        owner_id=owner_user.id,
+        company_id=company_for_projects(session, owner_user.id),
+    )
     session.add(project)
     session.commit()
     return project

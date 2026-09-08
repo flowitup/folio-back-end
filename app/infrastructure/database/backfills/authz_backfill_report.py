@@ -49,8 +49,8 @@ class BackfillReport:
     global_managers: int = 0
     creator_assignments: int = 0
     owner_roles_raised: int = 0
+    assignments_skipped: int = 0
     owner_access_created: int = 0
-    assignments_skipped_no_role: int = 0
     projects_without_company: int = 0
     persons_created: int = 0
     profiles_created: int = 0
@@ -66,8 +66,8 @@ class BackfillReport:
             f"{self.global_managers} company role(s) raised to manager from the legacy global role, "
             f"{self.creator_assignments} creator assignment(s) created, "
             f"{self.owner_roles_raised} owner company role(s) raised, "
+            f"{self.assignments_skipped} assignment(s) skipped, "
             f"{self.owner_access_created} owner company attachment(s) created, "
-            f"{self.assignments_skipped_no_role} assignment(s) skipped (no legacy role to reference), "
             f"{self.persons_created} person identity(ies) created, "
             f"{self.profiles_created} directory profile(s) created, "
             f"{self.profiles_reactivated} reactivated, "

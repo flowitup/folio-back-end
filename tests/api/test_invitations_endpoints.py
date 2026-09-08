@@ -28,7 +28,6 @@ class TestCreateInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": "newperson@example.com",
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
@@ -36,7 +35,7 @@ class TestCreateInvitation:
         data = resp.get_json()
         assert data["kind"] in ("invitation_sent", "direct_added")
 
-    def test_role_id_is_optional_and_defaults_to_member(self, inv_client, admin_token, invitation_app):
+    def test_the_invitation_grants_the_member_role(self, inv_client, admin_token, invitation_app):
         resp = inv_client.post(
             "/api/v1/invitations",
             json={"project_id": invitation_app._test_project_id, "email": "norole@example.com"},
@@ -51,7 +50,6 @@ class TestCreateInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": "someone@example.com",
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(outsider_token),
         )
@@ -63,7 +61,6 @@ class TestCreateInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": "x@example.com",
-                "role_id": invitation_app._test_member_role_id,
             },
         )
         assert resp.status_code == 401
@@ -81,7 +78,6 @@ class TestCreateInvitation:
         payload = {
             "project_id": invitation_app._test_project_id,
             "email": "dup-test@example.com",
-            "role_id": invitation_app._test_member_role_id,
         }
         r1 = inv_client.post("/api/v1/invitations", json=payload, headers=_auth(admin_token))
         assert r1.status_code == 201
@@ -97,37 +93,12 @@ class TestCreateInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": invitation_app._test_member_email,
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
         assert resp.status_code == 201
         body = resp.get_json()
         assert body["kind"] == "direct_added"
-
-    def test_existing_member_different_role_returns_409(self, inv_client, admin_token, invitation_app):
-        """Inviting an already-member with a DIFFERENT role is rejected with 409 (H2)."""
-        # Look up a different role id (admin) to assign — different from 'member'.
-        from app.infrastructure.database.models import RoleModel
-        from app import db
-
-        with invitation_app.app_context():
-            admin_role = db.session.query(RoleModel).filter(RoleModel.name == "admin").first()
-            assert admin_role is not None, "admin role must be seeded by conftest"
-            admin_role_id = str(admin_role.id)
-
-        resp = inv_client.post(
-            "/api/v1/invitations",
-            json={
-                "project_id": invitation_app._test_project_id,
-                "email": invitation_app._test_member_email,
-                "role_id": admin_role_id,
-            },
-            headers=_auth(admin_token),
-        )
-        assert resp.status_code == 409
-        body = resp.get_json()
-        assert "already a member" in body["message"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +165,6 @@ class TestRevokeInvitation:
             json={
                 "project_id": app._test_project_id,
                 "email": f"revoke-{uuid.uuid4().hex[:8]}@example.com",
-                "role_id": app._test_member_role_id,
             },
             headers=_auth(token),
         )
@@ -252,7 +222,6 @@ class TestVerifyInvitation:
             json={
                 "project_id": app._test_project_id,
                 "email": f"verify-{uuid.uuid4().hex[:8]}@example.com",
-                "role_id": app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
@@ -299,7 +268,6 @@ class TestVerifyInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": email_addr,
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
@@ -345,7 +313,6 @@ class TestVerifyInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": f"expired-{_uuid.uuid4().hex[:8]}@example.com",
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
@@ -399,7 +366,6 @@ class TestAcceptInvitation:
             json={
                 "project_id": app._test_project_id,
                 "email": email,
-                "role_id": app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
@@ -444,7 +410,6 @@ class TestAcceptInvitation:
             json={
                 "project_id": invitation_app._test_project_id,
                 "email": email,
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )

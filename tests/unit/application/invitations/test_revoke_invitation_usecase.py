@@ -28,7 +28,6 @@ def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=No
         id=uuid4(),
         email="user@example.com",
         project_id=uuid4(),
-        role_id=uuid4(),
         token_hash=token_hash,
         status=status,
         expires_at=now + timedelta(days=7),
@@ -45,7 +44,6 @@ def _make_user(email="admin@example.com") -> User:
         password_hash="h",
         is_active=True,
         created_at=datetime.now(timezone.utc),
-        roles=[],
     )
 
 

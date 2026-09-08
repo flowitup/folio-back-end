@@ -17,7 +17,7 @@ correctly finds the member in `project.user_ids` under SQLite.
 
 The admin user (project owner) always passes `can_read_project` via
 `project.owner_id == user_id`, so admin tests are unaffected.
-The superadmin user has `*:*` which bypasses `user_ids` check entirely.
+The platform-ops user bypasses every project check.
 
 Permission model: documents are closed to a company `member` — every route of
 the module, reads included, requires `project:update`. `owner_user` resolves
@@ -31,7 +31,7 @@ import io
 from uuid import uuid4
 
 import pytest
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -104,7 +104,7 @@ def doc_app():
       - owner_user: project owner (can do everything by owner right)
       - member_user: ORM-wired project member (non-owner; uploader of member docs)
       - outsider_user: not a member of the project (gets 403 on all routes)
-      - superadmin_user: has *:* permission
+      - superadmin_user: platform ops (the support bypass flag)
     """
     from app import create_app, db
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
@@ -116,8 +116,7 @@ def doc_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
-    from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
+    from app.infrastructure.database.models import UserModel, ProjectModel
     from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
     from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
     from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
@@ -152,7 +151,6 @@ def doc_app():
         project_repo = SQLAlchemyProjectRepository(db.session)
         inv_repo = SqlAlchemyInvitationRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-        role_repo = SqlAlchemyRoleRepository(db.session)
 
         configure_container(
             user_repository=user_repo,
@@ -162,26 +160,12 @@ def doc_app():
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
             project_membership_repo=membership_repo,
-            role_repo=role_repo,
         )
 
         # Seed permissions + roles
         # NOTE: permission *names* must match what @require_permission checks exactly.
         # "project:read" is what the document routes declare; "*:*" grants wildcard.
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
 
-        owner_role = RoleModel(name="doc_owner", description="Owner")
-        owner_role.permissions.append(read_perm)
-
-        member_role = RoleModel(name="doc_member", description="Member")
-        member_role.permissions.append(read_perm)
-
-        superadmin_role = RoleModel(name="doc_superadmin", description="Superadmin")
-        superadmin_role.permissions.append(star_perm)
-        superadmin_role.permissions.append(read_perm)
-
-        db.session.add_all([read_perm, star_perm, owner_role, member_role, superadmin_role])
         db.session.flush()
 
         # Seed users
@@ -190,14 +174,12 @@ def doc_app():
             password_hash=hasher.hash("Owner1234!"),
             is_active=True,
         )
-        owner_user.roles.append(owner_role)
 
         member_user = UserModel(
             email="doc_member@test.com",
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        member_user.roles.append(member_role)
 
         outsider_user = UserModel(
             email="doc_outsider@test.com",
@@ -209,14 +191,16 @@ def doc_app():
             email="doc_superadmin@test.com",
             password_hash=hasher.hash("Superadmin1234!"),
             is_active=True,
+            is_platform_ops=True,
         )
-        superadmin_user.roles.append(superadmin_role)
 
         db.session.add_all([owner_user, member_user, outsider_user, superadmin_user])
         db.session.flush()
 
         # Seed project
-        project = ProjectModel(name="Doc Test Project", owner_id=owner_user.id)
+        project = ProjectModel(
+            name="Doc Test Project", owner_id=owner_user.id, company_id=company_for_projects(db.session, owner_user.id)
+        )
         db.session.add(project)
         db.session.flush()
 
@@ -538,8 +522,7 @@ class TestUploadRateLimit:
         from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
             SqlAlchemyProjectMembershipRepository,
         )
-        from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
-        from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
+        from app.infrastructure.database.models import UserModel, ProjectModel
         from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
         from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
         from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
@@ -575,7 +558,6 @@ class TestUploadRateLimit:
             project_repo = SQLAlchemyProjectRepository(db.session)
             inv_repo = SqlAlchemyInvitationRepository(db.session)
             membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-            role_repo = SqlAlchemyRoleRepository(db.session)
 
             configure_container(
                 user_repository=user_repo,
@@ -585,13 +567,8 @@ class TestUploadRateLimit:
                 session_manager=FlaskSessionManager(),
                 invitation_repo=inv_repo,
                 project_membership_repo=membership_repo,
-                role_repo=role_repo,
             )
 
-            read_perm = PermissionModel(name="project:read", resource="project", action="read")
-            owner_role = RoleModel(name="rl_owner", description="Owner")
-            owner_role.permissions.append(read_perm)
-            db.session.add_all([read_perm, owner_role])
             db.session.flush()
 
             owner_user = UserModel(
@@ -599,11 +576,14 @@ class TestUploadRateLimit:
                 password_hash=hasher.hash("Owner1234!"),
                 is_active=True,
             )
-            owner_user.roles.append(owner_role)
             db.session.add(owner_user)
             db.session.flush()
 
-            project = ProjectModel(name="RL Test Project", owner_id=owner_user.id)
+            project = ProjectModel(
+                name="RL Test Project",
+                owner_id=owner_user.id,
+                company_id=company_for_projects(db.session, owner_user.id),
+            )
             db.session.add(project)
             db.session.flush()
             db.session.commit()
@@ -920,8 +900,7 @@ class TestCrossProjectDownloadAdversarial:
         from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
             SqlAlchemyProjectMembershipRepository,
         )
-        from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
-        from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
+        from app.infrastructure.database.models import UserModel, ProjectModel
         from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
         from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
         from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
@@ -956,7 +935,6 @@ class TestCrossProjectDownloadAdversarial:
             project_repo = SQLAlchemyProjectRepository(db.session)
             inv_repo = SqlAlchemyInvitationRepository(db.session)
             membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-            role_repo = SqlAlchemyRoleRepository(db.session)
 
             configure_container(
                 user_repository=user_repo,
@@ -966,17 +944,8 @@ class TestCrossProjectDownloadAdversarial:
                 session_manager=FlaskSessionManager(),
                 invitation_repo=inv_repo,
                 project_membership_repo=membership_repo,
-                role_repo=role_repo,
             )
 
-            read_perm = PermissionModel(name="project:read", resource="project", action="read")
-
-            owner_role = RoleModel(name="xp_owner", description="Owner")
-            owner_role.permissions.append(read_perm)
-            member_role = RoleModel(name="xp_member", description="Member")
-            member_role.permissions.append(read_perm)
-
-            db.session.add_all([read_perm, owner_role, member_role])
             db.session.flush()
 
             # dual_member is assigned to BOTH project A and B
@@ -985,20 +954,26 @@ class TestCrossProjectDownloadAdversarial:
                 password_hash=hasher.hash("Owner1234!"),
                 is_active=True,
             )
-            owner_user.roles.append(owner_role)
 
             dual_member = UserModel(
                 email="xp_dual@test.com",
                 password_hash=hasher.hash("Dual1234!"),
                 is_active=True,
             )
-            dual_member.roles.append(member_role)
 
             db.session.add_all([owner_user, dual_member])
             db.session.flush()
 
-            project_a = ProjectModel(name="Cross Project A", owner_id=owner_user.id)
-            project_b = ProjectModel(name="Cross Project B", owner_id=owner_user.id)
+            project_a = ProjectModel(
+                name="Cross Project A",
+                owner_id=owner_user.id,
+                company_id=company_for_projects(db.session, owner_user.id),
+            )
+            project_b = ProjectModel(
+                name="Cross Project B",
+                owner_id=owner_user.id,
+                company_id=company_for_projects(db.session, owner_user.id),
+            )
             db.session.add_all([project_a, project_b])
             db.session.flush()
 

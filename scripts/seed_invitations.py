@@ -32,7 +32,6 @@ from app import db
 from app.infrastructure.database.models import (
     InvitationModel,
     ProjectModel,
-    RoleModel,
     UserModel,
 )
 
@@ -42,14 +41,10 @@ def _fake_token_hash(seed: str) -> str:
     return hashlib.sha256(f"seed-token::{seed}".encode("utf-8")).hexdigest()
 
 
-def seed_invitations(
-    role_map: dict[str, RoleModel],
-    inviter: UserModel,
-) -> int:
+def seed_invitations(inviter: UserModel) -> int:
     """Create invitations across all 4 lifecycle states.
 
     Args:
-        role_map: name → RoleModel from seed_roles()
         inviter: the user to stamp as `invited_by` (typically admin)
 
     Returns:
@@ -60,33 +55,27 @@ def seed_invitations(
         print("  No projects found. Run seed.py with --with-admin --with-projects first.")
         return 0
 
-    if "user" not in role_map or "manager" not in role_map:
-        print("  Required roles not found in role_map; skipping invitation seed.")
-        return 0
-
     now = datetime.now(timezone.utc)
-    user_role = role_map["user"]
-    manager_role = role_map["manager"]
 
-    # Plan: (email, project_index, role, status, expires_offset_days, accepted_offset_days | None)
+    # Plan: (email, project_index, status, expires_offset_days, accepted_offset_days | None)
     # status ∈ {"pending", "revoked", "accepted"}; "expired" is just pending + past expires_at
     PLAN = [
         # PENDING — fresh, lots of time left
-        ("new.invitee1@example.com", 0, user_role, "pending", 6, None),
-        ("new.invitee2@example.com", 1, manager_role, "pending", 7, None),
+        ("new.invitee1@example.com", 0, "pending", 6, None),
+        ("new.invitee2@example.com", 1, "pending", 7, None),
         # PENDING — about to expire (1 day left)
-        ("expiring.invitee@example.com", 2, user_role, "pending", 1, None),
+        ("expiring.invitee@example.com", 2, "pending", 1, None),
         # EXPIRED (status=pending but expires_at in the past)
-        ("expired.invitee1@example.com", 0, user_role, "pending", -1, None),
-        ("expired.invitee2@example.com", 1, user_role, "pending", -7, None),
+        ("expired.invitee1@example.com", 0, "pending", -1, None),
+        ("expired.invitee2@example.com", 1, "pending", -7, None),
         # REVOKED
-        ("revoked.invitee@example.com", 0, user_role, "revoked", 6, None),
+        ("revoked.invitee@example.com", 0, "revoked", 6, None),
         # ACCEPTED — accepted 3 days ago, original expires_at was 4 days from then (now-3+4=now+1)
-        ("accepted.invitee@example.com", 1, user_role, "accepted", 1, -3),
+        ("accepted.invitee@example.com", 1, "accepted", 1, -3),
     ]
 
     created = 0
-    for email, proj_idx, role, status, exp_offset_days, acc_offset_days in PLAN:
+    for email, proj_idx, status, exp_offset_days, acc_offset_days in PLAN:
         if proj_idx >= len(projects):
             print(f"  [warn] Project index {proj_idx} out of range; skipping {email}")
             continue
@@ -108,7 +97,6 @@ def seed_invitations(
             id=uuid4(),
             email=email.lower(),
             project_id=project.id,
-            role_id=role.id,
             token_hash=_fake_token_hash(f"{email}::{project.id}::{status}"),
             status=status,
             expires_at=expires_at,
@@ -137,20 +125,18 @@ def seed_invitations(
 def main() -> None:
     """Standalone entry point — assumes admin + projects + roles already seeded."""
     from app import create_app
-    from scripts.seed_auth import seed_permissions, seed_roles
+    from scripts.seed_memberships import _first_company_admin
 
     app = create_app()
     with app.app_context():
         print("Seeding invitations...")
-        permission_map = seed_permissions()
-        role_map = seed_roles(permission_map)
 
-        admin = db.session.query(UserModel).join(UserModel.roles).filter(RoleModel.name == "admin").first()
+        admin = _first_company_admin()
         if not admin:
-            print("  No admin user found. Run seed.py --with-admin first.")
+            print("  No company admin found. Run seed.py --with-admin --with-companies first.")
             return
 
-        seed_invitations(role_map, admin)
+        seed_invitations(admin)
         print("\n  Done.")
 
 

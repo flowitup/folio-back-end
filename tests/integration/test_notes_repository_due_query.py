@@ -41,7 +41,6 @@ def pg_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from config import TestingConfig
     from wiring import configure_container
 
@@ -62,7 +61,6 @@ def pg_app():
             session_manager=FlaskSessionManager(),
             invitation_repo=SqlAlchemyInvitationRepository(db.session),
             project_membership_repo=SqlAlchemyProjectMembershipRepository(db.session),
-            role_repo=SqlAlchemyRoleRepository(db.session),
         )
         yield app
         db.session.remove()
@@ -109,7 +107,7 @@ def _insert_user_and_project(session):
         ),
         {"id": str(project_id), "name": "Test project", "owner": str(user_id), "now": now},
     )
-    # Add user as project member (no role required — user_projects role_id is nullable in tests)
+    # Assign the user to the project (an assignment carries no role)
     session.execute(
         text(
             "INSERT INTO user_projects (user_id, project_id, assigned_at) "

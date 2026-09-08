@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
 from app.infrastructure.database.models import ProjectModel, UserModel
+from tests.company_tenancy_helper import company_for_projects
 
 
 @pytest.fixture
@@ -28,7 +29,13 @@ def regular_user(session):
 @pytest.fixture
 def sample_project(session, owner_user):
     """Create a sample project."""
-    project = ProjectModel(id=uuid4(), name="Test Project", address="123 Test St", owner_id=owner_user.id)
+    project = ProjectModel(
+        id=uuid4(),
+        name="Test Project",
+        address="123 Test St",
+        owner_id=owner_user.id,
+        company_id=company_for_projects(session, owner_user.id),
+    )
     session.add(project)
     session.commit()
     return project
@@ -39,7 +46,13 @@ class TestProjectModel:
 
     def test_create_project(self, session, owner_user):
         """Test creating a new project."""
-        project = ProjectModel(id=uuid4(), name="New Project", address="456 New St", owner_id=owner_user.id)
+        project = ProjectModel(
+            id=uuid4(),
+            name="New Project",
+            address="456 New St",
+            owner_id=owner_user.id,
+            company_id=company_for_projects(session, owner_user.id),
+        )
         session.add(project)
         session.commit()
 
@@ -51,7 +64,12 @@ class TestProjectModel:
 
     def test_create_project_without_address(self, session, owner_user):
         """Test creating project with null address."""
-        project = ProjectModel(id=uuid4(), name="No Address Project", owner_id=owner_user.id)
+        project = ProjectModel(
+            id=uuid4(),
+            name="No Address Project",
+            owner_id=owner_user.id,
+            company_id=company_for_projects(session, owner_user.id),
+        )
         session.add(project)
         session.commit()
 
@@ -175,7 +193,12 @@ class TestProjectTimestamps:
 
     def test_created_at_auto_set(self, session, owner_user):
         """Test created_at is automatically set."""
-        project = ProjectModel(id=uuid4(), name="Timestamp Test", owner_id=owner_user.id)
+        project = ProjectModel(
+            id=uuid4(),
+            name="Timestamp Test",
+            owner_id=owner_user.id,
+            company_id=company_for_projects(session, owner_user.id),
+        )
         session.add(project)
         session.commit()
 
@@ -184,7 +207,12 @@ class TestProjectTimestamps:
 
     def test_updated_at_auto_set(self, session, owner_user):
         """Test updated_at is automatically set."""
-        project = ProjectModel(id=uuid4(), name="Timestamp Test", owner_id=owner_user.id)
+        project = ProjectModel(
+            id=uuid4(),
+            name="Timestamp Test",
+            owner_id=owner_user.id,
+            company_id=company_for_projects(session, owner_user.id),
+        )
         session.add(project)
         session.commit()
 

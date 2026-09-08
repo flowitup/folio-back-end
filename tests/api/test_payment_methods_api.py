@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
+from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -68,17 +68,7 @@ def pm_app():
 
         # Legacy roles are inert; kept so the fixture still exercises the
         # "a legacy role grants nothing" path alongside the ops flag below.
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
 
-        admin_role = RoleModel(name="pm_admin_role", description="Admin")
-        admin_role.permissions.append(star_perm)
-        admin_role.permissions.append(read_perm)
-
-        member_role = RoleModel(name="pm_member_role", description="Member")
-        member_role.permissions.append(read_perm)
-
-        db.session.add_all([star_perm, read_perm, admin_role, member_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -86,7 +76,6 @@ def pm_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
 
@@ -95,7 +84,6 @@ def pm_app():
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        member_user.roles.append(member_role)
 
         db.session.add_all([admin_user, member_user])
         db.session.flush()

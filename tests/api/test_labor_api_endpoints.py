@@ -16,13 +16,11 @@ import pytest
 from app.infrastructure.database.models import (
     UserModel,
     ProjectModel,
-    RoleModel,
-    PermissionModel,
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -60,16 +58,7 @@ def labor_app():
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
         # Seed permissions and roles — names must match exactly what require_permission checks.
-        manage_labor_perm = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
 
-        admin_role = RoleModel(name="labor_admin", description="Labor Admin")
-        admin_role.permissions.append(manage_labor_perm)
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(star_perm)
-
-        db.session.add_all([manage_labor_perm, read_perm, star_perm, admin_role])
         db.session.flush()
 
         # Seed user
@@ -77,8 +66,9 @@ def labor_app():
             email="laboradmin@test.com",
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
+            # The legacy `*:*` role this fixture used to seed mapped to platform ops.
+            is_platform_ops=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.flush()
 
@@ -86,6 +76,7 @@ def labor_app():
         project = ProjectModel(
             name="Labor API Test Project",
             owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
         )
         db.session.add(project)
         db.session.commit()
@@ -712,9 +703,11 @@ class TestLaborEntryRoutes:
         from app.infrastructure.database.models import ProjectModel
 
         with labor_app.app_context():
+            owner_id = _UUID(labor_app._test_admin_user_id)
             empty_project = ProjectModel(
                 name="Monthly Summary Empty Project",
-                owner_id=_UUID(labor_app._test_admin_user_id),
+                owner_id=owner_id,
+                company_id=company_for_projects(db.session, owner_id),
             )
             db.session.add(empty_project)
             db.session.commit()

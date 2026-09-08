@@ -145,7 +145,8 @@ def test_me_existing_fields_unchanged(client):
     h = _login(client, "me_none@test.com")
     resp = client.get("/api/v1/auth/me", headers=h)
     body = resp.get_json()
-    assert "permissions" in body and "roles" in body and "phone" in body
+    assert "permissions" in body and "phone" in body
+    assert "roles" not in body  # a user carries no roles of their own
 
 
 def test_login_response_includes_companies_matching_me(client, me_app):

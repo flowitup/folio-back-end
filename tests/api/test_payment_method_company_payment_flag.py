@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
+from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 
@@ -63,14 +63,6 @@ def cpf_app():
 
         hasher = Argon2PasswordHasher()
 
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-
-        admin_role = RoleModel(name="cpf_admin_role", description="Admin")
-        admin_role.permissions.append(star_perm)
-        admin_role.permissions.append(read_perm)
-
-        db.session.add_all([star_perm, read_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -78,7 +70,6 @@ def cpf_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
         db.session.add(admin_user)

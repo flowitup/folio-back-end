@@ -28,7 +28,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app import db
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
@@ -112,18 +112,7 @@ def mat_exp_app():
         hasher = Argon2PasswordHasher()
 
         # Permissions
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        inv_perm = PermissionModel(name="project:manage_invoices", resource="project", action="manage_invoices")
 
-        superadmin_role = RoleModel(name="mat_exp_superadmin", description="Superadmin")
-        superadmin_role.permissions.append(star_perm)
-
-        member_role = RoleModel(name="mat_exp_member", description="Member")
-        member_role.permissions.append(read_perm)
-        member_role.permissions.append(inv_perm)
-
-        db.session.add_all([star_perm, read_perm, inv_perm, superadmin_role, member_role])
         db.session.flush()
 
         # Users
@@ -132,8 +121,6 @@ def mat_exp_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(superadmin_role)  # superadmin so JWT has "*:*"
-        # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
 
         non_admin_user = UserModel(
@@ -141,7 +128,6 @@ def mat_exp_app():
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        non_admin_user.roles.append(member_role)
 
         # Plain company-A admin: has member_role (no *:*), will get company-admin
         # access row for company_a only — used to exercise non-superadmin code path.
@@ -150,7 +136,6 @@ def mat_exp_app():
             password_hash=hasher.hash("CompanyA1234!"),
             is_active=True,
         )
-        plain_company_a_admin_user.roles.append(member_role)
 
         db.session.add_all([admin_user, non_admin_user, plain_company_a_admin_user])
         db.session.flush()
@@ -182,9 +167,8 @@ def mat_exp_app():
         project_a1 = ProjectModel(name="Project A1", owner_id=admin_user.id, company_id=company_a.id)
         project_a2 = ProjectModel(name="Project A2", owner_id=admin_user.id, company_id=company_a.id)
         project_b = ProjectModel(name="Project B", owner_id=non_admin_user.id, company_id=company_b.id)
-        project_no_company = ProjectModel(name="No Company Project", owner_id=admin_user.id, company_id=None)
 
-        db.session.add_all([project_a1, project_a2, project_b, project_no_company])
+        db.session.add_all([project_a1, project_a2, project_b])
         db.session.commit()
 
         # UserCompanyAccess — admin_user is admin of company_a only
@@ -246,7 +230,6 @@ def mat_exp_app():
         test_app._project_a1_id = project_a1.id
         test_app._project_a2_id = project_a2.id
         test_app._project_b_id = project_b.id
-        test_app._project_no_company_id = project_no_company.id
 
         yield test_app
 
@@ -320,21 +303,6 @@ class TestListAggregation:
         assert resp.status_code == 200
         # Should be empty — non-admin with no admin companies sees nothing
         assert resp.get_json()["total"] == 0
-
-    def test_project_with_null_company_excluded(self, mat_client, admin_tok, mat_exp_app):
-        with mat_exp_app.app_context():
-            inv_nc = _make_invoice(
-                mat_exp_app._project_no_company_id, mat_exp_app._admin_user_id, refundable_status="refundable"
-            )
-            inv_nc_id = str(inv_nc.id)
-
-        resp = mat_client.get(
-            "/api/v1/billing/materials-expenses?refundable=true",
-            headers=_auth(admin_tok),
-        )
-        assert resp.status_code == 200
-        ids = [i["id"] for i in resp.get_json()["items"]]
-        assert inv_nc_id not in ids
 
     def test_project_name_present_in_response(self, mat_client, admin_tok, mat_exp_app):
         with mat_exp_app.app_context():

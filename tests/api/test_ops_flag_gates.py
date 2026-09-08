@@ -39,7 +39,7 @@ class TestAdminRoutes:
         return f"/api/v1/admin/users/{invitation_app._test_target_user_id}/memberships"
 
     def _body(self, invitation_app) -> dict:
-        return {"project_ids": [invitation_app._test_project_2_id], "role_id": invitation_app._test_member_role_id}
+        return {"project_ids": [invitation_app._test_project_2_id]}
 
     def test_ops_may_bulk_add(self, inv_client, invitation_app, superadmin_token):
         resp = inv_client.post(
@@ -90,7 +90,7 @@ class TestAuthMe:
         body = admin_me.get_json()
         assert body["is_platform_ops"] is False
         assert "project:create" in body["permissions"]
-        assert body["roles"] == []  # deprecated, empty for everyone but ops
+        assert "roles" not in body  # a user carries no roles of their own
         assert [c["role"] for c in body["companies"]] == ["admin"]
 
         ops_me = inv_client.get("/api/v1/auth/me", headers=_auth(superadmin_token)).get_json()
@@ -104,25 +104,16 @@ class TestAuthMe:
         assert "project:create" not in body["permissions"]
 
 
-class TestDeprecatedStubs:
-    def test_roles_endpoint_is_an_empty_stub(self, inv_client, admin_token):
-        resp = inv_client.get("/api/v1/roles", headers=_auth(admin_token))
-        assert resp.status_code == 200
-        assert resp.get_json()["roles"] == []
+class TestRemovedStubs:
+    """The deprecated shims Phase 3 kept for released clients are gone."""
 
-    def test_patch_member_role_accepts_and_ignores_role_id(self, inv_client, invitation_app, admin_token):
+    def test_roles_endpoint_is_gone(self, inv_client, admin_token):
+        assert inv_client.get("/api/v1/roles", headers=_auth(admin_token)).status_code == 404
+
+    def test_patch_member_role_is_gone(self, inv_client, invitation_app, admin_token):
         resp = inv_client.patch(
             f"/api/v1/projects/{invitation_app._test_project_id}/members/{invitation_app._test_member_user_id}",
-            json={"role_id": str(uuid4())},
-            headers=_auth(admin_token),
-        )
-        assert resp.status_code == 200
-        assert resp.get_json()["deprecated"] is True
-
-    def test_patch_member_role_still_404s_for_a_non_member(self, inv_client, invitation_app, admin_token):
-        resp = inv_client.patch(
-            f"/api/v1/projects/{invitation_app._test_project_id}/members/{uuid4()}",
-            json={"role_id": str(uuid4())},
+            json={},
             headers=_auth(admin_token),
         )
         assert resp.status_code == 404

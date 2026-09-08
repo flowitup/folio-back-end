@@ -74,14 +74,11 @@ class UserResponse(BaseModel):
 
     `permissions` is resolved from the caller's company role (primary company)
     for client-side UI gating only — the server re-resolves on every route.
-    `roles` is deprecated: global roles are gone, so it is always empty except
-    for platform ops, and it disappears with the legacy role tables.
     """
 
     id: UUID
     email: str
     permissions: List[str]
-    roles: List[str]
     phone: Optional[str] = None
     companies: List[UserCompanySummary] = []
     is_platform_ops: bool = False

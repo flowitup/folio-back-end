@@ -7,9 +7,9 @@ same way route decorators do:
 
     role in the company (+ project assignment) → matrix → D8 grants/denies
 
-Legacy global roles (`users.roles` → `role_permissions`) are NOT consulted any
-more; the only bypass is the `users.is_platform_ops` flag, read through the
-same `AuthzReaderPort` as the rest of the resolver.
+A user carries no roles of their own: a role is always held *in a company*.
+The only bypass is the `users.is_platform_ops` flag, read through the same
+`AuthzReaderPort` as the rest of the resolver.
 
 `has_permission` here answers a *context-free* question ("may this user manage
 a library at all?"), so it is true when ANY of the caller's companies grants
@@ -143,8 +143,7 @@ class AuthorizationService:
     def has_role(self, user_id: UUID, role_name: str) -> bool:
         """Return True when the caller holds `role_name` in any company.
 
-        "ops" answers the platform-ops flag; the legacy global-role table is
-        never consulted.
+        "ops" answers the platform-ops flag.
         """
         wanted = role_name.lower()
         if wanted == "ops":

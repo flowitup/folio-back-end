@@ -177,20 +177,17 @@ def list_projects():
 def create_project():
     """Create a new project.
 
-    No longer gated by the raw JWT `project:create` claim — that flag is now
-    only meaningful *per company*. Target company resolution:
+    `project:create` is meaningful only *per company*. Company resolution:
       1. body `company_id`, if given — must be a company the caller admins
-         (403 otherwise).
+         (403 otherwise; platform ops may name any existing company).
       2. else the caller's primary company, if they admin it.
       3. else the single company the caller admins.
-      4. else 400 ("no company") — UNLESS the caller holds the legacy global
-         `*:*` claim, which may still create an orphaned (company_id=None)
-         project (back-compat for the pre-companies flow).
+      4. else 400 — every project belongs to a company (`projects.company_id`
+         is NOT NULL), so there is no orphan path, not even for platform ops.
     `project:create` is then required from the resolver for the resolved
-    company (legacy `*:*` always passes). The creator is added to the new
-    project's `user_projects` as the legacy `manager` role, so the existing
-    per-project-role union (`_membership_role_permissions`) keeps working for
-    them without waiting on Phase 3's resolver-authoritative cutover.
+    company. The creator is assigned to the new project so that, with the
+    owner bypass gone (D6), they keep working on it and see it in
+    `GET /projects`.
     """
     try:
         data = CreateProjectRequest(**request.get_json())
@@ -242,7 +239,7 @@ def create_project():
                     break
         if target_company_id is None and len(admin_ids) == 1:
             target_company_id = admin_ids[0]
-        if target_company_id is None and not is_platform_admin:
+        if target_company_id is None:
             return (
                 jsonify(
                     ErrorResponse(
@@ -254,31 +251,28 @@ def create_project():
                 400,
             )
 
-    if target_company_id is not None:
-        # A non-admin's body_company_id is already rejected above (it can
-        # never be in admin_ids for a company that doesn't exist), but a
-        # platform admin skips that check entirely — validate existence here
-        # so a bogus id 400s instead of hitting the projects.company_id FK
-        # constraint inside create_project_usecase (a 500).
-        if container.company_repo is not None and container.company_repo.find_by_id(target_company_id) is None:
-            return (
-                jsonify(
-                    ErrorResponse(
-                        error="ValidationError", message="company_id does not exist", status_code=400
-                    ).model_dump()
-                ),
-                400,
-            )
-        reader = container.authz_reader
-        perms = (
-            _authz_effective_permissions(
-                reader, user_id, company_id=target_company_id, is_platform_admin=is_platform_admin
-            )
-            if reader is not None
-            else (frozenset({"*:*"}) if is_platform_admin else frozenset())
+    # A non-admin's body_company_id is already rejected above (it can never be
+    # in admin_ids for a company that doesn't exist), but a platform admin
+    # skips that check entirely — validate existence here so a bogus id 400s
+    # instead of hitting the projects.company_id FK constraint inside
+    # create_project_usecase (a 500).
+    if container.company_repo is not None and container.company_repo.find_by_id(target_company_id) is None:
+        return (
+            jsonify(
+                ErrorResponse(
+                    error="ValidationError", message="company_id does not exist", status_code=400
+                ).model_dump()
+            ),
+            400,
         )
-        if not _has_permission(list(perms), "project:create"):
-            return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+    reader = container.authz_reader
+    perms = (
+        _authz_effective_permissions(reader, user_id, company_id=target_company_id, is_platform_admin=is_platform_admin)
+        if reader is not None
+        else (frozenset({"*:*"}) if is_platform_admin else frozenset())
+    )
+    if not _has_permission(list(perms), "project:create"):
+        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     try:
         result = container.create_project_usecase.execute(
@@ -296,22 +290,17 @@ def create_project():
 
     # Assign the creator to their own project: with the owner bypass gone (D6)
     # the assignment row is what lets a company manager keep working on it, and
-    # what makes the project show up in their `GET /projects`. `role_id` only
-    # satisfies the legacy NOT NULL column (dropped in a later phase) — it no
-    # longer grants anything. Silently skipped when the legacy roles table has
-    # no "manager" row (fresh DB before scripts/seed_auth.py has run).
+    # what makes the project show up in their `GET /projects`.
     creator_assigned = False
-    if container.role_repository is not None and container.project_membership_repo is not None:
-        manager_role = container.role_repository.find_by_name("manager")
-        if manager_role is not None:
-            creator_assigned = container.project_membership_repo.add(
-                ProjectMembership.create(user_id=user_id, project_id=UUID(result.id), role_id=manager_role.id)
-            )
-            # ProjectMembership.add() only flushes (mirrors BulkAddExistingUserUseCase);
-            # commit explicitly so the row survives past this request's teardown.
-            from app import db as _db
+    if container.project_membership_repo is not None:
+        creator_assigned = container.project_membership_repo.add(
+            ProjectMembership.create(user_id=user_id, project_id=UUID(result.id))
+        )
+        # ProjectMembership.add() only flushes (mirrors BulkAddExistingUserUseCase);
+        # commit explicitly so the row survives past this request's teardown.
+        from app import db as _db
 
-            _db.session.commit()
+        _db.session.commit()
 
     return (
         jsonify(
@@ -532,12 +521,11 @@ def get_project_users(project_id: str):
 def add_user_to_project(project_id: str):
     """DEPRECATED — invite-only signup is the only membership-creation path.
 
-    This endpoint cannot satisfy the per-project role requirement (user_projects.role_id
-    is NOT NULL after migration e3f1a2b4c5d6) and is replaced by:
-      POST /api/v1/invitations  {project_id, email, role_id}
-
-    Returns 410 Gone for any caller. Kept registered (rather than removed) so legacy
-    clients receive a clear deprecation signal instead of a silent 404.
+    Replaced by ``POST /api/v1/invitations {project_id, email}`` for outsiders
+    and ``PUT /projects/<id>/assignments/<user_id>`` for existing company
+    members. Returns 410 Gone for any caller. Kept registered (rather than
+    removed) so legacy clients receive a clear deprecation signal instead of a
+    silent 404.
     """
     return (
         jsonify(
@@ -545,7 +533,7 @@ def add_user_to_project(project_id: str):
                 error="Gone",
                 message=(
                     "POST /projects/<id>/users is deprecated. Use "
-                    "POST /api/v1/invitations with {project_id, email, role_id} instead."
+                    "POST /api/v1/invitations with {project_id, email} instead."
                 ),
                 status_code=410,
             ).model_dump()
@@ -555,11 +543,16 @@ def add_user_to_project(project_id: str):
 
 
 @projects_bp.route("/<uuid:project_id>/members", methods=["GET"])
-@openapi_doc(summary="Return project members with role and join date", tags=["projects"])
+@openapi_doc(summary="Return the people assigned to a project with their company role", tags=["projects"])
 @jwt_required()
 @limiter.limit("60 per minute")
 def get_project_members(project_id: UUID):
-    """Return project members with role and join date. Requires project membership."""
+    """Return the people assigned to a project. Requires read access to the project.
+
+    ``role_name`` is the member's **company** role (`admin` | `manager` |
+    `member`) — an assignment itself carries no role. It is null when the
+    project has no company or the person is no longer attached to it.
+    """
     from sqlalchemy import text
 
     container = get_container()
@@ -579,21 +572,24 @@ def get_project_members(project_id: UUID):
     if not can_read_project(project, user_id):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
-    # Query members with role info via raw SQL (user_projects + roles + users join)
     from app import db
+
+    reader = container.authz_reader
+    company_id = reader.project_company_id(project_id) if reader is not None else None
 
     rows = db.session.execute(
         text(
             """
-            SELECT u.id, u.email, u.display_name, r.name AS role_name, up.assigned_at, up.role_id
+            SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at
             FROM user_projects up
             JOIN users u ON u.id = up.user_id
-            LEFT JOIN roles r ON r.id = up.role_id
+            LEFT JOIN user_company_access uca
+                   ON uca.user_id = up.user_id AND uca.company_id = :cid
             WHERE up.project_id = :pid
             ORDER BY up.assigned_at
             """
         ),
-        {"pid": str(project_id)},
+        {"pid": str(project_id), "cid": str(company_id) if company_id else None},
     ).fetchall()
 
     members = [
@@ -603,7 +599,6 @@ def get_project_members(project_id: UUID):
             "display_name": row[2],
             "role_name": row[3],
             "joined_at": row[4].isoformat() if row[4] else None,
-            "role_id": str(row[5]) if row[5] else None,
         }
         for row in rows
     ]
@@ -634,50 +629,3 @@ def remove_user_from_project(project_id: str, user_id: str):
 
     container.project_repository.remove_user(UUID(project_id), UUID(user_id))
     return "", 204
-
-
-@projects_bp.route("/<project_id>/members/<user_id>", methods=["PATCH"])
-@openapi_doc(summary="Change a project member's role (deprecated: role_id is ignored)", tags=["projects"])
-@jwt_required()
-@limiter.limit("30 per minute")
-@require_permission("project:manage_users")
-def update_member_role(project_id: str, user_id: str):
-    """Deprecated: per-project roles are gone — capability comes from the company role.
-
-    Kept so released web/mobile builds keep working: the call still validates
-    the caller, the project and the membership, accepts `role_id` in the body
-    and ignores it. Use `PUT /projects/<id>/assignments/<user_id>` to change
-    what a member may do.
-    """
-    container = get_container()
-    caller_id = UUID(get_jwt_identity())
-
-    try:
-        project_uuid = UUID(project_id)
-        user_uuid = UUID(user_id)
-    except ValueError:
-        return jsonify(ErrorResponse(error="ValidationError", message="Invalid id", status_code=400).model_dump()), 400
-
-    try:
-        project = container.get_project_usecase.execute(project_uuid)
-    except ProjectNotFoundError:
-        return (
-            jsonify(
-                ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()
-            ),
-            404,
-        )
-
-    if not can_mutate_project(project, caller_id, "project:manage_users"):
-        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
-
-    if container.project_membership_repo.find_role_id(user_uuid, project_uuid) is None and user_uuid not in set(
-        project.user_ids
-    ):
-        return (
-            jsonify(ErrorResponse(error="NotFound", message="User is not a member", status_code=404).model_dump()),
-            404,
-        )
-
-    body = request.get_json(silent=True) or {}
-    return jsonify({"user_id": user_id, "role_id": body.get("role_id"), "role_name": "", "deprecated": True}), 200

@@ -16,6 +16,7 @@ from app.infrastructure.database.backfills.persons_phone_normalized import (
 from app.infrastructure.database.models import PersonModel, ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
+from tests.company_tenancy_helper import company_for_projects
 
 PASSWORD_HASH = "x" * 60
 
@@ -46,7 +47,9 @@ def test_backfill_user_id_links_single_person(session):
     session.flush()
     person = _make_person(session, "Jean Dupont", "+33612345678", owner.id)
     session.flush()
-    project = ProjectModel(id=uuid4(), name="Backfill Project", owner_id=owner.id)
+    project = ProjectModel(
+        id=uuid4(), name="Backfill Project", owner_id=owner.id, company_id=company_for_projects(session, owner.id)
+    )
     session.add(project)
     session.flush()
     worker = WorkerModel(
@@ -77,7 +80,9 @@ def test_backfill_user_id_skips_ambiguous_user(session):
     person_a = _make_person(session, "Person A", None, owner.id)
     person_b = _make_person(session, "Person B", None, owner.id)
     session.flush()
-    project = ProjectModel(id=uuid4(), name="Ambiguous Project", owner_id=owner.id)
+    project = ProjectModel(
+        id=uuid4(), name="Ambiguous Project", owner_id=owner.id, company_id=company_for_projects(session, owner.id)
+    )
     session.add(project)
     session.flush()
     worker_a = WorkerModel(
@@ -93,7 +98,9 @@ def test_backfill_user_id_skips_ambiguous_user(session):
     session.flush()
     # Second worker for the SAME linked_user but a DIFFERENT person, on a
     # second project (workers.user_id is unique per project, not globally).
-    project2 = ProjectModel(id=uuid4(), name="Ambiguous Project 2", owner_id=owner.id)
+    project2 = ProjectModel(
+        id=uuid4(), name="Ambiguous Project 2", owner_id=owner.id, company_id=company_for_projects(session, owner.id)
+    )
     session.add(project2)
     session.flush()
     worker_b = WorkerModel(

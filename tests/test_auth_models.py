@@ -1,15 +1,13 @@
-"""Tests for authentication database models."""
+"""Tests for the authentication database models.
+
+A user carries identity only: roles live on `user_company_access`, so there is
+no `users` ↔ roles relationship and no `roles`/`permissions` table to assert.
+"""
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.infrastructure.database.models import (
-    UserModel,
-    RoleModel,
-    PermissionModel,
-    user_roles,
-    role_permissions,
-)
+from app.infrastructure.database.models import UserModel
 
 
 class TestUserModel:
@@ -44,183 +42,28 @@ class TestUserModel:
         with pytest.raises(IntegrityError):
             session.commit()
 
-    def test_user_role_relationship(self, session):
-        """Test many-to-many relationship between users and roles."""
-        user = UserModel(email="user@example.com", password_hash="hash")
-        role1 = RoleModel(name="admin", description="Admin role")
-        role2 = RoleModel(name="user", description="User role")
-
-        session.add_all([user, role1, role2])
+    def test_user_carries_no_roles(self, session):
+        """A user row has no role relationship: roles are per company."""
+        user = UserModel(email="norole@example.com", password_hash="hash")
+        session.add(user)
         session.commit()
 
-        user.roles.append(role1)
-        user.roles.append(role2)
-        session.commit()
-
-        assert len(user.roles) == 2
-        assert role1 in user.roles
-        assert role2 in user.roles
-        assert user in role1.users
-        assert user in role2.users
-
-    def test_user_role_cascade_delete(self, session):
-        """Test cascade delete when user is deleted."""
-        user = UserModel(email="cascade@example.com", password_hash="hash")
-        role = RoleModel(name="test_role")
-
-        session.add_all([user, role])
-        session.commit()
-
-        user.roles.append(role)
-        session.commit()
-
-        user_id = user.id
-        role_id = role.id
-
-        # Verify association exists
-        result = session.execute(user_roles.select().where(user_roles.c.user_id == user_id)).first()
-        assert result is not None
-
-        # Delete user
-        session.delete(user)
-        session.commit()
-
-        # Association should be deleted
-        result = session.execute(user_roles.select().where(user_roles.c.user_id == user_id)).first()
-        assert result is None
-
-        # Role should still exist
-        role_exists = session.get(RoleModel, role_id)
-        assert role_exists is not None
-
-
-class TestRoleModel:
-    """Test RoleModel database operations."""
-
-    def test_create_role(self, session):
-        """Test creating a role with all fields."""
-        role = RoleModel(name="manager", description="Project manager")
-        session.add(role)
-        session.commit()
-
-        assert role.id is not None
-        assert role.name == "manager"
-        assert role.description == "Project manager"
-        assert role.created_at is not None
-
-    def test_role_name_uniqueness(self, session):
-        """Test that role names must be unique."""
-        role1 = RoleModel(name="admin")
-        session.add(role1)
-        session.commit()
-
-        role2 = RoleModel(name="admin")
-        session.add(role2)
-
-        with pytest.raises(IntegrityError):
-            session.commit()
-
-    def test_role_permission_relationship(self, session):
-        """Test many-to-many relationship between roles and permissions."""
-        role = RoleModel(name="editor")
-        perm1 = PermissionModel(name="project:create", resource="project", action="create")
-        perm2 = PermissionModel(name="project:read", resource="project", action="read")
-
-        session.add_all([role, perm1, perm2])
-        session.commit()
-
-        role.permissions.append(perm1)
-        role.permissions.append(perm2)
-        session.commit()
-
-        assert len(role.permissions) == 2
-        assert perm1 in role.permissions
-        assert perm2 in role.permissions
-        assert role in perm1.roles
-        assert role in perm2.roles
-
-    def test_role_cascade_delete(self, session):
-        """Test cascade delete for role-permission association."""
-        role = RoleModel(name="temp_role")
-        perm = PermissionModel(name="test:action", resource="test", action="action")
-
-        session.add_all([role, perm])
-        session.commit()
-
-        role.permissions.append(perm)
-        session.commit()
-
-        role_id = role.id
-        perm_id = perm.id
-
-        # Delete role
-        session.delete(role)
-        session.commit()
-
-        # Association should be deleted
-        result = session.execute(role_permissions.select().where(role_permissions.c.role_id == role_id)).first()
-        assert result is None
-
-        # Permission should still exist
-        perm_exists = session.get(PermissionModel, perm_id)
-        assert perm_exists is not None
-
-
-class TestPermissionModel:
-    """Test PermissionModel database operations."""
-
-    def test_create_permission(self, session):
-        """Test creating a permission."""
-        perm = PermissionModel(name="user:update", resource="user", action="update")
-        session.add(perm)
-        session.commit()
-
-        assert perm.id is not None
-        assert perm.name == "user:update"
-        assert perm.resource == "user"
-        assert perm.action == "update"
-        assert perm.created_at is not None
-
-    def test_permission_name_uniqueness(self, session):
-        """Test that permission names must be unique."""
-        perm1 = PermissionModel(name="project:delete", resource="project", action="delete")
-        session.add(perm1)
-        session.commit()
-
-        perm2 = PermissionModel(name="project:delete", resource="project", action="delete")
-        session.add(perm2)
-
-        with pytest.raises(IntegrityError):
-            session.commit()
-
-    def test_permission_index(self, session):
-        """Test that resource-action index is created."""
-        # This test verifies the index exists by checking table args
-        from app.infrastructure.database.models import PermissionModel
-
-        table_args = PermissionModel.__table_args__
-        assert len(table_args) > 0
-
-        # Check that the index exists
-        index = table_args[0]
-        assert index.name == "ix_permissions_resource_action"
+        assert not hasattr(user, "roles")
 
 
 class TestDatabaseSchema:
     """Test overall database schema integrity."""
 
-    def test_all_tables_exist(self, engine):
-        """Test that all expected tables are created."""
+    def test_legacy_role_tables_are_gone(self, engine):
+        """The legacy RBAC tables must not be recreated by the models."""
         from sqlalchemy import inspect
 
-        inspector = inspect(engine)
-        table_names = inspector.get_table_names()
+        table_names = inspect(engine).get_table_names()
 
         assert "users" in table_names
-        assert "roles" in table_names
-        assert "permissions" in table_names
-        assert "user_roles" in table_names
-        assert "role_permissions" in table_names
+        assert "user_company_access" in table_names
+        for dropped in ("roles", "permissions", "user_roles", "role_permissions"):
+            assert dropped not in table_names
 
     def test_user_table_columns(self, engine):
         """Test users table has correct columns."""
@@ -233,6 +76,7 @@ class TestDatabaseSchema:
         assert "email" in columns
         assert "password_hash" in columns
         assert "is_active" in columns
+        assert "is_platform_ops" in columns
         assert "created_at" in columns
         assert "updated_at" in columns
 
@@ -247,40 +91,22 @@ class TestDatabaseSchema:
         email_unique = any("email" in constraint.get("column_names", []) for constraint in unique_constraints)
         assert email_unique
 
-    def test_association_table_foreign_keys(self, engine):
-        """Test association tables have correct foreign keys."""
+    def test_user_projects_carries_no_role(self, engine):
+        """A project assignment references a user and a project, nothing else."""
         from sqlalchemy import inspect
 
         inspector = inspect(engine)
 
-        # Check user_roles foreign keys
-        user_roles_fks = inspector.get_foreign_keys("user_roles")
-        assert len(user_roles_fks) == 2
+        columns = {col["name"] for col in inspector.get_columns("user_projects")}
+        assert "role_id" not in columns
 
-        fk_tables = {fk["referred_table"] for fk in user_roles_fks}
-        assert "users" in fk_tables
-        assert "roles" in fk_tables
+        fk_tables = {fk["referred_table"] for fk in inspector.get_foreign_keys("user_projects")}
+        assert fk_tables == {"users", "projects"}
 
-        # Check role_permissions foreign keys
-        role_perms_fks = inspector.get_foreign_keys("role_permissions")
-        assert len(role_perms_fks) == 2
-
-        fk_tables = {fk["referred_table"] for fk in role_perms_fks}
-        assert "roles" in fk_tables
-        assert "permissions" in fk_tables
-
-    def test_cascade_delete_constraints(self, engine):
-        """Test that CASCADE delete is configured on foreign keys."""
+    def test_user_projects_cascades_from_both_parents(self, engine):
+        """Deleting a user or a project removes the assignment with it."""
         from sqlalchemy import inspect
 
-        inspector = inspect(engine)
-
-        # Check user_roles cascades
-        user_roles_fks = inspector.get_foreign_keys("user_roles")
-        for fk in user_roles_fks:
-            assert fk.get("options", {}).get("ondelete") == "CASCADE"
-
-        # Check role_permissions cascades
-        role_perms_fks = inspector.get_foreign_keys("role_permissions")
-        for fk in role_perms_fks:
-            assert fk.get("options", {}).get("ondelete") == "CASCADE"
+        for fk in inspect(engine).get_foreign_keys("user_projects"):
+            expected = "SET NULL" if fk["constrained_columns"] == ["invited_by_user_id"] else "CASCADE"
+            assert fk.get("options", {}).get("ondelete") == expected

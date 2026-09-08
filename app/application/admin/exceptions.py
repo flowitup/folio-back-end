@@ -3,18 +3,11 @@
 Domain exceptions live in app.domain.exceptions.*; this module adds
 application-level concerns specific to the admin (bulk-add) flow.
 
-RoleNotFoundError, RoleNotAllowedError, and PermissionDeniedError are
-re-exported here so callers only import from one place.
+PermissionDeniedError is re-exported here so callers only import from one place.
 """
 
-# Re-export from invitations for convenience (same exceptions, shared semantics)
-from app.application.invitations.exceptions import (  # noqa: F401
-    RoleNotFoundError,
-    PermissionDeniedError,
-)
-from app.domain.exceptions.invitation_exceptions import (  # noqa: F401
-    RoleNotAllowedError,
-)
+# Re-export from invitations for convenience (same exception, shared semantics)
+from app.application.invitations.exceptions import PermissionDeniedError  # noqa: F401
 
 
 class TargetUserNotFoundError(Exception):

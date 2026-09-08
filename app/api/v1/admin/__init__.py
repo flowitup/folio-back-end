@@ -1,4 +1,4 @@
-"""Admin API Blueprint — superadmin-only endpoints (bulk-add memberships, user search)."""
+"""Admin API Blueprint — platform-ops endpoints (bulk project assignment, user search)."""
 
 from flask import Blueprint
 

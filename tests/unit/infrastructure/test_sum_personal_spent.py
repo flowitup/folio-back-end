@@ -292,16 +292,3 @@ class TestSumPersonalSpent:
         total = repo.sum_personal_spent(project_id)
 
         assert total == Decimal("0")
-
-    def test_project_without_company_returns_zero(self, session):
-        """Project with no company has no personal-flagged methods — returns 0."""
-        user_id = _make_user(session)
-        project = ProjectModel(id=uuid4(), name="No Co Project", owner_id=user_id)
-        session.add(project)
-        session.flush()
-        _make_invoice(session, project.id, "materials_services", 100.0)
-
-        repo = SQLAlchemyInvoiceRepository(session)
-        total = repo.sum_personal_spent(project.id)
-
-        assert total == Decimal("0")

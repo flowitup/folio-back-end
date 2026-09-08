@@ -1,10 +1,12 @@
 """Project assignment routes (Phase 2 onboarding): manager/member assignment.
 
-  PUT    /projects/<project_id>/assignments/<user_id>  → assign (admin: any role; manager: member only)
+  PUT    /projects/<project_id>/assignments/<user_id>  → assign
   DELETE /projects/<project_id>/assignments/<user_id>  → unassign
 
-Distinct from invitations (outsider path, no membership precondition):
-assignment targets an EXISTING company member and never creates an account.
+An assignment carries no role — it says "this person works on this project"
+and nothing more. Distinct from invitations (the outsider path, with no
+membership precondition): assignment names an EXISTING company member and
+never creates an account.
 """
 
 from __future__ import annotations
@@ -23,17 +25,22 @@ from app.api.v1.projects.decorators import require_project_access
 from app.application.projects.assignments import (
     AssignmentForbiddenError,
     AssignProjectMemberInput,
-    InvalidAssignmentRoleError,
-    LegacyRoleMissingError,
     ProjectCompanyUnresolvedError,
     TargetNotCompanyMemberError,
 )
+from app.domain.companies.exceptions import UserCompanyAccessNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 
 class AssignMemberRequest(BaseModel):
-    """PUT /projects/<id>/assignments/<user_id> body."""
+    """PUT /projects/<id>/assignments/<user_id> body.
+
+    `role` is COMPANY-WIDE, not per project: `manager` raises the target's
+    company role to manager (company admins only), which grants manager
+    permissions on every project they are assigned to in that company.
+    `member` is the default and never demotes anyone.
+    """
 
     role: str = Field(default="member", pattern=r"^(member|manager)$")
 
@@ -44,7 +51,7 @@ def _err(error: str, message: str, status: int):
 
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["PUT"])
 @openapi_doc(
-    summary="Assign a company member to a project (admin: any role; manager: member only)",
+    summary="Assign a company member to a project; a company admin may pass role=manager to promote the target",
     request=AssignMemberRequest,
     tags=["projects"],
 )
@@ -52,7 +59,16 @@ def _err(error: str, message: str, status: int):
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_project_access(write=True, permission="project:manage_users")
 def assign_project_member(project_id: str, user_id: str):
-    """Create or change a manager/member assignment on this project."""
+    """Assign a company member to this project (idempotent).
+
+    Optional body `{"role": "member" | "manager"}`: `manager` asks to raise the
+    target's COMPANY role to manager (company admins only — the role lives on
+    the company, the assignment only says who works on this project); `member`
+    never demotes anyone. The response echoes the target's company role.
+
+    A refused promotion rolls the assignment back: the request either performs
+    both writes or neither.
+    """
     try:
         target_uuid = UUID(user_id)
     except ValueError:
@@ -66,8 +82,10 @@ def assign_project_member(project_id: str, user_id: str):
     caller_id = UUID(get_jwt_identity())
     container = get_container()
 
+    from app import db
+
     try:
-        container.assign_project_member_usecase.execute(
+        company_role = container.assign_project_member_usecase.execute(
             AssignProjectMemberInput(
                 caller_id=caller_id,
                 project_id=UUID(project_id),
@@ -76,22 +94,24 @@ def assign_project_member(project_id: str, user_id: str):
             )
         )
     except ProjectCompanyUnresolvedError:
+        db.session.rollback()
         return _err("NotFound", f"Project {project_id} not found", 404)
-    except AssignmentForbiddenError as exc:
-        return _err("Forbidden", str(exc), 403)
-    except InvalidAssignmentRoleError as exc:
-        return _err("ValidationError", str(exc), 400)
     except TargetNotCompanyMemberError:
+        db.session.rollback()
         return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
-    except LegacyRoleMissingError as exc:
-        # M2: a mis-seeded deployment (missing "member"/"manager" legacy role
-        # row) — fail loudly rather than returning a 200 that never wrote anything.
-        return _err("ServerError", str(exc), 500)
-
-    from app import db
+    except UserCompanyAccessNotFoundError:
+        # The access row was detached between the read and the promotion.
+        db.session.rollback()
+        return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
+    except AssignmentForbiddenError as exc:
+        db.session.rollback()
+        return _err("Forbidden", str(exc), 403)
+    except ValueError as exc:
+        db.session.rollback()
+        return _err("ValidationError", str(exc), 400)
 
     db.session.commit()
-    return jsonify({"project_id": project_id, "user_id": user_id, "role": body.role}), 200
+    return jsonify({"project_id": project_id, "user_id": user_id, "role": company_role}), 200
 
 
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["DELETE"])

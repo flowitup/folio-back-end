@@ -9,15 +9,12 @@ from app.application.admin.dtos import BulkAddResultDto, BulkAddResultItemDto, B
 from app.application.admin.exceptions import (
     EmptyProjectListError,
     PermissionDeniedError,
-    RoleNotAllowedError,
-    RoleNotFoundError,
     TargetUserNotFoundError,
     TooManyProjectsError,
 )
 from app.application.invitations.ports import (
     ProjectMembershipRepositoryPort,
     ProjectRepositoryPort,
-    RoleRepositoryPort,
     TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
@@ -33,7 +30,7 @@ EMAIL_DEFAULT_LOCALE = "en"
 
 
 class BulkAddExistingUserUseCase:
-    """Superadmin-only: add an existing user to N projects with a single role.
+    """Platform-ops only: assign an existing user to N projects at once.
 
     Produces partial-success results per project and enqueues ONE consolidated
     email if at least one membership was actually created.
@@ -43,7 +40,6 @@ class BulkAddExistingUserUseCase:
         self,
         user_repo: UserWriteRepositoryPort,
         project_repo: ProjectRepositoryPort,
-        role_repo: RoleRepositoryPort,
         membership_repo: ProjectMembershipRepositoryPort,
         email_renderer: Any,  # EmailRenderer — render(template, locale, ctx) -> (subject, txt, html)
         queue_port: Any,  # QueuePort — enqueue(task_name, payload)
@@ -53,7 +49,6 @@ class BulkAddExistingUserUseCase:
     ) -> None:
         self._user_repo = user_repo
         self._project_repo = project_repo
-        self._role_repo = role_repo
         self._membership_repo = membership_repo
         self._renderer = email_renderer
         self._queue = queue_port
@@ -68,21 +63,17 @@ class BulkAddExistingUserUseCase:
         requester_id: UUID,
         target_user_id: UUID,
         project_ids: list[UUID],
-        role_id: UUID,
     ) -> BulkAddResultDto:
         """Run the bulk-add flow; return a per-project result DTO.
 
         Args:
-            requester_id: UUID of the superadmin performing the action.
-            target_user_id: UUID of the existing user being added.
-            project_ids: List of project UUIDs to add the user to (≤50, deduped).
-            role_id: UUID of the role to assign in all projects.
+            requester_id: UUID of the platform-ops user performing the action.
+            target_user_id: UUID of the existing user being assigned.
+            project_ids: List of project UUIDs to assign the user to (≤50, deduped).
 
         Raises:
             PermissionDeniedError: requester not found or is not platform ops.
             TargetUserNotFoundError: target user not found.
-            RoleNotFoundError: role not found.
-            RoleNotAllowedError: attempting to assign the 'superadmin' role.
             EmptyProjectListError: project_ids is empty after deduplication.
             TooManyProjectsError: project_ids has more than 50 entries after dedup.
         """
@@ -102,14 +93,7 @@ class BulkAddExistingUserUseCase:
         if target_user is None:
             raise TargetUserNotFoundError(f"Target user {target_user_id} not found.")
 
-        # 4. Load role; guard superadmin assignment
-        role = self._role_repo.find_by_id(role_id)
-        if role is None:
-            raise RoleNotFoundError(f"Role {role_id} not found.")
-        if role.name == "superadmin":
-            raise RoleNotAllowedError("Cannot assign the 'superadmin' role via bulk-add.")
-
-        # 5. Dedupe project_ids (preserve insertion order); validate bounds
+        # 4. Dedupe project_ids (preserve insertion order); validate bounds
         seen: dict[UUID, None] = {}
         for pid in project_ids:
             seen[pid] = None
@@ -122,7 +106,7 @@ class BulkAddExistingUserUseCase:
         ):  # pragma: no cover - defense-in-depth: Pydantic Field(max_length=50) intercepts
             raise TooManyProjectsError(f"project_ids must not exceed {_MAX_PROJECTS} entries; got {len(deduped)}.")
 
-        # 6. Per-project loop
+        # 5. Per-project loop
         results: list[BulkAddResultItemDto] = []
         added_projects: list[dict] = []  # [{name: str}] for the consolidated email
 
@@ -136,12 +120,11 @@ class BulkAddExistingUserUseCase:
 
             # Try to insert; the repo returns True only if a row was actually
             # written (False on ON CONFLICT DO NOTHING). This avoids the H1 race
-            # where two concurrent bulk-adds both observe `find_role_id == None`
-            # and both report ADDED even though only one INSERT succeeded.
+            # where two concurrent bulk-adds both see no assignment and both
+            # report ADDED even though only one INSERT succeeded.
             membership = ProjectMembership.create(
                 user_id=target_user.id,
                 project_id=project.id,
-                role_id=role.id,
                 invited_by=requester.id,
             )
             inserted = self._membership_repo.add(membership)
@@ -152,24 +135,12 @@ class BulkAddExistingUserUseCase:
                 )
                 added_projects.append({"name": project.name})
             else:
-                # Conflict — already a member. Read role to discriminate same-vs-different.
-                existing_role_id = self._membership_repo.find_role_id(target_user.id, project.id)
-                if existing_role_id == role.id:
-                    results.append(
-                        BulkAddResultItemDto(
-                            project_id=pid, project_name=project.name, status=BulkAddStatus.ALREADY_MEMBER_SAME_ROLE
-                        )
-                    )
-                else:
-                    results.append(
-                        BulkAddResultItemDto(
-                            project_id=pid,
-                            project_name=project.name,
-                            status=BulkAddStatus.ALREADY_MEMBER_DIFFERENT_ROLE,
-                        )
-                    )
+                # Conflict — already assigned to this project; nothing changed.
+                results.append(
+                    BulkAddResultItemDto(project_id=pid, project_name=project.name, status=BulkAddStatus.ALREADY_MEMBER)
+                )
 
-        # 7. Commit BEFORE enqueueing the email so the queue write only happens
+        # 6. Commit BEFORE enqueueing the email so the queue write only happens
         # after persistence is durable (H2 fix). If commit raises, the consolidated
         # email is never enqueued — no orphan "you've been added" notification.
         # Mirrors the explicit-commit pattern in ``AcceptInvitationUseCase``.
@@ -177,7 +148,6 @@ class BulkAddExistingUserUseCase:
 
         if added_projects:
             self._enqueue_consolidated_email(
-                role_name=role.name,
                 added_projects=added_projects,
                 requester_name=requester.display_or_email,
                 to_email=target_user.email,
@@ -191,7 +161,6 @@ class BulkAddExistingUserUseCase:
 
     def _enqueue_consolidated_email(
         self,
-        role_name: str,
         added_projects: list[dict],
         requester_name: str,
         to_email: str,
@@ -205,7 +174,6 @@ class BulkAddExistingUserUseCase:
         """
         ctx = {
             "added_projects": added_projects,
-            "role_name": role_name,
             "inviter_name": requester_name,
             "app_url": f"{self._base_url}/{EMAIL_DEFAULT_LOCALE}/dashboard",
         }

@@ -22,7 +22,6 @@ class SqlAlchemyInvitationRepository:
         if existing:
             existing.email = inv.email
             existing.project_id = inv.project_id
-            existing.role_id = inv.role_id
             existing.token_hash = inv.token_hash
             existing.status = inv.status.value
             existing.expires_at = inv.expires_at

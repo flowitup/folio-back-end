@@ -24,8 +24,8 @@ def _norm(column_expr: str) -> str:
 class SqlAlchemyProjectMembershipRepository:
     """SQLAlchemy adapter for ProjectMembership persistence.
 
-    Inserts directly into the user_projects association table (extended in phase 01
-    with role_id + invited_by_user_id columns).
+    Inserts directly into the user_projects association table. An assignment
+    carries no role — permissions come from the company role plus grants.
     """
 
     def __init__(self, session: Session) -> None:
@@ -53,9 +53,9 @@ class SqlAlchemyProjectMembershipRepository:
             text(
                 """
                 INSERT INTO user_projects
-                    (user_id, project_id, role_id, invited_by_user_id, assigned_at)
+                    (user_id, project_id, invited_by_user_id, assigned_at)
                 VALUES
-                    (:user_id, :project_id, :role_id, :invited_by, :assigned_at)
+                    (:user_id, :project_id, :invited_by, :assigned_at)
                 ON CONFLICT (user_id, project_id) DO NOTHING
                 RETURNING user_id
                 """
@@ -63,7 +63,6 @@ class SqlAlchemyProjectMembershipRepository:
             {
                 "user_id": str(membership.user_id),
                 "project_id": str(membership.project_id),
-                "role_id": str(membership.role_id),
                 "invited_by": str(membership.invited_by) if membership.invited_by else None,
                 "assigned_at": assigned_at,
             },
@@ -79,21 +78,6 @@ class SqlAlchemyProjectMembershipRepository:
             {"uid": str(user_id), "pid": str(project_id)},
         )
         return result.fetchone() is not None
-
-    def find_role_id(self, user_id: UUID, project_id: UUID):
-        """Return the role_id of an existing membership row, or None."""
-        result = self._session.execute(
-            text("SELECT role_id FROM user_projects " "WHERE user_id = :uid AND project_id = :pid LIMIT 1"),
-            {"uid": str(user_id), "pid": str(project_id)},
-        )
-        row = result.fetchone()
-        if row is None:
-            return None
-        # SQLAlchemy returns string for SQLite UUID; coerce to UUID for the port contract.
-        from uuid import UUID as _UUID
-
-        raw = row[0]
-        return raw if isinstance(raw, _UUID) else _UUID(str(raw))
 
     def remove(self, user_id: UUID, project_id: UUID) -> bool:
         """Delete a membership row (project assignment removal). Returns True if a row was deleted.
@@ -119,18 +103,4 @@ class SqlAlchemyProjectMembershipRepository:
             {"uid": str(user_id), "pid": str(project_id)},
         )
         self._session.flush()
-        return result.rowcount > 0
-
-    def set_role(self, user_id: UUID, project_id: UUID, role_id: UUID) -> bool:
-        """Update an existing membership's role. Returns True if a row was updated.
-
-        The new role takes effect immediately on the next request: project-scoped
-        permission checks resolve membership-role permissions per request, so no
-        token refresh is needed.
-        """
-        result = self._session.execute(
-            text("UPDATE user_projects SET role_id = :rid WHERE user_id = :uid AND project_id = :pid"),
-            {"rid": str(role_id), "uid": str(user_id), "pid": str(project_id)},
-        )
-        self._session.commit()
         return result.rowcount > 0

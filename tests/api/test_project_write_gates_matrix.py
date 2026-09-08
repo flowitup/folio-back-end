@@ -143,12 +143,7 @@ def wg_app(invitation_app):
 
         from sqlalchemy import text
 
-        # role_id is a non-null FK on user_projects (SqlAlchemyProjectMembershipRepository.
-        # find_role_id crashes on NULL) — reuse the seeded member_role, which only grants
-        # legacy `project:read`, so the write-gate outcome below is attributable to the
-        # company-matrix role (resolver), not this placeholder legacy role.
-        #
-        # admin_user (project owner) also needs an explicit row: on SQLite,
+        # admin_user (project owner) needs an explicit assignment row: on SQLite,
         # ProjectMembershipReaderPort.is_member()'s raw-SQL owner-check UNION branch
         # compares `:uid`/`:pid` string literals against columns without the
         # dialect-normalization SqlAlchemyAuthzReader applies elsewhere, so it never
@@ -157,14 +152,13 @@ def wg_app(invitation_app):
         for uid in (UUID(invitation_app._test_admin_user_id), manager_user.id, member_user.id, grantee_user.id):
             db.session.execute(
                 text(
-                    "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
-                    "VALUES (:uid, :pid, :rid, :at) "
+                    "INSERT INTO user_projects (user_id, project_id, assigned_at) "
+                    "VALUES (:uid, :pid, :at) "
                     "ON CONFLICT (user_id, project_id) DO NOTHING"
                 ),
                 {
                     "uid": str(uid),
                     "pid": invitation_app._test_project_id,
-                    "rid": invitation_app._test_member_role_id,
                     "at": now,
                 },
             )

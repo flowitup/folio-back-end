@@ -1,7 +1,6 @@
 """Project creators keep their project after the owner bypass disappears (step 3).
 
-Every project's ``owner_id`` gets a ``user_projects`` row (with the legacy
-``manager`` ``role_id``, a column dropped in a later phase) and the owner's role
+Every project's ``owner_id`` gets a ``user_projects`` row and the owner's role
 in the project's company is raised to at least ``manager``. An owner with no
 access row for that company gets one — otherwise the person who created the
 project would lose it at deploy time.
@@ -14,6 +13,7 @@ of pretending the assignment it writes grants anything.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, Callable
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -25,8 +25,6 @@ from app.infrastructure.database.backfills.authz_backfill_report import (
     raise_role,
     user_label,
 )
-
-_ROLE_ID_SQL = text("SELECT id FROM roles WHERE name = :role_name")
 
 _PROJECTS_SQL = text("SELECT id, owner_id, company_id FROM projects WHERE owner_id IS NOT NULL")
 
@@ -42,8 +40,8 @@ _ASSIGNMENT_EXISTS_SQL = text(
 
 _INSERT_ASSIGNMENT_SQL = text(
     """
-    INSERT INTO user_projects (user_id, project_id, role_id, invited_by_user_id, assigned_at)
-    VALUES (:user_id, :project_id, :role_id, NULL, :assigned_at)
+    INSERT INTO user_projects (user_id, project_id, invited_by_user_id, assigned_at)
+    VALUES (:user_id, :project_id, NULL, :assigned_at)
     """
 )
 
@@ -55,22 +53,22 @@ _INSERT_ACCESS_SQL = text(
 )
 
 
-def _legacy_role_id(conn: Connection):
-    """Any legacy role id, for the not-null `user_projects.role_id` column."""
-    for role_name in ("manager", "admin", "member"):
-        row = conn.execute(_ROLE_ID_SQL, {"role_name": role_name}).fetchone()
-        if row is not None:
-            return row[0]
-    return None
+def _insert_assignment(conn: Connection, user_id, project_id, assigned_at: datetime) -> bool:
+    """Write one `user_projects` row on the current schema. True when written."""
+    conn.execute(
+        _INSERT_ASSIGNMENT_SQL,
+        {"user_id": user_id, "project_id": project_id, "assigned_at": assigned_at},
+    )
+    return True
 
 
 def _warn_projects_without_company(conn: Connection, report: BackfillReport) -> None:
     """Count projects the resolver cannot answer for, and say so loudly.
 
     They stay reachable to platform ops only until someone sets their
-    `company_id`; a later phase makes the column NOT NULL. Never abort the
-    migration over it — migrations run at container start, so raising here is
-    an outage.
+    `company_id`. Never abort here — this backfill runs at container start, so
+    raising would be an outage; the revision that makes the column NOT NULL
+    does the aborting instead.
     """
     count = conn.execute(_PROJECTS_WITHOUT_COMPANY_SQL).scalar() or 0
     report.projects_without_company = int(count)
@@ -81,10 +79,19 @@ def _warn_projects_without_company(conn: Connection, report: BackfillReport) -> 
         )
 
 
-def backfill_creator_assignments(conn: Connection, report: BackfillReport) -> None:
-    """Step 3: every project owner gets an assignment + at least `manager` in the project's company."""
+def backfill_creator_assignments(
+    conn: Connection,
+    report: BackfillReport,
+    insert_assignment: "Callable[[Connection, Any, Any, datetime], bool]" = _insert_assignment,
+) -> None:
+    """Every project owner gets an assignment + at least `manager` in the project's company.
+
+    `insert_assignment` is overridable for a caller running against an older
+    schema than the current models (migration 9a4c1e7b2d05, where
+    `user_projects` still carries a NOT NULL role reference). It returns False
+    when it could not write the row, and the count reflects that.
+    """
     _warn_projects_without_company(conn, report)
-    legacy_role_id = _legacy_role_id(conn)
 
     now = datetime.now(timezone.utc)
     for project_id, owner_id, company_id in conn.execute(_PROJECTS_SQL).fetchall():
@@ -92,19 +99,10 @@ def backfill_creator_assignments(conn: Connection, report: BackfillReport) -> No
             _ASSIGNMENT_EXISTS_SQL, {"user_id": str(owner_id), "project_id": str(project_id)}
         ).fetchone()
         if exists is None:
-            if legacy_role_id is None:
-                report.assignments_skipped_no_role += 1
-            else:
-                conn.execute(
-                    _INSERT_ASSIGNMENT_SQL,
-                    {
-                        "user_id": owner_id,
-                        "project_id": project_id,
-                        "role_id": legacy_role_id,
-                        "assigned_at": now,
-                    },
-                )
+            if insert_assignment(conn, owner_id, project_id, now):
                 report.creator_assignments += 1
+            else:
+                report.assignments_skipped += 1
 
         if company_id is None:
             continue

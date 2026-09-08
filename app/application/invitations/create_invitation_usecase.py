@@ -2,29 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Optional, Any
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from app.application.invitations.authz import can_manage_project_invites
 from app.application.invitations.dtos import CreateInvitationResultDto
 from app.application.invitations.exceptions import (
-    AlreadyMemberError,
     PermissionDeniedError,
     RateLimitedError,
-    RoleNotFoundError,
     ProjectNotFoundError,
 )
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
     ProjectMembershipRepositoryPort,
     ProjectRepositoryPort,
-    RoleRepositoryPort,
     TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
+from app.domain.companies.roles import CompanyRole
+from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.invitation import Invitation
 from app.domain.entities.project_membership import ProjectMembership
-from app.domain.exceptions.invitation_exceptions import RoleNotAllowedError
 from tasks import EmailPayload
 
 
@@ -37,7 +36,6 @@ class CreateInvitationUseCase:
         project_membership_repo: ProjectMembershipRepositoryPort,
         user_repo: UserWriteRepositoryPort,
         project_repo: ProjectRepositoryPort,
-        role_repo: RoleRepositoryPort,
         email_port: Any,  # EmailAdapterPort with .send(EmailPayload)
         email_renderer: Any,  # EmailRenderer with .render(template, locale, ctx)
         queue_port: Any,  # QueuePort with .enqueue(task_name, payload)
@@ -45,12 +43,12 @@ class CreateInvitationUseCase:
         db_session: TransactionalSessionPort,
         project_invite_daily_cap: int = 50,
         authz_reader: Any = None,  # AuthzReaderPort — resolves project:invite
+        access_repo: Any = None,  # UserCompanyAccessRepositoryPort — company attachment
     ) -> None:
         self._inv_repo = invitation_repo
         self._membership_repo = project_membership_repo
         self._user_repo = user_repo
         self._project_repo = project_repo
-        self._role_repo = role_repo
         self._email_port = email_port
         self._renderer = email_renderer
         self._queue = queue_port
@@ -58,6 +56,7 @@ class CreateInvitationUseCase:
         self._db = db_session
         self._daily_cap = project_invite_daily_cap
         self._authz_reader = authz_reader
+        self._access_repo = access_repo
 
     def set_authz_reader(self, reader: Any) -> None:
         """Inject the resolver read port after construction.
@@ -67,24 +66,21 @@ class CreateInvitationUseCase:
         """
         self._authz_reader = reader
 
+    def set_access_repo(self, access_repo: Any) -> None:
+        """Inject the company-access repository after construction (same reason)."""
+        self._access_repo = access_repo
+
     # ------------------------------------------------------------------
 
-    _DEFAULT_INVITE_ROLES = ("member", "user")
-
-    def _default_role(self):
-        """Legacy role used when the client omits `role_id` (dropped in Phase 4)."""
-        for name in self._DEFAULT_INVITE_ROLES:
-            role = self._role_repo.find_by_name(name)
-            if role is not None:
-                return role
-        return None
+    # Accepting an invitation makes the invitee a `member` of the project's
+    # company; the invite itself never carries a role.
+    _GRANTED_ROLE = CompanyRole.MEMBER.value
 
     def execute(
         self,
         inviter_id: UUID,
         project_id: UUID,
         email: str,
-        role_id: Optional[UUID] = None,
         locale: str = "en",
     ) -> CreateInvitationResultDto:
         """Run the invite flow; return DTO indicating what happened."""
@@ -99,22 +95,14 @@ class CreateInvitationUseCase:
         if project is None:
             raise ProjectNotFoundError(str(project_id))
 
-        # Verify permission: role-based (global OR per-project membership) OR project owner
+        # Verify permission through the resolver (no owner bypass, D6).
         if not self._can_invite(inviter, project.owner_id, inviter_id, project_id):
             raise PermissionDeniedError(f"User {inviter_id} does not have 'project:invite' permission.")
 
-        # 3. Load role (legacy table, default member when the client sends none); guard superadmin
-        role = self._role_repo.find_by_id(role_id) if role_id is not None else self._default_role()
-        if role is None:
-            raise RoleNotFoundError(f"Role {role_id} not found.")
-        role_id = role.id
-        if role.name == "superadmin":
-            raise RoleNotAllowedError("Cannot invite users with the 'superadmin' role.")
-
-        # 4. Normalize email
+        # 3. Normalize email
         normalized_email = email.strip().lower()
 
-        # 5. Existing-user fast-path
+        # 4. Existing-user fast-path
         #
         # SECURITY/UX NOTE — kind discriminator leak (H3 from code-review):
         # The DTO returned below carries `kind="direct_added"` for existing emails
@@ -125,16 +113,19 @@ class CreateInvitationUseCase:
         # on any public-facing endpoint.
         existing_user = self._user_repo.find_by_email(normalized_email)
         if existing_user is not None:
-            existing_role_id = self._membership_repo.find_role_id(existing_user.id, project_id)
-            if existing_role_id is None:
-                # Not yet a member — add membership + send notification email.
+            if not self._membership_repo.exists(existing_user.id, project_id):
+                # Not yet assigned — assign + send notification email.
                 membership = ProjectMembership.create(
                     user_id=existing_user.id,
                     project_id=project_id,
-                    role_id=role_id,
                     invited_by=inviter_id,
                 )
                 self._membership_repo.add(membership)
+                # Permissions resolve through the company: an existing user who
+                # belongs to another company (or to none) would land on the
+                # project with zero permissions. Attach them as `member`, the
+                # same grant accepting an invitation gives.
+                self._attach_to_project_company(existing_user.id, project_id)
                 # H2 — commit BEFORE enqueueing the email so the queue write only
                 # happens after persistence is durable. If commit raises, no email
                 # goes out for a membership that didn't land.
@@ -143,21 +134,13 @@ class CreateInvitationUseCase:
                     to=existing_user.email,
                     project_name=project.name,
                     inviter_name=inviter.display_or_email,
-                    role_name=role.name,
+                    role_name=self._GRANTED_ROLE,
                     locale=locale,
                 )
-            elif existing_role_id != role_id:
-                # Already a member with a different role — refuse the silent
-                # role-change (H2 from code-review). Admin must use a dedicated
-                # role-change flow. Maps to HTTP 409.
-                raise AlreadyMemberError(
-                    f"User {existing_user.id} is already a member of project "
-                    f"{project_id} with a different role; refusing silent role change."
-                )
-            # else: same role → idempotent no-op (don't re-send the email).
+            # else: already assigned → idempotent no-op (don't re-send the email).
             return CreateInvitationResultDto(kind="direct_added", user_id=existing_user.id)
 
-        # 6. Invitation flow — enforce daily cap
+        # 5. Invitation flow — enforce daily cap
         daily_count = self._inv_repo.count_created_today_by_project(project_id)
         if daily_count >= self._daily_cap:
             raise RateLimitedError(
@@ -174,7 +157,6 @@ class CreateInvitationUseCase:
         inv, raw_token = Invitation.create(
             email=normalized_email,
             project_id=project_id,
-            role_id=role_id,
             invited_by=inviter_id,
         )
         self._inv_repo.save(inv)
@@ -188,7 +170,7 @@ class CreateInvitationUseCase:
             to=normalized_email,
             accept_url=accept_url,
             project_name=project.name,
-            role_name=role.name,
+            role_name=self._GRANTED_ROLE,
             inviter_name=inviter.display_or_email,
             locale=locale,
         )
@@ -197,6 +179,27 @@ class CreateInvitationUseCase:
             kind="invitation_sent",
             invitation_id=inv.id,
             expires_at=inv.expires_at,
+        )
+
+    def _attach_to_project_company(self, user_id: UUID, project_id: UUID) -> None:
+        """Make the directly-added user a `member` of the project's company.
+
+        No-op when they are already attached (their existing role is kept) or
+        when the deployment wired neither reader nor access repository.
+        """
+        if self._authz_reader is None or self._access_repo is None:
+            return
+        company_id = self._authz_reader.project_company_id(project_id)
+        if company_id is None or self._access_repo.find(user_id, company_id) is not None:
+            return
+        self._access_repo.save(
+            UserCompanyAccess(
+                user_id=user_id,
+                company_id=company_id,
+                is_primary=len(self._access_repo.list_for_user(user_id)) == 0,
+                attached_at=datetime.now(timezone.utc),
+                role=self._GRANTED_ROLE,
+            )
         )
 
     # ------------------------------------------------------------------
@@ -208,9 +211,9 @@ class CreateInvitationUseCase:
 
         Company admins hold it on every project of their company, an assigned
         manager on theirs, and a member only through an explicit D8 grant.
-        There is no owner bypass (D6) and no legacy global/membership role
-        fallback: without a reader wired this fails closed, since the route
-        that calls this use-case has already made the same check.
+        There is no owner bypass (D6): without a reader wired this fails
+        closed, since the route that calls this use-case has already made the
+        same check.
         """
         return can_manage_project_invites(self._authz_reader, inviter_id, project_id)
 

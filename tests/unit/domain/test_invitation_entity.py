@@ -26,7 +26,6 @@ def _make_pending(*, ttl_days: int = 7) -> tuple[Invitation, str]:
     return Invitation.create(
         email="test@example.com",
         project_id=uuid4(),
-        role_id=uuid4(),
         invited_by=uuid4(),
         ttl_days=ttl_days,
     )

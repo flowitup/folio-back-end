@@ -6,8 +6,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.domain.entities.user import User
-from app.domain.entities.role import Role
-from app.domain.entities.permission import Permission
 from app.infrastructure.database.models import UserModel
 
 
@@ -113,38 +111,8 @@ class SQLAlchemyUserRepository:
         self._session.flush()
         return user
 
-    def assign_role(self, user_id: UUID, role_id: UUID) -> None:
-        """Assign a global role to a user via the user_roles association."""
-        from sqlalchemy import text
-
-        self._session.execute(
-            text("INSERT INTO user_roles (user_id, role_id) " "VALUES (:user_id, :role_id) " "ON CONFLICT DO NOTHING"),
-            {"user_id": str(user_id), "role_id": str(role_id)},
-        )
-        self._session.flush()
-
     def _to_entity(self, model: UserModel) -> User:
         """Convert ORM model to domain entity."""
-        roles = []
-        for role_model in model.roles:
-            permissions = [
-                Permission(
-                    id=p.id,
-                    name=p.name,
-                    resource=p.resource,
-                    action=p.action,
-                )
-                for p in role_model.permissions
-            ]
-            roles.append(
-                Role(
-                    id=role_model.id,
-                    name=role_model.name,
-                    description=role_model.description or "",
-                    permissions=permissions,
-                )
-            )
-
         return User(
             id=model.id,
             email=model.email,
@@ -152,7 +120,6 @@ class SQLAlchemyUserRepository:
             is_active=model.is_active,
             created_at=model.created_at,
             updated_at=model.updated_at,
-            roles=roles,
             display_name=model.display_name,
             phone=model.phone,
             is_platform_ops=bool(model.is_platform_ops),

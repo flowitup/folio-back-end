@@ -88,6 +88,16 @@ def _seed_legacy_state(conn) -> dict:
         text("INSERT INTO roles (id, name, description) VALUES (:id, :name, 'legacy')"),
         {"id": ids["role"], "name": f"legacy_admin_{ids['role'].hex[:6]}"},
     )
+    # The creator-assignment step needs SOME legacy role to satisfy the NOT NULL
+    # `user_projects.role_id` of this revision. The chain seeds one, but a later
+    # revision's downgrade recreates `roles` empty, so seed it here too.
+    conn.execute(
+        text(
+            "INSERT INTO roles (id, name, description) VALUES (:id, 'manager', 'legacy') "
+            "ON CONFLICT (name) DO NOTHING"
+        ),
+        {"id": uuid4()},
+    )
     conn.execute(
         text("INSERT INTO permissions (id, name, resource, action) VALUES (:id, '*:*', '*', '*') "),
         {"id": ids["perm"]},

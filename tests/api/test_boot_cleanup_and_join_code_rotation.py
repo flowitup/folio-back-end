@@ -18,7 +18,6 @@ from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.project import ProjectModel
-from app.infrastructure.database.models.role import RoleModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -38,8 +37,6 @@ def boot_app():
     test_app = create_app(BootTestConfig)
     with test_app.app_context():
         db.create_all()
-        db.session.add(RoleModel(name="member", description="Member"))
-        db.session.commit()
         yield test_app
         db.session.remove()
         db.drop_all()
@@ -126,13 +123,12 @@ def _attach_with_person_and_project(app, user_id, company_id):
         project = ProjectModel(id=uuid4(), name="Cleanup Project", owner_id=user_id, company_id=company_id)
         db.session.add(project)
         db.session.flush()
-        member_role = db.session.query(RoleModel).filter_by(name="member").first()
         db.session.execute(
             text(
-                "INSERT INTO user_projects (user_id, project_id, role_id, invited_by_user_id, assigned_at) "
-                "VALUES (:uid, :pid, :rid, NULL, :at)"
+                "INSERT INTO user_projects (user_id, project_id, invited_by_user_id, assigned_at) "
+                "VALUES (:uid, :pid, NULL, :at)"
             ),
-            {"uid": str(user_id), "pid": str(project.id), "rid": str(member_role.id), "at": now},
+            {"uid": str(user_id), "pid": str(project.id), "at": now},
         )
         db.session.commit()
         return person.id, project.id

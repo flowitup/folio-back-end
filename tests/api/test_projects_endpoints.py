@@ -16,6 +16,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from tests.company_tenancy_helper import company_for_projects
 
 
 def _auth(token: str) -> dict:
@@ -53,10 +54,10 @@ def _update_project(client, token, project_id: str, payload: dict):
 # ---------------------------------------------------------------------------
 
 
-def test_create_project_with_budget_echoes_fields(inv_client, superadmin_token):
+def test_create_project_with_budget_echoes_fields(inv_client, admin_token):
     """Create project with budget + budget_source → response echoes them."""
     status, body = _create_project(
-        inv_client, superadmin_token, name="Budget Echo", budget=50000.0, budget_source="Client Contract"
+        inv_client, admin_token, name="Budget Echo", budget=50000.0, budget_source="Client Contract"
     )
     assert status == 201, body
     assert body["budget"] == pytest.approx(50000.0)
@@ -64,9 +65,9 @@ def test_create_project_with_budget_echoes_fields(inv_client, superadmin_token):
     assert body["spent"] == pytest.approx(0.0)
 
 
-def test_create_project_without_budget_defaults_null(inv_client, superadmin_token):
+def test_create_project_without_budget_defaults_null(inv_client, admin_token):
     """Create without budget → null budget, spent 0."""
-    status, body = _create_project(inv_client, superadmin_token, name="No Budget Project")
+    status, body = _create_project(inv_client, admin_token, name="No Budget Project")
     assert status == 201, body
     assert body["budget"] is None
     assert body["budget_source"] is None
@@ -85,9 +86,9 @@ def test_get_project_includes_budget_fields(inv_client, admin_token, invitation_
     assert "spent_by_credits" in body
 
 
-def test_list_projects_includes_budget_fields(inv_client, superadmin_token):
+def test_list_projects_includes_budget_fields(inv_client, admin_token):
     """GET list includes budget/budget_source/spent/spent_by_credits on every project row."""
-    resp = inv_client.get("/api/v1/projects", headers=_auth(superadmin_token))
+    resp = inv_client.get("/api/v1/projects", headers=_auth(admin_token))
     assert resp.status_code == 200
     projects = resp.get_json()["projects"]
     assert projects, "expected at least one project"
@@ -104,45 +105,45 @@ def test_list_projects_includes_budget_fields(inv_client, superadmin_token):
 # ---------------------------------------------------------------------------
 
 
-def test_patch_only_budget_source_leaves_budget_unchanged(inv_client, superadmin_token):
+def test_patch_only_budget_source_leaves_budget_unchanged(inv_client, admin_token):
     """PATCH of only budget_source must NOT wipe budget (regression)."""
     # Create with a budget
     status, created = _create_project(
-        inv_client, superadmin_token, name="PATCH Regression", budget=99999.0, budget_source="Original Source"
+        inv_client, admin_token, name="PATCH Regression", budget=99999.0, budget_source="Original Source"
     )
     assert status == 201, created
     pid = created["id"]
 
     # PATCH only budget_source — budget must survive
-    status, updated = _update_project(inv_client, superadmin_token, pid, {"budget_source": "Updated Source"})
+    status, updated = _update_project(inv_client, admin_token, pid, {"budget_source": "Updated Source"})
     assert status == 200, updated
     assert updated["budget"] == pytest.approx(99999.0), "budget was wiped — PATCH landmine!"
     assert updated["budget_source"] == "Updated Source"
 
 
-def test_patch_budget_to_null_clears_it(inv_client, superadmin_token):
+def test_patch_budget_to_null_clears_it(inv_client, admin_token):
     """Explicitly setting budget=null via PATCH clears the budget."""
     status, created = _create_project(
-        inv_client, superadmin_token, name="Clear Budget Test", budget=12345.0, budget_source="Funding"
+        inv_client, admin_token, name="Clear Budget Test", budget=12345.0, budget_source="Funding"
     )
     assert status == 201, created
     pid = created["id"]
 
-    status, updated = _update_project(inv_client, superadmin_token, pid, {"budget": None})
+    status, updated = _update_project(inv_client, admin_token, pid, {"budget": None})
     assert status == 200, updated
     assert updated["budget"] is None
 
 
-def test_patch_budget_source_only_persists_to_get(inv_client, superadmin_token):
+def test_patch_budget_source_only_persists_to_get(inv_client, admin_token):
     """After PATCH only budget_source, GET detail also shows preserved budget."""
     status, created = _create_project(
-        inv_client, superadmin_token, name="Persist Check", budget=77777.0, budget_source="Old"
+        inv_client, admin_token, name="Persist Check", budget=77777.0, budget_source="Old"
     )
     assert status == 201, created
     pid = created["id"]
 
-    _update_project(inv_client, superadmin_token, pid, {"budget_source": "New"})
-    status, body = _get_project(inv_client, superadmin_token, pid)
+    _update_project(inv_client, admin_token, pid, {"budget_source": "New"})
+    status, body = _get_project(inv_client, admin_token, pid)
     assert status == 200, body
     assert body["budget"] == pytest.approx(77777.0)
     assert body["budget_source"] == "New"
@@ -166,7 +167,9 @@ def spent_reader_project(invitation_app):
         owner_id = UUID(invitation_app._test_admin_user_id)
 
         # Project
-        project = ProjectModel(name="SpentReader Test", owner_id=owner_id)
+        project = ProjectModel(
+            name="SpentReader Test", owner_id=owner_id, company_id=company_for_projects(db.session, owner_id)
+        )
         db.session.add(project)
         db.session.flush()
 
@@ -312,7 +315,9 @@ def test_spent_reader_batch_two_projects(invitation_app, spent_reader_project):
 
     with invitation_app.app_context():
         owner_id = UUID(invitation_app._test_admin_user_id)
-        p2 = ProjectModel(name="Empty Project for batch", owner_id=owner_id)
+        p2 = ProjectModel(
+            name="Empty Project for batch", owner_id=owner_id, company_id=company_for_projects(db.session, owner_id)
+        )
         db.session.add(p2)
         db.session.commit()
 
@@ -344,7 +349,9 @@ def test_spent_reader_no_rows_returns_zero(invitation_app):
 
     with invitation_app.app_context():
         owner_id = UUID(invitation_app._test_admin_user_id)
-        empty_p = ProjectModel(name="Truly Empty", owner_id=owner_id)
+        empty_p = ProjectModel(
+            name="Truly Empty", owner_id=owner_id, company_id=company_for_projects(db.session, owner_id)
+        )
         db.session.add(empty_p)
         db.session.commit()
 

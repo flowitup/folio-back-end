@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from tests.company_tenancy_helper import seed_company_tenancy
@@ -60,16 +60,6 @@ def avoir_app():
 
         hasher = Argon2PasswordHasher()
 
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        manage_perm = PermissionModel(name="project:manage_invoices", resource="project", action="manage_invoices")
-
-        admin_role = RoleModel(name="avoir_admin", description="Admin")
-        admin_role.permissions.append(star_perm)
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(manage_perm)
-
-        db.session.add_all([star_perm, read_perm, manage_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -77,7 +67,6 @@ def avoir_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.flush()
 

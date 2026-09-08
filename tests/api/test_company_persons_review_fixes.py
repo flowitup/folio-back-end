@@ -88,30 +88,21 @@ def _make_user(app, email: str) -> str:
 
 
 def _make_platform_admin(app, email: str) -> str:
-    """A user holding the legacy global `*:*` wildcard permission — needed for
-    routes still gated by `@require_admin` (platform-only), e.g. DELETE
-    /companies/<id>, which M5's per-project-count check sits behind."""
+    """A platform-ops account — needed for routes gated by `@require_admin`
+    (platform-only), e.g. DELETE /companies/<id>, which M5's per-project-count
+    check sits behind."""
     from app import db
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
-    from app.infrastructure.database.models.permission import PermissionModel
-    from app.infrastructure.database.models.role import RoleModel
 
     with app.app_context():
-        star_perm = db.session.query(PermissionModel).filter_by(name="*:*").first() or PermissionModel(
-            name="*:*", resource="*", action="*"
-        )
-        role = RoleModel(name=f"cp_platform_admin_{uuid4().hex[:8]}", description="Platform admin")
-        role.permissions.append(star_perm)
         user = UserModel(
             id=uuid4(),
             email=email,
             password_hash=Argon2PasswordHasher().hash(PASSWORD),
             is_active=True,
-            # Platform access is the ops flag now, not the legacy `*:*` role.
             is_platform_ops=True,
         )
-        user.roles.append(role)
-        db.session.add_all([star_perm, role, user])
+        db.session.add(user)
         db.session.commit()
         return user.id
 
@@ -557,10 +548,7 @@ class TestM9ProjectMembershipRemoveNormalizesUuid:
             # produces — mirrors the ORM UUID TypeDecorator's dashless-hex
             # SQLite storage that other insert paths in this codebase use.
             db.session.execute(
-                text(
-                    "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
-                    "VALUES (:uid, :pid, NULL, :at)"
-                ),
+                text("INSERT INTO user_projects (user_id, project_id, assigned_at) " "VALUES (:uid, :pid, :at)"),
                 {"uid": user_id.hex, "pid": project_id.hex, "at": datetime.now(timezone.utc)},
             )
             db.session.commit()

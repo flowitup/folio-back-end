@@ -37,8 +37,8 @@ class LoginUseCase:
         Execute login flow.
 
         1. Authenticate credentials
-        2. Get user permissions
-        3. Generate tokens
+        2. Generate tokens
+        3. Resolve the primary company's permissions for the response body
 
         Args:
             email: User email
@@ -46,7 +46,10 @@ class LoginUseCase:
             persistent: never-expiring refresh token (REFRESH_TOKEN_POLICY=persistent)
 
         Returns:
-            LoginResult with tokens and permissions
+            LoginResult with tokens and the caller's primary-company
+            permissions. Those are a UI hint only — the access token carries
+            identity, never permissions, so a role change applies on the next
+            request without a re-login.
 
         Raises:
             AuthenticationError: If credentials invalid
@@ -54,10 +57,7 @@ class LoginUseCase:
         user_id = self._auth.authenticate(email, password)
         permissions = list(self._authz.get_user_permissions(user_id))
 
-        access_token = self._tokens.create_access_token(
-            user_id,
-            {"permissions": permissions},
-        )
+        access_token = self._tokens.create_access_token(user_id)
         refresh_token = self._tokens.create_refresh_token(user_id, persistent=persistent)
 
         return LoginResult(

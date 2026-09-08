@@ -26,7 +26,7 @@ from uuid import uuid4
 import pytest
 
 from app import db
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
@@ -70,7 +70,6 @@ def att_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
     from app.application.invoice.upload_attachment import UploadAttachmentUseCase  # noqa: F401
     from app.application.invoice.list_materials_expenses_usecase import ListMaterialsExpensesUseCase
@@ -93,21 +92,11 @@ def att_app():
         # --- Permissions ---
         # Names must match exactly what @require_permission() checks — they are embedded
         # verbatim in the JWT by AuthorizationService.get_user_permissions().
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        inv_perm = PermissionModel(name="project:manage_invoices", resource="project", action="manage_invoices")
-
-        superadmin_role = RoleModel(name="att_superadmin", description="Superadmin for att tests")
-        superadmin_role.permissions.append(star_perm)
 
         # member_role mirrors production "member" (has project:read) so the
         # @require_permission("project:read") gate passes. The test then verifies that
         # the access decorator is the real gate — not the permission check.
-        member_role = RoleModel(name="att_member", description="Member for att tests")
-        member_role.permissions.append(read_perm)
-        member_role.permissions.append(inv_perm)
 
-        db.session.add_all([star_perm, read_perm, inv_perm, superadmin_role, member_role])
         db.session.flush()
 
         # --- Users ---
@@ -116,7 +105,6 @@ def att_app():
             password_hash=hasher.hash("Setup1234!"),
             is_active=True,
         )
-        setup_user.roles.append(superadmin_role)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         setup_user.is_platform_ops = True
 
@@ -126,7 +114,6 @@ def att_app():
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        member_user.roles.append(member_role)
 
         # Company-X admin; NOT a project member anywhere
         company_x_admin_user = UserModel(
@@ -134,7 +121,6 @@ def att_app():
             password_hash=hasher.hash("CompX1234!"),
             is_active=True,
         )
-        company_x_admin_user.roles.append(member_role)
 
         # Company-Y admin; should be denied access to company-X projects
         company_y_admin_user = UserModel(
@@ -142,7 +128,6 @@ def att_app():
             password_hash=hasher.hash("CompY1234!"),
             is_active=True,
         )
-        company_y_admin_user.roles.append(member_role)
 
         # Pure outsider: no company admin, no project membership
         outsider_user = UserModel(
@@ -150,7 +135,6 @@ def att_app():
             password_hash=hasher.hash("Outsider1234!"),
             is_active=True,
         )
-        outsider_user.roles.append(member_role)
 
         db.session.add_all([setup_user, member_user, company_x_admin_user, company_y_admin_user, outsider_user])
         db.session.flush()
@@ -226,7 +210,6 @@ def att_app():
         company_repo = SqlAlchemyCompanyRepository(db.session)
         access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-        role_repo = SqlAlchemyRoleRepository(db.session)
         storage = InMemoryDocumentStorage()
 
         configure_container(
@@ -239,7 +222,6 @@ def att_app():
             invoice_attachment_repository=attachment_repo,
             attachment_storage=storage,
             project_membership_repo=membership_repo,
-            role_repo=role_repo,
         )
 
         _c = get_container()

@@ -1,39 +1,42 @@
-"""Project assignment use cases — manager/member assignment to a project (Phase 2 onboarding).
+"""Project assignment use cases — assign a company member to a project.
 
-Assignment is a row in `user_projects` (legacy membership table, reused —
-see `app.application.invitations.ports.ProjectMembershipRepositoryPort`).
-Authorization is resolved through the Phase 1 resolver
+An assignment is a row in `user_projects`. It carries no role: what the
+assignee may do on the project comes from their company role
+(`admin` | `manager` | `member`) plus their per-member grant/deny rows, so
+assigning is a pure "this person works on this project" statement.
+
+Authorization is resolved through the resolver
 (`app.application.authz.ports.AuthzReaderPort`) with an explicit company_id:
 
-  - admin of the project's company: may assign/unassign ANY company member,
-    with role "member" or "manager".
-  - manager assigned to the project: may assign/unassign "member"-role
-    targets only (never promote/demote another manager).
+  - admin of the project's company: may assign/unassign ANY company member.
+  - manager assigned to the project: may assign/unassign company `member`s
+    only (never another manager or an admin).
   - anyone else: 403.
-  - target must already be a member of the project's company (404 otherwise
-    — a stranger cannot be assigned, that is the invitation's job).
+  - the person must already be a member of the project's company (404
+    otherwise — a stranger cannot be assigned, that is the invitation's job).
 
-`role_id` on `user_projects` is resolved from the legacy `roles` table by
-name ("member" / "manager") via `RoleRepositoryPort.find_by_name` — if
-neither legacy role row exists (e.g. a minimal test fixture), the write is
-skipped silently rather than inserting a NULL that a real Postgres NOT NULL
-constraint would reject.
+Assigning may also carry an optional `role`. It does NOT live on the
+assignment: `role="manager"` asks to raise the target's COMPANY role to
+manager (company admins only), which is a company-wide promotion. `member`
+never demotes anyone. The use case returns the target's company role after
+the call so the endpoint can echo it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from app.application.companies._helpers import ForbiddenCompanyError
+from app.application.companies.dtos import SetMemberRoleInput
+from app.domain.companies.roles import CompanyRole
 from app.domain.entities.project_membership import ProjectMembership
 
 if TYPE_CHECKING:
     from app.application.authz.ports import AuthzReaderPort
     from app.application.companies.ports import UserCompanyAccessRepositoryPort
-    from app.application.invitations.ports import ProjectMembershipRepositoryPort, RoleRepositoryPort
-
-_ASSIGNABLE_ROLES = ("member", "manager")
+    from app.application.invitations.ports import ProjectMembershipRepositoryPort
 
 
 class AssignmentError(Exception):
@@ -46,29 +49,11 @@ class ProjectCompanyUnresolvedError(AssignmentError):
 
 class AssignmentForbiddenError(AssignmentError):
     """Caller is neither a company admin nor a manager assigned to this project
-    (or a manager tried to assign/unassign something other than a member)."""
-
-
-class InvalidAssignmentRoleError(AssignmentError):
-    """`role` is not one of the assignable roles ("member" | "manager")."""
+    (or a manager acted on someone who is not a plain company member)."""
 
 
 class TargetNotCompanyMemberError(AssignmentError):
-    """The target user has no `user_company_access` row for this project's company."""
-
-
-class LegacyRoleMissingError(AssignmentError):
-    """The legacy `roles` row ("member"/"manager") this write needs does not exist.
-
-    M2: a production deployment always seeds these — a missing row means the
-    deployment is mis-seeded, not a valid "no-op" outcome. Silently skipping
-    the write (the old behavior) hid the bug behind an apparently-successful
-    204/200 response while `user_projects` never actually gained the row.
-    """
-
-    def __init__(self, role_name: str) -> None:
-        self.role_name = role_name
-        super().__init__(f"Legacy role {role_name!r} is not seeded — cannot record this project assignment")
+    """The named user has no `user_company_access` row for this project's company."""
 
 
 @dataclass(frozen=True)
@@ -76,7 +61,8 @@ class AssignProjectMemberInput:
     caller_id: UUID
     project_id: UUID
     target_user_id: UUID
-    role: str = "member"
+    # Company-wide: "manager" promotes the target's company role (admins only).
+    role: str = CompanyRole.MEMBER.value
 
 
 def _resolve_caller_scope(
@@ -96,50 +82,92 @@ def _resolve_caller_scope(
     raise AssignmentForbiddenError("Caller must be a company admin or a manager assigned to this project")
 
 
+def _forbid_manager_on_a_non_member(
+    authz_reader: "AuthzReaderPort",
+    caller_role: str,
+    user_id: UUID,
+    company_id: UUID,
+) -> None:
+    """A manager may only act on people whose company role is `member`."""
+    if caller_role != "manager":
+        return
+    if authz_reader.company_role_for(user_id, company_id) != "member":
+        raise AssignmentForbiddenError("A manager may only assign or unassign a company 'member'")
+
+
 class AssignProjectMemberUseCase:
-    """PUT /projects/<id>/assignments/<user_id> — create or change a project assignment."""
+    """PUT /projects/<id>/assignments/<user_id> — assign a company member to a project."""
 
     def __init__(
         self,
         authz_reader: "AuthzReaderPort",
         access_repo: "UserCompanyAccessRepositoryPort",
         membership_repo: "ProjectMembershipRepositoryPort",
-        role_repo: "Optional[RoleRepositoryPort]" = None,
+        role_setter: Any = None,  # SetMemberRoleUseCase — needed for role="manager"
+        db_session: Any = None,  # TransactionalSessionPort, handed to the role setter
     ) -> None:
         self._authz = authz_reader
         self._access = access_repo
         self._membership = membership_repo
-        self._roles = role_repo
+        self._role_setter = role_setter
+        self._db = db_session
 
-    def execute(self, inp: AssignProjectMemberInput) -> None:
-        if inp.role not in _ASSIGNABLE_ROLES:
-            raise InvalidAssignmentRoleError(f"role must be one of {_ASSIGNABLE_ROLES}, got {inp.role!r}")
+    def execute(self, inp: AssignProjectMemberInput) -> str:
+        """Assign the target and return their company role afterwards.
+
+        Raises `AssignmentForbiddenError` when the caller may not assign (or
+        may not promote), `TargetNotCompanyMemberError` when the target has no
+        access row, `ValueError` for an unknown role and
+        `UserCompanyAccessNotFoundError` when the access row disappears
+        under a concurrent detach.
+        """
+        if inp.role not in CompanyRole.values():
+            raise ValueError(f"Invalid company role: {inp.role!r} (expected one of {CompanyRole.values()})")
 
         company_id, caller_role = _resolve_caller_scope(self._authz, inp.caller_id, inp.project_id)
-        if caller_role == "manager" and inp.role != "member":
-            raise AssignmentForbiddenError("A manager may only assign the 'member' role")
 
-        if self._access.find(inp.target_user_id, company_id) is None:
+        access = self._access.find(inp.target_user_id, company_id)
+        if access is None:
             raise TargetNotCompanyMemberError(f"user {inp.target_user_id} is not a member of company {company_id}")
 
-        role_row = self._roles.find_by_name(inp.role) if self._roles is not None else None
-        if role_row is None:
-            # M2: a missing legacy role row is a mis-seeded deployment, not a
-            # valid no-op — raise loudly instead of silently skipping the write.
-            raise LegacyRoleMissingError(inp.role)
-        role_id = role_row.id
+        _forbid_manager_on_a_non_member(self._authz, caller_role, inp.target_user_id, company_id)
 
-        if self._membership.find_role_id(inp.target_user_id, inp.project_id) is not None:
-            self._membership.set_role(inp.target_user_id, inp.project_id, role_id)
-        else:
-            self._membership.add(
-                ProjectMembership.create(
-                    user_id=inp.target_user_id,
-                    project_id=inp.project_id,
-                    role_id=role_id,
-                    invited_by=inp.caller_id,
-                )
+        # Idempotent: `add` is an INSERT ... ON CONFLICT DO NOTHING.
+        self._membership.add(
+            ProjectMembership.create(
+                user_id=inp.target_user_id,
+                project_id=inp.project_id,
+                invited_by=inp.caller_id,
             )
+        )
+
+        return self._apply_requested_role(inp, company_id, access.role)
+
+    def _apply_requested_role(self, inp: AssignProjectMemberInput, company_id: UUID, current_role: str) -> str:
+        """Promote the target's COMPANY role when asked; never demote.
+
+        The promotion goes through `SetMemberRoleUseCase`, so its company-admin
+        guard, last-admin guard and locking apply unchanged. A caller who is
+        not a company admin gets `AssignmentForbiddenError` and the whole
+        request (assignment included) is rolled back by the endpoint.
+        """
+        if inp.role != CompanyRole.MANAGER.value or current_role != CompanyRole.MEMBER.value:
+            return current_role
+        if self._role_setter is None or self._db is None:
+            raise AssignmentForbiddenError("Company-role promotion is not available on this deployment")
+        try:
+            updated = self._role_setter.execute(
+                SetMemberRoleInput(
+                    caller_id=inp.caller_id,
+                    company_id=company_id,
+                    user_id=inp.target_user_id,
+                    role=CompanyRole.MANAGER.value,
+                ),
+                self._db,
+            )
+        except ForbiddenCompanyError as exc:
+            raise AssignmentForbiddenError("Only a company admin can assign as manager") from exc
+        return updated.role
 
 
 class UnassignProjectMemberUseCase:
@@ -150,25 +178,20 @@ class UnassignProjectMemberUseCase:
         authz_reader: "AuthzReaderPort",
         access_repo: "UserCompanyAccessRepositoryPort",
         membership_repo: "ProjectMembershipRepositoryPort",
-        role_repo: "Optional[RoleRepositoryPort]" = None,
     ) -> None:
         self._authz = authz_reader
         self._access = access_repo
         self._membership = membership_repo
-        self._roles = role_repo
 
     def execute(self, caller_id: UUID, project_id: UUID, target_user_id: UUID) -> None:
         company_id, caller_role = _resolve_caller_scope(self._authz, caller_id, project_id)
 
-        if caller_role == "manager" and self._roles is not None:
-            # A manager may only unassign a "member"-role target, never demote/remove
-            # another manager. Degrades to "allow" when roles are unseeded (test fixture).
-            existing_role_id = self._membership.find_role_id(target_user_id, project_id)
-            member_role = self._roles.find_by_name("member")
-            if existing_role_id is not None and member_role is not None and existing_role_id != member_role.id:
-                raise AssignmentForbiddenError("A manager may only unassign a 'member'-role target")
-
+        # Same order as assigning: "not a member of this company" is answered
+        # with 404 for every caller, so an admin and a manager get the same
+        # answer for the same state.
         if self._access.find(target_user_id, company_id) is None:
             raise TargetNotCompanyMemberError(f"user {target_user_id} is not a member of company {company_id}")
+
+        _forbid_manager_on_a_non_member(self._authz, caller_role, target_user_id, company_id)
 
         self._membership.remove(target_user_id, project_id)

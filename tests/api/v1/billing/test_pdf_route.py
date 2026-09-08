@@ -91,8 +91,7 @@ def rate_limit_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
-    from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel
+    from app.infrastructure.database.models import UserModel
     from config import TestingConfig
     from wiring import configure_container
     import wiring as _wiring
@@ -118,7 +117,6 @@ def rate_limit_app():
         project_repo = SQLAlchemyProjectRepository(db.session)
         inv_repo = SqlAlchemyInvitationRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-        role_repo = SqlAlchemyRoleRepository(db.session)
 
         configure_container(
             user_repository=user_repo,
@@ -128,14 +126,9 @@ def rate_limit_app():
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
             project_membership_repo=membership_repo,
-            role_repo=role_repo,
         )
 
         # Seed roles + admin user
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        admin_role = RoleModel(name="rl-admin", description="Admin")
-        admin_role.permissions.append(star_perm)
-        db.session.add_all([star_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -143,7 +136,6 @@ def rate_limit_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.commit()
 

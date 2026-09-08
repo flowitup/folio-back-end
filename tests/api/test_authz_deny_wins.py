@@ -20,7 +20,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -48,15 +48,7 @@ def deny_app():
         hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        manage_labor_perm = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
-        legacy_manager_role = RoleModel(name="dw_legacy_manager", description="Legacy global manager")
-        legacy_manager_role.permissions.extend([read_perm, manage_labor_perm])
-        db.session.add_all([read_perm, manage_labor_perm, legacy_manager_role])
-        db.session.flush()
-
         user = UserModel(email="dw_manager@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
-        user.roles.append(legacy_manager_role)
         db.session.add(user)
         db.session.flush()
 
@@ -79,19 +71,11 @@ def deny_app():
 
         from sqlalchemy import text as _text
 
-        # role_id must be non-NULL: SqlAlchemyProjectMembershipRepository.find_role_id
-        # (used by _membership_role_permissions on every project-scoped route)
-        # crashes converting a NULL role_id to UUID. Reuse legacy_manager_role's
-        # id so the per-project membership-role path ALSO grants
-        # project:manage_labor — this test then proves the deny wins over
-        # every source (legacy JWT claim, per-project membership role, AND
-        # the resolver's own company-role grant), not just one of them.
+        # Assigned to the project: the company `manager` role grants
+        # project:manage_labor here, so the deny row has something to override.
         db.session.execute(
-            _text(
-                "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
-                "VALUES (:uid, :pid, :rid, :at)"
-            ),
-            {"uid": str(user.id), "pid": str(project.id), "rid": str(legacy_manager_role.id), "at": now},
+            _text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:uid, :pid, :at)"),
+            {"uid": str(user.id), "pid": str(project.id), "at": now},
         )
         db.session.commit()
 

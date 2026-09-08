@@ -19,14 +19,12 @@ from uuid import uuid4
 import pytest
 
 from app.infrastructure.database.models import (
-    PermissionModel,
     ProjectModel,
-    RoleModel,
     UserModel,
     WorkerModel,
 )
 from app.infrastructure.database.models.associations import user_projects
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 # Membership-role permission lookups use raw SQL with dashed UUID strings → Postgres only.
 _needs_pg = pytest.mark.skipif(
@@ -50,7 +48,6 @@ def av_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from app.application.labor import (
         ListPendingAttendanceUseCase,
         LogAttendanceUseCase,
@@ -74,39 +71,25 @@ def av_app():
         db.create_all()
         hasher = Argon2PasswordHasher()
 
-        manage = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
-        read = PermissionModel(name="project:read", resource="project", action="read")
-        self_log = PermissionModel(name="project:log_own_attendance", resource="project", action="log_own_attendance")
-        manager_role = RoleModel(name="manager", description="Manager")
-        manager_role.permissions.extend([manage, read, self_log])
-        member_role = RoleModel(name="member", description="Member")
-        member_role.permissions.extend([read, self_log])
-        db.session.add_all([manage, read, self_log, manager_role, member_role])
-        db.session.flush()
-
         owner = UserModel(email="owner@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
-        owner.roles.append(manager_role)
         linked = UserModel(email="linked@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
-        linked.roles.append(member_role)
         unlinked = UserModel(email="unlinked@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
-        unlinked.roles.append(member_role)
-        # Global role is the read-only default; manager rights come only from the membership role.
+        # Manager rights come from the company role the tenancy helper sets below.
         chef = UserModel(email="chef@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
-        chef.roles.append(member_role)
         db.session.add_all([owner, linked, unlinked, chef])
         db.session.flush()
 
-        project = ProjectModel(name="Chantier AV", owner_id=owner.id)
-        other_project = ProjectModel(name="Other site", owner_id=owner.id)
+        project = ProjectModel(
+            name="Chantier AV", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
+        other_project = ProjectModel(
+            name="Other site", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
         db.session.add_all([project, other_project])
         db.session.flush()
         for u in (linked, unlinked):
-            db.session.execute(
-                user_projects.insert().values(user_id=u.id, project_id=project.id, role_id=member_role.id)
-            )
-        db.session.execute(
-            user_projects.insert().values(user_id=chef.id, project_id=project.id, role_id=manager_role.id)
-        )
+            db.session.execute(user_projects.insert().values(user_id=u.id, project_id=project.id))
+        db.session.execute(user_projects.insert().values(user_id=chef.id, project_id=project.id))
 
         worker = WorkerModel(project_id=project.id, name="Linked Worker", daily_rate=100, user_id=linked.id)
         free_worker = WorkerModel(project_id=project.id, name="Free Worker", daily_rate=80)
@@ -115,7 +98,8 @@ def av_app():
 
         # Permissions come from the company role + assignment: owner and chef
         # become company managers, linked/unlinked members (see the helper).
-        seed_company_tenancy(test_app, legal_name="AV Test Co")
+        # `chef` validates attendance: that is the company `manager` role now.
+        seed_company_tenancy(test_app, legal_name="AV Test Co", roles={chef.id: "manager"})
 
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
@@ -128,7 +112,6 @@ def av_app():
             worker_repository=worker_repo,
             labor_entry_repository=entry_repo,
             project_membership_repo=SqlAlchemyProjectMembershipRepository(db.session),
-            role_repo=SqlAlchemyRoleRepository(db.session),
         )
         c = get_container()
         c.submit_own_attendance_usecase = SubmitOwnAttendanceUseCase(worker_repo=worker_repo, entry_repo=entry_repo)

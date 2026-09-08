@@ -60,10 +60,9 @@ class FakeReader:
 def _usecase(reader=None):
     return CreateInvitationUseCase(
         invitation_repo=None,
-        project_membership_repo=SimpleNamespace(find_role_id=lambda uid, pid: None),
+        project_membership_repo=SimpleNamespace(exists=lambda uid, pid: False),
         user_repo=None,
         project_repo=None,
-        role_repo=SimpleNamespace(find_by_id=lambda rid: None),
         email_port=None,
         email_renderer=None,
         queue_port=None,

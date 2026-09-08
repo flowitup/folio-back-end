@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel, WorkerModel
+from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 OWNER_TOKEN = "ExponentPushToken[owner-device-000000]"
@@ -48,36 +48,22 @@ def push_app():
         c.push_sender = recorder
         c.attendance_push_notifier._sender = recorder  # notifier was built with the log sender
         hasher = Argon2PasswordHasher()
-        perms = {
-            name: PermissionModel(name=name, resource="project", action=name.split(":")[1])
-            for name in ("project:read", "project:manage_labor", "project:log_own_attendance")
-        }
-        manager_role = RoleModel(name="manager", description="Manager")
-        manager_role.permissions.extend(perms.values())
-        member_role = RoleModel(name="member", description="Member")
-        member_role.permissions.extend([perms["project:read"], perms["project:log_own_attendance"]])
-        db.session.add_all([*perms.values(), manager_role, member_role])
-        db.session.flush()
 
-        def user(email, role):
-            u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
-            u.roles.append(role)
-            return u
+        def user(email):
+            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
 
-        owner = user("owner@push-test.com", manager_role)
-        chef = user("chef@push-test.com", member_role)  # manager through the membership role
-        linked = user("linked@push-test.com", member_role)
+        owner = user("owner@push-test.com")
+        chef = user("chef@push-test.com")  # company manager (set by the tenancy helper)
+        linked = user("linked@push-test.com")
         db.session.add_all([owner, chef, linked])
         db.session.flush()
-        project = ProjectModel(name="Chantier Push", owner_id=owner.id)
+        project = ProjectModel(
+            name="Chantier Push", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
         db.session.add(project)
         db.session.flush()
-        db.session.execute(
-            user_projects.insert().values(user_id=linked.id, project_id=project.id, role_id=member_role.id)
-        )
-        db.session.execute(
-            user_projects.insert().values(user_id=chef.id, project_id=project.id, role_id=manager_role.id)
-        )
+        db.session.execute(user_projects.insert().values(user_id=linked.id, project_id=project.id))
+        db.session.execute(user_projects.insert().values(user_id=chef.id, project_id=project.id))
         own = WorkerModel(project_id=project.id, name="Linked", daily_rate=100, user_id=linked.id)
         db.session.add(own)
         db.session.commit()
@@ -89,7 +75,8 @@ def push_app():
         }
         test_app.config["_push"] = recorder
         # Permissions come from the company role + project assignment (see the helper).
-        seed_company_tenancy(test_app)
+        # `chef` validates attendance: that is the company `manager` role now.
+        seed_company_tenancy(test_app, roles={chef.id: "manager"})
 
         yield test_app
         db.session.remove()

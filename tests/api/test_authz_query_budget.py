@@ -24,7 +24,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -33,10 +33,7 @@ PASSWORD = "Pass1234!"
 # Literal substrings unique to SqlAlchemyAuthzReader's raw-text queries (both
 # the SQLite-normalized and plain forms share these SELECT-clause fragments —
 # only the WHERE clause differs by dialect). Deliberately narrow so the ORM's
-# full-row project/company queries (and the LEGACY per-project membership-role
-# lookup `SELECT role_id FROM user_projects ...` in
-# app.api.v1.projects.decorators._membership_role_permissions, which also
-# touches `user_projects` but is not the resolver) are never counted.
+# full-row project/company queries are never counted.
 _RESOLVER_MARKERS = (
     "FROM user_company_access",
     "SELECT 1 FROM user_projects",
@@ -81,14 +78,9 @@ def budget_app():
         hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        legacy_role = RoleModel(name="qb_member", description="Legacy read-only signup role")
-        legacy_role.permissions.append(read_perm)
-        db.session.add_all([read_perm, legacy_role])
         db.session.flush()
 
         admin_user = UserModel(email="qb_admin@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
-        admin_user.roles.append(legacy_role)
         db.session.add(admin_user)
         db.session.flush()
 

@@ -33,7 +33,6 @@ def _make_inv(
         id=uuid4(),
         email="user@example.com",
         project_id=uuid4(),
-        role_id=uuid4(),
         token_hash=token_hash,
         status=status,
         expires_at=expires_at,
@@ -44,18 +43,15 @@ def _make_inv(
     return inv, raw
 
 
-def _make_uc(inv_repo, project_repo=None, role_repo=None, user_repo=None) -> VerifyInvitationUseCase:
+def _make_uc(inv_repo, project_repo=None, user_repo=None) -> VerifyInvitationUseCase:
     project_repo = project_repo or MagicMock()
-    role_repo = role_repo or MagicMock()
     user_repo = user_repo or MagicMock()
     # Default mock returns for related entities
     project_repo.find_by_id.return_value = MagicMock(name="Test Project")
-    role_repo.find_by_id.return_value = MagicMock(name="member")
     user_repo.find_by_id.return_value = MagicMock(display_or_email="Inviter Name")
     return VerifyInvitationUseCase(
         invitation_repo=inv_repo,
         project_repo=project_repo,
-        role_repo=role_repo,
         user_repo=user_repo,
     )
 
@@ -76,11 +72,6 @@ class TestVerifyInvitation:
         project_repo = MagicMock()
         project_repo.find_by_id.return_value = project
 
-        role = MagicMock()
-        role.name = "member"
-        role_repo = MagicMock()
-        role_repo.find_by_id.return_value = role
-
         inviter = MagicMock()
         inviter.display_or_email = "Boss"
         user_repo = MagicMock()
@@ -89,13 +80,13 @@ class TestVerifyInvitation:
         uc = VerifyInvitationUseCase(
             invitation_repo=inv_repo,
             project_repo=project_repo,
-            role_repo=role_repo,
             user_repo=user_repo,
         )
         dto = uc.execute(raw_token)
 
         assert dto.email == "user@example.com"
         assert dto.project_name == "My Project"
+        # Accepting always grants the company `member` role.
         assert dto.role_name == "member"
         assert dto.inviter_name == "Boss"
         # DTO must not expose invitation_id (VerifyInvitationDto has no invitation_id field)
