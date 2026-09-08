@@ -376,6 +376,10 @@ def get_current_user():
 
     # Resolved fresh on every call (never read from the token) so a role, grant
     # or ops change applies without re-login — clients refresh this on focus.
+    # Scope: the caller's PRIMARY company (union when they have none). It is a
+    # UI hint — a manager assigned to one project advertises the manager set
+    # company-wide, and a second company is not represented — so clients gate
+    # project screens on `project.my_permissions`, never on this list.
     permissions = sorted(container.authorization_service.get_user_permissions(UUID(user_id)))
 
     return jsonify(

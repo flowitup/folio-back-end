@@ -170,8 +170,16 @@ def permissions_for_user(
 
     The caller's primary company when they have one (the company their client
     shows by default), otherwise the union over every company they belong to.
-    `{"*:*"}` for platform ops. Clients use it to hide buttons; every route
-    still re-resolves against its own project/company.
+    `{"*:*"}` for platform ops.
+
+    Deliberately optimistic, and clients must treat it that way: it is
+    `permissions_in_company`, so a manager assigned to ONE project of the
+    company advertises the whole manager set — including on projects they are
+    not assigned to, and (for a multi-company user) it says nothing about their
+    other companies. It is a UI hint for hiding buttons, never an
+    authorization answer: every route re-resolves against its own
+    project/company, so a button this set enables can still answer 403. Clients
+    gating a project screen must use `project.my_permissions` instead.
     """
     if is_platform_admin:
         return frozenset({"*:*"})
