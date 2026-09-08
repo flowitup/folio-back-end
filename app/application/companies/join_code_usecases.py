@@ -52,16 +52,22 @@ def rotate_join_code_unchecked(
 ) -> Optional[str]:
     """Issue a fresh join code for `company_id` WITHOUT an admin-permission check.
 
-    Used internally by boot/detach cleanup (Phase 2 onboarding, finding 11):
-    the caller there has already been authorized for the boot/detach
-    operation itself (an admin booting someone, or a user detaching their
-    own access) — that is a different authorization question than "can this
-    caller manage this company's join code", which `SetJoinCodeUseCase`
-    guards for the direct API route. No-op (returns None) if the company
-    does not exist. Does not commit — the caller's transaction owns that.
+    Used internally by boot cleanup ONLY (Phase 2 onboarding, finding 11 /
+    H4): the caller there has already been authorized for the boot operation
+    itself (an admin booting someone) — that is a different authorization
+    question than "can this caller manage this company's join code", which
+    `SetJoinCodeUseCase` guards for the direct API route. Self-detach never
+    calls this (H4: a member leaving on their own must not invalidate the
+    code for everyone else).
+
+    No-op (returns None, does not allocate a new code) when the company does
+    not exist OR when it currently has no join code at all — rotation only
+    replaces an EXISTING code so a company that never issued one, or had it
+    revoked, is not silently handed a fresh one by an unrelated boot. Does
+    not commit — the caller's transaction owns that.
     """
     company = company_repo.find_by_id(company_id)
-    if company is None:
+    if company is None or company.join_code is None:
         return None
     code = _allocate_unique_code(company_repo)
     company_repo.save(company.with_updates(join_code=code, updated_at=clock.now()))
@@ -150,9 +156,11 @@ class JoinCompanyByCodeUseCase:
         return CompanyResponse.from_entity(company)
 
     def _ensure_company_person(self, user_id: UUID, company_id: UUID, now: datetime) -> None:
-        """Create an active company_persons row for the joiner if one is missing."""
+        """Create an active company_persons row for the joiner, reactivating
+        a previously-booted one (M1) rather than leaving it deactivated."""
         if self._persons is None or self._company_persons is None:
             return
+        import dataclasses
         from uuid import uuid4
 
         from app.domain.entities.company_person import CompanyPerson
@@ -179,9 +187,15 @@ class JoinCompanyByCodeUseCase:
                     phone=user.phone,
                     phone_normalized=user.phone,
                     user_id=user_id,
-                )
+                ),
+                commit=False,
             )
-        if self._company_persons.find(company_id, person.id) is not None:
+        existing = self._company_persons.find(company_id, person.id)
+        if existing is not None:
+            # M1: reactivate a previously-booted profile; an already-active
+            # row is untouched (plain idempotent re-join).
+            if not existing.is_active:
+                self._company_persons.save(dataclasses.replace(existing, is_active=True, pending_expires_at=None))
             return
         self._company_persons.save(
             CompanyPerson(

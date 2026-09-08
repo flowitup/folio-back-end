@@ -10,8 +10,8 @@ from app.application.companies.dtos import CreateCompanyInput
 
 
 @pytest.fixture
-def usecase(company_repo, role_service):
-    return CreateCompanyUseCase(company_repo=company_repo, role_checker=role_service)
+def usecase(company_repo, access_repo):
+    return CreateCompanyUseCase(company_repo=company_repo, access_repo=access_repo)
 
 
 def _inp(caller_id, **overrides):

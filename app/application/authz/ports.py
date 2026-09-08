@@ -56,6 +56,18 @@ class AuthzReaderPort(Protocol):
         """Return the subset of `project_ids` the user has a `user_projects` row for."""
         ...
 
+    def assigned_project_ids_for_users(self, company_id: UUID, user_ids: list[UUID]) -> "dict[UUID, list[UUID]]":
+        """Batch form of `assigned_project_ids` scoped to one company (H5).
+
+        Returns `{user_id: [project_id, ...]}` for every user in `user_ids`
+        that has at least one `user_projects` row on one of `company_id`'s
+        projects — a user with none is simply absent from the returned dict
+        (callers should default to `[]`). A single `IN`-based query, used by
+        the company directory (`GET /companies/<id>/persons`) so listing N
+        members costs one query instead of N.
+        """
+        ...
+
     def has_project_assignment_in_company(self, user_id: UUID, company_id: UUID) -> bool:
         """Return True if the user has a ``user_projects`` row on ANY project of `company_id`.
 

@@ -9,6 +9,18 @@ from sqlalchemy.orm import Session
 from app.domain.entities.project_membership import ProjectMembership
 
 
+def _norm(column_expr: str) -> str:
+    """SQL fragment: lowercase, dash-stripped text form of a UUID column/param.
+
+    Mirrors `app.infrastructure.database.repositories.sqlalchemy_authz_reader
+    ._norm` — same insert-path-agnostic normalisation, needed here for the
+    same reason: `user_projects` rows are written through several different
+    paths (ORM relationship append, Core `Table.insert()`, raw `text()` SQL)
+    that do not agree on hex-vs-dashed formatting on SQLite.
+    """
+    return f"REPLACE(LOWER(CAST({column_expr} AS TEXT)), '-', '')"
+
+
 class SqlAlchemyProjectMembershipRepository:
     """SQLAlchemy adapter for ProjectMembership persistence.
 
@@ -18,6 +30,12 @@ class SqlAlchemyProjectMembershipRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+        self._cached_dialect_name: "str | None" = None
+
+    def _is_sqlite(self) -> bool:
+        if self._cached_dialect_name is None:
+            self._cached_dialect_name = self._session.get_bind().dialect.name
+        return self._cached_dialect_name == "sqlite"
 
     def add(self, membership: ProjectMembership) -> bool:
         """Insert a new membership row IF NOT ALREADY PRESENT.
@@ -85,9 +103,19 @@ class SqlAlchemyProjectMembershipRepository:
         project. Flushes only (no commit) — same convention as `add()`/`delete()`
         elsewhere in this repository, so a caller can compose this with other
         writes into one atomic transaction.
+
+        M9: on SQLite, `user_id`/`project_id` are compared normalized (like
+        `SqlAlchemyAuthzReader`) — boot/detach cleanup calls this for every
+        project of a company, and a plain `=` comparison silently deletes zero
+        rows when the mixed insert paths in this codebase wrote a
+        differently-formatted UUID string for this pair.
         """
+        if self._is_sqlite():
+            where_clause = f"{_norm('user_id')} = {_norm(':uid')} AND {_norm('project_id')} = {_norm(':pid')}"
+        else:
+            where_clause = "user_id = :uid AND project_id = :pid"
         result = self._session.execute(
-            text("DELETE FROM user_projects WHERE user_id = :uid AND project_id = :pid"),
+            text(f"DELETE FROM user_projects WHERE {where_clause}"),
             {"uid": str(user_id), "pid": str(project_id)},
         )
         self._session.flush()

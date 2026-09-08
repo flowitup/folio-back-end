@@ -38,6 +38,36 @@ def _role_response(role) -> LaborRoleResponse:
     )
 
 
+_MANAGE_ROLES = ("admin", "manager")
+
+
+def _require_company_admin_or_manager(caller_id: UUID, company_id):
+    """M10: creating/updating/deleting a labor role requires company admin or
+    manager of `company_id` — the routes previously had no role check beyond
+    `@jwt_required()`, letting any authenticated member (of ANY company)
+    mutate roles.
+
+    `company_id=None` (legacy/unscoped rows, no company context resolved) is
+    restricted to a platform admin — there is no per-company role to check
+    against, so anyone-but-a-platform-admin would otherwise get a blank check.
+    Returns an error response, or None if the caller is authorized.
+    """
+    container = get_container()
+    role_checker = getattr(container, "authorization_service", None)
+    is_platform_admin = role_checker is not None and role_checker.is_platform_admin(caller_id)
+    if is_platform_admin:
+        return None
+
+    if company_id is None:
+        return _error_response("Forbidden", "Admin permission required", 403)
+
+    access_repo = getattr(container, "user_company_access_repo", None)
+    access = access_repo.find(caller_id, company_id) if access_repo is not None else None
+    if access is None or access.role not in _MANAGE_ROLES:
+        return _error_response("Forbidden", "Company admin or manager permission required", 403)
+    return None
+
+
 def _resolve_company_scope():
     """Resolve the company scope for the global /labor/roles routes (Phase 2).
 
@@ -111,6 +141,11 @@ def create_labor_role():
     if error is not None:
         return error
 
+    caller_id = UUID(get_jwt_identity())
+    auth_error = _require_company_admin_or_manager(caller_id, company_id)
+    if auth_error is not None:
+        return auth_error
+
     try:
         role = get_container().create_labor_role_usecase.execute(
             name=data.name,
@@ -135,14 +170,24 @@ def create_labor_role():
 @jwt_required()
 @limiter.limit("10 per minute")
 def update_labor_role(role_id: str):
-    """Update name and/or color of a labor role."""
+    """Update name and/or color of a labor role (company admin or manager)."""
     try:
         data = UpdateLaborRoleRequest(**request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
+    container = get_container()
+    existing = container.labor_role_repository.find_by_id(UUID(role_id))
+    if existing is None:
+        return _error_response("NotFound", f"Labor role {role_id} not found", 404)
+
+    caller_id = UUID(get_jwt_identity())
+    auth_error = _require_company_admin_or_manager(caller_id, existing.company_id)
+    if auth_error is not None:
+        return auth_error
+
     try:
-        role = get_container().update_labor_role_usecase.execute(
+        role = container.update_labor_role_usecase.execute(
             role_id=UUID(role_id),
             name=data.name,
             color=data.color,
@@ -162,9 +207,20 @@ def update_labor_role(role_id: str):
 @jwt_required()
 @limiter.limit("10 per minute")
 def delete_labor_role(role_id: str):
-    """Delete a labor role. Workers referencing it will have role cleared."""
+    """Delete a labor role (company admin or manager). Workers referencing it
+    will have their role cleared."""
+    container = get_container()
+    existing = container.labor_role_repository.find_by_id(UUID(role_id))
+    if existing is None:
+        return _error_response("NotFound", f"Labor role {role_id} not found", 404)
+
+    caller_id = UUID(get_jwt_identity())
+    auth_error = _require_company_admin_or_manager(caller_id, existing.company_id)
+    if auth_error is not None:
+        return auth_error
+
     try:
-        get_container().delete_labor_role_usecase.execute(role_id=UUID(role_id))
+        container.delete_labor_role_usecase.execute(role_id=UUID(role_id))
     except LaborRoleNotFoundError:
         return _error_response("NotFound", f"Labor role {role_id} not found", 404)
     except ValueError as e:

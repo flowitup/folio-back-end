@@ -236,6 +236,44 @@ class SqlAlchemyAuthzReader:
         ).fetchall()
         return [self._as_uuid_or_none(r[0]) for r in rows]
 
+    def assigned_project_ids_for_users(self, company_id: UUID, user_ids: "list[UUID]") -> "dict[UUID, list[UUID]]":
+        """Batch form of `assigned_project_ids` for every user of one company (H5).
+
+        One `user_projects JOIN projects` query for the whole `user_ids`
+        list, instead of the directory calling `assigned_project_ids` once
+        per person. The JOIN condition mirrors `has_project_assignment_in_company`
+        (dialect-normalized on SQLite for the same insert-path-agnostic reason).
+        """
+        result: "dict[UUID, list[UUID]]" = {}
+        if not user_ids:
+            return result
+        unique_users = list(dict.fromkeys(user_ids))
+        if self._is_sqlite():
+            join_clause = f"{_norm('p.id')} = {_norm('up.project_id')}"
+            user_col = _norm("up.user_id")
+            placeholders = ", ".join(_norm(f":uid{i}") for i in range(len(unique_users)))
+        else:
+            join_clause = "p.id = up.project_id"
+            user_col = "up.user_id"
+            placeholders = ", ".join(f":uid{i}" for i in range(len(unique_users)))
+        params = {f"uid{i}": self._bind_uuid(uid) for i, uid in enumerate(unique_users)}
+        params["cid"] = self._bind_uuid(company_id)
+        rows = self._session.execute(
+            text(
+                "SELECT up.user_id, up.project_id FROM user_projects up "
+                f"JOIN projects p ON {join_clause} "
+                f"WHERE {self._eq('p.company_id', 'cid')} AND {user_col} IN ({placeholders})"
+            ),
+            params,
+        ).fetchall()
+        for row in rows:
+            uid = self._as_uuid_or_none(row[0])
+            pid = self._as_uuid_or_none(row[1])
+            if uid is None or pid is None:
+                continue
+            result.setdefault(uid, []).append(pid)
+        return result
+
     def has_project_assignment_in_company(self, user_id: UUID, company_id: UUID) -> bool:
         """Return True if `user_id` has a `user_projects` row on any project of `company_id`.
 

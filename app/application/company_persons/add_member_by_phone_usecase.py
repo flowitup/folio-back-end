@@ -12,12 +12,21 @@ Match order (Phase 2 onboarding, finding 5):
       row (`pending_expires_at = now + 30 days`); it links automatically the
       next time someone signs up with this phone (`VerifySignupOtpUseCase`).
 
-The response never reveals which branch fired beyond "pending vs already
-linked" is not even exposed — (a) and (d) return the identical shape.
+The response never reveals which branch fired: (a) and (d) return the
+identical shape, and the caller-supplied `person_id` disambiguation resend
+(H1) is checked against the exact candidate set the 409 path computed, not
+merely "does this person_id exist and have no user_id" — otherwise any admin
+could resend an arbitrary foreign `person_id` and attach it silently.
+
+H2: `company_id` may have at most one active `company_persons` row per
+normalized phone (DB partial unique index) — re-adding the SAME person
+reactivates a booted profile (M1); a DIFFERENT person already holding that
+phone in this company is a 409, not a silent duplicate insert.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
@@ -34,6 +43,7 @@ from app.application.company_persons.exceptions import (
     InvalidCandidatePersonError,
     MemberAlreadyAttachedError,
     MultipleCandidatesError,
+    PhoneAlreadyInCompanyError,
 )
 from app.application.company_persons.dtos import AddMemberByPhoneInput, AddMemberByPhoneResult
 from app.application.company_persons.ports import CompanyPersonRepositoryPort
@@ -127,10 +137,12 @@ class AddMemberByPhoneUseCase:
                         phone=phone,
                         phone_normalized=phone,
                         user_id=user.id,
-                    )
+                    ),
+                    commit=False,
                 )
-                self._persons.set_user_id(person.id, user.id)
+                self._persons.set_user_id(person.id, user.id, commit=False)
 
+            self._upsert_company_person(inp.company_id, person.id, inp.caller_id, phone, now, pending=False)
             self._access.save(
                 UserCompanyAccess(
                     user_id=user.id,
@@ -140,21 +152,15 @@ class AddMemberByPhoneUseCase:
                     role=inp.role,
                 )
             )
-            self._upsert_company_person(inp.company_id, person.id, inp.caller_id, phone, now, pending=False)
             db_session.commit()
             return AddMemberByPhoneResult(person_id=person.id, name=person.name, phone=phone, pending=False)
 
         # ------------------------------------------------------------------
-        # Caller resent with an explicit person_id after a 409 (match order c).
-        # ------------------------------------------------------------------
-        if inp.person_id is not None:
-            chosen = self._persons.find_by_id(inp.person_id)
-            if chosen is None or chosen.user_id is not None:
-                raise InvalidCandidatePersonError(f"person {inp.person_id} is not a valid candidate")
-            return self._create_pending(inp, company, chosen, phone, now, db_session)
-
-        # ------------------------------------------------------------------
-        # (b)/(c) un-linked Person profiled in a company the caller admins.
+        # (b)/(c) un-linked Person profiled in a company the caller admins —
+        # the candidate set is computed here UNCONDITIONALLY (not only on the
+        # first attempt) because a caller-supplied `person_id` resend (H1)
+        # must be validated against this exact same set, not accepted merely
+        # because it exists and has no linked user.
         # ------------------------------------------------------------------
         admin_company_ids = [a.company_id for a in self._access.list_for_user(inp.caller_id) if a.role == "admin"]
         candidates: dict[UUID, Person] = {}
@@ -165,6 +171,17 @@ class AddMemberByPhoneUseCase:
             candidate_person = self._persons.find_by_id(cp.person_id)
             if candidate_person is not None and candidate_person.user_id is None:
                 candidates[candidate_person.id] = candidate_person
+
+        # ------------------------------------------------------------------
+        # Caller resent with an explicit person_id after a 409 (match order c).
+        # ------------------------------------------------------------------
+        if inp.person_id is not None:
+            chosen = candidates.get(inp.person_id)
+            if chosen is None:
+                raise InvalidCandidatePersonError(
+                    f"person {inp.person_id} is not a candidate for this phone number in a company you admin"
+                )
+            return self._create_pending(inp, chosen, phone, now, db_session)
 
         if len(candidates) > 1:
             raise MultipleCandidatesError(
@@ -186,16 +203,15 @@ class AddMemberByPhoneUseCase:
                     created_at=now,
                     phone=phone,
                     phone_normalized=phone,
-                )
+                ),
+                commit=False,
             )
 
-        return self._create_pending(inp, company, chosen, phone, now, db_session)
+        return self._create_pending(inp, chosen, phone, now, db_session)
 
     # ----------------------------------------------------------------------
 
-    def _create_pending(
-        self, inp, company, person: Person, phone: str, now: datetime, db_session
-    ) -> AddMemberByPhoneResult:
+    def _create_pending(self, inp, person: Person, phone: str, now: datetime, db_session) -> AddMemberByPhoneResult:
         self._upsert_company_person(inp.company_id, person.id, inp.caller_id, phone, now, pending=True)
         db_session.commit()
         return AddMemberByPhoneResult(person_id=person.id, name=person.name, phone=phone, pending=True)
@@ -212,7 +228,26 @@ class AddMemberByPhoneUseCase:
     ) -> CompanyPerson:
         existing = self._company_persons.find(company_id, person_id)
         if existing is not None:
+            # M1: re-adding a previously-booted member — reactivate rather
+            # than silently no-op on a deactivated row. An already-active row
+            # (whether pending or not) is untouched — this is a plain
+            # idempotent resend, not a boot recovery.
+            if not existing.is_active:
+                return self._company_persons.save(
+                    dataclasses.replace(existing, is_active=True, pending_expires_at=None)
+                )
             return existing
+
+        # H2: at most one ACTIVE company_persons row per (company_id,
+        # phone_normalized) — the DB partial unique index enforces this too
+        # (belt-and-suspenders against a concurrent insert, see
+        # `members_routes.add_member_by_phone`'s IntegrityError handling). A
+        # row already occupying this phone for a DIFFERENT person is a real
+        # conflict, not something to silently duplicate or overwrite.
+        phone_conflict = self._company_persons.find_by_phone(company_id, phone)
+        if phone_conflict is not None and phone_conflict.person_id != person_id:
+            raise PhoneAlreadyInCompanyError(company_id, phone_conflict.person_id)
+
         return self._company_persons.save(
             CompanyPerson(
                 id=uuid4(),

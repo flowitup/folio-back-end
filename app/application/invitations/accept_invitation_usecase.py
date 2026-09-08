@@ -43,6 +43,13 @@ class AcceptInvitationUseCase:
     row added below). `authz_reader`/`access_repo` are optional so existing
     callers/tests that construct this use case without the companies BC
     keep working unchanged (company attachment is then simply skipped).
+
+    M3: `execute` takes no `phone` parameter — an invitation acceptor typing
+    an arbitrary phone number is never a verified identity, so it must never
+    be written to `users.phone` nor fed to `LinkPersonOnSignupUseCase` (which
+    would otherwise silently merge an unrelated pending onboarding profile
+    onto this account). `link_person_on_signup` stays injectable for parity
+    with the OTP sign-up wiring but is currently unused here for that reason.
     """
 
     _DEFAULT_GLOBAL_ROLE = "user"
@@ -78,7 +85,6 @@ class AcceptInvitationUseCase:
         raw_token: str,
         name: str,
         password: str,
-        phone: "Optional[str]" = None,
     ) -> AcceptInvitationResultDto:
         """Process acceptance of an invitation.
 
@@ -119,18 +125,11 @@ class AcceptInvitationUseCase:
                     password_hash=password_hash,
                     display_name=name,
                 )
-                if phone:
-                    user.phone = phone
                 user = self._user_repo.save(user)
 
                 default_role = self._role_repo.find_by_name(self._DEFAULT_GLOBAL_ROLE)
                 if default_role is not None:
                     self._user_repo.assign_role(user.id, default_role.id)
-
-                # Same pending-profile linking as phone-OTP sign-up (Phase 2):
-                # only meaningful when the invitee supplied a phone.
-                if phone and self._link_person_on_signup is not None:
-                    self._link_person_on_signup.execute(user.id, phone)
 
             if not self._membership_repo.exists(user.id, inv.project_id):
                 membership = ProjectMembership.create(

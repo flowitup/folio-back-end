@@ -15,7 +15,6 @@ from app.application.companies._helpers import (
 from app.application.companies.dtos import CompanyResponse, CreateCompanyInput
 from app.application.companies.ports import (
     CompanyRepositoryPort,
-    RoleCheckerPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
@@ -57,13 +56,11 @@ class CreateCompanyUseCase:
     def __init__(
         self,
         company_repo: CompanyRepositoryPort,
-        role_checker: RoleCheckerPort,
-        access_repo: Optional[UserCompanyAccessRepositoryPort] = None,
+        access_repo: UserCompanyAccessRepositoryPort,
         seed_payment_methods: Optional["SeedPaymentMethodsForCompanyUseCase"] = None,
         seed_default_labor_roles: Optional["SeedDefaultLaborRolesUseCase"] = None,
     ) -> None:
         self._company_repo = company_repo
-        self._role_checker = role_checker
         self._access_repo = access_repo
         self._seed_payment_methods = seed_payment_methods
         self._seed_default_labor_roles = seed_default_labor_roles
@@ -100,17 +97,16 @@ class CreateCompanyUseCase:
         # 3. Attach the creator as company admin (D6) — is_primary when this
         # is their first company. Same transaction as the company insert so
         # a company is never created "orphaned" (no admin) if this fails.
-        if self._access_repo is not None:
-            is_first_company = len(self._access_repo.list_for_user(inp.caller_id)) == 0
-            self._access_repo.save(
-                UserCompanyAccess(
-                    user_id=inp.caller_id,
-                    company_id=saved.id,
-                    is_primary=is_first_company,
-                    attached_at=now,
-                    role=CompanyRole.ADMIN.value,
-                )
+        is_first_company = len(self._access_repo.list_for_user(inp.caller_id)) == 0
+        self._access_repo.save(
+            UserCompanyAccess(
+                user_id=inp.caller_id,
+                company_id=saved.id,
+                is_primary=is_first_company,
+                attached_at=now,
+                role=CompanyRole.ADMIN.value,
             )
+        )
 
         db_session.commit()
 

@@ -293,10 +293,17 @@ class VerifySignupOtpUseCase:
             self._users.assign_role(user.id, default_role.id)
 
         # Phase 2 onboarding: attach any pending company profiles an admin
-        # created for this phone before the account existed. Never raises —
-        # a broken pending row must not block sign-up itself.
+        # created for this phone before the account existed. The use case
+        # itself CAN raise (e.g. a repository failure while merging several
+        # duplicate pending profiles — C1) — wrapped here so a broken pending
+        # row never blocks sign-up itself.
         if self._link_person_on_signup is not None:
-            self._link_person_on_signup.execute(user.id, phone)
+            try:
+                self._link_person_on_signup.execute(user.id, phone)
+            except Exception:
+                logger.exception(
+                    "link_person_on_signup failed during sign-up for user %s; continuing without it", user.id
+                )
 
         permissions: List[str] = list(self._authz.get_user_permissions(user.id))
         return LoginResult(

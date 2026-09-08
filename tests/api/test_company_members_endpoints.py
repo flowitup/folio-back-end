@@ -164,7 +164,9 @@ class TestAddMemberByPhoneExistingAccount:
         )
         assert resp.status_code == 201, resp.get_data(as_text=True)
         body = resp.get_json()
-        assert body["pending"] is False
+        # M6: response shape never exposes `pending` — identical whether the
+        # phone matched an existing account or a brand new profile.
+        assert set(body.keys()) == {"person_id", "name", "phone"}
         assert body["name"] == "Target One"
 
         from app import db
@@ -232,7 +234,7 @@ class TestAddMemberByPhoneMatchOrder:
         assert resp.status_code == 201, resp.get_data(as_text=True)
         body = resp.get_json()
         assert body["person_id"] == str(person_id)
-        assert body["pending"] is True
+        assert set(body.keys()) == {"person_id", "name", "phone"}
 
     def test_several_candidates_return_409_then_resend_with_person_id(self, members_client, members_app):
         admin_id = _make_user(members_app, "mab_admin5@test.com")
@@ -274,10 +276,10 @@ class TestAddMemberByPhoneMatchOrder:
         )
         assert resp.status_code == 201
         body = resp.get_json()
-        assert body["pending"] is True
         assert body["name"] == "Brand New"
-        # (a) and (d) share the exact same response shape — no enumeration.
-        assert set(body.keys()) == {"person_id", "name", "phone", "pending"}
+        # (a) and (d) share the exact same response shape — no enumeration,
+        # and `pending` is never exposed here (M6; the directory keeps it).
+        assert set(body.keys()) == {"person_id", "name", "phone"}
 
 
 class TestImportMembers:

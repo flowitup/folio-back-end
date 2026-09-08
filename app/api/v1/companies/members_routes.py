@@ -16,6 +16,7 @@ from uuid import UUID
 from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
@@ -33,6 +34,7 @@ from app.application.company_persons import (
     MultipleCandidatesError,
     SourceCompanyNotAccessibleError,
 )
+from app.application.company_persons.exceptions import PhoneAlreadyInCompanyError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -61,11 +63,19 @@ def _company_uuid_or_404(company_id: str):
 )
 @jwt_required()
 @limiter.limit("20 per minute", key_func=jwt_user_key)
+@limiter.limit("20 per hour", key_func=jwt_user_key)
 @require_company_role("admin")
 def add_member_by_phone(company_id: str):
     """Onboard a person by phone (match order: existing account → un-linked
     profile in another company the caller admins → several candidates (409)
-    → brand new pending profile). See `AddMemberByPhoneUseCase`."""
+    → brand new pending profile). See `AddMemberByPhoneUseCase`.
+
+    Response shape (`{person_id, name, phone}`) is identical whether the
+    phone matched an existing account or a brand new profile was created —
+    `pending` is never exposed here (it would let the caller distinguish the
+    two cases); the member directory (`GET /companies/<id>/persons`) does
+    expose it, since that endpoint's whole purpose is showing onboarding state.
+    """
     company_uuid, err = _company_uuid_or_404(company_id)
     if err is not None:
         return err
@@ -112,6 +122,32 @@ def add_member_by_phone(company_id: str):
             ),
             409,
         )
+    except PhoneAlreadyInCompanyError as exc:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": str(exc),
+                    "person_id": str(exc.existing_person_id),
+                }
+            ),
+            409,
+        )
+    except IntegrityError:
+        # H2: concurrent request won the per-company phone-uniqueness race
+        # the pre-check just missed — safe to retry.
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": "Concurrent onboarding detected for this phone number. Please retry.",
+                    "reason": "concurrent_phone_conflict",
+                }
+            ),
+            409,
+        )
 
     return (
         jsonify(
@@ -119,7 +155,6 @@ def add_member_by_phone(company_id: str):
                 "person_id": str(result.person_id),
                 "name": result.name,
                 "phone": result.phone,
-                "pending": result.pending,
             }
         ),
         201,
@@ -181,7 +216,8 @@ def import_members(company_id: str):
                         "linked_user_id": str(item.linked_user_id) if item.linked_user_id else None,
                     }
                     for item in result.items
-                ]
+                ],
+                "skipped_person_ids": [str(pid) for pid in result.skipped_person_ids],
             }
         ),
         201,

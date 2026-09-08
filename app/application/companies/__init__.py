@@ -65,6 +65,7 @@ from app.application.companies.ports import (
 # --- Domain exceptions re-exported for convenience ---
 from app.domain.companies.exceptions import (
     CompaniesDomainError,
+    CompanyHasProjectsError,
     CompanyNotFoundError,
     UserCompanyAccessNotFoundError,
     InviteTokenNotFoundError,
@@ -129,6 +130,7 @@ __all__ = [
     "TransactionalSessionPort",
     # exceptions
     "CompaniesDomainError",
+    "CompanyHasProjectsError",
     "CompanyNotFoundError",
     "UserCompanyAccessNotFoundError",
     "InviteTokenNotFoundError",

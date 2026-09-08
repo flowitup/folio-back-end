@@ -21,7 +21,7 @@ class SqlAlchemyPersonRepository(IPersonRepository):
     # ------------------------------------------------------------------
     # IPersonRepository
     # ------------------------------------------------------------------
-    def create(self, person: Person) -> Person:
+    def create(self, person: Person, *, commit: bool = True) -> Person:
         model = PersonModel(
             id=person.id,
             name=person.name,
@@ -33,8 +33,17 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             phone_normalized=person.phone_normalized,
         )
         self._session.add(model)
-        self._session.commit()
-        # Refresh to pick up server-side defaults (updated_at)
+        if commit:
+            # M8: default kept True for existing single-write callers. Multi-write
+            # onboarding use cases (add-by-phone, sign-up linking, join-by-code)
+            # pass commit=False so a Person insert can never survive as a
+            # committed orphan when a LATER write in the same use case fails —
+            # they flush here and commit once at the end of their own transaction.
+            self._session.commit()
+        else:
+            self._session.flush()
+        # Refresh to pick up server-side defaults (updated_at) — safe pre- or
+        # post-commit, flush() alone already assigned them.
         self._session.refresh(model)
         return self._to_entity(model)
 
@@ -42,16 +51,26 @@ class SqlAlchemyPersonRepository(IPersonRepository):
         model = self._session.query(PersonModel).filter_by(id=person_id).first()
         return self._to_entity(model) if model else None
 
+    def find_by_ids(self, person_ids: List[UUID]) -> List[Person]:
+        if not person_ids:
+            return []
+        unique_ids = list(dict.fromkeys(person_ids))
+        models = self._session.query(PersonModel).filter(PersonModel.id.in_(unique_ids)).all()
+        return [self._to_entity(m) for m in models]
+
     def find_by_user_id(self, user_id: UUID) -> Optional[Person]:
         model = self._session.query(PersonModel).filter_by(user_id=user_id).first()
         return self._to_entity(model) if model else None
 
-    def set_user_id(self, person_id: UUID, user_id: UUID) -> Optional[Person]:
+    def set_user_id(self, person_id: UUID, user_id: UUID, *, commit: bool = True) -> Optional[Person]:
         model = self._session.query(PersonModel).filter_by(id=person_id).first()
         if model is None:
             return None
         model.user_id = user_id
-        self._session.commit()
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
         self._session.refresh(model)
         return self._to_entity(model)
 
@@ -91,6 +110,11 @@ class SqlAlchemyPersonRepository(IPersonRepository):
 
         models = q.order_by(PersonModel.normalized_name).limit(limit).all()
         return [self._to_entity(m) for m in models]
+
+    def has_references(self, person_id: UUID) -> bool:
+        from app.infrastructure.database.models.worker import WorkerModel
+
+        return self._session.query(WorkerModel).filter_by(person_id=person_id).first() is not None
 
     def delete(self, person_id: UUID) -> bool:
         model = self._session.query(PersonModel).filter_by(id=person_id).first()

@@ -5,13 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.application.companies.dtos import DetachCompanyInput
-from app.application.companies.join_code_usecases import rotate_join_code_unchecked
-from app.application.companies.ports import (
-    ClockPort,
-    CompanyRepositoryPort,
-    TransactionalSessionPort,
-    UserCompanyAccessRepositoryPort,
-)
+from app.application.companies.ports import TransactionalSessionPort, UserCompanyAccessRepositoryPort
 from app.domain.companies.exceptions import LastCompanyAdminError, UserCompanyAccessNotFoundError
 from app.domain.companies.roles import CompanyRole
 
@@ -30,10 +24,12 @@ class DetachCompanyUseCase:
     BootAttachedUserUseCase instead.
 
     Phase 2 onboarding cleanup, same transaction as the access-row delete:
-    the departing user's assignments on this company's projects are removed,
-    their `company_persons` profile (if any) is deactivated, and the join
-    code is rotated (best-effort — skipped when the optional collaborators
-    are not injected, so existing callers/tests keep working).
+    the departing user's assignments on this company's projects are removed
+    and their `company_persons` profile (if any) is deactivated — best-effort,
+    skipped when the optional collaborators are not injected, so existing
+    callers/tests keep working. H4: self-detach never rotates the company's
+    join code — only booting a member does (a member leaving on their own
+    must not invalidate the code for everyone else).
 
     Raises:
         UserCompanyAccessNotFoundError: caller is not attached to the company.
@@ -48,16 +44,12 @@ class DetachCompanyUseCase:
         membership_repo: Optional[Any] = None,
         person_repo: Optional[Any] = None,
         company_person_repo: Optional[Any] = None,
-        company_repo: Optional[CompanyRepositoryPort] = None,
-        clock: Optional[ClockPort] = None,
     ) -> None:
         self._access_repo = access_repo
         self._authz_reader = authz_reader
         self._membership_repo = membership_repo
         self._person_repo = person_repo
         self._company_person_repo = company_person_repo
-        self._company_repo = company_repo
-        self._clock = clock
 
     def execute(
         self,
@@ -104,8 +96,5 @@ class DetachCompanyUseCase:
             person = self._person_repo.find_by_user_id(inp.user_id)
             if person is not None:
                 self._company_person_repo.deactivate(inp.company_id, person.id)
-
-        if self._company_repo is not None and self._clock is not None:
-            rotate_join_code_unchecked(self._company_repo, self._clock, inp.company_id)
 
         db_session.commit()

@@ -49,15 +49,19 @@ class ImportMembersUseCase:
 
         now = datetime.now(timezone.utc)
         items: list[ImportedMember] = []
+        skipped_person_ids: list = []
 
         for person_id in inp.person_ids:
             source_profile = self._company_persons.find(inp.from_company_id, person_id)
             if source_profile is None:
-                # Not actually a member of the source company — skip silently
-                # rather than failing the whole batch on one bad id.
+                # Not actually a member of the source company — skip rather
+                # than failing the whole batch on one bad id, but report it
+                # back so the caller can tell "imported" from "silently lost".
+                skipped_person_ids.append(person_id)
                 continue
             person = self._persons.find_by_id(person_id)
             if person is None:
+                skipped_person_ids.append(person_id)
                 continue
 
             target_profile = self._company_persons.find(inp.company_id, person_id)
@@ -97,4 +101,4 @@ class ImportMembersUseCase:
             )
 
         db_session.commit()
-        return ImportMembersResult(items=items)
+        return ImportMembersResult(items=items, skipped_person_ids=skipped_person_ids)

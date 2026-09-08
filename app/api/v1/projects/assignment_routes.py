@@ -24,6 +24,7 @@ from app.application.projects.assignments import (
     AssignmentForbiddenError,
     AssignProjectMemberInput,
     InvalidAssignmentRoleError,
+    LegacyRoleMissingError,
     ProjectCompanyUnresolvedError,
     TargetNotCompanyMemberError,
 )
@@ -82,6 +83,10 @@ def assign_project_member(project_id: str, user_id: str):
         return _err("ValidationError", str(exc), 400)
     except TargetNotCompanyMemberError:
         return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
+    except LegacyRoleMissingError as exc:
+        # M2: a mis-seeded deployment (missing "member"/"manager" legacy role
+        # row) — fail loudly rather than returning a 200 that never wrote anything.
+        return _err("ServerError", str(exc), 500)
 
     from app import db
 

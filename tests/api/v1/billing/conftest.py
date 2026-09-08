@@ -76,8 +76,14 @@ def billing_profile(_billing_client, billing_token, invitation_app):
     Module-scoped: runs once per test module, not once per test function.
     Returns a dict with at least: company_id, legal_name, address.
     Also seeds the legacy company-profile endpoint for tests that use it directly.
+
+    Self-service company creation (Phase 2 D6) already attaches the creator
+    as the company's admin/primary — the invite-token generate+redeem
+    round-trip this fixture used to perform for the SAME user is now not
+    just redundant but a guaranteed 409 (CompanyAlreadyAttachedError), so it
+    has been dropped.
     """
-    # 1. Create company via admin endpoint
+    # 1. Create company via admin endpoint — attaches billing_token as admin (D6).
     resp = _billing_client.post(
         "/api/v1/companies",
         json={
@@ -92,24 +98,7 @@ def billing_profile(_billing_client, billing_token, invitation_app):
     company = resp.get_json()
     company_id = company["id"]
 
-    # 2. Generate invite token for the company (admin role → can manage billing)
-    resp = _billing_client.post(
-        f"/api/v1/companies/{company_id}/invite-tokens",
-        json={"role": "admin"},
-        headers=_auth(billing_token),
-    )
-    assert resp.status_code == 201, f"Generate token failed: {resp.get_data(as_text=True)}"
-    plaintext_token = resp.get_json()["token"]
-
-    # 3. Redeem token to attach billing_token user to company (primary)
-    resp = _billing_client.post(
-        "/api/v1/companies/attach-by-token",
-        json={"token": plaintext_token},
-        headers=_auth(billing_token),
-    )
-    assert resp.status_code == 200, f"Redeem token failed: {resp.get_data(as_text=True)}"
-
-    # 4. Also seed legacy company-profile for tests using that endpoint directly
+    # 2. Also seed legacy company-profile for tests using that endpoint directly
     _billing_client.put(
         "/api/v1/company-profile",
         json={

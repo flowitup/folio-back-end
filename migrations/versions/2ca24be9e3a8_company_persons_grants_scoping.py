@@ -263,7 +263,21 @@ def upgrade() -> None:
     )
 
 
+def _has_duplicates(conn, *, table: str, columns: list[str]) -> bool:
+    """Return True if `table` has more than one row sharing the same
+    `columns` values (M4): recreating a global unique constraint over
+    duplicate rows would abort the downgrade outright, taking down the whole
+    rollback with it. Checked BEFORE attempting to drop the per-company
+    constraint, so a dirty downgrade leaves the safer per-company constraint
+    in place instead of erroring out mid-migration."""
+    cols = ", ".join(columns)
+    result = conn.execute(sa.text(f"SELECT 1 FROM {table} GROUP BY {cols} HAVING COUNT(*) > 1 LIMIT 1")).fetchone()
+    return result is not None
+
+
 def downgrade() -> None:
+    conn = op.get_bind()
+
     # 7. projects.company_id FK: RESTRICT → SET NULL
     op.drop_constraint("fk_projects_company_id", "projects", type_="foreignkey")
     op.create_foreign_key(
@@ -275,17 +289,35 @@ def downgrade() -> None:
         ondelete="SET NULL",
     )
 
-    # 6. billing_document_templates
-    op.drop_constraint("uq_billing_template_company_user_kind_name", "billing_document_templates", type_="unique")
-    op.create_unique_constraint(
-        "uq_billing_template_user_kind_name", "billing_document_templates", ["user_id", "kind", "name"]
-    )
+    # 6. billing_document_templates: only recreate the global
+    # UNIQUE(user_id, kind, name) if no two rows (now possibly in different
+    # companies) would collide under it — otherwise keep the per-company
+    # constraint and warn, rather than aborting the whole downgrade (M4).
+    if _has_duplicates(conn, table="billing_document_templates", columns=["user_id", "kind", "name"]):
+        print(
+            "billing_document_templates downgrade: duplicate (user_id, kind, name) rows exist across "
+            "companies — keeping uq_billing_template_company_user_kind_name instead of the global "
+            "constraint. Resolve the duplicates manually before re-attempting this downgrade."
+        )
+    else:
+        op.drop_constraint("uq_billing_template_company_user_kind_name", "billing_document_templates", type_="unique")
+        op.create_unique_constraint(
+            "uq_billing_template_user_kind_name", "billing_document_templates", ["user_id", "kind", "name"]
+        )
     op.drop_index("ix_billing_document_templates_company_id", table_name="billing_document_templates")
     op.drop_column("billing_document_templates", "company_id")
 
-    # 5. labor_roles
-    op.drop_constraint("uq_labor_roles_company_name", "labor_roles", type_="unique")
-    op.create_unique_constraint("labor_roles_name_key", "labor_roles", ["name"])
+    # 5. labor_roles: same guard for the global UNIQUE(name) (M4) — two
+    # different companies legitimately have a role with the same name today.
+    if _has_duplicates(conn, table="labor_roles", columns=["name"]):
+        print(
+            "labor_roles downgrade: duplicate name(s) exist across companies — keeping "
+            "uq_labor_roles_company_name instead of the global UNIQUE(name). Resolve the "
+            "duplicates manually before re-attempting this downgrade."
+        )
+    else:
+        op.drop_constraint("uq_labor_roles_company_name", "labor_roles", type_="unique")
+        op.create_unique_constraint("labor_roles_name_key", "labor_roles", ["name"])
     op.drop_column("labor_roles", "slug")
     op.drop_column("labor_roles", "company_id")
 

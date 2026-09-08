@@ -57,6 +57,20 @@ class TargetNotCompanyMemberError(AssignmentError):
     """The target user has no `user_company_access` row for this project's company."""
 
 
+class LegacyRoleMissingError(AssignmentError):
+    """The legacy `roles` row ("member"/"manager") this write needs does not exist.
+
+    M2: a production deployment always seeds these — a missing row means the
+    deployment is mis-seeded, not a valid "no-op" outcome. Silently skipping
+    the write (the old behavior) hid the bug behind an apparently-successful
+    204/200 response while `user_projects` never actually gained the row.
+    """
+
+    def __init__(self, role_name: str) -> None:
+        self.role_name = role_name
+        super().__init__(f"Legacy role {role_name!r} is not seeded — cannot record this project assignment")
+
+
 @dataclass(frozen=True)
 class AssignProjectMemberInput:
     caller_id: UUID
@@ -109,11 +123,11 @@ class AssignProjectMemberUseCase:
             raise TargetNotCompanyMemberError(f"user {inp.target_user_id} is not a member of company {company_id}")
 
         role_row = self._roles.find_by_name(inp.role) if self._roles is not None else None
-        role_id = role_row.id if role_row is not None else None
-        if role_id is None:
-            # Legacy role row absent (e.g. minimal test fixture) — skip
-            # silently rather than writing a role_id-less row a real DB would reject.
-            return
+        if role_row is None:
+            # M2: a missing legacy role row is a mis-seeded deployment, not a
+            # valid no-op — raise loudly instead of silently skipping the write.
+            raise LegacyRoleMissingError(inp.role)
+        role_id = role_row.id
 
         if self._membership.find_role_id(inp.target_user_id, inp.project_id) is not None:
             self._membership.set_role(inp.target_user_id, inp.project_id, role_id)

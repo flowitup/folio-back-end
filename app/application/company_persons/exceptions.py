@@ -43,11 +43,27 @@ class MemberAlreadyAttachedError(CompanyPersonsError):
 
 
 class InvalidCandidatePersonError(CompanyPersonsError):
-    """Raised when a caller-supplied `person_id` (disambiguation resend) is invalid.
-
-    Either the id does not exist, is not a candidate for this phone/company
-    scope, or already has a linked user account.
+    """Raised when a caller-supplied `person_id` (disambiguation resend) is not
+    in the candidate set computed for `(phone_normalized, caller's admin
+    companies)` — the exact same query the 409 `MultipleCandidatesError` path
+    uses (H1). Covers: the id does not exist, is not a candidate for this
+    phone/company scope (including a foreign company's candidate), or already
+    has a linked user account.
     """
+
+
+class PhoneAlreadyInCompanyError(CompanyPersonsError):
+    """Raised when `company_id` already has an active `company_persons` row for
+    `phone_normalized` belonging to a DIFFERENT person (H2 — the DB's partial
+    unique index on `(company_id, phone_normalized)` allows at most one).
+
+    Re-adding the SAME person is not a conflict — see M1 (reactivation).
+    """
+
+    def __init__(self, company_id: UUID, existing_person_id: UUID) -> None:
+        self.company_id = company_id
+        self.existing_person_id = existing_person_id
+        super().__init__(f"Phone number already belongs to person {existing_person_id} in company {company_id}")
 
 
 class SourceCompanyNotAccessibleError(CompanyPersonsError):

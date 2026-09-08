@@ -118,20 +118,33 @@ def _to_row(grant: MemberGrant) -> MemberGrantRow:
     )
 
 
-_ERROR_STATUS = {
-    ForbiddenGrantsCallerError: 403,
-    CompanyNotFoundForGrantsError: 404,
-    TargetNotCompanyMemberError: 404,
-    ProjectNotInCompanyError: 404,
-    InvalidGrantPermissionError: 400,
-    InvalidGrantEffectError: 400,
-    NonDeniablePermissionError: 400,
-    TargetNotCustomisableError: 400,
-}
+# Ordered so a future subclass of one of these is still mapped correctly by
+# `isinstance` (a plain `type(exc)` dict lookup would miss it) — order matters
+# only in that a more specific exception should be listed before a broader
+# ancestor it might share, which is not currently the case (flat hierarchy).
+_ERROR_STATUS: "list[tuple[type[Exception], int]]" = [
+    (ForbiddenGrantsCallerError, 403),
+    (CompanyNotFoundForGrantsError, 404),
+    (TargetNotCompanyMemberError, 404),
+    (ProjectNotInCompanyError, 404),
+    (InvalidGrantPermissionError, 400),
+    (InvalidGrantEffectError, 400),
+    (NonDeniablePermissionError, 400),
+    (TargetNotCustomisableError, 400),
+]
+
+
+def _status_for(exc: Exception) -> "Optional[int]":
+    for exc_type, status in _ERROR_STATUS:
+        if isinstance(exc, exc_type):
+            return status
+    return None
 
 
 def _map_error(exc: Exception) -> tuple[Response, int]:
-    status = _ERROR_STATUS.get(type(exc), 400)
+    status = _status_for(exc)
+    if status is None:
+        status = 400
     error_name = "Forbidden" if status == 403 else ("NotFound" if status == 404 else "ValidationError")
     return _err(error_name, str(exc), status)
 
@@ -163,7 +176,7 @@ def list_member_grants(company_id: str, user_id: str):
             ListGrantsInput(caller_id=caller_id, company_id=company_uuid, user_id=target_uuid)
         )
     except Exception as exc:  # noqa: BLE001 — mapped to a specific status below
-        if type(exc) not in _ERROR_STATUS:
+        if _status_for(exc) is None:
             raise
         return _map_error(exc)
 
@@ -218,7 +231,7 @@ def set_member_grant(company_id: str, user_id: str):
             )
         )
     except Exception as exc:  # noqa: BLE001 — mapped to a specific status below
-        if type(exc) not in _ERROR_STATUS:
+        if _status_for(exc) is None:
             raise
         return _map_error(exc)
 
@@ -266,7 +279,7 @@ def remove_member_grant(company_id: str, user_id: str):
             )
         )
     except Exception as exc:  # noqa: BLE001 — mapped to a specific status below
-        if type(exc) not in _ERROR_STATUS:
+        if _status_for(exc) is None:
             raise
         return _map_error(exc)
 

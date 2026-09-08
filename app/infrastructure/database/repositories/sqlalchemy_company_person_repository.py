@@ -37,11 +37,17 @@ class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
     # ------------------------------------------------------------------
 
     def find(self, company_id: UUID, person_id: UUID) -> Optional[CompanyPerson]:
+        # .first() rather than scalar_one_or_none(): on SQLite the mixed
+        # insert paths this codebase uses for UUID columns elsewhere make
+        # "more than one row could theoretically match" a possibility this
+        # adapter should degrade gracefully from (return a row) rather than
+        # raise MultipleResultsFound — the (company_id, person_id) pair is
+        # unique by DB constraint on Postgres regardless.
         stmt = select(CompanyPersonModel).where(
             CompanyPersonModel.company_id == company_id,
             CompanyPersonModel.person_id == person_id,
         )
-        row = self._session.execute(stmt).scalar_one_or_none()
+        row = self._session.execute(stmt).scalars().first()
         return self._to_entity(row) if row is not None else None
 
     def find_by_phone(self, company_id: UUID, phone_normalized: str) -> Optional[CompanyPerson]:
@@ -49,7 +55,7 @@ class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
             CompanyPersonModel.company_id == company_id,
             CompanyPersonModel.phone_normalized == phone_normalized,
         )
-        row = self._session.execute(stmt).scalar_one_or_none()
+        row = self._session.execute(stmt).scalars().first()
         return self._to_entity(row) if row is not None else None
 
     def list_for_company(self, company_id: UUID, include_inactive: bool = False) -> List[CompanyPerson]:

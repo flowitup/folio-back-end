@@ -594,7 +594,7 @@ def _configure_di_container() -> None:
     # admin use-cases
     _c.create_company_usecase = _CreateCompanyUseCase(
         company_repo=_company_repo,
-        role_checker=_role_checker,
+        access_repo=_access_repo,
     )
     _c.update_company_usecase = _UpdateCompanyUseCase(
         company_repo=_company_repo,
@@ -603,6 +603,7 @@ def _configure_di_container() -> None:
     _c.delete_company_usecase = _DeleteCompanyUseCase(
         company_repo=_company_repo,
         role_checker=_role_checker,
+        authz_reader=_c.authz_reader,
     )
     _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
         company_repo=_company_repo,
@@ -769,8 +770,6 @@ def _configure_di_container() -> None:
         membership_repo=_c.project_membership_repo,
         person_repo=_person_repo,
         company_person_repo=_c.company_person_repo,
-        company_repo=_company_repo,
-        clock=_clock,
     )
 
     # Project assignment use cases (Phase 2 onboarding): admin/manager assign
@@ -796,20 +795,27 @@ def _configure_di_container() -> None:
             role_repo=_c.role_repository,
         )
 
+    # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
+    # access_repo — all wired above regardless of OTP configuration. M7: this
+    # is hoisted OUT of the OTP-specific conditional below so an invitation
+    # acceptor (AcceptInvitationUseCase) becomes a real company member even
+    # on a deployment where phone-OTP sign-up itself is not configured.
+    from app.application.company_persons.link_person_on_signup_usecase import (
+        LinkPersonOnSignupUseCase as _LinkPersonOnSignupUseCase,
+    )
+
+    _link_person_on_signup = _LinkPersonOnSignupUseCase(
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        access_repo=_access_repo,
+    )
+
     # Re-wire VerifySignupOtpUseCase with sign-up linking now that
     # company_person_repo/person_repo/access_repo exist — it is constructed
     # earlier (OTP DI block, before the companies section) without them.
     if _c.verify_signup_otp_usecase is not None and _c.role_repository is not None and _c.password_hasher is not None:
-        from app.application.company_persons.link_person_on_signup_usecase import (
-            LinkPersonOnSignupUseCase as _LinkPersonOnSignupUseCase,
-        )
         from app.application.usecases.otp_login import VerifySignupOtpUseCase as _VerifySignupOtpUseCaseV2
 
-        _link_person_on_signup = _LinkPersonOnSignupUseCase(
-            person_repo=_person_repo,
-            company_person_repo=_c.company_person_repo,
-            access_repo=_access_repo,
-        )
         _c.verify_signup_otp_usecase = _VerifySignupOtpUseCaseV2(
             _c.user_repository,
             _otp_repo,
@@ -821,28 +827,28 @@ def _configure_di_container() -> None:
             link_person_on_signup=_link_person_on_signup,
         )
 
-        # Re-wire AcceptInvitationUseCase (invitations are the outsider path,
-        # Phase 2): the acceptor becomes a `member` of the invited project's
-        # company, and the same pending-profile linking runs when the
-        # invitee supplied a phone. Constructed earlier (invitations DI
-        # block, before the companies section) without these pieces.
-        if _c.accept_invitation_usecase is not None:
-            from app.application.invitations.accept_invitation_usecase import (
-                AcceptInvitationUseCase as _AcceptInvitationUseCaseV2,
-            )
+    # Re-wire AcceptInvitationUseCase (invitations are the outsider path,
+    # Phase 2): the acceptor becomes a `member` of the invited project's
+    # company. Constructed earlier (invitations DI block, before the
+    # companies section) without these pieces. M7: unconditional on OTP
+    # configuration — company attachment on accept must work regardless.
+    if _c.accept_invitation_usecase is not None:
+        from app.application.invitations.accept_invitation_usecase import (
+            AcceptInvitationUseCase as _AcceptInvitationUseCaseV2,
+        )
 
-            _c.accept_invitation_usecase = _AcceptInvitationUseCaseV2(
-                invitation_repo=_c.invitation_repo,
-                user_repo=_c.user_repository,
-                project_membership_repo=_c.project_membership_repo,
-                password_hasher=_c.password_hasher,
-                token_issuer=_c.token_issuer,
-                db_session=db.session,
-                role_repo=_c.role_repository,
-                authz_reader=_c.authz_reader,
-                access_repo=_access_repo,
-                link_person_on_signup=_link_person_on_signup,
-            )
+        _c.accept_invitation_usecase = _AcceptInvitationUseCaseV2(
+            invitation_repo=_c.invitation_repo,
+            user_repo=_c.user_repository,
+            project_membership_repo=_c.project_membership_repo,
+            password_hasher=_c.password_hasher,
+            token_issuer=_c.token_issuer,
+            db_session=db.session,
+            role_repo=_c.role_repository,
+            authz_reader=_c.authz_reader,
+            access_repo=_access_repo,
+            link_person_on_signup=_link_person_on_signup,
+        )
 
     # Re-wire CreateWorkerUseCase with person_repo now that the latter
     # exists. configure_container() in wiring.py wires it with the worker
@@ -1111,7 +1117,6 @@ def _configure_di_container() -> None:
 
     _c.create_company_usecase = _CreateCompanyUseCaseV2(
         company_repo=_company_repo,
-        role_checker=_role_checker,
         access_repo=_access_repo,
         seed_payment_methods=_c.seed_payment_methods_usecase,
         seed_default_labor_roles=_c.seed_default_labor_roles_usecase,

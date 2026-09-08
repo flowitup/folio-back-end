@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.company_persons.grants_ports import MemberGrant
@@ -50,6 +51,21 @@ class SqlAlchemyCompanyMemberGrantRepository:
                 granted_at=grant.granted_at,
             )
             self._session.add(row)
+            try:
+                self._session.flush()
+            except IntegrityError:
+                # Concurrent PUT for the same (company, user, permission,
+                # project) key raced this insert — re-read the row the other
+                # request just committed and update it in place instead of
+                # surfacing a raw DB error to the caller.
+                self._session.rollback()
+                row = self._find_row(grant.company_id, grant.user_id, grant.permission, grant.project_id)
+                if row is None:
+                    raise
+                row.effect = grant.effect
+                row.granted_by_user_id = grant.granted_by_user_id
+                row.granted_at = grant.granted_at
+                self._session.flush()
         else:
             # Replace in place (idempotent upsert): the row's identity is the
             # (company, user, permission, project) key, not its own `id` —
@@ -57,7 +73,7 @@ class SqlAlchemyCompanyMemberGrantRepository:
             row.effect = grant.effect
             row.granted_by_user_id = grant.granted_by_user_id
             row.granted_at = grant.granted_at
-        self._session.flush()
+            self._session.flush()
         return self._to_dto(row)
 
     def delete(self, company_id: UUID, user_id: UUID, permission: str, project_id: Optional[UUID]) -> bool:

@@ -436,7 +436,7 @@ def invitation_app():
 
         _c.create_company_usecase = _CreateCompanyUseCase(
             company_repo=_company_repo,
-            role_checker=_role_checker,
+            access_repo=_access_repo,
         )
         _c.update_company_usecase = _UpdateCompanyUseCase(
             company_repo=_company_repo,
@@ -738,7 +738,7 @@ def invitation_app():
 
         _c.create_company_usecase = _CreateCompanyUCv2(
             company_repo=_company_repo,
-            role_checker=_role_checker,
+            access_repo=_access_repo,
             seed_payment_methods=_c.seed_payment_methods_usecase,
         )
 
