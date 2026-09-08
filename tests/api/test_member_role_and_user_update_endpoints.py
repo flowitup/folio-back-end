@@ -17,76 +17,50 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _admin_role_id(inv_client, token: str) -> str:
-    """Resolve the seeded 'admin' role id via the roles list endpoint."""
-    resp = inv_client.get("/api/v1/roles", headers=_auth(token))
-    assert resp.status_code == 200
-    roles = resp.get_json()["roles"]
-    return next(r["id"] for r in roles if r["name"] == "admin")
-
-
 # ---------------------------------------------------------------------------
-# PATCH /projects/<pid>/members/<uid>
+# PATCH /projects/<pid>/members/<uid> — deprecated: role_id is accepted and ignored
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateMemberRole:
+    """Per-project roles are gone; the endpoint stays as a tolerant no-op stub."""
+
     def _url(self, app, uid: str) -> str:
         return f"/api/v1/projects/{app._test_project_id}/members/{uid}"
 
-    def test_200_changes_member_role(self, inv_client, superadmin_token, invitation_app):
-        role_id = _admin_role_id(inv_client, superadmin_token)
-        resp = inv_client.patch(
-            self._url(invitation_app, invitation_app._test_target_user_id),
-            json={"role_id": role_id},
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["role_name"] == "admin"
-        assert body["role_id"] == role_id
-
-    def test_403_caller_lacks_manage_users(self, inv_client, member_token, invitation_app):
-        # member_user's global role grants only read; require_permission rejects before role lookup
-        resp = inv_client.patch(
-            self._url(invitation_app, invitation_app._test_target_user_id),
-            json={"role_id": invitation_app._test_member_role_id},
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 403
-
-    def test_403_cannot_assign_superadmin(self, inv_client, superadmin_token, invitation_app):
-        resp = inv_client.patch(
-            self._url(invitation_app, invitation_app._test_target_user_id),
-            json={"role_id": invitation_app._test_superadmin_role_id},
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 403
-
-    def test_404_target_not_a_member(self, inv_client, superadmin_token, invitation_app):
-        # admin_user owns P1 but has no membership row -> not a member
-        resp = inv_client.patch(
-            self._url(invitation_app, invitation_app._test_admin_user_id),
-            json={"role_id": invitation_app._test_member_role_id},
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 404
-
-    def test_404_unknown_role(self, inv_client, superadmin_token, invitation_app):
+    def test_200_accepts_and_ignores_role_id(self, inv_client, superadmin_token, invitation_app):
         resp = inv_client.patch(
             self._url(invitation_app, invitation_app._test_target_user_id),
             json={"role_id": str(uuid4())},
             headers=_auth(superadmin_token),
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        assert resp.get_json()["deprecated"] is True
 
-    def test_400_missing_role_id(self, inv_client, superadmin_token, invitation_app):
+    def test_200_without_a_body(self, inv_client, superadmin_token, invitation_app):
         resp = inv_client.patch(
             self._url(invitation_app, invitation_app._test_target_user_id),
             json={},
             headers=_auth(superadmin_token),
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+
+    def test_403_caller_lacks_manage_users(self, inv_client, member_token, invitation_app):
+        """A company member holds no project:manage_users, on this project or any other."""
+        resp = inv_client.patch(
+            self._url(invitation_app, invitation_app._test_target_user_id),
+            json={"role_id": str(uuid4())},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 403
+
+    def test_404_target_not_a_member(self, inv_client, superadmin_token, invitation_app):
+        resp = inv_client.patch(
+            self._url(invitation_app, str(uuid4())),
+            json={"role_id": str(uuid4())},
+            headers=_auth(superadmin_token),
+        )
+        assert resp.status_code == 404
 
     def test_401_unauthenticated(self, inv_client, invitation_app):
         resp = inv_client.patch(

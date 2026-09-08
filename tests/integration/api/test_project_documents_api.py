@@ -602,6 +602,9 @@ class TestUploadRateLimit:
             db.session.flush()
             db.session.commit()
 
+            # Capability comes from the company role + assignment.
+            seed_company_tenancy(rl_app, legal_name="Rate Limit Co")
+
             doc_storage = InMemoryDocumentStorage()
             doc_repo = SqlAlchemyProjectDocumentRepository(db.session)
 
@@ -730,8 +733,10 @@ class TestDownloadDocumentErrors:
             _download_url(fake_project_id, doc_id),
             headers=_auth(owner_token),
         )
-        # The route may return 404 (project not found) or 404 (cross-project guard)
-        assert resp.status_code == 404
+        # Unknown project id → 403: with no company to resolve against, the
+        # caller holds no permission on it (the cross-project guard behind it
+        # would answer 404).
+        assert resp.status_code == 403
 
     def test_200_download_returns_file_content(self, doc_client, owner_token, doc_app):
         content = b"exact document content bytes"

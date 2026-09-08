@@ -90,6 +90,8 @@ def inv_pm_app():
             is_active=True,
         )
         admin_user.roles.append(admin_role)
+        # Platform access is the ops flag now, not the legacy `*:*` role.
+        admin_user.is_platform_ops = True
         db.session.add(admin_user)
         db.session.flush()
 

@@ -121,6 +121,8 @@ def tenancy_app():
         claim_holder = user("tn_claim_holder@test.com", claim_role)
         outsider = user("tn_outsider@test.com", member_role)
         platform_admin = user("tn_platform_admin@test.com", platform_admin_role)
+        # Platform access is the ops flag now, not the legacy `*:*` role.
+        platform_admin.is_platform_ops = True
         db.session.add_all([admin_a, admin_b, claim_holder, outsider, platform_admin])
         db.session.flush()
 
@@ -424,9 +426,10 @@ def test_role_downgrade_takes_effect_on_the_next_request(client, admin_a_h, tena
     # first request's cached resolver output (this fixture's outer
     # app_context is reused across test_client() calls) and this would
     # incorrectly still show project:update.
+    # A member who is not assigned to the project holds nothing on it at all,
+    # so the demotion shows up as a 403 on the very next request.
     resp2 = client.get(f"/api/v1/projects/{tenancy_app._project_a_id}", headers=admin_a_h)
-    assert resp2.status_code == 200
-    assert "project:update" not in resp2.get_json()["my_permissions"]
+    assert resp2.status_code == 403
 
     # Restore state so later tests in this module see admin_a as admin again.
     with tenancy_app.app_context():

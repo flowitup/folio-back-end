@@ -371,10 +371,10 @@ def test_export_404_when_project_not_found(export_client, export_app, admin_toke
         query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
         headers=_auth(admin_token),
     )
-    assert resp.status_code == 404
-    data = resp.get_json()
-    # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
-    assert data["error"] in ("NotFound", "project_not_found")
+    # An id that resolves to no company resolves to no permission, so the
+    # permission gate answers 403 before the access decorator can say 404.
+    assert resp.status_code == 403
+    assert resp.get_json()["error"] == "Forbidden"
 
 
 # ---------------------------------------------------------------------------
@@ -838,9 +838,9 @@ class TestWorkerLaborExportEndpoint:
             query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
             headers=_auth(we_admin_token),
         )
-        assert resp.status_code == 404
-        # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
-        assert resp.get_json()["error"] in ("NotFound", "project_not_found")
+        # Unknown project id → 403: permissions resolve through the project's company.
+        assert resp.status_code == 403
+        assert resp.get_json()["error"] == "Forbidden"
 
     # --- Case 9: 404 worker not found (legitimate UUID, no row) ---
 
