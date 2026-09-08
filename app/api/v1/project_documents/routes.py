@@ -1,4 +1,17 @@
-"""Project document API routes — list, upload, download, delete."""
+"""Project document API routes — list, upload, download, delete.
+
+Authorization (D9): documents are off-limits to a company ``member``. Every
+route here — reads included — requires ``project:update``, so listing,
+previewing, downloading, uploading, renaming, tagging and deleting all answer
+403 for a member and 200 for an assigned manager, a company admin, platform
+ops, or a member holding a D8 grant of ``project:update`` on the project.
+There is no documents-specific permission name: the D8 grant is the only way
+to open this resource to a member.
+
+The uploader/owner extras inside the delete/rename use-cases stay, but they
+are additive only: a caller who does not hold ``project:update`` never reaches
+them, so uploading a file no longer buys write rights on it.
+"""
 
 from __future__ import annotations
 
@@ -68,8 +81,8 @@ def _serialize(doc) -> dict:
     tags=["project_documents"],
 )
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def list_project_documents(project_id: str):
     # Collect multi-valued ?type= and ?tag= params then flatten into a dict for Pydantic
     type_values = request.args.getlist("type")
@@ -114,8 +127,8 @@ def list_project_documents(project_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents", methods=["POST"])
 @openapi_doc(summary="Upload a document to a project (multipart/form-data)", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def upload_project_document(project_id: str):
     if "file" not in request.files:
@@ -156,8 +169,8 @@ def upload_project_document(project_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/presign", methods=["POST"])
 @openapi_doc(summary="Generate a presigned PUT URL for direct-to-S3 browser upload", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def presign_project_document(project_id: str):
     """Generate a presigned PUT URL for direct-to-S3 browser upload."""
@@ -217,8 +230,8 @@ def presign_project_document(project_id: str):
     summary="Confirm a presigned upload — verify S3 object exists and persist DB row", tags=["project_documents"]
 )
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def confirm_project_document_upload(project_id: str):
     """Confirm a presigned upload — verify S3 object exists and persist DB row."""
@@ -287,8 +300,8 @@ def confirm_project_document_upload(project_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/preview-url", methods=["GET"])
 @openapi_doc(summary="Return a short-lived presigned GET URL for browser preview", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def get_document_preview_url(project_id: str, document_id: str):
     """Return a short-lived presigned GET URL so the browser can load the
     document directly from S3/MinIO — bypasses Flask streaming entirely."""
@@ -326,8 +339,8 @@ def get_document_preview_url(project_id: str, document_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/download", methods=["GET"])
 @openapi_doc(summary="Download a project document", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def download_project_document(project_id: str, document_id: str):
     try:
         doc_uuid = UUID(document_id)
@@ -364,8 +377,8 @@ def download_project_document(project_id: str, document_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/rename", methods=["PATCH"])
 @openapi_doc(summary="Rename a project document", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def rename_project_document(project_id: str, document_id: str):
     try:
         doc_uuid = UUID(document_id)
@@ -387,8 +400,9 @@ def rename_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    # Bypasses the uploader/owner check in the use case: the caller's resolved
-    # project:update permission (platform ops resolves to "*:*").
+    # The uploader/owner check in the use case is additive only (D9): the route
+    # already demanded project:update, so this resolves True for every caller
+    # who gets here (platform ops resolves to "*:*").
     is_admin = _has_permission(_effective_perms_for(UUID(project_id), requester_user_id), "project:update")
 
     try:
@@ -412,8 +426,8 @@ def rename_project_document(project_id: str, document_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>", methods=["DELETE"])
 @openapi_doc(summary="Delete a project document", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def delete_project_document(project_id: str, document_id: str):
     try:
         doc_uuid = UUID(document_id)
@@ -428,8 +442,9 @@ def delete_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    # Bypasses the uploader/owner check in the use case: the caller's resolved
-    # project:update permission (platform ops resolves to "*:*").
+    # The uploader/owner check in the use case is additive only (D9): the route
+    # already demanded project:update, so this resolves True for every caller
+    # who gets here (platform ops resolves to "*:*").
     is_admin = _has_permission(_effective_perms_for(UUID(project_id), requester_user_id), "project:update")
 
     try:
@@ -450,8 +465,8 @@ def delete_project_document(project_id: str, document_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/tags", methods=["PUT"])
 @openapi_doc(summary="Replace all tags on a project document", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def update_document_tags(project_id: str, document_id: str):
     try:
         doc_uuid = UUID(document_id)
@@ -493,8 +508,8 @@ def update_document_tags(project_id: str, document_id: str):
 @project_documents_bp.route("/projects/<project_id>/documents/tags", methods=["GET"])
 @openapi_doc(summary="List all tags used in a project's documents", tags=["project_documents"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def list_project_document_tags(project_id: str):
     container = get_container()
     tags = container.project_document_repository.list_tags_for_project(UUID(project_id))

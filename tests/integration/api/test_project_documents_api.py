@@ -18,6 +18,11 @@ correctly finds the member in `project.user_ids` under SQLite.
 The admin user (project owner) always passes `can_read_project` via
 `project.owner_id == user_id`, so admin tests are unaffected.
 The superadmin user has `*:*` which bypasses `user_ids` check entirely.
+
+Permission model: documents are closed to a company `member` — every route of
+the module, reads included, requires `project:update`. `owner_user` resolves
+to a company manager (it owns the project), `member_user` to a company member,
+so the two personas below are exactly the allowed/refused pair.
 """
 
 from __future__ import annotations
@@ -298,12 +303,13 @@ class TestListDocumentsPermissions:
         assert "items" in data
         assert "total" in data
 
-    def test_200_member_can_list(self, doc_client, member_token, doc_app):
+    def test_403_member_cannot_list(self, doc_client, member_token, doc_app):
+        """A company member cannot even see that the project has documents."""
         resp = doc_client.get(
             _docs_url(doc_app._doc_project_id),
             headers=_auth(member_token),
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 403
 
     def test_403_non_member_cannot_list(self, doc_client, outsider_token, doc_app):
         resp = doc_client.get(
@@ -395,9 +401,9 @@ class TestUploadDocumentPermissions:
         resp = _upload(doc_client, doc_app._doc_project_id, owner_token)
         assert resp.status_code == 201
 
-    def test_201_member_can_upload(self, doc_client, member_token, doc_app):
+    def test_403_member_cannot_upload(self, doc_client, member_token, doc_app):
         resp = _upload(doc_client, doc_app._doc_project_id, member_token)
-        assert resp.status_code == 201
+        assert resp.status_code == 403
 
     def test_403_non_member_cannot_upload(self, doc_client, outsider_token, doc_app):
         resp = _upload(doc_client, doc_app._doc_project_id, outsider_token)
@@ -685,13 +691,13 @@ class TestDownloadDocumentPermissions:
         )
         assert resp.status_code == 200
 
-    def test_200_member_can_download(self, doc_client, owner_token, member_token, doc_app):
+    def test_403_member_cannot_download(self, doc_client, owner_token, member_token, doc_app):
         doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
         resp = doc_client.get(
             _download_url(doc_app._doc_project_id, doc_id),
             headers=_auth(member_token),
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 403
 
     def test_403_non_member_cannot_download(self, doc_client, owner_token, outsider_token, doc_app):
         doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
@@ -773,17 +779,12 @@ class TestDownloadDocumentErrors:
 
 
 class TestDeleteDocumentPermissions:
-    def test_204_uploader_can_delete_own_doc(self, doc_client, member_token, doc_app):
-        """Member uploads their own doc and deletes it — 204."""
-        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, member_token)
-        resp = doc_client.delete(
-            _delete_url(doc_app._doc_project_id, doc_id),
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 204
+    def test_403_member_cannot_delete_a_doc(self, doc_client, owner_token, member_token, doc_app):
+        """Owner uploads doc; the company member tries to delete it — 403.
 
-    def test_403_member_cannot_delete_other_members_doc(self, doc_client, owner_token, member_token, doc_app):
-        """Owner uploads doc; member (non-owner, non-uploader) tries to delete — 403."""
+        A member cannot upload either, so there is no "own document" case left:
+        authorship never buys write rights on a resource a member cannot reach.
+        """
         doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
         resp = doc_client.delete(
             _delete_url(doc_app._doc_project_id, doc_id),
@@ -791,18 +792,18 @@ class TestDeleteDocumentPermissions:
         )
         assert resp.status_code == 403
 
-    def test_204_owner_can_delete_any_doc(self, doc_client, member_token, owner_token, doc_app):
-        """Project owner can delete any doc — 204."""
-        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, member_token)
+    def test_204_owner_can_delete_any_doc(self, doc_client, owner_token, doc_app):
+        """Project owner (company manager) can delete any doc — 204."""
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
         resp = doc_client.delete(
             _delete_url(doc_app._doc_project_id, doc_id),
             headers=_auth(owner_token),
         )
         assert resp.status_code == 204
 
-    def test_204_superadmin_can_delete_any_doc(self, doc_client, member_token, superadmin_token, doc_app):
+    def test_204_superadmin_can_delete_any_doc(self, doc_client, owner_token, superadmin_token, doc_app):
         """Superadmin (*:*) can delete any doc — 204."""
-        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, member_token)
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
         resp = doc_client.delete(
             _delete_url(doc_app._doc_project_id, doc_id),
             headers=_auth(superadmin_token),
@@ -978,7 +979,7 @@ class TestCrossProjectDownloadAdversarial:
             db.session.add_all([read_perm, owner_role, member_role])
             db.session.flush()
 
-            # dual_member is a member of BOTH project A and B
+            # dual_member is assigned to BOTH project A and B
             owner_user = UserModel(
                 email="xp_owner@test.com",
                 password_hash=hasher.hash("Owner1234!"),
@@ -1030,8 +1031,11 @@ class TestCrossProjectDownloadAdversarial:
             test_app._xp_project_b_id = str(project_b.id)
             test_app._xp_doc_storage = doc_storage
 
-            # Permissions come from the company role + project assignment (see the helper).
-            seed_company_tenancy(test_app)
+            # Permissions come from the company role + project assignment (see the
+            # helper). dual_member has to be a manager: documents need
+            # `project:update`, so a company member is refused at the route and
+            # the use-case cross-project guard would never be reached.
+            seed_company_tenancy(test_app, roles={dual_member.id: "manager"})
 
             yield test_app
 

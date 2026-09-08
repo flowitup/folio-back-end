@@ -88,7 +88,7 @@ class TestUpdateNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="New title")
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="New title")
 
         assert dto.title == "New title"
 
@@ -100,7 +100,7 @@ class TestUpdateNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, category="inspection")
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, category="inspection")
 
         assert dto.category == "inspection"
 
@@ -112,7 +112,9 @@ class TestUpdateNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="Only title changed")
+        dto = uc.execute(
+            actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="Only title changed"
+        )
 
         # category unchanged
         assert dto.category == "delivery"
@@ -126,7 +128,7 @@ class TestUpdateNoteHappyPath:
         db = _FakeSession()
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership, db_session=db)
-        uc.execute(actor_id=uuid4(), note_id=note.id, title="New")
+        uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="New")
 
         assert db.commit_calls == 1
 
@@ -138,7 +140,7 @@ class TestUpdateNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        uc.execute(actor_id=uuid4(), note_id=note.id, title="Updated")
+        uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="Updated")
 
         note_repo.save.assert_called_once()
 
@@ -158,7 +160,7 @@ class TestUpdateNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(NotProjectMemberError):
-            uc.execute(actor_id=uuid4(), note_id=note.id, title="Blocked")
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="Blocked")
 
     def test_note_not_found_raises_note_not_found_error(self):
         note_repo = MagicMock()
@@ -166,7 +168,21 @@ class TestUpdateNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo)
         with pytest.raises(NoteNotFoundError):
-            uc.execute(actor_id=uuid4(), note_id=uuid4(), title="Ghost note")
+            uc.execute(actor_id=uuid4(), note_id=uuid4(), expected_project_id=uuid4(), title="Ghost note")
+
+    def test_note_of_another_project_is_reported_missing(self):
+        """Write rights on the URL's project must not reach another project's note."""
+        note = _make_note()
+        note_repo = MagicMock()
+        note_repo.find_by_id_for_update.return_value = note
+        membership = MagicMock()
+
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        with pytest.raises(NoteNotFoundError):
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=uuid4(), title="Hijacked")
+
+        membership.is_member.assert_not_called()
+        note_repo.save.assert_not_called()
 
     def test_not_found_takes_priority_over_membership(self):
         """404 is checked before membership — find_by_id_for_update returns None."""
@@ -176,7 +192,7 @@ class TestUpdateNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(NoteNotFoundError):
-            uc.execute(actor_id=uuid4(), note_id=uuid4())
+            uc.execute(actor_id=uuid4(), note_id=uuid4(), expected_project_id=uuid4())
 
         membership.is_member.assert_not_called()
 
@@ -196,7 +212,7 @@ class TestUpdateNoteValidation:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(InvalidCategoryError):
-            uc.execute(actor_id=uuid4(), note_id=note.id, category="invalid")
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, category="invalid")
 
     def test_empty_title_raises_value_error(self):
         note = _make_note()
@@ -207,7 +223,7 @@ class TestUpdateNoteValidation:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(ValueError):
-            uc.execute(actor_id=uuid4(), note_id=note.id, title="   ")
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="   ")
 
     def test_invalid_status_raises_value_error(self):
         note = _make_note()
@@ -218,7 +234,7 @@ class TestUpdateNoteValidation:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(ValueError):
-            uc.execute(actor_id=uuid4(), note_id=note.id, status="pending")
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, status="pending")
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +253,7 @@ class TestUpdateNoteStatus:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, status="done")
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, status="done")
 
         assert dto.status == "done"
 
@@ -249,7 +265,9 @@ class TestUpdateNoteStatus:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="Only title changed")
+        dto = uc.execute(
+            actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="Only title changed"
+        )
 
         assert dto.status == "done"  # unchanged
 
@@ -261,7 +279,7 @@ class TestUpdateNoteStatus:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, status="done")
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, status="done")
 
         assert dto.status == "done"
         assert dto.title == "Keep me"
@@ -285,7 +303,9 @@ class TestUpdateNoteDescription:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, description="new description")
+        dto = uc.execute(
+            actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, description="new description"
+        )
 
         assert dto.description == "new description"
 
@@ -297,7 +317,7 @@ class TestUpdateNoteDescription:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, description=None)
+        dto = uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, description=None)
 
         assert dto.description is None
 
@@ -310,6 +330,8 @@ class TestUpdateNoteDescription:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        dto = uc.execute(actor_id=uuid4(), note_id=note.id, title="only title changed")
+        dto = uc.execute(
+            actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id, title="only title changed"
+        )
 
         assert dto.description == "keep me"

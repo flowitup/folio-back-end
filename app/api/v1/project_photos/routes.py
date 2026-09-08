@@ -96,8 +96,8 @@ def _parse_captured_at(raw: str | None) -> datetime | None:
 @project_photos_bp.route("/projects/<project_id>/photos", methods=["POST"])
 @openapi_doc(summary="Upload a progress photo to a project (multipart/form-data)", tags=["project_photos"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def upload_project_photo(project_id: str):
     if "file" not in request.files:
@@ -257,8 +257,8 @@ def _set_image_headers(response: Response, length: int) -> None:
 @project_photos_bp.route("/projects/<project_id>/photos/<photo_id>", methods=["PATCH"])
 @openapi_doc(summary="Update caption and/or captured_at on a project photo", tags=["project_photos"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def update_project_photo(project_id: str, photo_id: str):
     try:
         pid_uuid = UUID(photo_id)
@@ -283,8 +283,9 @@ def update_project_photo(project_id: str, photo_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    # Bypasses the uploader/owner check in the use case: the caller's resolved
-    # project:update permission (platform ops resolves to "*:*").
+    # The uploader/owner check in the use case is additive only (D9): the route
+    # already demanded project:update, so this resolves True for every caller
+    # who gets here (platform ops resolves to "*:*").
     is_admin = _has_permission(_effective_perms_for(UUID(project_id), requester_user_id), "project:update")
 
     # Build sentinel-aware kwargs so omitted fields are not overwritten.
@@ -319,8 +320,8 @@ def update_project_photo(project_id: str, photo_id: str):
 @project_photos_bp.route("/projects/<project_id>/photos/<photo_id>", methods=["DELETE"])
 @openapi_doc(summary="Soft-delete a project photo", tags=["project_photos"])
 @jwt_required()
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 def delete_project_photo(project_id: str, photo_id: str):
     try:
         pid_uuid = UUID(photo_id)
@@ -333,8 +334,9 @@ def delete_project_photo(project_id: str, photo_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    # Bypasses the uploader/owner check in the use case: the caller's resolved
-    # project:update permission (platform ops resolves to "*:*").
+    # The uploader/owner check in the use case is additive only (D9): the route
+    # already demanded project:update, so this resolves True for every caller
+    # who gets here (platform ops resolves to "*:*").
     is_admin = _has_permission(_effective_perms_for(UUID(project_id), requester_user_id), "project:update")
 
     try:

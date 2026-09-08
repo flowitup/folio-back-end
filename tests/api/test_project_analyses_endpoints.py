@@ -1,8 +1,13 @@
 """Integration tests for project-scoped analysis report endpoints (8 routes).
 
-Authorization model — TWO TIERS (read carefully):
-  * Read (list, tags, get, content) and create: project membership sufficient.
-  * Mutate (PATCH, DELETE): membership AND (uploader OR project owner OR admin).
+Authorization model — TWO TIERS (read carefully), since D9:
+  * Read (list, tags, get, content): project membership (`project:read`).
+  * Write (POST, PATCH, DELETE): `project:update`, i.e. company admin or
+    assigned manager. The uploader/owner check inside the use-cases is
+    additive only — it is never reached without `project:update`.
+  The module's uploader persona (`member_token`) is therefore promoted to
+  company manager below, while `other_member_token` stays a company member:
+  the read-only persona the 403 cases need.
 
 Security notes:
   - Content route must return specific headers: X-Content-Type-Options,
@@ -17,7 +22,7 @@ from __future__ import annotations
 
 import io
 import pytest
-from uuid import uuid4
+from uuid import UUID, uuid4
 from werkzeug.datastructures import MultiDict
 
 
@@ -131,8 +136,8 @@ def analyses_app(invitation_app):
     - superadmin_user (has *:*)
 
     For our tests:
-    - analyses_owner: target_user (member but different from main uploader)
-    - analyses_member: member_user (main test uploader)
+    - analyses_owner: target_user (company member, read-only since D9)
+    - analyses_member: member_user (main test uploader, promoted to manager)
     - analyses_another: admin_user (project owner, not in membership, tests owner rights)
     - outsider: outsider_user (not in project)
     - superadmin: superadmin_user
@@ -158,6 +163,18 @@ def analyses_app(invitation_app):
                 "at": datetime.now(timezone.utc),
             },
         )
+        db.session.commit()
+
+        # D9: uploading, editing and deleting a report all require
+        # `project:update`, so the module's uploader persona is a company
+        # manager. target_user keeps the `member` role — the read-only
+        # persona behind `other_member_token`.
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        uploader_access = (
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=UUID(invitation_app._test_member_user_id)).one()
+        )
+        uploader_access.role = "manager"
         db.session.commit()
 
     invitation_app._analyses_owner_email = invitation_app._test_target_user_email
@@ -229,14 +246,16 @@ def inv_client(analyses_app):
 
 @pytest.fixture
 def other_member_token(inv_client, analyses_app):
-    """JWT token for target_user: a plain project member who is NOT the uploader,
-    NOT the project owner and NOT an admin. Use this for "other member" cases."""
+    """JWT token for target_user: a company member assigned to the project.
+
+    Read-only on the site journal since D9 (no `project:update`): use this for
+    the "another member" 403 cases."""
     return _login(inv_client, analyses_app._analyses_owner_email, analyses_app._analyses_owner_password)
 
 
 @pytest.fixture
 def member_token(inv_client, analyses_app):
-    """JWT token for member_user (main uploader in tests)."""
+    """JWT token for member_user — the module's uploader, a company manager."""
     return _login(inv_client, analyses_app._analyses_member_email, analyses_app._analyses_member_password)
 
 
@@ -705,13 +724,9 @@ class TestGetAnalysisEndpoint:
         )
         assert resp.status_code == 404
 
-    def test_403_non_member_cannot_get(self, inv_client, outsider_token, analyses_app):
+    def test_403_non_member_cannot_get(self, inv_client, outsider_token, member_token, analyses_app):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(
-            inv_client,
-            analyses_app._analyses_project_id,
-            _login(inv_client, analyses_app._analyses_owner_email, analyses_app._analyses_owner_password),
-        )
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.get(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
@@ -837,9 +852,9 @@ class TestGetAnalysisContentEndpoint:
         )
         assert resp.status_code == 404
 
-    def test_403_non_member_cannot_get_content(self, inv_client, outsider_token, analyses_app, other_member_token):
+    def test_403_non_member_cannot_get_content(self, inv_client, outsider_token, analyses_app, member_token):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, other_member_token)
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.get(
             _content_url(analyses_app._analyses_project_id, analysis_id),
@@ -1000,11 +1015,12 @@ class TestUpdateAnalysisEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["tags"] == []
 
-    def test_403_non_uploader_member_cannot_patch(self, inv_client, member_token, other_member_token, analyses_app):
-        """Member who didn't upload cannot PATCH (regression test for two-tier authz).
+    def test_403_member_cannot_patch_an_analysis(self, inv_client, member_token, other_member_token, analyses_app):
+        """A company member reads the journal but never edits it.
 
-        other_member_token is a plain project member: not the uploader, not the
-        project owner, not an admin. Membership alone must not grant edit.
+        other_member_token is a company member assigned to the project: it holds
+        `project:read` and no `project:update`, so PATCH is refused whoever
+        uploaded the report. Membership alone must not grant edit.
         """
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
@@ -1029,9 +1045,9 @@ class TestUpdateAnalysisEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["title"] == "Owner Edit"
 
-    def test_403_non_member_cannot_patch(self, inv_client, outsider_token, analyses_app, other_member_token):
+    def test_403_non_member_cannot_patch(self, inv_client, outsider_token, analyses_app, member_token):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, other_member_token)
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.patch(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),
@@ -1136,11 +1152,12 @@ class TestDeleteAnalysisEndpoint:
         )
         assert resp.status_code == 204
 
-    def test_403_non_uploader_member_cannot_delete(self, inv_client, member_token, other_member_token, analyses_app):
-        """Member who didn't upload cannot DELETE (regression test).
+    def test_403_member_cannot_delete_an_analysis(self, inv_client, member_token, other_member_token, analyses_app):
+        """A company member reads the journal but never deletes from it.
 
-        other_member_token is a plain project member: not uploader, not owner,
-        not admin. Membership alone must not grant delete.
+        other_member_token is a company member assigned to the project: it holds
+        `project:read` and no `project:update`, so DELETE is refused whoever
+        uploaded the report. Membership alone must not grant delete.
         """
         analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
@@ -1150,9 +1167,9 @@ class TestDeleteAnalysisEndpoint:
         )
         assert resp.status_code == 403
 
-    def test_403_non_member_cannot_delete(self, inv_client, outsider_token, analyses_app, other_member_token):
+    def test_403_non_member_cannot_delete(self, inv_client, outsider_token, analyses_app, member_token):
         """Non-member → 403."""
-        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, other_member_token)
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
 
         resp = inv_client.delete(
             _analysis_url(analyses_app._analyses_project_id, analysis_id),

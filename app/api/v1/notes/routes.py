@@ -1,16 +1,18 @@
 """Notes API routes — 4 project-scoped CRUD endpoints.
 
-Authorization note:
+Authorization note (D9):
     Two layers, both resolved by the permission resolver (company role +
     assignment + D8 rows; never the token):
 
-    * the route gate — ``project:read`` on the project in the URL, the same
-      level ``project_documents``/``project_photos`` use for the site journal a
-      member is expected to fill. It also answers 404 for a project id that
-      does not exist, before any permission is evaluated.
-    * the use-case — ``is_member()`` on the note's OWN project, which is what
-      stops a member of project A from editing a note of project B through an
-      A-shaped URL.
+    * the route gate — ``project:read`` to list, ``project:update`` to create,
+      update or delete. A company ``member`` reads the site journal but never
+      writes it, exactly like analyses and photos. The write gate also answers
+      404 for a project id that does not exist, before any permission is
+      evaluated.
+    * the use-case — the note must belong to the project in the URL (404
+      otherwise, existence is not leaked) and ``is_member()`` on it, which is
+      what stops write rights on project A from reaching a note of project B
+      through an A-shaped URL.
 """
 
 from __future__ import annotations
@@ -73,11 +75,11 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
     tags=["notes"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def create_note(project_id: UUID) -> Any:
-    """Create a journal note for a project. Actor must be a project member."""
+    """Create a journal note for a project. Needs `project:update` on it."""
     try:
         body = NoteCreateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
@@ -151,11 +153,11 @@ def list_notes(project_id: UUID) -> Any:
     tags=["notes"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_note(project_id: UUID, note_id: UUID) -> Any:
-    """Update a journal note's title, description, or category."""
+    """Update a note's title, description, or category. Needs `project:update`."""
     try:
         body = NoteUpdateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
@@ -174,6 +176,7 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
         note_dto = container.update_note_usecase.execute(
             actor_id=actor_id,
             note_id=note_id,
+            expected_project_id=project_id,
             title=body.title,
             description=description_arg,
             category=body.category,
@@ -200,11 +203,11 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
 @notes_bp.delete("/projects/<uuid:project_id>/notes/<uuid:note_id>")
 @openapi_doc(summary="Delete a journal note", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_note(project_id: UUID, note_id: UUID) -> Any:
-    """Delete a journal note. Actor must be a project member."""
+    """Delete a journal note. Needs `project:update` on the note's project."""
     actor_id = UUID(get_jwt_identity())
     container = get_container()
     if container.delete_note_usecase is None:
@@ -214,6 +217,7 @@ def delete_note(project_id: UUID, note_id: UUID) -> Any:
         container.delete_note_usecase.execute(
             actor_id=actor_id,
             note_id=note_id,
+            expected_project_id=project_id,
         )
     except NoteNotFoundError:
         return _err(404, "NotFound", "Note not found")

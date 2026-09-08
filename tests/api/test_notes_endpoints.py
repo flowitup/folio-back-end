@@ -1,8 +1,37 @@
-"""Integration tests for project-scoped journal notes endpoints (4 routes)."""
+"""Integration tests for project-scoped journal notes endpoints (4 routes).
+
+These exercise the CRUD mechanics, not the permission matrix: since D9 a
+note is written by a `project:update` holder only, so the shared fixture's
+`member_token` persona is promoted to company manager for this module. Who
+may read versus write a note is covered by
+`test_project_write_gates_matrix.py` and `test_resolver_authoritative.py`.
+"""
 
 from __future__ import annotations
 
 import uuid
+from uuid import UUID
+
+import pytest
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _member_persona_writes_notes(invitation_app):
+    """Promote the fixture's member persona to company manager (see module docstring).
+
+    Module-scoped like `invitation_app` itself, so the promotion never leaks
+    into another module's database.
+    """
+    from app import db
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+    with invitation_app.app_context():
+        access = (
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=UUID(invitation_app._test_member_user_id)).one()
+        )
+        access.role = "manager"
+        db.session.commit()
+    return invitation_app
 
 
 # ---------------------------------------------------------------------------
