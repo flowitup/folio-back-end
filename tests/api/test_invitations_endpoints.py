@@ -36,6 +36,15 @@ class TestCreateInvitation:
         data = resp.get_json()
         assert data["kind"] in ("invitation_sent", "direct_added")
 
+    def test_role_id_is_optional_and_defaults_to_member(self, inv_client, admin_token, invitation_app):
+        resp = inv_client.post(
+            "/api/v1/invitations",
+            json={"project_id": invitation_app._test_project_id, "email": "norole@example.com"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["kind"] == "invitation_sent"
+
     def test_non_admin_without_perm_returns_403(self, inv_client, outsider_token, invitation_app):
         resp = inv_client.post(
             "/api/v1/invitations",

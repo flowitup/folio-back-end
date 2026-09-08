@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Optional, Any
 from uuid import UUID
 
 from app.application.invitations.authz import can_manage_project_invites
@@ -69,12 +69,22 @@ class CreateInvitationUseCase:
 
     # ------------------------------------------------------------------
 
+    _DEFAULT_INVITE_ROLES = ("member", "user")
+
+    def _default_role(self):
+        """Legacy role used when the client omits `role_id` (dropped in Phase 4)."""
+        for name in self._DEFAULT_INVITE_ROLES:
+            role = self._role_repo.find_by_name(name)
+            if role is not None:
+                return role
+        return None
+
     def execute(
         self,
         inviter_id: UUID,
         project_id: UUID,
         email: str,
-        role_id: UUID,
+        role_id: Optional[UUID] = None,
         locale: str = "en",
     ) -> CreateInvitationResultDto:
         """Run the invite flow; return DTO indicating what happened."""
@@ -93,10 +103,11 @@ class CreateInvitationUseCase:
         if not self._can_invite(inviter, project.owner_id, inviter_id, project_id):
             raise PermissionDeniedError(f"User {inviter_id} does not have 'project:invite' permission.")
 
-        # 3. Load role; guard superadmin
-        role = self._role_repo.find_by_id(role_id)
+        # 3. Load role (legacy table, default member when the client sends none); guard superadmin
+        role = self._role_repo.find_by_id(role_id) if role_id is not None else self._default_role()
         if role is None:
             raise RoleNotFoundError(f"Role {role_id} not found.")
+        role_id = role.id
         if role.name == "superadmin":
             raise RoleNotAllowedError("Cannot invite users with the 'superadmin' role.")
 
