@@ -35,6 +35,7 @@ def _role_response(role) -> LaborRoleResponse:
         name=role.name,
         color=role.color,
         created_at=role.created_at.isoformat(),
+        slug=getattr(role, "slug", None),
     )
 
 
