@@ -29,14 +29,37 @@ if "sqlite" in _DB_URL:
 
 @pytest.fixture(scope="module")
 def alembic_cfg():
+    """Alembic config for the flask-migrate layout (`migrations/alembic.ini` + `migrations/`).
+
+    flask-migrate's `env.py` reads the engine from `current_app`, so commands must
+    run inside an app context bound to the Postgres test database (see `_run`).
+    """
     import pathlib
 
     from alembic.config import Config
 
-    repo_root = pathlib.Path(__file__).parents[1]  # folio-back-end/
-    cfg = Config(str(repo_root / "alembic.ini"))
+    migrations_dir = pathlib.Path(__file__).parents[2] / "migrations"
+    cfg = Config(str(migrations_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(migrations_dir))
     cfg.set_main_option("sqlalchemy.url", _DB_URL)
     return cfg
+
+
+@pytest.fixture(scope="module")
+def migration_app():
+    """Flask app bound to the Postgres test database for flask-migrate commands."""
+    from app import create_app
+    from config import TestingConfig
+
+    class _PostgresMigrationConfig(TestingConfig):
+        DATABASE_URL = _DB_URL
+
+    return create_app(_PostgresMigrationConfig)
+
+
+def _run(app, fn, *args):
+    with app.app_context():
+        return fn(*args)
 
 
 @pytest.fixture(scope="module")
@@ -64,17 +87,17 @@ def _column_exists(conn, table_name: str, column_name: str) -> bool:
     return result.scalar() == 1
 
 
-def test_migration_2ca24be9e3a8_round_trip(alembic_cfg, pg_engine):
+def test_migration_2ca24be9e3a8_round_trip(alembic_cfg, pg_engine, migration_app):
     from alembic import command
 
-    # Stamp at the pre-migration head.
-    command.stamp(alembic_cfg, "15c1df3fdbfa")
+    # Build the real pre-migration schema (upgrade from base to the previous head).
+    _run(migration_app, command.upgrade, alembic_cfg, "15c1df3fdbfa")
 
     with pg_engine.connect() as conn:
         assert not _table_exists(conn, "company_persons")
         assert not _table_exists(conn, "company_member_grants")
 
-    command.upgrade(alembic_cfg, "2ca24be9e3a8")
+    _run(migration_app, command.upgrade, alembic_cfg, "2ca24be9e3a8")
 
     with pg_engine.connect() as conn:
         assert _table_exists(conn, "company_persons")
@@ -101,7 +124,7 @@ def test_migration_2ca24be9e3a8_round_trip(alembic_cfg, pg_engine):
         assert result is not None
         assert result[0] == "r"  # 'r' = RESTRICT in pg_constraint.confdeltype
 
-    command.downgrade(alembic_cfg, "-1")
+    _run(migration_app, command.downgrade, alembic_cfg, "-1")
 
     with pg_engine.connect() as conn:
         assert not _table_exists(conn, "company_persons")
@@ -111,4 +134,4 @@ def test_migration_2ca24be9e3a8_round_trip(alembic_cfg, pg_engine):
         assert not _column_exists(conn, "billing_document_templates", "company_id")
 
     # Restore to head so subsequent tests have a clean DB.
-    command.upgrade(alembic_cfg, "head")
+    _run(migration_app, command.upgrade, alembic_cfg, "head")

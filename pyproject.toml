@@ -68,3 +68,8 @@ dev = [
     "pypdf>=5.0",
     "openapi-spec-validator>=0.7",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_postgres: needs TEST_DATABASE_URL pointing at a real Postgres",
+]
