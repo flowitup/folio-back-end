@@ -1,9 +1,6 @@
 """Main seed script for the construction backend.
 
 Usage:
-    # Seed only permissions and roles (minimal)
-    uv run python scripts/seed.py
-
     # Seed with admin user (CLI args - dev only)
     uv run python scripts/seed.py --with-admin admin@example.com password
 
@@ -37,15 +34,16 @@ Security Note:
     exposing it in shell history. CLI args are acceptable for local development.
 
 Flag dependency graph:
-    --with-admin            (no deps)
+    --with-admin            (no deps) — also creates the demo company, since
+                            every project needs one (projects.company_id NOT NULL)
     --with-projects         requires --with-admin
-    --with-users            requires --with-admin (for the role_map)
+    --with-users            requires --with-admin
     --with-memberships      requires --with-projects + --with-users
     --with-invitations      requires --with-admin + --with-projects
     --with-labor            requires --with-projects
     --with-invoices         requires --with-projects
     --with-notes            requires --with-admin + --with-projects (uses --with-users if available)
-    --with-companies        requires --with-admin (uses --with-users/--with-projects/--with-persons if available)
+    --with-companies        requires --with-admin (uses --with-users/--with-persons if available)
     --all                   shorthand for everything above
 """
 
@@ -53,8 +51,6 @@ import sys
 
 from app import create_app
 from scripts.seed_auth import (
-    seed_permissions,
-    seed_roles,
     create_admin_user,
     create_client_user,
     get_admin_credentials,
@@ -67,7 +63,7 @@ from scripts.seed_labor import seed_labor
 from scripts.seed_persons import seed_persons
 from scripts.seed_invoices import seed_invoices
 from scripts.seed_notes import seed_notes
-from scripts.seed_companies import seed_companies
+from scripts.seed_companies import ensure_company, seed_companies
 
 
 def _flag(name: str, *aliases: str) -> bool:
@@ -85,23 +81,22 @@ def main() -> None:
     with app.app_context():
         print("Seeding database...")
 
-        print("\n1. Creating permissions...")
-        permission_map = seed_permissions()
-
-        print("\n2. Creating roles...")
-        role_map = seed_roles(permission_map)
-
         admin_user = None
+        company = None
         if all_flag or _flag("--with-admin"):
             email, password = get_admin_credentials()
 
             if email and password:
-                print(f"\n3. Creating admin user: {email}...")
-                admin_user = create_admin_user(email, password, role_map)
+                print(f"\n1. Creating admin user: {email}...")
+                admin_user = create_admin_user(email, password)
 
                 # Also create the legacy client user for backwards-compat
-                print("\n4. Creating client user: client@example.com...")
-                create_client_user("client@example.com", "password123", role_map)
+                print("\n2. Creating client user: client@example.com...")
+                create_client_user("client@example.com", "password123")
+
+                # The company is the tenant: it exists before any project.
+                print("\n3. Creating the demo company...")
+                company = ensure_company(admin_user)
             else:
                 print("\nError: --with-admin requires credentials")
                 print("Options:")
@@ -115,16 +110,16 @@ def main() -> None:
             if not admin_user:
                 print("\nError: --with-users requires --with-admin")
                 sys.exit(1)
-            print("\n5. Creating test user roster...")
-            user_map = seed_test_users(role_map)
+            print("\n4. Creating test user roster...")
+            user_map = seed_test_users()
 
         # Sample projects (owned by admin)
         if all_flag or _flag("--with-projects"):
             if not admin_user:
                 print("\nError: --with-projects requires --with-admin")
                 sys.exit(1)
-            print("\n6. Creating sample projects...")
-            seed_projects(admin_user)
+            print("\n5. Creating sample projects...")
+            seed_projects(admin_user, company)
 
         # Project memberships (user_projects entries beyond owner)
         if all_flag or _flag("--with-memberships"):
@@ -134,25 +129,25 @@ def main() -> None:
             if not user_map:
                 print("\nError: --with-memberships requires --with-users " "(or --all so the user roster exists)")
                 sys.exit(1)
-            print("\n7. Creating project memberships...")
-            seed_memberships(role_map, user_map, admin_user)
+            print("\n6. Creating project assignments...")
+            seed_memberships(user_map, admin_user)
 
         # Invitations across all 4 lifecycle states
         if all_flag or _flag("--with-invitations"):
             if not admin_user:
                 print("\nError: --with-invitations requires --with-admin")
                 sys.exit(1)
-            print("\n8. Creating invitations (pending/expired/revoked/accepted)...")
-            seed_invitations(role_map, admin_user)
+            print("\n7. Creating invitations (pending/expired/revoked/accepted)...")
+            seed_invitations(admin_user)
 
         if all_flag or _flag("--with-labor"):
-            print("\n9. Creating sample labor data...")
+            print("\n8. Creating sample labor data...")
             seed_labor()
 
         # Persons (global identity entities) — Phase 1b-ii. Independent of
         # workers; backfill linking workers→persons lands in Phase 1c.
         if all_flag or _flag("--with-persons"):
-            print("\n9b. Creating sample persons...")
+            print("\n9. Creating sample persons...")
             seed_persons()
 
         if all_flag or _flag("--with-invoices"):
@@ -164,16 +159,15 @@ def main() -> None:
             print("\n11. Creating notes + dismissals...")
             seed_notes()
 
-        # Company-as-tenant model (Phase 2): demo company + memberships +
-        # project/labor-role/person scoping. Best run after --with-users,
-        # --with-projects, --with-persons, --with-labor so there is
-        # something to attach/scope — but only --with-admin is required;
-        # anything else not yet seeded is silently skipped.
+        # Attach the rest of the roster to the demo company created above and
+        # scope labor roles + the person directory. Best run after
+        # --with-users and --with-persons so there is something to attach;
+        # anything not yet seeded is silently skipped.
         if all_flag or _flag("--with-companies"):
             if not admin_user:
                 print("\nError: --with-companies requires --with-admin")
                 sys.exit(1)
-            print("\n12. Creating demo company + memberships + scoping...")
+            print("\n12. Attaching the roster to the demo company...")
             seed_companies(admin_user, user_map)
 
         print("\nSeeding complete!")

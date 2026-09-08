@@ -1,4 +1,9 @@
-"""Seed script for authentication data (permissions, roles, users)."""
+"""Seed script for authentication data (users).
+
+Permissions are derived in code (`app.domain.authz.matrix`) from the company
+role, so there is nothing to seed for them: a user becomes an admin by being
+attached to a company as `admin` (see scripts/seed_companies.py).
+"""
 
 import os
 import sys
@@ -6,120 +11,14 @@ from argon2 import PasswordHasher
 from uuid import uuid4
 
 from app import db
-from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
-
-DEFAULT_PERMISSIONS = [
-    {"name": "*:*", "resource": "*", "action": "*"},
-    {"name": "project:create", "resource": "project", "action": "create"},
-    {"name": "project:read", "resource": "project", "action": "read"},
-    {"name": "project:update", "resource": "project", "action": "update"},
-    {"name": "project:delete", "resource": "project", "action": "delete"},
-    {"name": "project:invite", "resource": "project", "action": "invite"},
-    {"name": "project:manage_users", "resource": "project", "action": "manage_users"},
-    {"name": "project:manage_labor", "resource": "project", "action": "manage_labor"},
-    {"name": "project:log_own_attendance", "resource": "project", "action": "log_own_attendance"},
-    {"name": "project:manage_invoices", "resource": "project", "action": "manage_invoices"},
-    {"name": "bibliotheque:manage", "resource": "bibliotheque", "action": "manage"},
-    {"name": "user:read", "resource": "user", "action": "read"},
-    # Phase 1 (roles & permissions redesign): new permission strings derived
-    # by app.domain.authz.matrix, not attached to any legacy role below —
-    # legacy roles must not gain company-tenant or roster/pay capabilities.
-    {"name": "project:view_roster", "resource": "project", "action": "view_roster"},
-    {"name": "project:view_pay", "resource": "project", "action": "view_pay"},
-    {"name": "company:manage_members", "resource": "company", "action": "manage_members"},
-    {"name": "company:manage_settings", "resource": "company", "action": "manage_settings"},
-    {"name": "company:manage_billing", "resource": "company", "action": "manage_billing"},
-]
-
-DEFAULT_ROLES = [
-    {
-        "name": "admin",
-        "description": "Full system access - all resources and actions",
-        "permissions": ["*:*"],
-    },
-    {
-        "name": "manager",
-        "description": "Project management access",
-        "permissions": [
-            "project:create",
-            "project:read",
-            "project:update",
-            "project:delete",
-            "project:invite",
-            "project:manage_users",
-            "project:manage_labor",
-            "project:manage_invoices",
-            "bibliotheque:manage",
-            "user:read",
-        ],
-    },
-    {
-        "name": "member",
-        "description": "Default project member",
-        "permissions": ["project:read", "user:read", "project:log_own_attendance"],
-    },
-    {
-        "name": "user",
-        "description": "Basic user access",
-        "permissions": ["project:read", "user:read", "project:log_own_attendance"],
-    },
-]
+from app.infrastructure.database.models import UserModel
 
 
-def seed_permissions() -> dict:
-    """Create default permissions. Returns dict of name -> PermissionModel."""
-    permission_map = {}
+def create_admin_user(email: str, password: str) -> UserModel | None:
+    """Create the seed account with a hashed password.
 
-    for perm_data in DEFAULT_PERMISSIONS:
-        existing = db.session.query(PermissionModel).filter_by(name=perm_data["name"]).first()
-        if existing:
-            print(f"  Permission '{perm_data['name']}' already exists, skipping.")
-            permission_map[perm_data["name"]] = existing
-        else:
-            perm = PermissionModel(
-                id=uuid4(),
-                name=perm_data["name"],
-                resource=perm_data["resource"],
-                action=perm_data["action"],
-            )
-            db.session.add(perm)
-            permission_map[perm_data["name"]] = perm
-            print(f"  Created permission: {perm_data['name']}")
-
-    db.session.commit()
-    return permission_map
-
-
-def seed_roles(permission_map: dict) -> dict:
-    """Create default roles with permissions. Returns dict of name -> RoleModel."""
-    role_map = {}
-
-    for role_data in DEFAULT_ROLES:
-        existing = db.session.query(RoleModel).filter_by(name=role_data["name"]).first()
-        if existing:
-            print(f"  Role '{role_data['name']}' already exists, skipping.")
-            role_map[role_data["name"]] = existing
-        else:
-            role = RoleModel(
-                id=uuid4(),
-                name=role_data["name"],
-                description=role_data["description"],
-            )
-            for perm_name in role_data["permissions"]:
-                if perm_name in permission_map:
-                    role.permissions.append(permission_map[perm_name])
-            db.session.add(role)
-            role_map[role_data["name"]] = role
-            print(f"  Created role: {role_data['name']} with {len(role_data['permissions'])} permissions")
-
-    db.session.commit()
-    return role_map
-
-
-def create_admin_user(email: str, password: str, role_map: dict) -> UserModel | None:
-    """Create an admin user with hashed password.
-
-    If the user already exists, reset their password and ensure the admin role is set.
+    If the user already exists, reset their password and reactivate them.
+    Company `admin` rights come from the attachment made in seed_companies.
     """
     ph = PasswordHasher()
     password_hash = ph.hash(password)
@@ -128,10 +27,8 @@ def create_admin_user(email: str, password: str, role_map: dict) -> UserModel | 
     if existing:
         existing.password_hash = password_hash
         existing.is_active = True
-        if "admin" in role_map and role_map["admin"] not in existing.roles:
-            existing.roles.append(role_map["admin"])
         db.session.commit()
-        print(f"  User '{email}' already existed — password reset and admin role ensured.")
+        print(f"  User '{email}' already existed — password reset.")
         return existing
 
     user = UserModel(
@@ -141,17 +38,14 @@ def create_admin_user(email: str, password: str, role_map: dict) -> UserModel | 
         is_active=True,
     )
 
-    if "admin" in role_map:
-        user.roles.append(role_map["admin"])
-
     db.session.add(user)
     db.session.commit()
     print(f"  Created admin user: {email}")
     return user
 
 
-def create_client_user(email: str, password: str, role_map: dict) -> UserModel | None:
-    """Create a client user with basic 'user' role."""
+def create_client_user(email: str, password: str) -> UserModel | None:
+    """Create the legacy demo account; it joins the company as a `member`."""
     existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
     if existing:
         print(f"  User '{email}' already exists, skipping.")
@@ -166,9 +60,6 @@ def create_client_user(email: str, password: str, role_map: dict) -> UserModel |
         password_hash=password_hash,
         is_active=True,
     )
-
-    if "user" in role_map:
-        user.roles.append(role_map["user"])
 
     db.session.add(user)
     db.session.commit()

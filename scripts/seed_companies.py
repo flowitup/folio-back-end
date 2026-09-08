@@ -1,15 +1,13 @@
-"""Seed script for the company-as-tenant model (Phase 2 of roles-permissions-redesign).
+"""Seed script for the company-as-tenant model.
 
-Creates one demo company ("Folio Demo SARL"), attaches the seeded users at
-their company role, scopes the seeded projects/persons/labor roles to it.
+The company is the tenant, so it comes first: `ensure_company()` creates the
+demo company ("Folio Demo SARL") and makes the seed admin its `admin`, and
+every project seeded afterwards is created inside it (`projects.company_id` is
+NOT NULL). `seed_companies()` then attaches the rest of the roster at their
+company role and scopes persons and labor roles.
 
 Idempotent: re-running finds the existing company by legal_name and skips
-memberships/roles/company_persons that already exist.
-
-Typically invoked via `scripts/seed.py --with-companies` (or `--all`),
-after `--with-admin --with-users --with-projects --with-persons --with-labor`
-have already run — memberships for users/projects/persons not yet seeded are
-silently skipped rather than failing the whole run.
+attachments/labor roles/company_persons that already exist.
 """
 
 from __future__ import annotations
@@ -24,7 +22,6 @@ from app.infrastructure.database.models import (
     CompanyPersonModel,
     LaborRoleModel,
     PersonModel,
-    ProjectModel,
     UserCompanyAccessModel,
     UserModel,
 )
@@ -93,20 +90,25 @@ def _attach_member(company: CompanyModel, user: UserModel, role: str, is_primary
     print(f"    [add]  {user.email} → {role}")
 
 
-def _attach_memberships(company: CompanyModel, admin_user: UserModel, user_map: dict[str, UserModel]) -> None:
+def ensure_company(admin_user: UserModel) -> CompanyModel:
+    """Create (or find) the demo company with `admin_user` as its admin.
+
+    Runs before anything that needs a company — projects above all, whose
+    `company_id` is NOT NULL. Commits so later steps can reference the id.
+    """
+    company = _find_or_create_company(admin_user)
     _attach_member(company, admin_user, role="admin", is_primary=True)
+    _scope_labor_roles(company)
+    db.session.commit()
+    return company
+
+
+def _attach_memberships(company: CompanyModel, user_map: dict[str, UserModel]) -> None:
     for email, role in _COMPANY_ROLE_FOR_EMAIL.items():
         user = user_map.get(email)
         if user is None:
             continue
         _attach_member(company, user, role=role, is_primary=False)
-
-
-def _scope_projects(company: CompanyModel) -> None:
-    projects = db.session.query(ProjectModel).filter(ProjectModel.company_id.is_(None)).all()
-    for project in projects:
-        project.company_id = company.id
-        print(f"    [company_id] project '{project.name}' → {COMPANY_NAME}")
 
 
 def _scope_labor_roles(company: CompanyModel) -> None:
@@ -154,17 +156,16 @@ def _scope_persons(company: CompanyModel) -> None:
 
 
 def seed_companies(admin_user: UserModel, user_map: dict[str, UserModel]) -> CompanyModel:
-    """Seed the demo company, memberships, project scoping, labor roles, and person directory.
+    """Attach the roster to the demo company and scope labor roles + persons.
 
     `user_map` is the dict returned by `scripts.seed_users.seed_test_users`
-    (may be empty if `--with-users` was not run — memberships for those
-    users are then simply skipped).
+    (may be empty if `--with-users` was not run — attachments for those users
+    are then simply skipped).
     """
-    company = _find_or_create_company(admin_user)
-    _attach_memberships(company, admin_user, user_map)
-    _scope_projects(company)
+    company = ensure_company(admin_user)
+    _attach_memberships(company, user_map)
     _scope_labor_roles(company)
     _scope_persons(company)
     db.session.commit()
-    print(f"  Seeded company '{COMPANY_NAME}' with memberships, projects, labor roles, and persons.")
+    print(f"  Seeded company '{COMPANY_NAME}' with members, labor roles and persons.")
     return company
