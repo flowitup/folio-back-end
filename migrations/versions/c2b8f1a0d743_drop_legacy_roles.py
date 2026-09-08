@@ -18,6 +18,10 @@ tables, then the two parent tables:
 resolve any permission, so it would be invisible to everyone; the upgrade
 aborts with the offending ids rather than leaving that state behind.
 
+Postgres only: the ``SET NOT NULL`` below is a bare ``ALTER COLUMN``, which
+SQLite cannot run. Every environment this revision targets is Postgres; the
+test suite builds its schema from the models instead of replaying migrations.
+
 Revision ID: c2b8f1a0d743
 Revises: 9a4c1e7b2d05
 Create Date: 2026-09-08 15:40:00.000000
@@ -25,6 +29,7 @@ Create Date: 2026-09-08 15:40:00.000000
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "c2b8f1a0d743"
@@ -79,7 +84,7 @@ def upgrade() -> None:
     op.drop_table("permissions")
 
     # 4. Every project belongs to a company.
-    op.alter_column("projects", "company_id", existing_type=sa.dialects.postgresql.UUID(), nullable=False)
+    op.alter_column("projects", "company_id", existing_type=postgresql.UUID(), nullable=False)
 
 
 def downgrade() -> None:
@@ -96,7 +101,7 @@ def downgrade() -> None:
         "The previous release needs those rows: restore the pre-upgrade dump."
     )
 
-    op.alter_column("projects", "company_id", existing_type=sa.dialects.postgresql.UUID(), nullable=True)
+    op.alter_column("projects", "company_id", existing_type=postgresql.UUID(), nullable=True)
 
     op.create_table(
         "permissions",

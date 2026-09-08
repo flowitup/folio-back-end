@@ -7,8 +7,12 @@ What each of them may do comes from the company role assigned in
 
 Idempotent: re-running skips users that already exist (matched by email).
 
+`--with-ops` additionally flags `superadmin@example.com` as platform ops, the
+only way to reach `/api/v1/admin/*` on a freshly seeded database (the flag is
+deliberately off by default: it is not a tenant role).
+
 Standalone usage:
-    EMAIL_PROVIDER=inmemory uv run python -m scripts.seed_users
+    EMAIL_PROVIDER=inmemory uv run python -m scripts.seed_users [--with-ops]
 
 Typically invoked via the main `scripts/seed.py` orchestrator with
 `--with-users` (requires --with-admin first).
@@ -17,6 +21,7 @@ Typically invoked via the main `scripts/seed.py` orchestrator with
 from __future__ import annotations
 
 import os
+import sys
 from uuid import uuid4
 
 from argon2 import PasswordHasher
@@ -26,6 +31,9 @@ from app.infrastructure.database.models import UserModel
 
 # Hardcoded password for ALL seeded test users — DEV/TEST ONLY.
 TEST_PASSWORD = "password123"
+
+# The roster member `--with-ops` flags as platform ops.
+OPS_EMAIL = "superadmin@example.com"
 
 # Roster: (email, display_name | None, is_active). The company role each of
 # them gets is in scripts/seed_companies._COMPANY_ROLE_FOR_EMAIL.
@@ -55,8 +63,12 @@ TEST_PHONES: dict[str, str] = {
 }
 
 
-def seed_test_users() -> dict[str, UserModel]:
-    """Create the test user roster. Returns dict of email → UserModel."""
+def seed_test_users(with_ops: bool = False) -> dict[str, UserModel]:
+    """Create the test user roster. Returns dict of email → UserModel.
+
+    With `with_ops`, `superadmin@example.com` also gets the platform-ops flag
+    so the `/api/v1/admin/*` endpoints are reachable on a dev database.
+    """
     # Hardcoded TEST_PASSWORD must never reach production.
     if os.environ.get("FLASK_ENV") == "production":
         raise RuntimeError("REFUSING to seed test users with hardcoded password in FLASK_ENV=production.")
@@ -91,6 +103,14 @@ def seed_test_users() -> dict[str, UserModel]:
         display_marker = f" '{display_name}'" if display_name else ""
         print(f"  [add]  {email}{display_marker}{active_marker}")
 
+    if with_ops:
+        ops_user = user_map.get(OPS_EMAIL)
+        if ops_user is None:
+            print(f"  [ops]  {OPS_EMAIL} not in the roster — skipped")
+        elif not ops_user.is_platform_ops:
+            ops_user.is_platform_ops = True
+            print(f"  [ops]  {OPS_EMAIL} is now platform ops")
+
     db.session.commit()
     print(f"\n  Created {created_count} test users (password: '{TEST_PASSWORD}')")
     return user_map
@@ -103,7 +123,7 @@ def main() -> None:
     app = create_app()
     with app.app_context():
         print("Seeding test users...")
-        seed_test_users()
+        seed_test_users(with_ops="--with-ops" in sys.argv)
         print("\n  Done.")
 
 

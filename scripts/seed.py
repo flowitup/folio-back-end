@@ -38,6 +38,8 @@ Flag dependency graph:
                             every project needs one (projects.company_id NOT NULL)
     --with-projects         requires --with-admin
     --with-users            requires --with-admin
+    --with-ops              with --with-users: flags superadmin@example.com as
+                            platform ops (reaches /api/v1/admin/*)
     --with-memberships      requires --with-projects + --with-users
     --with-invitations      requires --with-admin + --with-projects
     --with-labor            requires --with-projects
@@ -111,7 +113,9 @@ def main() -> None:
                 print("\nError: --with-users requires --with-admin")
                 sys.exit(1)
             print("\n4. Creating test user roster...")
-            user_map = seed_test_users()
+            # Platform ops is off unless asked for: it is a support flag, not
+            # a tenant role, and --all must not hand it out silently.
+            user_map = seed_test_users(with_ops=_flag("--with-ops"))
 
         # Sample projects (owned by admin)
         if all_flag or _flag("--with-projects"):

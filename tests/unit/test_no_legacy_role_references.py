@@ -1,12 +1,17 @@
-"""The legacy RBAC vocabulary must not come back into `app/`.
+"""The legacy RBAC vocabulary must not come back into the runtime code.
 
 Permissions are derived from the company role plus grant/deny rows, and the
 tables that used to hold them are dropped by migration c2b8f1a0d743. Anything
-in `app/` that still names them would either crash at runtime or quietly gate
-on something that no longer exists.
+in `app/`, `scripts/` or `wiring.py` that still names them would either crash
+at runtime or quietly gate on something that no longer exists.
 
 `labor_roles` and `workers.role_id` are a different feature (the trade a worker
 practises) and stay — hence the deliberately narrow patterns below.
+
+`migrations/` is out of scope on purpose: revisions that ran before the drop
+must keep reading those tables. `scripts/migration_legacy_role_mapping.py` is
+the one scanned-tree file exempted for that reason — it is the data step of
+revision 9a4c1e7b2d05 and never runs after the drop.
 """
 
 from __future__ import annotations
@@ -16,7 +21,13 @@ import re
 
 import pytest
 
-APP_ROOT = pathlib.Path(__file__).resolve().parents[2] / "app"
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+APP_ROOT = REPO_ROOT / "app"
+
+# Runtime code that must stay free of the vocabulary, and the one exemption.
+SCANNED_ROOTS = (APP_ROOT, REPO_ROOT / "scripts")
+SCANNED_FILES = (REPO_ROOT / "wiring.py",)
+EXEMPT = (REPO_ROOT / "scripts" / "migration_legacy_role_mapping.py",)
 
 # (label, regex). Each must not match anywhere under app/.
 FORBIDDEN = [
@@ -32,19 +43,30 @@ FORBIDDEN = [
 
 
 def _python_sources() -> list[pathlib.Path]:
-    return [p for p in APP_ROOT.rglob("*.py") if "__pycache__" not in p.parts]
+    sources = [p for root in SCANNED_ROOTS for p in root.rglob("*.py") if "__pycache__" not in p.parts]
+    sources.extend(p for p in SCANNED_FILES if p.exists())
+    return [p for p in sources if p not in EXEMPT]
 
 
 @pytest.mark.parametrize("label,pattern", FORBIDDEN, ids=[label for label, _ in FORBIDDEN])
-def test_no_legacy_role_reference_in_app(label: str, pattern: re.Pattern[str]) -> None:
+def test_no_legacy_role_reference_in_runtime_code(label: str, pattern: re.Pattern[str]) -> None:
     offenders: list[str] = []
     for path in _python_sources():
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if "LaborRole" in line or "labor_role" in line:
                 continue
             if pattern.search(line):
-                offenders.append(f"{path.relative_to(APP_ROOT.parent)}:{lineno}: {line.strip()}")
-    assert not offenders, f"legacy {label} reference(s) left in app/:\n" + "\n".join(offenders)
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
+    assert not offenders, f"legacy {label} reference(s) left in runtime code:\n" + "\n".join(offenders)
+
+
+def test_the_scan_covers_scripts_and_wiring() -> None:
+    """Guard the guard: widening the tree is only useful if it is really scanned."""
+    scanned = _python_sources()
+    assert (REPO_ROOT / "scripts" / "seed_auth.py") in scanned
+    assert (REPO_ROOT / "wiring.py") in scanned
+    # The migration data step keeps its legacy SQL and must stay exempt.
+    assert EXEMPT[0].exists() and EXEMPT[0] not in scanned
 
 
 def test_labor_roles_are_untouched() -> None:
