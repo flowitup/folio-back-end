@@ -172,18 +172,27 @@ def analyses_app(invitation_app):
     invitation_app._analyses_superadmin_password = invitation_app._test_superadmin_password
     invitation_app._analyses_project_id = invitation_app._test_project_id
 
-    # A second project the ADMIN also owns, for the cross-project guard test.
+    # A second project of the SAME company, for the cross-project guard test.
     # `_test_project_2_id` is not usable here: no matching row exists in this
-    # app's database, so the actor fails the membership gate and the request is
-    # rejected with 403 before the guard can answer 404.
+    # app's database, so the actor fails the read gate and the request is
+    # rejected with 403 before the guard can answer 404. The company is copied
+    # from the main project — permissions resolve through it, so a project
+    # without one is readable by nobody.
     with invitation_app.app_context():
         other_project_id = str(uuid4())
+        # The id comparison is normalized: the ORM writes dashless hex on
+        # SQLite while the fixture keeps the dashed string form.
+        main_company_id = db.session.execute(
+            db.text("SELECT company_id FROM projects " "WHERE REPLACE(LOWER(CAST(id AS TEXT)), '-', '') = :main"),
+            {"main": invitation_app._test_project_id.replace("-", "").lower()},
+        ).scalar()
         db.session.execute(
-            db.text("INSERT INTO projects (id, name, owner_id) VALUES (:id, :name, :owner)"),
+            db.text("INSERT INTO projects (id, name, owner_id, company_id) VALUES (:id, :name, :owner, :company)"),
             {
                 "id": other_project_id,
                 "name": "Analyses Cross-Project Guard Project",
                 "owner": invitation_app._test_admin_user_id,
+                "company": main_company_id,
             },
         )
         db.session.commit()

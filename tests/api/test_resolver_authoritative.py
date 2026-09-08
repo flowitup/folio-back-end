@@ -58,6 +58,7 @@ def personas(invitation_app):
 
         manager = user("persona_manager@test.com")
         grantee = user("persona_grantee@test.com")
+        labor_grantee = user("persona_labor_grantee@test.com")
         denied = user("persona_denied@test.com")
         lone_owner = user("persona_lone_owner@test.com")
         other_admin = user("persona_other_admin@test.com")
@@ -93,6 +94,9 @@ def personas(invitation_app):
                     user_id=grantee.id, company_id=company_id, role="member", is_primary=True, attached_at=now
                 ),
                 UserCompanyAccessModel(
+                    user_id=labor_grantee.id, company_id=company_id, role="member", is_primary=True, attached_at=now
+                ),
+                UserCompanyAccessModel(
                     user_id=denied.id, company_id=company_id, role="manager", is_primary=True, attached_at=now
                 ),
                 UserCompanyAccessModel(
@@ -111,6 +115,16 @@ def personas(invitation_app):
                     company_id=company_id,
                     user_id=grantee.id,
                     permission="project:manage_invoices",
+                    effect="grant",
+                    project_id=project_id,
+                    granted_by_user_id=admin_user_id,
+                    granted_at=now,
+                ),
+                CompanyMemberGrantModel(
+                    id=uuid4(),
+                    company_id=company_id,
+                    user_id=labor_grantee.id,
+                    permission="project:manage_labor",
                     effect="grant",
                     project_id=project_id,
                     granted_by_user_id=admin_user_id,
@@ -142,6 +156,7 @@ def personas(invitation_app):
         ids = {
             "manager": str(manager.id),
             "grantee": str(grantee.id),
+            "labor_grantee": str(labor_grantee.id),
             "denied": str(denied.id),
             "lone_owner": str(lone_owner.id),
             "other_admin": str(other_admin.id),
@@ -334,3 +349,126 @@ class TestCompanyAdminVisibility:
         row = next(p for p in resp.get_json()["projects"] if p["id"] == invitation_app._test_project_id)
         assert "project:manage_invoices" in row["my_permissions"]
         assert "project:delete" not in row["my_permissions"]
+
+
+# ---------------------------------------------------------------------------
+# Notes and analyses resolve like every other project route (no legacy union)
+# ---------------------------------------------------------------------------
+
+
+class TestNotesFollowTheResolver:
+    """`ProjectMembershipReaderPort` answers `project:read`, writes add `project:update`.
+
+    Before this, the reader answered with `user_projects` OR `projects.owner_id`
+    OR a legacy global `*:*` role row — so an ops revocation did not apply, the
+    owner bypass survived, and an unassigned company admin was refused.
+    """
+
+    def test_company_admin_reads_notes_without_an_assignment(self, inv_client, personas, admin_token):
+        resp = inv_client.get(f"/api/v1/projects/{personas['orphan_project']}/notes", headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_company_admin_writes_notes_without_an_assignment(self, inv_client, personas, admin_token):
+        resp = inv_client.post(
+            f"/api/v1/projects/{personas['orphan_project']}/notes",
+            json={"title": "Site visit"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_owner_without_a_company_role_cannot_read_notes(self, inv_client, personas, lone_owner_token):
+        """D6 on notes too: ownership alone grants nothing."""
+        resp = inv_client.get(f"/api/v1/projects/{personas['orphan_project']}/notes", headers=_auth(lone_owner_token))
+        assert resp.status_code == 403
+
+    def test_manager_writes_a_note_on_the_assigned_project(self, inv_client, invitation_app, manager_token):
+        resp = inv_client.post(
+            f"/api/v1/projects/{invitation_app._test_project_id}/notes",
+            json={"title": "Delivery received", "category": "delivery"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_assigned_member_keeps_the_site_journal(self, inv_client, invitation_app, member_token):
+        """Notes sit at `project:read`, like documents and photos: the journal is
+        what an assigned member is there to fill. Money and management routes
+        are the ones a member cannot reach."""
+        pid = invitation_app._test_project_id
+        assert inv_client.get(f"/api/v1/projects/{pid}/notes", headers=_auth(member_token)).status_code == 200
+        resp = inv_client.post(f"/api/v1/projects/{pid}/notes", json={"title": "Delivery"}, headers=_auth(member_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_outsider_gets_403_on_notes(self, inv_client, invitation_app, outsider_token):
+        resp = inv_client.get(
+            f"/api/v1/projects/{invitation_app._test_project_id}/notes", headers=_auth(outsider_token)
+        )
+        assert resp.status_code == 403
+
+    def test_unknown_project_answers_404_on_notes(self, inv_client, admin_token):
+        resp = inv_client.post(
+            f"/api/v1/projects/{uuid4()}/notes", json={"title": "Nowhere"}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /projects never lists a project the caller cannot open
+# ---------------------------------------------------------------------------
+
+
+class TestListNeverLeaksUnreadableProjects:
+    def test_lone_owner_lists_nothing(self, inv_client, personas, lone_owner_token):
+        """Ownership puts the row in the query but not in the answer (403 on every route)."""
+        resp = inv_client.get("/api/v1/projects", headers=_auth(lone_owner_token))
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["projects"] == []
+        assert body["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Attendance validation targets (bell + push share this one query)
+# ---------------------------------------------------------------------------
+
+
+def _validators(app, project_id: str, company_id: str) -> set:
+    from app import db
+    from app.infrastructure.database.labor_validation_scope import validator_user_ids
+
+    with app.app_context():
+        rows = validator_user_ids(db.session, UUID(project_id), UUID(company_id))
+    return {str(r).replace("-", "").lower() for r in rows}
+
+
+def _key(value) -> str:
+    return str(value).replace("-", "").lower()
+
+
+class TestAttendanceValidationTargets:
+    """`validator_user_ids` must agree with the matrix, not with the old role tables.
+
+    Bell (fixed user → projects) and push targeting (fixed project → users) are
+    the same SQL definition, so asserting one direction covers both.
+    """
+
+    def test_unassigned_company_admin_is_a_target(self, invitation_app, personas):
+        """Admin is implicit on every project of the company — no assignment needed."""
+        validators = _validators(invitation_app, personas["orphan_project"], invitation_app._test_company_id)
+        assert _key(invitation_app._test_admin_user_id) in validators
+
+    def test_assigned_manager_is_a_target_and_a_plain_member_is_not(self, invitation_app, personas):
+        validators = _validators(invitation_app, invitation_app._test_project_id, invitation_app._test_company_id)
+        assert _key(personas["manager"]) in validators
+        assert _key(invitation_app._test_member_user_id) not in validators
+
+    def test_a_manage_labor_grant_adds_a_member(self, invitation_app, personas):
+        validators = _validators(invitation_app, invitation_app._test_project_id, invitation_app._test_company_id)
+        assert _key(personas["labor_grantee"]) in validators
+
+    def test_a_deny_removes_an_assigned_manager(self, invitation_app, personas):
+        validators = _validators(invitation_app, invitation_app._test_project_id, invitation_app._test_company_id)
+        assert _key(personas["denied"]) not in validators
+
+    def test_owner_without_a_company_role_is_never_a_target(self, invitation_app, personas):
+        validators = _validators(invitation_app, personas["orphan_project"], invitation_app._test_company_id)
+        assert _key(personas["lone_owner"]) not in validators
