@@ -541,6 +541,9 @@ class Container:
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
     get_monthly_labor_summary_usecase: Optional[GetMonthlyLaborSummaryUseCase] = None
+    # D3 day roster — wired in app/__init__.py once authz_reader exists (needs
+    # worker_repository + labor_entry_repository + the company-aware authz reader).
+    get_day_roster_usecase: Optional[Any] = None  # GetDayRosterUseCase
     export_labor_usecase: Optional[ExportLaborUseCase] = None
     # Attendance validation — worker self-log → manager validate / reject, bell feed.
     submit_own_attendance_usecase: Optional[SubmitOwnAttendanceUseCase] = None

@@ -563,6 +563,17 @@ def _configure_di_container() -> None:
 
     _c.authz_reader = SqlAlchemyAuthzReader(db.session)
 
+    # D3 day roster use case — needs worker_repository + labor_entry_repository
+    # (wired earlier in configure_container) plus the authz reader just above.
+    if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+        from app.application.labor.get_day_roster_usecase import GetDayRosterUseCase
+
+        _c.get_day_roster_usecase = GetDayRosterUseCase(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            authz_reader=_c.authz_reader,
+        )
+
     # admin use-cases
     _c.create_company_usecase = _CreateCompanyUseCase(
         company_repo=_company_repo,

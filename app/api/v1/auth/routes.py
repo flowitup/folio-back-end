@@ -30,6 +30,7 @@ from app.api.v1.auth.schemas import (
     SignupRequestBody,
     SignupVerifyBody,
     UserResponse,
+    UserCompanySummary,
     ErrorResponse,
     LogoutResponse,
 )
@@ -348,6 +349,18 @@ def get_current_user():
     if not user:
         return jsonify(ErrorResponse(error="NotFound", message="User not found", status_code=404).model_dump()), 404
 
+    companies: list[UserCompanySummary] = []
+    if container.company_repo is not None:
+        for company, access in container.company_repo.list_attached_for_user(UUID(user_id)):
+            companies.append(
+                UserCompanySummary(
+                    id=company.id,
+                    legal_name=company.legal_name,
+                    role=access.role,
+                    is_primary=access.is_primary,
+                )
+            )
+
     return jsonify(
         UserResponse(
             id=user.id,
@@ -355,6 +368,7 @@ def get_current_user():
             permissions=jwt_claims.get("permissions", []),
             roles=[r.name for r in user.roles],
             phone=user.phone,
+            companies=companies,
         ).model_dump()
     )
 

@@ -1,9 +1,14 @@
 """Worker scope — what a project member may see of labor and pay data.
 
 A caller who holds ``project:manage_labor`` on a project (global role, membership
-role, or project owner) sees every worker. Everyone else is a *restricted member*:
-they only see the worker linked to their own account (``workers.user_id``) — their
-attendance, their pay, their summary — and nothing of the project's money.
+role, or project owner) sees every worker. A caller who instead holds the
+read-only ``project:view_pay`` permission (matrix: admin implicit, manager on
+an assigned project — never member) also sees every worker, but gains no
+write access: it only widens :func:`labor_scope_for`'s *read* scope, never
+:func:`caller_manages_labor`'s write gate. Everyone else is a *restricted
+member*: they only see the worker linked to their own account
+(``workers.user_id``) — their attendance, their pay, their summary — and
+nothing of the project's money.
 
 Route handlers call :func:`labor_scope_for` and narrow their query / response;
 endpoints that cannot be narrowed (whole-project exports, tag cost rollups…) use
@@ -46,12 +51,21 @@ def caller_manages_labor(project_id: UUID, user_id: UUID) -> bool:
 
 
 def labor_scope_for(project_id: UUID | str) -> LaborScope:
-    """Resolve the scope of the current JWT caller on ``project_id``."""
+    """Resolve the scope of the current JWT caller on ``project_id``.
+
+    ``project:view_pay`` (effective — global ∪ membership role ∪ the company
+    matrix resolver, wildcards honoured) widens this to an unrestricted READ
+    scope, same as ``caller_manages_labor``, but is evaluated separately: it
+    must never satisfy ``caller_manages_labor`` itself, so a view_pay holder
+    still gets 403 on every write endpoint that gates on that function.
+    """
     from wiring import get_container
 
     project_uuid = UUID(str(project_id))
     user_id = UUID(str(get_jwt_identity()))
     if caller_manages_labor(project_uuid, user_id):
+        return LaborScope(restricted=False, worker_id=None)
+    if _has_permission(_effective_perms_for(project_uuid, user_id), "project:view_pay"):
         return LaborScope(restricted=False, worker_id=None)
     worker_repo = getattr(get_container(), "worker_repository", None)
     worker = worker_repo.find_by_project_and_user(project_uuid, user_id) if worker_repo is not None else None

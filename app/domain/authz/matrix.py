@@ -38,6 +38,7 @@ ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         "bibliotheque:manage",
         "project:log_own_attendance",
         "project:view_pay",
+        "project:view_roster",
         "user:read",
     }
 )
@@ -56,16 +57,19 @@ MANAGER_PROJECT_PERMISSIONS: frozenset[str] = frozenset(
         "bibliotheque:manage",
         "project:log_own_attendance",
         "project:view_pay",
+        "project:view_roster",
     }
 )
 
 # `member` holds read-only access to the same project-scoped surface, plus
-# their own attendance logging. No project:view_pay (never sees other
+# their own attendance logging and the day roster (D3: name, presence, hours,
+# day type — never rate/cost). No project:view_pay (never sees other
 # workers' rate/cost) and no manage_* write permission.
 MEMBER_PROJECT_PERMISSIONS: frozenset[str] = frozenset(
     {
         "project:read",
         "project:log_own_attendance",
+        "project:view_roster",
     }
 )
 
