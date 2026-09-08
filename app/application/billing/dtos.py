@@ -161,6 +161,7 @@ class CreateTemplateInput:
     notes: Optional[str] = None
     terms: Optional[str] = None
     default_vat_rate: Optional[Decimal] = None
+    company_id: Optional[UUID] = None
 
 
 @dataclass(frozen=True)
@@ -316,6 +317,7 @@ class BillingTemplateResponse:
     notes: Optional[str] = None
     terms: Optional[str] = None
     default_vat_rate: Optional[Decimal] = None
+    company_id: Optional[UUID] = None
 
     @staticmethod
     def from_entity(tpl: BillingDocumentTemplate) -> "BillingTemplateResponse":
@@ -344,6 +346,7 @@ class BillingTemplateResponse:
             notes=tpl.notes,
             terms=tpl.terms,
             default_vat_rate=tpl.default_vat_rate,
+            company_id=tpl.company_id,
         )
 
 

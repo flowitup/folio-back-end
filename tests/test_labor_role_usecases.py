@@ -63,14 +63,17 @@ class InMemoryLaborRoleRepository:
     def find_by_id(self, role_id: UUID) -> Optional[LaborRole]:
         return self._store.get(role_id)
 
-    def find_by_name(self, name: str) -> Optional[LaborRole]:
+    def find_by_name(self, name: str, company_id: Optional[UUID] = None) -> Optional[LaborRole]:
         for role in self._store.values():
-            if role.name == name:
+            if role.name == name and role.company_id == company_id:
                 return role
         return None
 
-    def list_all(self) -> List[LaborRole]:
-        return sorted(self._store.values(), key=lambda r: r.name)
+    def list_all(self, company_id: Optional[UUID] = None) -> List[LaborRole]:
+        return sorted(
+            (r for r in self._store.values() if r.company_id == company_id),
+            key=lambda r: r.name,
+        )
 
     def update(self, role: LaborRole) -> LaborRole:
         self._store[role.id] = role

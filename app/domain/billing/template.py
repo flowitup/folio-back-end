@@ -36,6 +36,10 @@ class BillingDocumentTemplate:
     terms: Optional[str] = None
     default_vat_rate: Optional[Decimal] = None
     items: tuple[BillingDocumentItem, ...] = field(default_factory=tuple)
+    # Phase 2: scopes the template to a company for shared, per-company
+    # listing. None = not yet backfilled (ambiguous owner) — excluded from
+    # company-scoped lists.
+    company_id: Optional[UUID] = None
 
     def with_updates(self, **kwargs: object) -> "BillingDocumentTemplate":
         """Return a new BillingDocumentTemplate with the given fields replaced."""

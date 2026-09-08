@@ -528,6 +528,11 @@ class Container:
     search_persons_usecase: Optional[Any] = None  # SearchPersonsUseCase
     merge_persons_usecase: Optional[Any] = None  # MergePersonsUseCase
 
+    # Company-scoped person directory (Phase 2 of roles-permissions-redesign).
+    # Repository only in this slice — onboarding use cases (add-by-phone,
+    # import, sign-up linking, grants) are a later slice built on top.
+    company_person_repo: Optional[Any] = None  # SqlAlchemyCompanyPersonRepository
+
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
     update_worker_usecase: Optional[UpdateWorkerUseCase] = None
@@ -557,6 +562,7 @@ class Container:
     create_labor_role_usecase: Optional[CreateLaborRoleUseCase] = None
     update_labor_role_usecase: Optional[UpdateLaborRoleUseCase] = None
     delete_labor_role_usecase: Optional[DeleteLaborRoleUseCase] = None
+    seed_default_labor_roles_usecase: Optional[Any] = None  # SeedDefaultLaborRolesUseCase (Phase 2)
     list_labor_roles_usecase: Optional[ListLaborRolesUseCase] = None
 
     # Labor activity use cases

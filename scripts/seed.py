@@ -45,6 +45,7 @@ Flag dependency graph:
     --with-labor            requires --with-projects
     --with-invoices         requires --with-projects
     --with-notes            requires --with-admin + --with-projects (uses --with-users if available)
+    --with-companies        requires --with-admin (uses --with-users/--with-projects/--with-persons if available)
     --all                   shorthand for everything above
 """
 
@@ -66,6 +67,7 @@ from scripts.seed_labor import seed_labor
 from scripts.seed_persons import seed_persons
 from scripts.seed_invoices import seed_invoices
 from scripts.seed_notes import seed_notes
+from scripts.seed_companies import seed_companies
 
 
 def _flag(name: str, *aliases: str) -> bool:
@@ -161,6 +163,18 @@ def main() -> None:
         if all_flag or _flag("--with-notes"):
             print("\n11. Creating notes + dismissals...")
             seed_notes()
+
+        # Company-as-tenant model (Phase 2): demo company + memberships +
+        # project/labor-role/person scoping. Best run after --with-users,
+        # --with-projects, --with-persons, --with-labor so there is
+        # something to attach/scope — but only --with-admin is required;
+        # anything else not yet seeded is silently skipped.
+        if all_flag or _flag("--with-companies"):
+            if not admin_user:
+                print("\nError: --with-companies requires --with-admin")
+                sys.exit(1)
+            print("\n12. Creating demo company + memberships + scoping...")
+            seed_companies(admin_user, user_map)
 
         print("\nSeeding complete!")
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from flask import jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api.openapi import openapi_doc
@@ -38,12 +38,51 @@ def _role_response(role) -> LaborRoleResponse:
     )
 
 
+def _resolve_company_scope():
+    """Resolve the company scope for the global /labor/roles routes (Phase 2).
+
+    `?company_id=` is honored only when the caller belongs to that company
+    (any role) — returns a (company_id, error_response) tuple where exactly
+    one element is None. Falls back to the caller's primary company; when
+    neither resolves (no query param and no primary company — e.g. a
+    platform admin with no company of their own, or a test fixture with no
+    company set up at all), scope stays None (legacy/unscoped rows) rather
+    than failing, so callers with no company context keep working.
+    """
+    container = get_container()
+    caller_id = UUID(get_jwt_identity())
+
+    raw_company_id = request.args.get("company_id")
+    if raw_company_id:
+        try:
+            requested = UUID(raw_company_id)
+        except ValueError:
+            return None, _error_response("ValidationError", f"Invalid company id: {raw_company_id!r}", 400)
+        access_repo = getattr(container, "user_company_access_repo", None)
+        access = access_repo.find(caller_id, requested) if access_repo is not None else None
+        if access is None:
+            return None, _error_response("Forbidden", f"Not a member of company {raw_company_id}", 403)
+        return requested, None
+
+    authz_reader = getattr(container, "authz_reader", None)
+    if authz_reader is not None:
+        primary = authz_reader.primary_company_id(caller_id)
+        if primary is not None:
+            return primary, None
+    return None, None
+
+
 @labor_bp.route("/labor/roles", methods=["GET"])
-@openapi_doc(summary="List all labor roles with the suggested color palette", tags=["labor"])
+@openapi_doc(
+    summary="List labor roles (scoped to the caller's company) with the suggested color palette", tags=["labor"]
+)
 @jwt_required()
 def list_labor_roles():
-    """List all labor roles with the suggested color palette."""
-    roles = get_container().list_labor_roles_usecase.execute()
+    """List labor roles scoped to the caller's company, with the suggested color palette."""
+    company_id, error = _resolve_company_scope()
+    if error is not None:
+        return error
+    roles = get_container().list_labor_roles_usecase.execute(company_id=company_id)
     return jsonify(
         LaborRoleListResponse(
             roles=[_role_response(r) for r in roles],
@@ -54,7 +93,7 @@ def list_labor_roles():
 
 @labor_bp.route("/labor/roles", methods=["POST"])
 @openapi_doc(
-    summary="Create a new labor role",
+    summary="Create a new labor role, scoped to the caller's company",
     request=CreateLaborRoleRequest,
     responses={201: LaborRoleResponse},
     tags=["labor"],
@@ -62,16 +101,21 @@ def list_labor_roles():
 @jwt_required()
 @limiter.limit("10 per minute")
 def create_labor_role():
-    """Create a new labor role."""
+    """Create a new labor role, scoped to the caller's company."""
     try:
         data = CreateLaborRoleRequest(**request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
+    company_id, error = _resolve_company_scope()
+    if error is not None:
+        return error
+
     try:
         role = get_container().create_labor_role_usecase.execute(
             name=data.name,
             color=data.color,
+            company_id=company_id,
         )
     except DuplicateLaborRoleError as e:
         return _error_response("Conflict", str(e), 409)

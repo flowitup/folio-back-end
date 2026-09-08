@@ -21,17 +21,45 @@ class IPersonRepository(ABC):
         ...
 
     @abstractmethod
+    def find_by_user_id(self, user_id: UUID) -> Optional[Person]:
+        """Find the Person linked to a user account, or None (Phase 2).
+
+        A user has at most one Person (``persons.user_id`` is unique) —
+        set once, either by the backfill migration or by
+        ``set_user_id`` on sign-up linking.
+        """
+        ...
+
+    @abstractmethod
+    def set_user_id(self, person_id: UUID, user_id: UUID) -> Optional[Person]:
+        """Link a Person to a user account (Phase 2 sign-up linking).
+
+        Returns the updated Person, or None if `person_id` does not exist.
+        Does not check for a pre-existing link on `user_id` — the caller
+        (sign-up linking use case) owns that invariant since it must decide
+        what to do about a conflict, not silently overwrite.
+        """
+        ...
+
+    @abstractmethod
     def search(
         self,
         query: str,
         limit: int = 20,
+        company_ids: Optional[List[UUID]] = None,
     ) -> List[Person]:
         """Search persons by name (case-insensitive substring on normalized_name)
         or by exact phone match. Returns up to `limit` rows ordered by name.
 
-        Phase 1b-ii intentionally returns a flat unscoped list. Cross-project
-        privacy scoping (limit to persons visible via accessible projects)
-        will be layered in Phase 1d once the FE typeahead consumes this.
+        `company_ids` (Phase 2): when given, restricts results to persons
+        with an active `company_persons` row in one of those companies —
+        the tenancy scope for `GET /persons` (see
+        `app.application.persons.search_persons.SearchPersonsUseCase`).
+        `None` means unscoped (platform `*:*` callers only); an empty list
+        would incorrectly behave like "no filter" in a plain SQL `IN ()`, so
+        callers MUST resolve at least one company id before scoping, never
+        pass `[]` expecting "no results" — the use case enforces this by
+        returning early with an empty response instead of calling `search`.
         """
         ...
 

@@ -21,6 +21,13 @@ class LaborRole:
     color: str
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Phase 2: scopes a role to one company (None = legacy/unscoped row —
+    # excluded from a company's list, kept around for ambiguous backfills).
+    company_id: Optional[UUID] = None
+    # Phase 2: stable i18n key for the two seeded roles ("tho_chinh",
+    # "tho_phu") and any future default role — clients key UI copy on this
+    # instead of a random per-environment UUID.
+    slug: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():

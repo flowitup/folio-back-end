@@ -25,10 +25,10 @@ projects of one company) collapse to a single query. Without a provider (the
 default — e.g. tests that construct this class directly), every call queries
 fresh; still correct, just uncached.
 
-`grants_for` always returns `[]` — the `company_member_grants` table (D8)
-lands in Phase 2. Every other method degrades to "no relationship" (None /
-False / empty list) rather than raising, since a missing row is a normal,
-expected outcome (e.g. a user with no access to a company).
+`grants_for` reads the Phase 2 `company_member_grants` table (D8). Every
+method degrades to "no relationship" (None / False / empty list) rather than
+raising, since a missing row is a normal, expected outcome (e.g. a user with
+no access to a company, or no grant/deny row at all).
 """
 
 from __future__ import annotations
@@ -200,8 +200,48 @@ class SqlAlchemyAuthzReader:
         return result
 
     def grants_for(self, user_id: UUID, company_id: UUID, project_id: "UUID | None") -> "list[tuple[str, str]]":
-        """D8 per-user grant/deny rows — always empty until Phase 2 ships the table."""
-        return []
+        """Return the caller's D8 grant/deny rows applicable to this scope.
+
+        Reads `company_member_grants` for `(user_id, company_id)`, keeping
+        rows that are either company-wide (`project_id IS NULL` — always
+        applicable) or scoped to the SAME `project_id` passed in. A row
+        scoped to a DIFFERENT project never matches — that is the whole
+        point of D8's per-project scoping (a grant on project P must not
+        leak onto project Q).
+
+        Caching key includes `project_id` (even though a company-wide row
+        would also apply project-agnostically) because the resolver calls
+        this once per resolved `(user_id, company_id, project_id)` triple —
+        caching at that same granularity avoids a second cache dimension
+        for no benefit within one request.
+        """
+        cache = self._cache()
+        key = ("grants_for", user_id, company_id, project_id)
+        if cache is not None and key in cache:
+            return cache[key]
+
+        if project_id is None:
+            scope_clause = "project_id IS NULL"
+            params = {"uid": self._bind_uuid(user_id), "cid": self._bind_uuid(company_id)}
+        else:
+            scope_clause = f"(project_id IS NULL OR {self._eq('project_id', 'pid')})"
+            params = {
+                "uid": self._bind_uuid(user_id),
+                "cid": self._bind_uuid(company_id),
+                "pid": self._bind_uuid(project_id),
+            }
+
+        rows = self._session.execute(
+            text(
+                f"SELECT permission, effect FROM company_member_grants "
+                f"WHERE {self._eq('user_id', 'uid')} AND {self._eq('company_id', 'cid')} AND {scope_clause}"
+            ),
+            params,
+        ).fetchall()
+        result = [(r[0], r[1]) for r in rows]
+        if cache is not None:
+            cache[key] = result
+        return result
 
     @staticmethod
     def _as_uuid_or_none(raw) -> "UUID | None":

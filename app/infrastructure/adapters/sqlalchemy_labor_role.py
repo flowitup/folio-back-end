@@ -30,7 +30,9 @@ class SQLAlchemyLaborRoleRepository(ILaborRoleRepository):
     def create(self, role: LaborRole) -> LaborRole:
         model = LaborRoleModel(
             id=role.id,
+            company_id=role.company_id,
             name=role.name,
+            slug=role.slug,
             color=role.color,
             created_at=role.created_at,
         )
@@ -68,12 +70,21 @@ class SQLAlchemyLaborRoleRepository(ILaborRoleRepository):
         model = self._session.query(LaborRoleModel).filter_by(id=role_id).first()
         return self._to_entity(model) if model else None
 
-    def find_by_name(self, name: str) -> Optional[LaborRole]:
-        model = self._session.query(LaborRoleModel).filter_by(name=name).first()
+    def find_by_name(self, name: str, company_id: Optional[UUID] = None) -> Optional[LaborRole]:
+        model = (
+            self._session.query(LaborRoleModel)
+            .filter(LaborRoleModel.name == name, LaborRoleModel.company_id == company_id)
+            .first()
+        )
         return self._to_entity(model) if model else None
 
-    def list_all(self) -> List[LaborRole]:
-        models = self._session.query(LaborRoleModel).order_by(LaborRoleModel.name).all()
+    def list_all(self, company_id: Optional[UUID] = None) -> List[LaborRole]:
+        models = (
+            self._session.query(LaborRoleModel)
+            .filter(LaborRoleModel.company_id == company_id)
+            .order_by(LaborRoleModel.name)
+            .all()
+        )
         return [self._to_entity(m) for m in models]
 
     # ------------------------------------------------------------------
@@ -88,4 +99,6 @@ class SQLAlchemyLaborRoleRepository(ILaborRoleRepository):
             color=model.color,
             created_at=model.created_at,
             updated_at=model.updated_at,
+            company_id=model.company_id,
+            slug=model.slug,
         )

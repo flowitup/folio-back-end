@@ -145,6 +145,18 @@ class BillingTemplateRepositoryPort(Protocol):
         """Return all templates for a user, optionally filtered by kind."""
         ...
 
+    def list_for_company(
+        self,
+        company_id: UUID,
+        kind: Optional[BillingDocumentKind] = None,
+    ) -> list[BillingDocumentTemplate]:
+        """Return every template scoped to a company (any author), optionally filtered by kind.
+
+        Templates are shared, per-company assets once scoped (Phase 2) —
+        unlike `list_for_user`, this is not limited to the caller's own rows.
+        """
+        ...
+
     def save(self, template: BillingDocumentTemplate) -> BillingDocumentTemplate:
         """Insert or update a template. Returns the persisted instance."""
         ...

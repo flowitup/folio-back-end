@@ -686,6 +686,14 @@ def _configure_di_container() -> None:
         db_session=db.session,
     )
 
+    # Company-scoped person directory (Phase 2). Repository only — onboarding
+    # use cases (add-by-phone, import, sign-up linking) are a later slice.
+    from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+        SqlAlchemyCompanyPersonRepository,
+    )
+
+    _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+
     # Re-wire CreateWorkerUseCase with person_repo now that the latter
     # exists. configure_container() in wiring.py wires it with the worker
     # repo only — cook 1d-ii-b adds the inline-Person-create branch which
@@ -716,6 +724,13 @@ def _configure_di_container() -> None:
     _c.update_labor_role_usecase = _UpdateLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.delete_labor_role_usecase = _DeleteLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.list_labor_roles_usecase = _ListLaborRolesUseCase(repo=_labor_role_repo)
+
+    # Default role roster for a newly created company (Phase 2 onboarding
+    # slice wires this into company creation; exposed here so seeds/tests
+    # can call it directly).
+    from app.application.labor.seed_default_labor_roles import SeedDefaultLaborRolesUseCase as _SeedDefaultLRUC
+
+    _c.seed_default_labor_roles_usecase = _SeedDefaultLRUC(repo=_labor_role_repo, db_session=db.session)
 
     # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)

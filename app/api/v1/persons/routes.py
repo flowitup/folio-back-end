@@ -130,16 +130,44 @@ def _get_merge_usecase() -> MergePersonsUseCase:
 # ---------------------------------------------------------------------------
 
 
+def _company_scope_for_search(caller_id: UUID) -> "Optional[list[UUID]]":
+    """Resolve the tenancy scope for GET /persons (Phase 2, finding 10).
+
+    Returns None for a platform `*:*` caller (unscoped — every person is
+    visible, matching every other superadmin bypass in this codebase).
+    Otherwise returns the list of company ids where the caller holds the
+    "admin" or "manager" role — member-only callers get an empty list,
+    which the route turns into a 403 (a member sees the day roster of
+    their assigned project, never the global person directory).
+    """
+    claims = get_jwt()
+    if "*:*" in set(claims.get("permissions", [])):
+        return None
+
+    access_repo = getattr(get_container(), "user_company_access_repo", None)
+    if access_repo is None:
+        return []
+
+    accesses = access_repo.list_for_user(caller_id)
+    return [a.company_id for a in accesses if a.role in ("admin", "manager")]
+
+
 @persons_bp.route("/persons", methods=["GET"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def search_persons():
-    """Typeahead search over Persons.
+    """Typeahead search over Persons, scoped to the caller's companies (Phase 2).
 
     Query params:
       q     — search substring (matched against normalized_name or exact phone).
               Min length 2 to prevent enumeration via single-character prefixes.
       limit — max rows to return (default 20, capped 20)
+
+    Scoping: results are limited to persons with an active company_persons
+    row in a company where the caller is admin or manager. A caller who is
+    only a member somewhere (or a member of nowhere) gets 403 — the global
+    directory is an admin/manager tool, not the day roster a member sees.
+    Platform `*:*` callers are unscoped.
     """
     query = (request.args.get("q") or "").strip()
     if len(query) < _PERSONS_SEARCH_MIN_Q:
@@ -156,7 +184,11 @@ def search_persons():
     # widen the response window past the configured ceiling.
     limit = max(1, min(limit, _PERSONS_SEARCH_MAX_LIMIT))
 
-    result = _get_search_usecase().execute(SearchPersonsRequest(query=query, limit=limit))
+    company_ids = _company_scope_for_search(_current_user_uuid())
+    if company_ids is not None and len(company_ids) == 0:
+        return _error("Forbidden", "Admin or manager role in at least one company is required.", 403)
+
+    result = _get_search_usecase().execute(SearchPersonsRequest(query=query, limit=limit, company_ids=company_ids))
 
     return jsonify(
         SearchPersonsResponseSchema(

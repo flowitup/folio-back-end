@@ -191,10 +191,131 @@ def test_reader_matches_rows_regardless_of_insert_path(session, two_company_worl
     assert reader.company_role_for(w["outsider"], w["company_b"]) == "member"
 
 
-def test_reader_grants_for_always_empty(two_company_world, reader):
-    """Stubbed until Phase 2 — every adapter call must return []."""
+def test_reader_grants_for_empty_with_no_rows(two_company_world, reader):
+    """No company_member_grants row for this user/company → empty list."""
     w = two_company_world
     assert reader.grants_for(w["admin_a"], w["company_a"], w["project_a"]) == []
+
+
+def test_reader_grants_for_reads_company_member_grants(session, two_company_world, reader):
+    """A grant row scoped to project_a applies there and only there (D8)."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+
+    w = two_company_world
+    session.add(
+        CompanyMemberGrantModel(
+            id=uuid4(),
+            company_id=w["company_a"],
+            user_id=w["member_a_assigned"],
+            permission="project:manage_labor",
+            effect="grant",
+            project_id=w["project_a"],
+            granted_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    rows = reader.grants_for(w["member_a_assigned"], w["company_a"], w["project_a"])
+    assert rows == [("project:manage_labor", "grant")]
+
+    # A different company_id (project_b's) must not see this row.
+    assert reader.grants_for(w["member_a_assigned"], w["company_b"], w["project_b"]) == []
+
+
+def test_reader_grants_for_company_wide_deny_applies_to_every_project(session, two_company_world, reader):
+    """A company-wide (project_id NULL) deny row applies regardless of which project is asked about."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+    from app.infrastructure.database.models.project import ProjectModel
+
+    w = two_company_world
+    second_project = ProjectModel(id=uuid4(), name="Project A2", owner_id=w["admin_a"], company_id=w["company_a"])
+    session.add(second_project)
+    session.add(
+        CompanyMemberGrantModel(
+            id=uuid4(),
+            company_id=w["company_a"],
+            user_id=w["manager_a_assigned"],
+            permission="project:manage_labor",
+            effect="deny",
+            project_id=None,
+            granted_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    # Applies on project_a...
+    rows_a = reader.grants_for(w["manager_a_assigned"], w["company_a"], w["project_a"])
+    assert rows_a == [("project:manage_labor", "deny")]
+    # ...and on a second, unrelated project of the same company.
+    rows_b = reader.grants_for(w["manager_a_assigned"], w["company_a"], second_project.id)
+    assert rows_b == [("project:manage_labor", "deny")]
+
+
+def test_resolver_project_scoped_grant_does_not_leak_to_other_project(session, two_company_world, reader):
+    """effective_permissions: a grant on project_a must not apply on a second project of the same company."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+    from app.infrastructure.database.models.project import ProjectModel
+
+    w = two_company_world
+    other_project = ProjectModel(id=uuid4(), name="Project A3", owner_id=w["admin_a"], company_id=w["company_a"])
+    session.add(other_project)
+    session.add(
+        CompanyMemberGrantModel(
+            id=uuid4(),
+            company_id=w["company_a"],
+            user_id=w["member_a_assigned"],
+            permission="project:manage_invoices",
+            effect="grant",
+            project_id=w["project_a"],
+            granted_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    perms_on_granted_project = effective_permissions(reader, w["member_a_assigned"], project_id=w["project_a"])
+    assert "project:manage_invoices" in perms_on_granted_project
+
+    # member_a_assigned is not assigned to other_project at all, so the base
+    # matrix already denies everything project-scoped there — the grant must
+    # not resurrect it.
+    perms_on_other_project = effective_permissions(reader, w["member_a_assigned"], project_id=other_project.id)
+    assert "project:manage_invoices" not in perms_on_other_project
+
+
+def test_resolver_deny_wins_over_matrix_grant(session, two_company_world, reader):
+    """effective_permissions: a deny row removes a permission the base matrix would otherwise grant."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+
+    w = two_company_world
+    session.add(
+        CompanyMemberGrantModel(
+            id=uuid4(),
+            company_id=w["company_a"],
+            user_id=w["manager_a_assigned"],
+            permission="project:manage_labor",
+            effect="deny",
+            project_id=w["project_a"],
+            granted_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    perms = effective_permissions(reader, w["manager_a_assigned"], project_id=w["project_a"])
+    assert "project:manage_labor" not in perms
+    # Everything else the matrix grants a manager stays intact.
+    assert "project:manage_invoices" in perms
 
 
 # ---------------------------------------------------------------------------

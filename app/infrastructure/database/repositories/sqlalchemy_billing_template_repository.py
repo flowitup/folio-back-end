@@ -49,6 +49,19 @@ class SqlAlchemyBillingTemplateRepository:
         rows = self._session.execute(stmt).scalars().all()
         return [deserialize_orm_to_template(r) for r in rows]
 
+    def list_for_company(
+        self,
+        company_id: UUID,
+        kind: Optional[BillingDocumentKind] = None,
+    ) -> list[BillingDocumentTemplate]:
+        """Return every template scoped to a company (any author), optionally filtered by kind."""
+        stmt = select(BillingDocumentTemplateModel).where(BillingDocumentTemplateModel.company_id == company_id)
+        if kind is not None:
+            stmt = stmt.where(BillingDocumentTemplateModel.kind == kind.value)
+        stmt = stmt.order_by(BillingDocumentTemplateModel.name)
+        rows = self._session.execute(stmt).scalars().all()
+        return [deserialize_orm_to_template(r) for r in rows]
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------

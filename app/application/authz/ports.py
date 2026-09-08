@@ -2,11 +2,8 @@
 
 ``AuthzReaderPort`` is the single read surface the domain resolver
 (``app.domain.authz.resolver``) needs: company role, project assignment,
-project→company lookup, and the caller's admin/primary companies. Grants and
-denies (D8) are stubbed to always return an empty list until the
-``company_member_grants`` table lands in Phase 2 — the resolver already
-folds them in correctly, so no resolver change is needed when that table
-arrives.
+project→company lookup, the caller's admin/primary companies, and D8
+grant/deny rows read from ``company_member_grants`` (Phase 2).
 """
 
 from __future__ import annotations
@@ -48,9 +45,11 @@ class AuthzReaderPort(Protocol):
     def grants_for(self, user_id: UUID, company_id: UUID, project_id: "UUID | None") -> list[tuple[str, str]]:
         """Return the caller's explicit D8 grant/deny rows as (permission, effect) pairs.
 
-        ``effect`` is "grant" or "deny". Stubbed to always return ``[]`` until
-        the Phase 2 ``company_member_grants`` table exists — every adapter
-        implementing this port before then MUST return an empty list, never
-        raise, so the resolver degrades to matrix-only permissions.
+        ``effect`` is "grant" or "deny". Rows are scoped to `company_id`
+        and either company-wide (``project_id IS NULL`` on the row) or
+        matching the given `project_id` exactly — a row scoped to a
+        different project never applies. Returns ``[]`` when there is
+        nothing to apply (never raises), so the resolver degrades to
+        matrix-only permissions.
         """
         ...

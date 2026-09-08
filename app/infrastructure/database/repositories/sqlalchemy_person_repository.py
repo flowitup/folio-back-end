@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.application.persons.ports import IPersonRepository
 from app.domain.entities.person import Person
 from app.infrastructure.database.models import PersonModel
+from app.infrastructure.database.models.company_person import CompanyPersonModel
 
 
 class SqlAlchemyPersonRepository(IPersonRepository):
@@ -39,7 +40,25 @@ class SqlAlchemyPersonRepository(IPersonRepository):
         model = self._session.query(PersonModel).filter_by(id=person_id).first()
         return self._to_entity(model) if model else None
 
-    def search(self, query: str, limit: int = 20) -> List[Person]:
+    def find_by_user_id(self, user_id: UUID) -> Optional[Person]:
+        model = self._session.query(PersonModel).filter_by(user_id=user_id).first()
+        return self._to_entity(model) if model else None
+
+    def set_user_id(self, person_id: UUID, user_id: UUID) -> Optional[Person]:
+        model = self._session.query(PersonModel).filter_by(id=person_id).first()
+        if model is None:
+            return None
+        model.user_id = user_id
+        self._session.commit()
+        self._session.refresh(model)
+        return self._to_entity(model)
+
+    def search(
+        self,
+        query: str,
+        limit: int = 20,
+        company_ids: Optional[List[UUID]] = None,
+    ) -> List[Person]:
         q = self._session.query(PersonModel)
         normalized = Person.normalize(query)
 
@@ -53,6 +72,20 @@ class SqlAlchemyPersonRepository(IPersonRepository):
                     PersonModel.phone == query.strip(),
                 )
             )
+
+        if company_ids is not None:
+            # Tenancy scope (Phase 2): only persons with an active
+            # company_persons row in one of the caller's admin/manager
+            # companies. `.distinct()` guards against duplicate rows when a
+            # person has profiles in more than one of the given companies.
+            q = q.join(
+                CompanyPersonModel,
+                CompanyPersonModel.person_id == PersonModel.id,
+            ).filter(
+                CompanyPersonModel.company_id.in_(company_ids),
+                CompanyPersonModel.is_active.is_(True),
+            )
+            q = q.distinct()
 
         models = q.order_by(PersonModel.normalized_name).limit(limit).all()
         return [self._to_entity(m) for m in models]
@@ -79,4 +112,6 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             created_at=model.created_at,
             phone=model.phone,
             updated_at=model.updated_at,
+            user_id=model.user_id,
+            phone_normalized=model.phone_normalized,
         )
