@@ -52,12 +52,11 @@ def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
     return spent_map.get(project_id, _NO_SPEND)
 
 
-def _money_visible(perms: list, owner_id, user_id: UUID) -> bool:
+def _money_visible(perms: list) -> bool:
     """Budget and spend need `project:manage_labor` or `project:view_pay`.
 
-    `owner_id`/`user_id` are kept in the signature for call-site readability
-    only: creating a project is no longer a permission of its own (D6), so an
-    owner sees money exactly like any other manager — through the resolver.
+    Project ownership grants nothing on its own (D6): an owner sees money
+    exactly like any other manager, through the resolver.
     """
     return _has_permission(perms, "project:manage_labor") or _has_permission(perms, "project:view_pay")
 
@@ -103,16 +102,15 @@ def list_projects():
 
     project_ids = [UUID(str(p.id)) for p in projects]
 
-    # H1: prime the per-request authz-reader cache with every project's
-    # company_id in ONE query, so the per-project _effective_perms_for() call
-    # below hits the cache instead of issuing N separate `project_company_id`
-    # SELECTs (a company admin listing many projects would otherwise pay one
-    # resolver query per project). No-op if authz_reader isn't wired or
-    # doesn't support preloading (e.g. a minimal test double).
+    # Prime the per-request authz-reader cache with everything the resolver
+    # needs for the whole list — project→company, the caller's assignments and
+    # their D8 rows — in three queries instead of three per project. No-op if
+    # authz_reader isn't wired or doesn't support preloading (a minimal test
+    # double).
     if project_ids and container.authz_reader is not None:
-        preload = getattr(container.authz_reader, "preload_project_company_ids", None)
+        preload = getattr(container.authz_reader, "preload_for_projects", None)
         if preload is not None:
-            preload(project_ids)
+            preload(UUID(user_id), project_ids)
 
     spent_map = {}
     if project_ids and container.project_spent_reader is not None:
@@ -141,7 +139,14 @@ def list_projects():
     for p in projects:
         pid = UUID(str(p.id))
         perms = sorted(_effective_perms_for(pid, user_uuid))
-        visible = _money_visible(perms, p.owner_id, user_uuid)
+        # A row the caller cannot open is not part of their list: ownership and
+        # a bare assignment row no longer imply a company role, so the query's
+        # visibility clauses can still surface a project the resolver refuses
+        # (403 on every one of its routes). Filtering here also keeps `total`
+        # honest.
+        if not _has_permission(perms, "project:read"):
+            continue
+        visible = _money_visible(perms)
         items.append(
             ProjectResponse(
                 id=p.id,
@@ -157,7 +162,7 @@ def list_projects():
                 **_spend_fields(_spent_for(spent_map, pid) if visible else _NO_SPEND),
             )
         )
-    return jsonify(ProjectListResponse(projects=items, total=len(projects)).model_dump())
+    return jsonify(ProjectListResponse(projects=items, total=len(items)).model_dump())
 
 
 @projects_bp.route("", methods=["POST"])
@@ -365,7 +370,7 @@ def get_project(project_id: str):
         spent_rollup = _spent_for(spent_map, project.id)
 
     perms = sorted(_effective_perms_for(project.id, user_id))
-    visible = _money_visible(perms, project.owner_id, user_id)
+    visible = _money_visible(perms)
     return jsonify(
         ProjectResponse(
             id=str(project.id),

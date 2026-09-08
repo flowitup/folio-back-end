@@ -217,15 +217,24 @@ def test_from_after_to_returns_422(inv_export_client, inv_export_app, admin_toke
     assert resp.get_json()["error"] == "validation_error"
 
 
-def test_unknown_project_returns_403(inv_export_client, inv_export_app, admin_token):
-    """Non-existent project UUID → 403.
-
-    Permissions are resolved from the project's company; an id that resolves to
-    no company resolves to no permission, so `@require_permission` answers
-    before `@require_project_access()` can report 404. Nobody can learn from a
-    403 whether the id exists.
-    """
+def test_unknown_project_returns_404(inv_export_client, inv_export_app, admin_token):
+    """Non-existent project UUID → 404: existence is resolved before permissions."""
     url = _export_url(str(uuid4()))
+    resp = inv_export_client.get(
+        url,
+        query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert data["error"] in ("NotFound", "project_not_found")
+
+
+def test_project_of_another_company_returns_403(inv_export_client, inv_export_app, admin_token):
+    """An existing project the caller may not read → 403 (not 404)."""
+    from tests.foreign_project_helper import create_foreign_project
+
+    url = _export_url(create_foreign_project(inv_export_app))
     resp = inv_export_client.get(
         url,
         query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},

@@ -30,44 +30,110 @@ def _has_permission(permissions: list, required: str) -> bool:
     return False
 
 
-def _resolve_project_id(kwargs: dict) -> "UUID | None":
-    """Resolve the project this request targets from the route's URL params.
+def _as_uuid(raw) -> "UUID | None":
+    """Parse a URL parameter into a UUID.
+
+    Routes declare their ids either as plain strings or through Flask's
+    `<uuid:...>` converter, which hands the view a `UUID` object — `str(raw)`
+    accepts both. Returns None for anything unparseable.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, UUID):
+        return raw
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _project_exists(project_id: UUID) -> bool:
+    """True when a `projects` row with this id exists (unknown → assume it does).
+
+    Answers the "does this id exist at all?" half of the 404-before-403 rule.
+    Falls back to True when no authz reader is wired (minimal test doubles), so
+    a wiring gap degrades to the permission check instead of a spurious 404.
+    """
+    from wiring import get_container
+
+    reader = getattr(get_container(), "authz_reader", None)
+    exists = getattr(reader, "project_exists", None)
+    if exists is None:
+        return True
+    return bool(exists(project_id))
+
+
+def _resolve_project_ref(kwargs: dict) -> "tuple[UUID | None, bool]":
+    """Resolve the project this request targets → `(project_id, ref_is_missing)`.
 
     Project-scoped routes carry the project either directly (`project_id`) or
     via a child entity (`invoice_id`/`task_id`/`attachment_id`) that belongs to
-    a project. Returns the owning project UUID, or None when no project context
-    can be resolved (non-project routes, or the entity does not exist — in which
-    case the downstream access decorator returns the proper 404).
+    a project.
+
+    `ref_is_missing` is True when the URL names a project (or an invoice / task
+    / attachment) that does not exist: the caller gets 404 before any
+    permission is evaluated, which is the pre-existing contract on these routes
+    and matches the roster rule. An id that is present but unparseable, or a
+    route carrying no project reference at all, yields `(None, False)` — the
+    permission check then answers as usual.
     """
     from wiring import get_container
 
     raw = kwargs.get("project_id")
     if raw:
-        try:
-            return UUID(raw)
-        except (ValueError, TypeError):
-            return None
+        project_id = _as_uuid(raw)
+        if project_id is None:
+            return None, False
+        if not _project_exists(project_id):
+            return None, True
+        return project_id, False
 
     container = get_container()
     invoice_repo = getattr(container, "invoice_repository", None)
     task_repo = getattr(container, "task_repository", None)
     attachment_repo = getattr(container, "invoice_attachment_repository", None)
-    try:
-        if kwargs.get("invoice_id") and invoice_repo is not None:
-            invoice = invoice_repo.find_by_id(UUID(kwargs["invoice_id"]))
-            return invoice.project_id if invoice else None
-        if kwargs.get("task_id") and task_repo is not None:
-            task = task_repo.find_by_id(UUID(kwargs["task_id"]))
-            return task.project_id if task else None
-        if kwargs.get("attachment_id") and attachment_repo is not None and invoice_repo is not None:
-            attachment = attachment_repo.find_by_id(UUID(kwargs["attachment_id"]))
-            if attachment is None:
-                return None
-            invoice = invoice_repo.find_by_id(attachment.invoice_id)
-            return invoice.project_id if invoice else None
-    except (ValueError, TypeError):
-        return None
-    return None
+
+    if kwargs.get("invoice_id") and invoice_repo is not None:
+        invoice_id = _as_uuid(kwargs["invoice_id"])
+        if invoice_id is None:
+            return None, False
+        invoice = invoice_repo.find_by_id(invoice_id)
+        return (invoice.project_id, False) if invoice else (None, True)
+    if kwargs.get("task_id") and task_repo is not None:
+        task_id = _as_uuid(kwargs["task_id"])
+        if task_id is None:
+            return None, False
+        task = task_repo.find_by_id(task_id)
+        return (task.project_id, False) if task else (None, True)
+    if kwargs.get("attachment_id") and attachment_repo is not None and invoice_repo is not None:
+        attachment_id = _as_uuid(kwargs["attachment_id"])
+        if attachment_id is None:
+            return None, False
+        attachment = attachment_repo.find_by_id(attachment_id)
+        if attachment is None:
+            return None, True
+        invoice = invoice_repo.find_by_id(attachment.invoice_id)
+        return (invoice.project_id, False) if invoice else (None, True)
+    return None, False
+
+
+def _resolve_project_id(kwargs: dict) -> "UUID | None":
+    """The project this request targets, or None (see `_resolve_project_ref`)."""
+    project_id, _missing = _resolve_project_ref(kwargs)
+    return project_id
+
+
+def _missing_ref_message(kwargs: dict) -> str:
+    """404 body for the URL id that could not be resolved to an existing row."""
+    for key, label in (
+        ("project_id", "Project"),
+        ("invoice_id", "Invoice"),
+        ("task_id", "Task"),
+        ("attachment_id", "Attachment"),
+    ):
+        if kwargs.get(key):
+            return f"{label} {kwargs[key]} not found"
+    return "Not found"
 
 
 def _is_platform_admin() -> bool:
@@ -99,6 +165,17 @@ def _resolver_permissions_no_project(user_id: UUID) -> frozenset:
     return resolve_for_request(user_id, is_platform_admin=_is_platform_admin())
 
 
+def _permissions_for(project_id: "UUID | None") -> list:
+    """The caller's effective permissions for `project_id` (context-free when None)."""
+    identity = get_jwt_identity()
+    user_id = _as_uuid(identity)
+    if user_id is None:
+        return []
+    if project_id is None:
+        return list(_resolver_permissions_no_project(user_id))
+    return list(_resolver_permissions_for_project(user_id, project_id))
+
+
 def _effective_permissions(kwargs: dict) -> list:
     """The caller's effective permissions for this request — resolver only.
 
@@ -112,15 +189,7 @@ def _effective_permissions(kwargs: dict) -> list:
     stale token can no longer widen access, and a role change applies on the
     next request.
     """
-    identity = get_jwt_identity()
-    try:
-        user_id = UUID(str(identity))
-    except (ValueError, TypeError):
-        return []
-    project_id = _resolve_project_id(kwargs)
-    if project_id is None:
-        return list(_resolver_permissions_no_project(user_id))
-    return list(_resolver_permissions_for_project(user_id, project_id))
+    return _permissions_for(_resolve_project_id(kwargs))
 
 
 def require_permission(permission: str):
@@ -129,7 +198,9 @@ def require_permission(permission: str):
 
     Project-scoped routes are answered by the resolver for that project
     (company role + assignment + D8 rows); non-project routes get the
-    resolver's context-free answer.
+    resolver's context-free answer. A URL naming a project (or invoice / task /
+    attachment) that does not exist answers 404 before any permission is
+    evaluated — an id nobody can act on is "not found", not "forbidden".
 
     Usage:
         @require_permission("project:create")
@@ -140,7 +211,10 @@ def require_permission(permission: str):
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            permissions = _effective_permissions(kwargs)
+            project_id, ref_is_missing = _resolve_project_ref(kwargs)
+            if ref_is_missing:
+                return _not_found(_missing_ref_message(kwargs))
+            permissions = _permissions_for(project_id)
 
             if not _has_permission(permissions, permission):
                 return (
@@ -226,9 +300,8 @@ def require_project_access(write: bool = False, permission: str = "project:updat
             project_id_str = kwargs.get("project_id")
             if not project_id_str:
                 return _forbidden("Missing project id")
-            try:
-                project_uuid = UUID(project_id_str)
-            except ValueError:
+            project_uuid = _as_uuid(project_id_str)
+            if project_uuid is None:
                 return _forbidden("Invalid project id")
 
             container = get_container()
@@ -247,86 +320,39 @@ def require_project_access(write: bool = False, permission: str = "project:updat
     return decorator
 
 
-def _get_project_company_id_from_orm(project_id: UUID) -> "UUID | None":
-    """Fetch company_id directly from the ORM model.
-
-    The domain Project entity intentionally omits company_id (kept in the
-    infrastructure layer). This helper queries the DB row so the decorator
-    can resolve company ownership without extending the domain entity.
-    """
-    from app import db
-    from app.infrastructure.database.models.project import ProjectModel
-
-    row = db.session.get(ProjectModel, project_id)
-    return row.company_id if row is not None else None
-
-
-def _is_company_admin_for_project(project, user_id: UUID) -> bool:
-    """Return True when the user is a company admin of the project's owning company.
-
-    This allows company admins to read invoice attachments for their company's projects
-    even when they are not a project member. Write paths are NOT widened by this check.
-    """
-    company_id = _get_project_company_id_from_orm(project.id)
-    if company_id is None:
-        return False
-    from wiring import get_container  # local to avoid circular imports at module load
-
-    container = get_container()
-    access_repo = getattr(container, "user_company_access_repo", None)
-    if access_repo is None:
-        return False
-    from app.application.billing.ports import admin_company_ids  # lazy to avoid circular imports
-
-    return company_id in admin_company_ids(access_repo, user_id)
-
-
-def require_invoice_access(
-    write: bool = False,
-    allow_company_admin: bool = False,
-    permission: str = "project:manage_invoices",
+def _require_entity_access(
+    id_kwarg: str,
+    label: str,
+    project_for,
+    write: bool,
+    permission: str,
 ):
-    """Decorator: load invoice → load project → check caller is a member (or admin).
+    """Build a decorator gating `<id_kwarg>` on the resolver, for one resource kind.
 
-    Apply to any route whose path includes `<invoice_id>`. The decorator runs AFTER
-    `@jwt_required()`. If the caller lacks access (not owner, not member, not admin),
-    returns 403; if the invoice/project does not exist, returns 404.
-
-    Args:
-        write: when True, requires `permission` on the invoice's project;
-               when False, `can_read_project`.
-        permission: the write permission required — `project:manage_invoices`
-               by default, since that is what an invoice write is.
-        allow_company_admin: when True and write=False, also grants access to users
-               who are admins of the project's owning company (even without membership).
-               Has no effect on write paths.
+    `project_for(container, entity_id)` returns `(project, not_found_message)`:
+    the project owning the URL entity, or None plus the 404 body to answer.
+    Shared by the invoice / task / attachment decorators so all three answer
+    404-before-403 and resolve permissions identically.
     """
 
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            from wiring import get_container  # local import to avoid circular dep at module load
+            from wiring import get_container  # local import: avoids a circular dep at module load
 
-            invoice_id_str = kwargs.get("invoice_id")
-            if not invoice_id_str:
-                return _forbidden("Missing invoice id")
-            try:
-                invoice_uuid = UUID(invoice_id_str)
-            except ValueError:
-                return _forbidden("Invalid invoice id")
+            raw = kwargs.get(id_kwarg)
+            if not raw:
+                return _forbidden(f"Missing {label.lower()} id")
+            entity_id = _as_uuid(raw)
+            if entity_id is None:
+                return _forbidden(f"Invalid {label.lower()} id")
 
-            container = get_container()
-            invoice = container.invoice_repository.find_by_id(invoice_uuid)
-            if invoice is None:
-                return _not_found(f"Invoice {invoice_id_str} not found")
-            project = container.project_repository.find_by_id(invoice.project_id)
+            project, missing = project_for(get_container(), entity_id)
             if project is None:
-                return _not_found("Invoice's project no longer exists")
+                return _not_found(missing or f"{label} {raw} not found")
 
-            user_id = UUID(get_jwt_identity())
+            user_id = UUID(str(get_jwt_identity()))
             allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
-            if not allowed and not write and allow_company_admin:
-                allowed = _is_company_admin_for_project(project, user_id)
             if not allowed:
                 return _forbidden()
             return fn(*args, **kwargs)
@@ -334,98 +360,59 @@ def require_invoice_access(
         return wrapper
 
     return decorator
+
+
+def _project_of_invoice(container, invoice_id: UUID):
+    invoice = container.invoice_repository.find_by_id(invoice_id)
+    if invoice is None:
+        return None, f"Invoice {invoice_id} not found"
+    project = container.project_repository.find_by_id(invoice.project_id)
+    return project, "Invoice's project no longer exists"
+
+
+def _project_of_task(container, task_id: UUID):
+    task = container.task_repository.find_by_id(task_id)
+    if task is None:
+        return None, f"Task {task_id} not found"
+    project = container.project_repository.find_by_id(task.project_id)
+    return project, "Task's project no longer exists"
+
+
+def _project_of_attachment(container, attachment_id: UUID):
+    attachment = container.invoice_attachment_repository.find_by_id(attachment_id)
+    if attachment is None:
+        return None, f"Attachment {attachment_id} not found"
+    invoice = container.invoice_repository.find_by_id(attachment.invoice_id)
+    if invoice is None:
+        return None, "Attachment's invoice no longer exists"
+    project = container.project_repository.find_by_id(invoice.project_id)
+    return project, "Attachment's project no longer exists"
+
+
+def require_invoice_access(write: bool = False, permission: str = "project:manage_invoices"):
+    """Decorator: load invoice → its project → resolve the caller's permission.
+
+    Apply to any route whose path includes `<invoice_id>`; runs after
+    `@jwt_required()`. 404 when the invoice (or its project) is gone, 403 when
+    the caller lacks `project:read` (reads) or `permission` (writes). Company
+    admins pass through the resolver like any other caller — their read of a
+    company project needs no special case.
+    """
+    return _require_entity_access("invoice_id", "Invoice", _project_of_invoice, write, permission)
 
 
 def require_task_access(write: bool = False, permission: str = "project:update"):
-    """Decorator: load task → invoice's project → check membership.
+    """Decorator: load task → its project → resolve the caller's permission.
 
-    Apply to routes whose path includes `<task_id>`. JWT is required
-    upstream via `@jwt_required()`.
+    Apply to routes whose path includes `<task_id>`; runs after `@jwt_required()`.
     """
-
-    def decorator(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            from wiring import get_container
-
-            task_id_str = kwargs.get("task_id")
-            if not task_id_str:
-                return _forbidden("Missing task id")
-            try:
-                task_uuid = UUID(task_id_str)
-            except ValueError:
-                return _forbidden("Invalid task id")
-
-            container = get_container()
-            task = container.task_repository.find_by_id(task_uuid)
-            if task is None:
-                return _not_found(f"Task {task_id_str} not found")
-            project = container.project_repository.find_by_id(task.project_id)
-            if project is None:
-                return _not_found("Task's project no longer exists")
-
-            user_id = UUID(get_jwt_identity())
-            allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
-            if not allowed:
-                return _forbidden()
-            return fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
+    return _require_entity_access("task_id", "Task", _project_of_task, write, permission)
 
 
-def require_attachment_access(
-    write: bool = False,
-    allow_company_admin: bool = False,
-    permission: str = "project:manage_invoices",
-):
-    """Decorator: load attachment → invoice → project → check membership.
+def require_attachment_access(write: bool = False, permission: str = "project:manage_invoices"):
+    """Decorator: load attachment → invoice → project → resolve the caller's permission.
 
     Apply to routes whose path includes `<attachment_id>`. Same semantics as
     `require_invoice_access`.
-
-    Args:
-        write: when True, requires `permission` on the attachment's project;
-               when False, `can_read_project`.
-        permission: the write permission required — `project:manage_invoices` by default.
-        allow_company_admin: when True and write=False, also grants access to users
-               who are admins of the project's owning company (even without membership).
-               Has no effect on write paths.
     """
-
-    def decorator(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            from wiring import get_container
-
-            att_id_str = kwargs.get("attachment_id")
-            if not att_id_str:
-                return _forbidden("Missing attachment id")
-            try:
-                att_uuid = UUID(att_id_str)
-            except ValueError:
-                return _forbidden("Invalid attachment id")
-
-            container = get_container()
-            attachment = container.invoice_attachment_repository.find_by_id(att_uuid)
-            if attachment is None:
-                return _not_found(f"Attachment {att_id_str} not found")
-            invoice = container.invoice_repository.find_by_id(attachment.invoice_id)
-            if invoice is None:
-                return _not_found("Attachment's invoice no longer exists")
-            project = container.project_repository.find_by_id(invoice.project_id)
-            if project is None:
-                return _not_found("Attachment's project no longer exists")
-
-            user_id = UUID(get_jwt_identity())
-            allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
-            if not allowed and not write and allow_company_admin:
-                allowed = _is_company_admin_for_project(project, user_id)
-            if not allowed:
-                return _forbidden()
-            return fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
+    return _require_entity_access("attachment_id", "Attachment", _project_of_attachment, write, permission)

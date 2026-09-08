@@ -450,65 +450,93 @@ def test_require_attachment_access_paths(monkeypatch, app_ctx):
     assert status == 404
 
 
-def test_company_admin_read_fallback_without_a_company_is_false(monkeypatch, app_ctx):
-    """`allow_company_admin` degrades to False when the project has no company."""
+def test_company_admin_reads_an_invoice_without_an_assignment(monkeypatch, app_ctx):
+    """A company admin reads their company's invoices through the matrix alone.
+
+    The old `allow_company_admin` escape hatch is gone: `project:read` for an
+    admin comes from the resolver, assigned or not.
+    """
+    reader, user_id, project_id = _ctx(role="admin", assigned=False)
+    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
+    invoice = SimpleNamespace(project_id=project_id)
+    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice)
+
+    assert _view(dec.require_invoice_access())(invoice_id=str(uuid4())) == "ok"
+
+
+def test_unassigned_member_cannot_read_an_invoice(monkeypatch, app_ctx):
+    """No company-admin fallback for a plain member of the project's company."""
     reader, user_id, project_id = _ctx(role="member", assigned=False)
     project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
     invoice = SimpleNamespace(project_id=project_id)
     _wire_project(monkeypatch, reader, user_id, project, invoice=invoice)
-    monkeypatch.setattr(dec, "_get_project_company_id_from_orm", lambda pid: None)
 
-    _body, status = _view(dec.require_invoice_access(allow_company_admin=True))(invoice_id=str(uuid4()))
+    _body, status = _view(dec.require_invoice_access())(invoice_id=str(uuid4()))
     assert status == 403
 
 
-def test_company_admin_read_fallback_uses_the_access_repo(monkeypatch, app_ctx):
-    """`allow_company_admin` lets a company admin read an attachment's invoice."""
-    reader, user_id, project_id = _ctx(role="member", assigned=False)
-    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
-    invoice = SimpleNamespace(project_id=project_id)
-    company_id = uuid4()
+# ---------------------------------------------------------------------------
+# 404 before 403: an id nobody can act on is "not found", not "forbidden"
+# ---------------------------------------------------------------------------
 
-    import wiring
 
-    container = SimpleNamespace(
-        authz_reader=reader,
-        project_repository=SimpleNamespace(find_by_id=lambda pid: project),
-        invoice_repository=SimpleNamespace(find_by_id=lambda iid: invoice),
-        task_repository=SimpleNamespace(find_by_id=lambda tid: None),
-        invoice_attachment_repository=SimpleNamespace(find_by_id=lambda aid: None),
-        user_company_access_repo=SimpleNamespace(
-            list_for_user=lambda uid: [SimpleNamespace(company_id=company_id, role="admin")]
-        ),
+class _ReaderWithExistence(FakeReader):
+    """FakeReader that also answers `project_exists` (the real reader does)."""
+
+    def project_exists(self, project_id):
+        return project_id == self._project_id
+
+
+def test_unknown_project_id_is_404_before_the_permission_check(monkeypatch, app_ctx):
+    user_id, project_id, company_id = uuid4(), uuid4(), uuid4()
+    reader = _ReaderWithExistence(user_id=user_id, project_id=project_id, company_id=company_id, role="admin")
+    _wire(monkeypatch, reader, user_id)
+
+    @dec.require_permission("project:read")
+    def view(project_id):  # pragma: no cover - never reached
+        return "ok"
+
+    _body, status = view(project_id=str(uuid4()))
+    assert status == 404
+    assert view(project_id=str(project_id)) == "ok"
+
+
+def test_existing_project_the_caller_cannot_read_is_403(monkeypatch, app_ctx):
+    user_id, project_id, company_id = uuid4(), uuid4(), uuid4()
+    reader = _ReaderWithExistence(
+        user_id=user_id, project_id=project_id, company_id=company_id, role="member", assigned=False
     )
-    monkeypatch.setattr(wiring, "get_container", lambda: container)
-    monkeypatch.setattr(dec, "get_jwt_identity", lambda: str(user_id))
-    import app.api.v1.ops_context as ops_context
+    _wire(monkeypatch, reader, user_id)
 
-    monkeypatch.setattr(ops_context, "get_jwt_identity", lambda: str(user_id))
-    monkeypatch.setattr(dec, "_get_project_company_id_from_orm", lambda pid: company_id)
+    @dec.require_permission("project:read")
+    def view(project_id):  # pragma: no cover - never reached
+        return "ok"
 
-    assert _view(dec.require_invoice_access(allow_company_admin=True))(invoice_id=str(uuid4())) == "ok"
-    assert dec._is_company_admin_for_project(project, user_id) is True
-
-    # No access repo wired → the fallback answers False rather than raising.
-    container.user_company_access_repo = None
-    assert dec._is_company_admin_for_project(project, user_id) is False
-
-
-def test_attachment_company_admin_read_fallback(monkeypatch, app_ctx):
-    """Same fallback on the attachment route: admin reads, non-admin is refused."""
-    reader, user_id, project_id = _ctx(role="member", assigned=False)
-    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
-    invoice = SimpleNamespace(project_id=project_id)
-    attachment = SimpleNamespace(invoice_id=uuid4())
-    company_id = uuid4()
-
-    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice, attachment=attachment)
-    monkeypatch.setattr(dec, "_get_project_company_id_from_orm", lambda pid: company_id)
-    monkeypatch.setattr(dec, "_is_company_admin_for_project", lambda p, uid: True)
-    assert _view(dec.require_attachment_access(allow_company_admin=True))(attachment_id=str(uuid4())) == "ok"
-
-    monkeypatch.setattr(dec, "_is_company_admin_for_project", lambda p, uid: False)
-    _body, status = _view(dec.require_attachment_access(allow_company_admin=True))(attachment_id=str(uuid4()))
+    _body, status = view(project_id=str(project_id))
     assert status == 403
+
+
+def test_missing_invoice_answers_404_from_require_permission(monkeypatch, app_ctx):
+    reader, user_id, _project_id = _ctx()
+    _wire(monkeypatch, reader, user_id, invoice=None)
+
+    @dec.require_permission("project:read")
+    def view(invoice_id):  # pragma: no cover - never reached
+        return "ok"
+
+    _body, status = view(invoice_id=str(uuid4()))
+    assert status == 404
+
+
+def test_uuid_converter_kwargs_are_accepted(monkeypatch, app_ctx):
+    """Routes declared with `<uuid:project_id>` hand the decorators a UUID object."""
+    reader, user_id, project_id = _ctx()
+    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
+    _wire_project(monkeypatch, reader, user_id, project)
+
+    @dec.require_permission("project:read")
+    @dec.require_project_access()
+    def view(project_id):
+        return "ok"
+
+    assert view(project_id=project_id) == "ok"

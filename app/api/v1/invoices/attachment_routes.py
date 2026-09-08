@@ -6,7 +6,7 @@ from typing import Tuple
 from uuid import UUID
 
 from flask import Response, jsonify, request, send_file
-from flask_jwt_extended import get_jwt_identity, get_jwt, jwt_required
+from flask_jwt_extended import get_jwt, jwt_required
 
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
@@ -16,7 +16,6 @@ from app.api.v1.projects.decorators import (
     require_attachment_access,
 )
 from app.api.v1.projects.schemas import ErrorResponse
-from app.api.v1.projects.decorators import _is_company_admin_for_project
 from app.api.v1.projects.labor_scope import labor_scope_for
 from app.application.invoice import (
     AttachmentNotFoundError,
@@ -49,7 +48,7 @@ def _serialize(att) -> dict:
 @openapi_doc(summary="List attachments for an invoice", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
-@require_invoice_access(write=False, allow_company_admin=True)
+@require_invoice_access(write=False)
 def list_attachments(project_id: str, invoice_id: str):
     try:
         inv_uuid = UUID(invoice_id)
@@ -66,16 +65,14 @@ def list_attachments(project_id: str, invoice_id: str):
 def _own_labor_invoice_or_manager(project_id: str, invoice_id: UUID) -> bool:
     """Restricted members only reach attachments of their own labor payments.
 
-    Company admins keep their read access (they reach these routes without a project
-    membership through ``allow_company_admin``); everyone with project:manage_labor is unrestricted.
+    Everyone holding ``project:manage_labor`` (company admin, assigned manager,
+    D8 grant holder) is unrestricted — `labor_scope_for` resolves that through
+    the matrix, so no company-admin special case is needed here.
     """
     scope = labor_scope_for(project_id)
     if not scope.restricted:
         return True
     container = get_container()
-    project = container.project_repository.find_by_id(UUID(project_id))
-    if project is not None and _is_company_admin_for_project(project, UUID(str(get_jwt_identity()))):
-        return True
     invoice = container.invoice_repository.find_by_id(invoice_id)
     return invoice is not None and invoice.worker_id is not None and scope.allows_worker(invoice.worker_id)
 
@@ -130,7 +127,7 @@ def upload_attachment(project_id: str, invoice_id: str):
 @openapi_doc(summary="Download an invoice attachment", tags=["invoices"])
 @jwt_required()
 @require_permission("project:read")
-@require_attachment_access(write=False, allow_company_admin=True)
+@require_attachment_access(write=False)
 def download_attachment(attachment_id: str):
     try:
         att_uuid = UUID(attachment_id)

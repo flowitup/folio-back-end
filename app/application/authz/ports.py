@@ -33,6 +33,15 @@ class AuthzReaderPort(Protocol):
         does not exist or has no company (orphaned FK)."""
         ...
 
+    def project_exists(self, project_id: UUID) -> bool:
+        """Return True when a `projects` row with this id exists.
+
+        Separate from `project_company_id` because a project with no company
+        still exists: the route decorators answer 404 only for an id nobody
+        could ever act on, and 403 for a real project the caller may not read.
+        """
+        ...
+
     def primary_company_id(self, user_id: UUID) -> "UUID | None":
         """Return the company_id of the user's ``is_primary=True`` access row,
         or None if the user has no primary company."""

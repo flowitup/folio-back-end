@@ -371,10 +371,22 @@ def test_export_404_when_project_not_found(export_client, export_app, admin_toke
         query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
         headers=_auth(admin_token),
     )
-    # An id that resolves to no company resolves to no permission, so the
-    # permission gate answers 403 before the access decorator can say 404.
+    assert resp.status_code == 404
+    data = resp.get_json()
+    # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
+    assert data["error"] in ("NotFound", "project_not_found")
+
+
+def test_export_403_when_project_belongs_to_another_company(export_client, export_app, admin_token):
+    """An existing project the caller may not read → 403, not 404."""
+    from tests.foreign_project_helper import create_foreign_project
+
+    resp = export_client.get(
+        _export_url(create_foreign_project(export_app)),
+        query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
     assert resp.status_code == 403
-    assert resp.get_json()["error"] == "Forbidden"
 
 
 # ---------------------------------------------------------------------------
@@ -838,9 +850,9 @@ class TestWorkerLaborExportEndpoint:
             query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
             headers=_auth(we_admin_token),
         )
-        # Unknown project id → 403: permissions resolve through the project's company.
-        assert resp.status_code == 403
-        assert resp.get_json()["error"] == "Forbidden"
+        # Unknown project id → 404: existence is resolved before permissions.
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] in ("NotFound", "project_not_found")
 
     # --- Case 9: 404 worker not found (legitimate UUID, no row) ---
 
