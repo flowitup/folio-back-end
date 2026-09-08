@@ -907,6 +907,7 @@ def configure_container(
             queue_port=_queue,
             app_base_url=app_base_url,
             db_session=_db.session,
+            authz_reader=container.authz_reader,
         )
         container.verify_invitation_usecase = VerifyInvitationUseCase(
             invitation_repo=invitation_repo,

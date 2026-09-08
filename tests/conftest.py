@@ -190,11 +190,15 @@ def invitation_app():
             is_active=True,
         )
 
-        # Seed superadmin user (needed for admin bulk-add + search endpoint tests)
+        # Seed the platform-ops user (needed for admin bulk-add + search endpoint
+        # tests). Ops is the `users.is_platform_ops` flag, not a role — the legacy
+        # superadmin role is kept only so `user_roles` rows still exist for the
+        # tests that assert the deprecated /auth/me `roles` field.
         superadmin_user = UserModel(
             email="superadmin@invite-test.com",
             password_hash=hasher.hash("Superadmin1234!"),
             is_active=True,
+            is_platform_ops=True,
         )
         superadmin_user.roles.append(superadmin_role)
 
@@ -209,19 +213,74 @@ def invitation_app():
         db.session.add_all([admin_user, member_user, outsider_user, superadmin_user, target_user])
         db.session.flush()  # assign user IDs before project references admin_user.id
 
+        # ------------------------------------------------------------------
+        # Company tenancy: permissions come from the company role + project
+        # assignment, so every fixture user needs a `user_company_access` row
+        # and every project needs a `company_id`.
+        #   admin_user      → company admin (implicit on every company project)
+        #   member_user     → company member, assigned to P1
+        #   target_user     → company member, assigned to P1
+        #   superadmin_user → platform ops, attached to no company
+        #   outsider_user   → attached to nothing
+        # ------------------------------------------------------------------
+        from datetime import datetime, timezone
+
+        from app.infrastructure.database.models.company import CompanyModel
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        _now = datetime.now(timezone.utc)
+        company = CompanyModel(
+            legal_name="Invite Test Company",
+            address="1 rue de Test",
+            created_by=admin_user.id,
+            created_at=_now,
+            updated_at=_now,
+        )
+        db.session.add(company)
+        db.session.flush()
+
+        db.session.add_all(
+            [
+                UserCompanyAccessModel(
+                    user_id=admin_user.id,
+                    company_id=company.id,
+                    role="admin",
+                    is_primary=True,
+                    attached_at=_now,
+                ),
+                UserCompanyAccessModel(
+                    user_id=member_user.id,
+                    company_id=company.id,
+                    role="member",
+                    is_primary=True,
+                    attached_at=_now,
+                ),
+                UserCompanyAccessModel(
+                    user_id=target_user.id,
+                    company_id=company.id,
+                    role="member",
+                    is_primary=True,
+                    attached_at=_now,
+                ),
+            ]
+        )
+
         # Seed a project owned by admin
         project = ProjectModel(
             name="Invite Test Project",
             owner_id=admin_user.id,
+            company_id=company.id,
         )
         # Two extra projects for bulk-add multi-project tests
         project2 = ProjectModel(
             name="Bulk Add Test Project 2",
             owner_id=admin_user.id,
+            company_id=company.id,
         )
         project3 = ProjectModel(
             name="Bulk Add Test Project 3",
             owner_id=admin_user.id,
+            company_id=company.id,
         )
         db.session.add_all([project, project2, project3])
         db.session.commit()
@@ -245,6 +304,7 @@ def invitation_app():
         test_app._test_member_user_id = str(member_user.id)
         test_app._test_superadmin_user_id = str(superadmin_user.id)
         test_app._test_target_user_id = str(target_user.id)
+        test_app._test_company_id = str(company.id)
 
         # Add member_user as a project member so they can list invitations
         # (user_projects is an association table — no ORM model; use raw SQL)
@@ -282,6 +342,23 @@ def invitation_app():
                 "at": datetime.now(timezone.utc),
             },
         )
+
+        # The owner bypass is gone (D6): the creator is an ordinary assignee.
+        for _pid in (project.id, project2.id, project3.id):
+            db.session.execute(
+                text(
+                    "INSERT INTO user_projects "
+                    "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
+                    "VALUES (:uid, :pid, :rid, NULL, :at) "
+                    "ON CONFLICT (user_id, project_id) DO NOTHING"
+                ),
+                {
+                    "uid": str(admin_user.id),
+                    "pid": str(_pid),
+                    "rid": str(admin_role.id),
+                    "at": datetime.now(timezone.utc),
+                },
+            )
         db.session.commit()
 
         # ------------------------------------------------------------------
@@ -423,6 +500,20 @@ def invitation_app():
         )
 
         _c.authz_reader = _SqlAlchemyAuthzReader(db.session, cache_provider=_get_reader_cache)
+
+        # Mirrors app/__init__.py: the RoleCheckerPort implementation and the
+        # invitation use-case resolve through the same reader as the decorators.
+        if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
+            _role_checker.set_authz_reader(_c.authz_reader)
+        if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_authz_reader"):
+            _c.create_invitation_usecase.set_authz_reader(_c.authz_reader)
+        if _role_checker is not None and hasattr(_role_checker, "set_company_role_lookup"):
+
+            def _company_role_for(user_id, company_id):
+                access = _access_repo.find(user_id, company_id)
+                return access.role if access is not None else None
+
+            _role_checker.set_company_role_lookup(_company_role_for)
 
         from app.application.companies.join_code_usecases import (
             JoinCompanyByCodeUseCase as _JoinByCodeUC,

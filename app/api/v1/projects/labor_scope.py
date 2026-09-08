@@ -1,7 +1,7 @@
 """Worker scope — what a project member may see of labor and pay data.
 
-A caller who holds ``project:manage_labor`` on a project (global role, membership
-role, or project owner) sees every worker. A caller who instead holds the
+A caller who holds ``project:manage_labor`` on a project (company admin, or an
+assigned manager) sees every worker. A caller who instead holds the
 read-only ``project:view_pay`` permission (matrix: admin implicit, manager on
 an assigned project — never member) also sees every worker, but gains no
 write access: it only widens :func:`labor_scope_for`'s *read* scope, never
@@ -40,21 +40,19 @@ class LaborScope:
 
 
 def caller_manages_labor(project_id: UUID, user_id: UUID) -> bool:
-    """Owner, or effective ``project:manage_labor`` (global ∪ membership role, wildcards honoured)."""
-    from wiring import get_container
+    """Resolver ``project:manage_labor`` on this project (wildcards honoured).
 
-    project_repo = getattr(get_container(), "project_repository", None)
-    project = project_repo.find_by_id(project_id) if project_repo is not None else None
-    if project is not None and project.owner_id == user_id:
-        return True
+    No owner bypass (D6): the creator of a project holds this through their
+    company role and assignment like everyone else.
+    """
     return _has_permission(_effective_perms_for(project_id, user_id), "project:manage_labor")
 
 
 def labor_scope_for(project_id: UUID | str) -> LaborScope:
     """Resolve the scope of the current JWT caller on ``project_id``.
 
-    ``project:view_pay`` (effective — global ∪ membership role ∪ the company
-    matrix resolver, wildcards honoured) widens this to an unrestricted READ
+    ``project:view_pay`` (resolved from the company matrix + D8 rows, wildcards
+    honoured) widens this to an unrestricted READ
     scope, same as ``caller_manages_labor``, but is evaluated separately: it
     must never satisfy ``caller_manages_labor`` itself, so a view_pay holder
     still gets 403 on every write endpoint that gates on that function.

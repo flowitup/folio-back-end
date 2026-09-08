@@ -199,6 +199,37 @@ class SqlAlchemyAuthzReader:
             cache[key] = result
         return result
 
+    def company_roles_for(self, user_id: UUID) -> "list[tuple[UUID, str]]":
+        """Return every `(company_id, role)` pair the user is attached to."""
+        cache = self._cache()
+        key = ("company_roles_for", user_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        rows = self._session.execute(
+            text(f"SELECT company_id, role FROM user_company_access WHERE {self._eq('user_id', 'uid')}"),
+            {"uid": self._bind_uuid(user_id)},
+        ).fetchall()
+        result = [(self._as_uuid_or_none(r[0]), r[1]) for r in rows]
+        result = [(cid, role) for cid, role in result if cid is not None]
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        """Return `users.is_platform_ops` for this user (False when the user is gone)."""
+        cache = self._cache()
+        key = ("is_platform_ops", user_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        row = self._session.execute(
+            text(f"SELECT is_platform_ops FROM users WHERE {self._eq('id', 'uid')} LIMIT 1"),
+            {"uid": self._bind_uuid(user_id)},
+        ).fetchone()
+        result = bool(row[0]) if row is not None else False
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def project_ids_for_company(self, company_id: UUID) -> "list[UUID]":
         """Return every project id owned by `company_id`."""
         cache = self._cache()

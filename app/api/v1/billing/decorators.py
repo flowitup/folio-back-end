@@ -17,8 +17,9 @@ from functools import wraps
 from uuid import UUID
 
 from flask import jsonify
-from flask_jwt_extended import get_jwt, get_jwt_identity
+from flask_jwt_extended import get_jwt_identity
 
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.projects.schemas import ErrorResponse
 
 
@@ -30,9 +31,8 @@ def _not_found(message: str):
 
 
 def _has_superadmin() -> bool:
-    """Return True if the JWT carries the *:* wildcard permission."""
-    jwt_claims = get_jwt()
-    return "*:*" in jwt_claims.get("permissions", [])
+    """Return True if the caller holds the platform-ops flag."""
+    return is_platform_ops()
 
 
 def _can_access_billing_doc(doc, caller_id: UUID, container) -> bool:

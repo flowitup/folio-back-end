@@ -6,15 +6,11 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel
-from app.infrastructure.database.models.associations import role_permissions, user_projects, user_roles
+from app.infrastructure.database.labor_validation_scope import validator_user_ids as _validator_user_ids
+from app.infrastructure.database.models import ProjectModel
 from app.infrastructure.database.models.push_device import PushDeviceOrm
-
-# Same rule as the bell: owner, or a project member whose membership role / global role validates.
-_VALIDATOR_PERMISSIONS = ("project:manage_labor", "project:*", "*:*")
 
 
 class SQLAlchemyPushDeviceRepository:
@@ -54,30 +50,12 @@ class SQLAlchemyPushDeviceRepository:
         return out
 
     def validator_user_ids(self, project_id: UUID) -> List[UUID]:
-        """Users who may validate attendance on the project (bell rule, see the pending query)."""
-        owner = self._session.query(ProjectModel.owner_id).filter(ProjectModel.id == project_id).scalar()
-        membership_grants = exists(
-            select(1)
-            .select_from(role_permissions.join(PermissionModel, PermissionModel.id == role_permissions.c.permission_id))
-            .where(
-                role_permissions.c.role_id == user_projects.c.role_id, PermissionModel.name.in_(_VALIDATOR_PERMISSIONS)
-            )
-        )
-        global_grants = exists(
-            select(1)
-            .select_from(
-                user_roles.join(role_permissions, role_permissions.c.role_id == user_roles.c.role_id).join(
-                    PermissionModel, PermissionModel.id == role_permissions.c.permission_id
-                )
-            )
-            .where(user_roles.c.user_id == user_projects.c.user_id, PermissionModel.name.in_(_VALIDATOR_PERMISSIONS))
-        )
-        members = (
-            self._session.query(user_projects.c.user_id)
-            .filter(user_projects.c.project_id == project_id, membership_grants | global_grants)
-            .all()
-        )
-        ids = {row[0] for row in members}
-        if owner is not None:
-            ids.add(owner)
-        return list(ids)
+        """Users who may validate attendance on the project (same rule as the bell).
+
+        Company admins plus assigned managers and D8 grant holders — see
+        `app.infrastructure.database.labor_validation_scope`. Platform ops is
+        deliberately excluded: support staff are not project stakeholders and
+        must not receive a company's push notifications.
+        """
+        company_id = self._session.query(ProjectModel.company_id).filter(ProjectModel.id == project_id).scalar()
+        return _validator_user_ids(self._session, project_id, company_id)

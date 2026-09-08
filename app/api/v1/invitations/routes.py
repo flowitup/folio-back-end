@@ -81,29 +81,15 @@ def create_invitation():
     container = get_container()
     user_id = UUID(get_jwt_identity())
 
-    # Owner-check fallback: load project to compare owner_id
-    project = None
     if container.create_invitation_usecase is None:
         return _err(503, "ServiceUnavailable", "Invitation service not configured.")
 
-    # Pre-check: allow project owner even without explicit permission
-    project = None
-    try:
-        project = container.project_repository.find_by_id(data.project_id)
-    except Exception:
-        pass
-
-    # Effective per-project permissions: global-role perms UNION the caller's
-    # membership-role perms on this project, so a project manager/admin (whose
-    # GLOBAL role is the read-only default) can still invite.
+    # Inviting is `project:invite` on THIS project, resolved from the caller's
+    # company role + assignment (+ D8 rows). No owner bypass (D6).
     from app.api.v1.projects.decorators import _effective_perms_for
 
     permissions = set(_effective_perms_for(data.project_id, user_id))
-    is_superadmin = "*:*" in permissions
-    has_perm = "project:invite" in permissions or "project:*" in permissions
-    is_owner = project is not None and project.owner_id == user_id
-
-    if not (is_superadmin or has_perm or is_owner):
+    if not ({"*:*", "project:invite", "project:*"} & permissions):
         return _err(403, "Forbidden", "You do not have permission to invite users to this project.")
 
     try:

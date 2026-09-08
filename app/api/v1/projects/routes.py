@@ -53,12 +53,13 @@ def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
 
 
 def _money_visible(perms: list, owner_id, user_id: UUID) -> bool:
-    """Budget and spend are for the owner and holders of manage_labor or view_pay."""
-    return (
-        str(owner_id) == str(user_id)
-        or _has_permission(perms, "project:manage_labor")
-        or _has_permission(perms, "project:view_pay")
-    )
+    """Budget and spend need `project:manage_labor` or `project:view_pay`.
+
+    `owner_id`/`user_id` are kept in the signature for call-site readability
+    only: creating a project is no longer a permission of its own (D6), so an
+    owner sees money exactly like any other manager — through the resolver.
+    """
+    return _has_permission(perms, "project:manage_labor") or _has_permission(perms, "project:view_pay")
 
 
 def _spend_fields(rollup: ProjectSpent) -> dict:
@@ -289,12 +290,12 @@ def create_project():
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
 
-    # Assign the creator as the legacy per-project "manager" role so the
-    # existing membership-role union keeps granting them full project rights
-    # (see app.api.v1.projects.decorators._membership_role_permissions).
-    # Silently skipped if the legacy roles table has no "manager" row (fresh
-    # DB before scripts/seed_auth.py has run) — no per-project role table is
-    # a hard requirement for project creation.
+    # Assign the creator to their own project: with the owner bypass gone (D6)
+    # the assignment row is what lets a company manager keep working on it, and
+    # what makes the project show up in their `GET /projects`. `role_id` only
+    # satisfies the legacy NOT NULL column (dropped in a later phase) — it no
+    # longer grants anything. Silently skipped when the legacy roles table has
+    # no "manager" row (fresh DB before scripts/seed_auth.py has run).
     creator_assigned = False
     if container.role_repository is not None and container.project_membership_repo is not None:
         manager_role = container.role_repository.find_by_name("manager")
@@ -483,7 +484,7 @@ def delete_project(project_id: str):
             404,
         )
 
-    if not can_mutate_project(project, user_id):
+    if not can_mutate_project(project, user_id, "project:delete"):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.delete_project_usecase.execute(UUID(project_id))
@@ -570,13 +571,9 @@ def get_project_members(project_id: UUID):
             404,
         )
 
-    # Allow project owner or any member
-    if project.owner_id != user_id and user_id not in project.user_ids:
-        from flask_jwt_extended import get_jwt
-
-        claims = get_jwt()
-        if "*:*" not in set(claims.get("permissions", [])):
-            return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+    # Reading the member list needs read access to the project itself.
+    if not can_read_project(project, user_id):
+        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     # Query members with role info via raw SQL (user_projects + roles + users join)
     from app import db
@@ -628,7 +625,7 @@ def remove_user_from_project(project_id: str, user_id: str):
             404,
         )
 
-    if not can_mutate_project(project, caller_id):
+    if not can_mutate_project(project, caller_id, "project:manage_users"):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.project_repository.remove_user(UUID(project_id), UUID(user_id))
@@ -636,15 +633,17 @@ def remove_user_from_project(project_id: str, user_id: str):
 
 
 @projects_bp.route("/<project_id>/members/<user_id>", methods=["PATCH"])
-@openapi_doc(summary="Change a project member's role", tags=["projects"])
+@openapi_doc(summary="Change a project member's role (deprecated: role_id is ignored)", tags=["projects"])
 @jwt_required()
 @limiter.limit("30 per minute")
 @require_permission("project:manage_users")
 def update_member_role(project_id: str, user_id: str):
-    """Change an existing member's role on a project.
+    """Deprecated: per-project roles are gone — capability comes from the company role.
 
-    The new role's permissions take effect immediately (project-scoped checks
-    resolve the membership role per request — no token refresh needed).
+    Kept so released web/mobile builds keep working: the call still validates
+    the caller, the project and the membership, accepts `role_id` in the body
+    and ignores it. Use `PUT /projects/<id>/assignments/<user_id>` to change
+    what a member may do.
     """
     container = get_container()
     caller_id = UUID(get_jwt_identity())
@@ -665,39 +664,16 @@ def update_member_role(project_id: str, user_id: str):
             404,
         )
 
-    if not can_mutate_project(project, caller_id):
+    if not can_mutate_project(project, caller_id, "project:manage_users"):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
-    body = request.get_json(silent=True) or {}
-    role_id_raw = body.get("role_id")
-    try:
-        role_uuid = UUID(str(role_id_raw))
-    except (ValueError, TypeError):
-        return (
-            jsonify(
-                ErrorResponse(error="ValidationError", message="role_id is required", status_code=400).model_dump()
-            ),
-            400,
-        )
-
-    role = container.role_repository.find_by_id(role_uuid)
-    if role is None:
-        return jsonify(ErrorResponse(error="NotFound", message="Role not found", status_code=404).model_dump()), 404
-    if role.name == "superadmin":
-        return (
-            jsonify(
-                ErrorResponse(
-                    error="Forbidden", message="Cannot assign the superadmin role", status_code=403
-                ).model_dump()
-            ),
-            403,
-        )
-
-    if container.project_membership_repo.find_role_id(user_uuid, project_uuid) is None:
+    if container.project_membership_repo.find_role_id(user_uuid, project_uuid) is None and user_uuid not in set(
+        project.user_ids
+    ):
         return (
             jsonify(ErrorResponse(error="NotFound", message="User is not a member", status_code=404).model_dump()),
             404,
         )
 
-    container.project_membership_repo.set_role(user_uuid, project_uuid, role_uuid)
-    return jsonify({"user_id": user_id, "role_id": str(role_uuid), "role_name": role.name}), 200
+    body = request.get_json(silent=True) or {}
+    return jsonify({"user_id": user_id, "role_id": body.get("role_id"), "role_name": "", "deprecated": True}), 200

@@ -520,7 +520,7 @@ def get_labor_payments_summary(project_id: str):
 @jwt_required()
 @limiter.limit("20 per minute")
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 def create_invoice(project_id: str):
     """Create a new invoice for a project."""
     try:

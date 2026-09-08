@@ -230,7 +230,7 @@ def list_units(project_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/units")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_unit(project_id: str) -> Any:
     """Add a custom unit symbol to the project."""
@@ -246,7 +246,7 @@ def create_unit(project_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/units/<unit_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_unit(project_id: str, unit_id: str) -> Any:
     """Remove a custom unit. Articles keep their snapshot symbol."""
@@ -266,7 +266,7 @@ def delete_unit(project_id: str, unit_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/postes")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_poste(project_id: str) -> Any:
     """Create a costing section."""
@@ -284,7 +284,7 @@ def create_poste(project_id: str) -> Any:
 @chiffrage_bp.patch("/projects/<project_id>/chiffrage/postes/<poste_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def update_poste(project_id: str, poste_id: str) -> Any:
     """Rename a poste or edit its note."""
@@ -308,7 +308,7 @@ def update_poste(project_id: str, poste_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/postes/<poste_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_poste(project_id: str, poste_id: str) -> Any:
     """Delete a poste with its articles and quotes."""
@@ -323,7 +323,7 @@ def delete_poste(project_id: str, poste_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/reorder")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def reorder_poste(project_id: str, poste_id: str) -> Any:
     """Move a poste between two neighbours."""
@@ -365,7 +365,7 @@ def _create_store(project_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/stores")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_store(project_id: str) -> Any:
     """Add a shop the project buys from."""
@@ -375,7 +375,7 @@ def create_store(project_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/stores")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_store_for_poste(project_id: str, poste_id: str) -> Any:
     """Deprecated alias of the project-scoped create.
@@ -392,7 +392,7 @@ def create_store_for_poste(project_id: str, poste_id: str) -> Any:
 @chiffrage_bp.patch("/projects/<project_id>/chiffrage/stores/<store_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def update_store(project_id: str, store_id: str) -> Any:
     """Rename a shop, correct its address or its website."""
@@ -417,7 +417,7 @@ def update_store(project_id: str, store_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/stores/<store_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_store(project_id: str, store_id: str) -> Any:
     """Remove a shop from the project. Prices recorded there keep their value."""
@@ -437,7 +437,7 @@ def delete_store(project_id: str, store_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/articles")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_article(project_id: str, poste_id: str) -> Any:
     """Add an article to a poste."""
@@ -461,7 +461,7 @@ def create_article(project_id: str, poste_id: str) -> Any:
 @chiffrage_bp.patch("/projects/<project_id>/chiffrage/articles/<article_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def update_article(project_id: str, article_id: str) -> Any:
     """Edit an article's name, quantity, unit or note."""
@@ -488,7 +488,7 @@ def update_article(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<article_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_article(project_id: str, article_id: str) -> Any:
     """Delete an article with its quotes."""
@@ -505,7 +505,7 @@ def delete_article(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/reorder")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def reorder_article(project_id: str, article_id: str) -> Any:
     """Move an article within its poste."""
@@ -531,7 +531,7 @@ def reorder_article(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/quotes")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_quote(project_id: str, article_id: str) -> Any:
     """Record a fournisseur price for an article."""
@@ -558,7 +558,7 @@ def create_quote(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.patch("/projects/<project_id>/chiffrage/quotes/<quote_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def update_quote(project_id: str, quote_id: str) -> Any:
     """Edit a quote's fournisseur, price, VAT rate, link or note."""
@@ -588,7 +588,7 @@ def update_quote(project_id: str, quote_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/quotes/<quote_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_quote(project_id: str, quote_id: str) -> Any:
     """Delete a quote; the article falls back to the cheapest remaining one."""
@@ -603,7 +603,7 @@ def delete_quote(project_id: str, quote_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/quotes/<quote_id>/select")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def select_quote(project_id: str, quote_id: str) -> Any:
     """Mark a quote as the retained offer for its article."""
@@ -657,7 +657,7 @@ def get_article_image(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/image")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def upload_article_image(project_id: str, article_id: str) -> Any:
     """Upload a photo for an article (multipart field 'image')."""
@@ -682,7 +682,7 @@ def upload_article_image(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/image-from-url")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit("10 per minute", key_func=jwt_user_key)
 def set_article_image_from_url(project_id: str, article_id: str) -> Any:
     """Fetch a supplier image server-side and store it for the article."""
@@ -700,7 +700,7 @@ def set_article_image_from_url(project_id: str, article_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<article_id>/image")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_article_image(project_id: str, article_id: str) -> Any:
     """Detach an article's photo."""
@@ -737,7 +737,7 @@ def list_rooms(project_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/rooms")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def create_room(project_id: str) -> Any:
     """Declare a room for this chantier."""
@@ -753,7 +753,7 @@ def create_room(project_id: str) -> Any:
 @chiffrage_bp.patch("/projects/<project_id>/chiffrage/rooms/<room_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def update_room(project_id: str, room_id: str) -> Any:
     """Rename a room. Articles hold its id, so they follow the rename."""
@@ -771,7 +771,7 @@ def update_room(project_id: str, room_id: str) -> Any:
 @chiffrage_bp.delete("/projects/<project_id>/chiffrage/rooms/<room_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def delete_room(project_id: str, room_id: str) -> Any:
     """Delete a room; its articles resurface as unassigned rather than vanish."""
@@ -786,7 +786,7 @@ def delete_room(project_id: str, room_id: str) -> Any:
 @chiffrage_bp.post("/projects/<project_id>/chiffrage/rooms/<room_id>/reorder")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
 def reorder_room(project_id: str, room_id: str) -> Any:
     """Move a room between two neighbours."""

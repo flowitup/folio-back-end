@@ -16,10 +16,11 @@ from typing import Optional
 from uuid import UUID
 
 from flask import jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import BaseModel, Field, ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.persons import persons_bp
 from app.application.persons import (
     CreatePersonRequest,
@@ -133,15 +134,14 @@ def _get_merge_usecase() -> MergePersonsUseCase:
 def _company_scope_for_search(caller_id: UUID) -> "Optional[list[UUID]]":
     """Resolve the tenancy scope for GET /persons (Phase 2, finding 10).
 
-    Returns None for a platform `*:*` caller (unscoped — every person is
-    visible, matching every other superadmin bypass in this codebase).
+    Returns None for a platform-ops caller (unscoped — every person is
+    visible, matching every other ops bypass in this codebase).
     Otherwise returns the list of company ids where the caller holds the
     "admin" or "manager" role — member-only callers get an empty list,
     which the route turns into a 403 (a member sees the day roster of
     their assigned project, never the global person directory).
     """
-    claims = get_jwt()
-    if "*:*" in set(claims.get("permissions", [])):
+    if is_platform_ops():
         return None
 
     access_repo = getattr(get_container(), "user_company_access_repo", None)
@@ -246,18 +246,16 @@ def merge_persons(source_person_id: str):
     Person is a global identity. Allowing any authenticated caller to
     merge two arbitrary Person rows would let attackers reassign workers
     (and therefore labor history) across tenants. The endpoint is
-    therefore restricted to superadmin until the per-tenant admin model
+    therefore restricted to platform ops until the per-tenant admin model
     for Person merge ships.
     """
-    claims = get_jwt()
-    permissions = set(claims.get("permissions", []))
-    if "*:*" not in permissions:
+    if not is_platform_ops():
         try:
             uid = get_jwt_identity()
         except Exception:  # pragma: no cover - defensive
             uid = None
-        logger.warning("person_merge denied for non-superadmin user_id=%s", uid)
-        return _error("Forbidden", "Superadmin required.", 403)
+        logger.warning("person_merge denied for non-ops user_id=%s", uid)
+        return _error("Forbidden", "Platform ops required.", 403)
 
     try:
         body = MergePersonsRequestSchema(**(request.get_json() or {}))

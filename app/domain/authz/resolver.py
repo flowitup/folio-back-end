@@ -111,6 +111,98 @@ def effective_permissions(
     return frozenset((base | grants) - denies)
 
 
+def permissions_in_company(
+    reader: "AuthzReaderPort",
+    user_id: UUID,
+    company_id: UUID,
+) -> "frozenset[str]":
+    """Return what the caller can do *somewhere* inside one company.
+
+    Company-level answer for questions that carry no project: an admin gets the
+    full matrix; a manager/member gets their project-scoped matrix set as soon
+    as they are assigned to at least ONE project of that company (the
+    permission is then real on that project), plus the company-wide D8 grants
+    minus the company-wide denies.
+
+    Never use this to gate a project-scoped route — `effective_permissions`
+    with a `project_id` is the authority there. This is for company-scoped or
+    context-free capabilities (`bibliotheque:manage`, `company:*`, the token's
+    `permissions` claim).
+    """
+    role = reader.company_role_for(user_id, company_id)
+    if role is None:
+        return frozenset()
+    assigned = role == "admin" or reader.has_project_assignment_in_company(user_id, company_id)
+    base = permissions_for(role, assigned)
+    grant_rows = reader.grants_for(user_id, company_id, None)
+    grants = {perm for perm, effect in grant_rows if effect == "grant"}
+    denies = {perm for perm, effect in grant_rows if effect == "deny"} - NON_DENIABLE
+    return frozenset((base | grants) - denies)
+
+
+def permissions_anywhere(
+    reader: "AuthzReaderPort",
+    user_id: UUID,
+    *,
+    is_platform_admin: bool = False,
+) -> "frozenset[str]":
+    """Union of `permissions_in_company` over every company the caller belongs to.
+
+    Backs the context-free `RoleCheckerPort.has_permission` and the
+    `permissions` claim old mobile builds still read. `{"*:*"}` for platform
+    ops, empty for a user attached to no company.
+    """
+    if is_platform_admin:
+        return frozenset({"*:*"})
+    perms: set[str] = set()
+    for company_id, _role in reader.company_roles_for(user_id):
+        perms |= permissions_in_company(reader, user_id, company_id)
+    return frozenset(perms)
+
+
+def permissions_for_user(
+    reader: "AuthzReaderPort",
+    user_id: UUID,
+    *,
+    is_platform_admin: bool = False,
+) -> "frozenset[str]":
+    """Company-agnostic permission set for `/auth/me` and the token claim.
+
+    The caller's primary company when they have one (the company their client
+    shows by default), otherwise the union over every company they belong to.
+    `{"*:*"}` for platform ops. Clients use it to hide buttons; every route
+    still re-resolves against its own project/company.
+    """
+    if is_platform_admin:
+        return frozenset({"*:*"})
+    primary = reader.primary_company_id(user_id)
+    if primary is not None:
+        return permissions_in_company(reader, user_id, primary)
+    return permissions_anywhere(reader, user_id)
+
+
+def has_permission_anywhere(
+    reader: "AuthzReaderPort",
+    user_id: UUID,
+    permission: str,
+    *,
+    is_platform_admin: bool = False,
+) -> bool:
+    """Return whether ANY of the caller's companies grants `permission`.
+
+    Short-circuits per company instead of building the full union, and honours
+    the `"*:*"` / `"<resource>:*"` wildcards like `has_permission`.
+    """
+    if is_platform_admin:
+        return True
+    resource_wildcard = f"{permission.split(':', 1)[0]}:*"
+    for company_id, _role in reader.company_roles_for(user_id):
+        perms = permissions_in_company(reader, user_id, company_id)
+        if permission in perms or "*:*" in perms or resource_wildcard in perms:
+            return True
+    return False
+
+
 def denied_permissions(
     reader: "AuthzReaderPort",
     user_id: UUID,

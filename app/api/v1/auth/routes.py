@@ -172,6 +172,14 @@ def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
 
 
+def _deprecated_roles(user) -> list[str]:
+    """Legacy global role names — kept in the payload until released clients drop it.
+
+    Empty for everyone except platform ops, whose support tooling still shows it.
+    """
+    return [r.name for r in user.roles] if getattr(user, "is_platform_ops", False) else []
+
+
 def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
     """Companies the user is attached to — shared by login and /auth/me responses."""
     companies: list[UserCompanySummary] = []
@@ -198,9 +206,10 @@ def _login_response(container, result: LoginResult):
             id=user.id,
             email=user.email,
             permissions=result.permissions,
-            roles=[r.name for r in user.roles],
+            roles=_deprecated_roles(user),
             phone=user.phone,
             companies=_user_companies(container, result.user_id),
+            is_platform_ops=bool(getattr(user, "is_platform_ops", False)),
         ),
     )
     response = make_response(jsonify(response_data.model_dump()))
@@ -358,7 +367,6 @@ def refresh():
 def get_current_user():
     """Get current authenticated user info."""
     user_id = get_jwt_identity()
-    jwt_claims = get_jwt()
 
     container = get_container()
     user = container.user_repository.find_by_id(UUID(user_id))
@@ -366,14 +374,19 @@ def get_current_user():
     if not user:
         return jsonify(ErrorResponse(error="NotFound", message="User not found", status_code=404).model_dump()), 404
 
+    # Resolved fresh on every call (never read from the token) so a role, grant
+    # or ops change applies without re-login — clients refresh this on focus.
+    permissions = sorted(container.authorization_service.get_user_permissions(UUID(user_id)))
+
     return jsonify(
         UserResponse(
             id=user.id,
             email=user.email,
-            permissions=jwt_claims.get("permissions", []),
-            roles=[r.name for r in user.roles],
+            permissions=permissions,
+            roles=_deprecated_roles(user),
             phone=user.phone,
             companies=_user_companies(container, UUID(user_id)),
+            is_platform_ops=bool(user.is_platform_ops),
         ).model_dump()
     )
 

@@ -43,6 +43,7 @@ class CreateInvitationUseCase:
         app_base_url: str,
         db_session: TransactionalSessionPort,
         project_invite_daily_cap: int = 50,
+        authz_reader: Any = None,  # AuthzReaderPort — resolves project:invite
     ) -> None:
         self._inv_repo = invitation_repo
         self._membership_repo = project_membership_repo
@@ -55,6 +56,15 @@ class CreateInvitationUseCase:
         self._base_url = app_base_url.rstrip("/")
         self._db = db_session
         self._daily_cap = project_invite_daily_cap
+        self._authz_reader = authz_reader
+
+    def set_authz_reader(self, reader: Any) -> None:
+        """Inject the resolver read port after construction.
+
+        `wiring.configure_container()` builds this use-case before the
+        SQLAlchemy-backed reader exists; `app/__init__.py` calls this once it does.
+        """
+        self._authz_reader = reader
 
     # ------------------------------------------------------------------
 
@@ -182,28 +192,19 @@ class CreateInvitationUseCase:
     # ------------------------------------------------------------------
 
     def _can_invite(self, user: Any, project_owner_id: UUID, inviter_id: UUID, project_id: UUID) -> bool:
-        """Return True if the user may invite to this project.
+        """Return True when the resolver grants `project:invite` on this project.
 
-        Allowed when the inviter is the project owner, holds an invite-granting
-        GLOBAL permission, or whose project-membership role on this project grants
-        it (so a project manager/admin can invite even though their global role is
-        the read-only default).
+        Company admins hold it on every project of their company, an assigned
+        manager on theirs, and a member only through an explicit D8 grant.
+        There is no owner bypass (D6) and no legacy global/membership role
+        fallback: without a reader wired this fails closed, since the route
+        that calls this use-case has already made the same check.
         """
-        # Project owner may always invite — compare UUIDs directly
-        if project_owner_id == inviter_id:
-            return True
-        # Global-role permissions
-        if user.has_permission("*", "*") or user.has_permission("project", "invite"):
-            return True
-        # Per-project membership-role permissions
-        role_id = self._membership_repo.find_role_id(inviter_id, project_id)
-        if role_id is not None:
-            role = self._role_repo.find_by_id(role_id)
-            if role is not None:
-                names = {p.name for p in role.permissions}
-                if "*:*" in names or "project:invite" in names or "project:*" in names:
-                    return True
-        return False
+        if self._authz_reader is None:
+            return False
+        from app.domain.authz.resolver import has_permission
+
+        return has_permission(self._authz_reader, inviter_id, "project:invite", project_id=project_id)
 
     def _enqueue_invite_email(
         self,

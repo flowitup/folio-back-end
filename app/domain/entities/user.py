@@ -36,6 +36,8 @@ class User:
     display_name: Optional[str] = None
     # E.164 number for SMS-code sign-in; assigned by an admin, unique across users.
     phone: Optional[str] = None
+    # Platform-ops (flowitup support) bypass — a hidden flag, not a role.
+    is_platform_ops: bool = False
 
     def __eq__(self, other: object) -> bool:
         """Users are equal if they have the same ID."""

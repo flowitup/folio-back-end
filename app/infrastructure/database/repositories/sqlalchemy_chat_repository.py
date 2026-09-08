@@ -11,10 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
-from app.infrastructure.database.models.associations import role_permissions, user_roles
 from app.infrastructure.database.models.chat_message import ChatChannelReadOrm, ChatMessageOrm
 from app.infrastructure.database.models.company import CompanyModel
-from app.infrastructure.database.models.permission import PermissionModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -113,13 +111,8 @@ class SqlAlchemyChatRepository:
     # ------------------------------------------------------------------
 
     def _is_superadmin(self, user_id: UUID) -> bool:
-        stmt = (
-            select(func.count())
-            .select_from(user_roles)
-            .join(role_permissions, role_permissions.c.role_id == user_roles.c.role_id)
-            .join(PermissionModel, PermissionModel.id == role_permissions.c.permission_id)
-            .where(user_roles.c.user_id == user_id, PermissionModel.name == "*:*")
-        )
+        """Platform ops (flowitup support) — the `users.is_platform_ops` flag."""
+        stmt = select(func.count()).select_from(UserModel).where(UserModel.id == user_id, UserModel.is_platform_ops)
         return int(self._session.execute(stmt).scalar_one()) > 0
 
     def _company_member_count(self, company_id: UUID) -> int:

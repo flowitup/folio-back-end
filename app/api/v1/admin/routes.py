@@ -4,10 +4,11 @@ import logging
 from uuid import UUID
 
 from flask import jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api.openapi import openapi_doc
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.admin import admin_bp
 from app.api.v1.admin.schemas import (
     BulkAddRequest,
@@ -52,11 +53,14 @@ def _validation_err(e: ValidationError):
 
 
 def _require_superadmin():
-    """Return 403 tuple if caller lacks *:* permission, else None."""
-    claims = get_jwt()
-    perms = set(claims.get("permissions", []))
-    if "*:*" not in perms:
-        return _err(403, "Forbidden", "Superadmin required.")
+    """Return a 403 tuple unless the caller holds the platform-ops flag, else None.
+
+    These routes are flowitup support tooling (cross-tenant user search, bulk
+    project assignment): a company admin manages their own company through the
+    /companies endpoints instead.
+    """
+    if not is_platform_ops():
+        return _err(403, "Forbidden", "Platform ops required.")
     return None
 
 

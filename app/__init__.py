@@ -580,6 +580,16 @@ def _configure_di_container() -> None:
 
     _c.authz_reader = SqlAlchemyAuthzReader(db.session, cache_provider=get_reader_cache)
 
+    # The RoleCheckerPort / ICompanyPermissionChecker implementation resolves
+    # permissions through the same reader as the route decorators — one
+    # authority for use-cases and routes alike.
+    if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
+        _role_checker.set_authz_reader(_c.authz_reader)
+
+    # Same reason: the invitation use-case resolves `project:invite` itself.
+    if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_authz_reader"):
+        _c.create_invitation_usecase.set_authz_reader(_c.authz_reader)
+
     # D3 day roster use case — needs worker_repository + labor_entry_repository
     # (wired earlier in configure_container) plus the authz reader just above.
     if _c.worker_repository is not None and _c.labor_entry_repository is not None:

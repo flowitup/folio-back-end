@@ -42,6 +42,24 @@ class AuthzReaderPort(Protocol):
         """Return every company_id where the user holds the "admin" role."""
         ...
 
+    def company_roles_for(self, user_id: UUID) -> list[tuple[UUID, str]]:
+        """Return every ``(company_id, role)`` the user is attached to.
+
+        Used to answer permission questions that carry no company/project
+        context (``bibliotheque:manage``, the token's ``permissions`` claim):
+        the caller holds such a permission when at least one of their
+        companies grants it.
+        """
+        ...
+
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        """Return the user's ``users.is_platform_ops`` flag (False when unknown).
+
+        The flowitup support bypass. Read per request from the database — never
+        from the token — so revoking it applies immediately.
+        """
+        ...
+
     def project_ids_for_company(self, company_id: UUID) -> list[UUID]:
         """Return every project id owned by `company_id`.
 

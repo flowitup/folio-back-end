@@ -33,7 +33,7 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.project_analyses import project_analyses_bp
 from app.api.v1.project_analyses.schemas import AnalysisUpdateBody, ListQueryParams
-from app.api.v1.projects.decorators import _effective_perms_for, _has_permission, has_permission
+from app.api.v1.projects.decorators import _effective_perms_for, _has_permission
 from app.application.project_analyses.dtos import (
     AnalysisOutput,
     CreateAnalysisInput,
@@ -388,10 +388,9 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
                 tags=tags_arg,
             ),
             project_owner_id=project.owner_id,
-            # Platform admin, or the caller's effective project:update permission
-            # (legacy ∪ matrix ∪ grants − denies) bypasses the uploader/owner check.
-            is_admin=has_permission("*:*")
-            or _has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
+            # The caller's resolved project:update permission (platform ops
+            # resolves to "*:*") bypasses the uploader/owner check.
+            is_admin=_has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
         )
     except AnalysisNotFoundError:
         return _err(404, "NotFound", "Analysis not found")
@@ -437,10 +436,9 @@ def delete_analysis(project_id: UUID, analysis_id: UUID) -> Any:
             analysis_id=analysis_id,
             expected_project_id=project_id,
             project_owner_id=project.owner_id,
-            # Platform admin, or the caller's effective project:update permission
-            # (legacy ∪ matrix ∪ grants − denies) bypasses the uploader/owner check.
-            is_admin=has_permission("*:*")
-            or _has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
+            # The caller's resolved project:update permission (platform ops
+            # resolves to "*:*") bypasses the uploader/owner check.
+            is_admin=_has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
         )
     except AnalysisNotFoundError:
         return _err(404, "NotFound", "Analysis not found")

@@ -1,11 +1,19 @@
-"""RBAC decorators for project routes."""
+"""Permission decorators for project routes — the resolver is the only authority.
+
+Every check here resolves `company role (+ project assignment) → matrix → D8
+grants/denies` through `app.domain.authz.resolver`, memoized per request by
+`app.api.v1.authz_context`. Nothing reads the token's `permissions` claim and
+there is no owner bypass any more (D6): a project creator is an ordinary
+assignee, backfilled by the platform-ops migration.
+"""
 
 from functools import wraps
 from uuid import UUID
 
 from flask import jsonify
-from flask_jwt_extended import get_jwt, get_jwt_identity
+from flask_jwt_extended import get_jwt_identity
 
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.projects.schemas import ErrorResponse
 
 
@@ -62,32 +70,13 @@ def _resolve_project_id(kwargs: dict) -> "UUID | None":
     return None
 
 
-def _membership_role_permissions(user_id: UUID, project_id: UUID) -> set:
-    """Permissions granted by the caller's membership role on a specific project.
-
-    Project-membership roles (the role picked when inviting/adding a user to a
-    project) grant capability scoped to that project only. Returns an empty set
-    when the user is not a member or the role has no permissions.
-    """
-    from wiring import get_container
-
-    container = get_container()
-    membership_repo = getattr(container, "project_membership_repo", None)
-    role_repo = getattr(container, "role_repository", None)
-    if membership_repo is None or role_repo is None:
-        return set()
-    role_id = membership_repo.find_role_id(user_id, project_id)
-    if role_id is None:
-        return set()
-    role = role_repo.find_by_id(role_id)
-    if role is None:
-        return set()
-    return {perm.name for perm in role.permissions}
-
-
 def _is_platform_admin() -> bool:
-    """True when the caller's JWT carries the legacy global `*:*` claim."""
-    return "*:*" in set(get_jwt().get("permissions", []))
+    """True when the caller holds the platform-ops flag (`users.is_platform_ops`).
+
+    Read from the database on every request (never from the token), so granting
+    or revoking ops applies immediately.
+    """
+    return is_platform_ops()
 
 
 def _resolver_permissions_for_project(user_id: UUID, project_id: UUID) -> frozenset:
@@ -103,60 +92,44 @@ def _resolver_permissions_for_project(user_id: UUID, project_id: UUID) -> frozen
     return resolve_for_request(user_id, project_id=project_id, is_platform_admin=_is_platform_admin())
 
 
-def _resolver_denies_for_project(user_id: UUID, project_id: UUID) -> frozenset:
-    """D8 explicit deny rows for a specific project (H3: deny must win over the legacy union).
+def _resolver_permissions_no_project(user_id: UUID) -> frozenset:
+    """Resolver output for a route that resolves no project (e.g. `POST /projects`)."""
+    from app.api.v1.authz_context import resolve_for_request
 
-    Empty for a platform `*:*` holder (`_is_platform_admin()` short-circuit,
-    also enforced inside the resolver itself) and never includes `project:read`
-    (enforced by `app.domain.authz.resolver.denied_permissions`).
-    """
-    from app.api.v1.authz_context import resolve_denied_for_request
-
-    return resolve_denied_for_request(user_id, project_id=project_id, is_platform_admin=_is_platform_admin())
+    return resolve_for_request(user_id, is_platform_admin=_is_platform_admin())
 
 
 def _effective_permissions(kwargs: dict) -> list:
-    """Caller's effective permissions for this request: (legacy union ∪ resolver allowed) − resolver denied.
+    """The caller's effective permissions for this request — resolver only.
 
-    Legacy union — global-role JWT permissions UNION the caller's membership-role
-    permissions on the request's target project — is unchanged and stays monotonic
-    (only adds), so a user invited as a project admin/manager keeps working exactly
-    as before. The resolver additively contributes the company-derived matrix
-    permissions (admin/manager/member) for that same project, and — H3 — its
-    explicit D8 deny rows are then subtracted from the WHOLE union so an
-    admin-managed deny on a manager/member overrides even a legacy global role
-    that happens to carry the same permission string. Deny is never applied to a
-    platform `*:*` holder (`_resolver_denies_for_project` returns empty for them).
+    Resolves the request's target project (directly, or through the invoice /
+    task / attachment in the URL) and returns the company matrix set for it,
+    with D8 grants added and denies removed. A route that resolves no project
+    gets the resolver's context-free answer (`project:create` for an admin of
+    at least one company, plus `user:read`).
 
-    This raw union is used by the generic `require_permission()` decorator for
-    permissions other than the read/mutate gate — `can_read_project` and
-    `can_mutate_project` below do NOT consult it for `project:create`, because a
-    *global* JWT `project:create` claim must not become an implicit "see every
-    project" bit (the tenancy hole Phase 1 closes).
+    Legacy global-role and membership-role permissions are NOT consulted: a
+    stale token can no longer widen access, and a role change applies on the
+    next request.
     """
-    permissions = set(get_jwt().get("permissions", []))
+    identity = get_jwt_identity()
+    try:
+        user_id = UUID(str(identity))
+    except (ValueError, TypeError):
+        return []
     project_id = _resolve_project_id(kwargs)
-    if project_id is not None:
-        identity = get_jwt_identity()
-        try:
-            user_id = UUID(identity)
-        except (ValueError, TypeError):
-            return list(permissions)
-        permissions |= _membership_role_permissions(user_id, project_id)
-        permissions |= _resolver_permissions_for_project(user_id, project_id)
-        if not _is_platform_admin():
-            permissions -= _resolver_denies_for_project(user_id, project_id)
-    return list(permissions)
+    if project_id is None:
+        return list(_resolver_permissions_no_project(user_id))
+    return list(_resolver_permissions_for_project(user_id, project_id))
 
 
 def require_permission(permission: str):
     """
     Decorator to check if current user has required permission.
 
-    For project-scoped routes the check uses the caller's *effective*
-    permissions: global-role permissions UNION the permissions of their
-    membership role on the target project. Non-project routes resolve no
-    project and fall back to global-role permissions only.
+    Project-scoped routes are answered by the resolver for that project
+    (company role + assignment + D8 rows); non-project routes get the
+    resolver's context-free answer.
 
     Usage:
         @require_permission("project:create")
@@ -186,52 +159,34 @@ def require_permission(permission: str):
     return decorator
 
 
-def has_permission(permission: str) -> bool:
-    """Check if current user has a specific permission."""
-    jwt_claims = get_jwt()
-    permissions = jwt_claims.get("permissions", [])
-    return _has_permission(permissions, permission)
-
-
 def _effective_perms_for(project_id: UUID, user_id: UUID) -> list:
-    """(Legacy union ∪ resolver allowed) − resolver denied for a project (see `_effective_permissions`)."""
-    permissions = set(get_jwt().get("permissions", []))
-    permissions |= _membership_role_permissions(user_id, project_id)
-    permissions |= _resolver_permissions_for_project(user_id, project_id)
-    if not _is_platform_admin():
-        permissions -= _resolver_denies_for_project(user_id, project_id)
-    return list(permissions)
+    """The resolver's permission set for one project (see `_effective_permissions`)."""
+    return list(_resolver_permissions_for_project(user_id, project_id))
 
 
 def can_read_project(project, user_id: UUID) -> bool:
-    """Owner, project member, or resolver `project:read` (company admin, or an
-    assigned manager/member) may read a project.
+    """Return True when the resolver grants `project:read` on this project.
 
-    No longer consults the raw JWT `project:create` claim — that was the
-    tenancy hole where any legacy-admin token could read every project in the
-    database regardless of company. `project:create` on this project's
-    company is a *creation* capability only.
+    Company admins read every project of their company; an assigned
+    manager/member reads the ones they are assigned to. Neither the owner
+    column nor bare `user_projects` membership is a bypass any more (D6) —
+    reading requires a company role, which the platform-ops migration
+    backfills for every existing owner.
     """
-    if project.owner_id == user_id or user_id in project.user_ids:
-        return True
     return _has_permission(list(_resolver_permissions_for_project(user_id, project.id)), "project:read")
 
 
-def can_mutate_project(project, user_id: UUID) -> bool:
-    """Project owner, resolver `project:update`, or a legacy per-project `manager`/`admin`
-    membership role (`user_projects.role_id` → `project:create`) may modify a project.
+def can_mutate_project(project, user_id: UUID, permission: str = "project:update") -> bool:
+    """Return True when the resolver grants `permission` on this project.
 
-    The membership-role branch is intentionally scoped to THIS project's row in
-    `user_projects` (monotonic, additive, matches pre-Phase-1 behavior for users
-    invited as a project admin/manager) — it never reads the raw global JWT claim,
-    which would grant mutate rights on every other company's project too.
+    The write gate is resource-aware: invoice/attachment/chiffrage routes pass
+    `project:manage_invoices`, member management passes `project:manage_users`,
+    project deletion passes `project:delete` (admin-only, D2) and everything
+    else keeps the default `project:update`. Chaining the SAME permission the
+    route's `require_permission(...)` already demands means a D8 grant actually
+    unlocks the resource it names — and nothing more.
     """
-    if project.owner_id == user_id:
-        return True
-    if _has_permission(list(_resolver_permissions_for_project(user_id, project.id)), "project:update"):
-        return True
-    membership_perms = _membership_role_permissions(user_id, project.id)
-    return _has_permission(list(membership_perms), "project:create")
+    return _has_permission(list(_resolver_permissions_for_project(user_id, project.id)), permission)
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +208,15 @@ def _not_found(message: str):
     )
 
 
-def require_project_access(write: bool = False):
-    """Decorator: load project from `<project_id>` URL param → check membership."""
+def require_project_access(write: bool = False, permission: str = "project:update"):
+    """Decorator: load the project from `<project_id>` → check the caller may read/write it.
+
+    Args:
+        write: gate on `permission` instead of `project:read`.
+        permission: the write permission this resource needs — `project:manage_invoices`
+            for invoice/chiffrage routes, `project:manage_users` for membership,
+            `project:delete` for deletion, `project:update` (default) otherwise.
+    """
 
     def decorator(fn):
         @wraps(fn)
@@ -275,7 +237,7 @@ def require_project_access(write: bool = False):
                 return _not_found(f"Project {project_id_str} not found")
 
             user_id = UUID(get_jwt_identity())
-            allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
             if not allowed:
                 return _forbidden()
             return fn(*args, **kwargs)
@@ -319,7 +281,11 @@ def _is_company_admin_for_project(project, user_id: UUID) -> bool:
     return company_id in admin_company_ids(access_repo, user_id)
 
 
-def require_invoice_access(write: bool = False, allow_company_admin: bool = False):
+def require_invoice_access(
+    write: bool = False,
+    allow_company_admin: bool = False,
+    permission: str = "project:manage_invoices",
+):
     """Decorator: load invoice → load project → check caller is a member (or admin).
 
     Apply to any route whose path includes `<invoice_id>`. The decorator runs AFTER
@@ -327,8 +293,10 @@ def require_invoice_access(write: bool = False, allow_company_admin: bool = Fals
     returns 403; if the invoice/project does not exist, returns 404.
 
     Args:
-        write: when True, requires `can_mutate_project` (owner or admin only);
-               when False, `can_read_project` (any project member).
+        write: when True, requires `permission` on the invoice's project;
+               when False, `can_read_project`.
+        permission: the write permission required — `project:manage_invoices`
+               by default, since that is what an invoice write is.
         allow_company_admin: when True and write=False, also grants access to users
                who are admins of the project's owning company (even without membership).
                Has no effect on write paths.
@@ -356,7 +324,7 @@ def require_invoice_access(write: bool = False, allow_company_admin: bool = Fals
                 return _not_found("Invoice's project no longer exists")
 
             user_id = UUID(get_jwt_identity())
-            allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
             if not allowed and not write and allow_company_admin:
                 allowed = _is_company_admin_for_project(project, user_id)
             if not allowed:
@@ -368,7 +336,7 @@ def require_invoice_access(write: bool = False, allow_company_admin: bool = Fals
     return decorator
 
 
-def require_task_access(write: bool = False):
+def require_task_access(write: bool = False, permission: str = "project:update"):
     """Decorator: load task → invoice's project → check membership.
 
     Apply to routes whose path includes `<task_id>`. JWT is required
@@ -397,7 +365,7 @@ def require_task_access(write: bool = False):
                 return _not_found("Task's project no longer exists")
 
             user_id = UUID(get_jwt_identity())
-            allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
             if not allowed:
                 return _forbidden()
             return fn(*args, **kwargs)
@@ -407,14 +375,20 @@ def require_task_access(write: bool = False):
     return decorator
 
 
-def require_attachment_access(write: bool = False, allow_company_admin: bool = False):
+def require_attachment_access(
+    write: bool = False,
+    allow_company_admin: bool = False,
+    permission: str = "project:manage_invoices",
+):
     """Decorator: load attachment → invoice → project → check membership.
 
     Apply to routes whose path includes `<attachment_id>`. Same semantics as
     `require_invoice_access`.
 
     Args:
-        write: when True, requires `can_mutate_project`; when False, `can_read_project`.
+        write: when True, requires `permission` on the attachment's project;
+               when False, `can_read_project`.
+        permission: the write permission required — `project:manage_invoices` by default.
         allow_company_admin: when True and write=False, also grants access to users
                who are admins of the project's owning company (even without membership).
                Has no effect on write paths.
@@ -445,7 +419,7 @@ def require_attachment_access(write: bool = False, allow_company_admin: bool = F
                 return _not_found("Attachment's project no longer exists")
 
             user_id = UUID(get_jwt_identity())
-            allowed = can_mutate_project(project, user_id) if write else can_read_project(project, user_id)
+            allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
             if not allowed and not write and allow_company_admin:
                 allowed = _is_company_admin_for_project(project, user_id)
             if not allowed:
