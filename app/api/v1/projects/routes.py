@@ -118,20 +118,23 @@ def list_projects():
     if project_ids and container.project_spent_reader is not None:
         spent_map = container.project_spent_reader.sum_spent_by_projects(project_ids)
 
-    # Fetch budget fields from the DB models (not exposed via ProjectSummary DTO).
+    # Fetch budget + company_id fields from the DB models (not exposed via ProjectSummary DTO).
     budget_map: dict = {}
+    company_id_map: dict = {}
     if project_ids:
         rows = (
             db.session.query(
                 ProjectModel.id,
                 ProjectModel.budget,
                 ProjectModel.budget_source,
+                ProjectModel.company_id,
             )
             .filter(ProjectModel.id.in_(project_ids))
             .all()
         )
         for row in rows:
             budget_map[row.id] = (row.budget, row.budget_source)
+            company_id_map[row.id] = str(row.company_id) if row.company_id else None
 
     user_uuid = UUID(user_id)
     items = []
@@ -147,6 +150,7 @@ def list_projects():
                 owner_id=p.owner_id,
                 user_count=p.user_count,
                 created_at="",
+                company_id=company_id_map.get(pid),
                 my_permissions=perms,
                 budget=(float(budget_map[pid][0]) if visible and budget_map.get(pid, (None,))[0] is not None else None),
                 budget_source=budget_map.get(pid, (None, None))[1] if visible else None,
