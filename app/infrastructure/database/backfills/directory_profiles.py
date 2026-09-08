@@ -125,33 +125,47 @@ def _phone_for_profile(conn: Connection, company_id, phone_normalized, user_id, 
     return None
 
 
+def ensure_directory_profile(
+    conn: Connection,
+    user_id,
+    company_id,
+    report: BackfillReport,
+    now: "datetime | None" = None,
+) -> None:
+    """Give one company attachment an active, user-linked directory profile.
+
+    Idempotent: an existing profile is reactivated if it was archived and left
+    alone otherwise. Shared with `scripts/qa_personas.py`, which attaches its
+    personas one at a time.
+    """
+    now = now or datetime.now(timezone.utc)
+    person_id, phone_normalized = _person_for_user(conn, user_id, now, report)
+    if person_id is None:
+        return
+
+    profile = conn.execute(_COMPANY_PERSON_SQL, {"company_id": str(company_id), "person_id": str(person_id)}).fetchone()
+    if profile is not None:
+        if not profile[1]:
+            conn.execute(_REACTIVATE_COMPANY_PERSON_SQL, {"id": profile[0]})
+            report.profiles_reactivated += 1
+        return
+
+    conn.execute(
+        _INSERT_COMPANY_PERSON_SQL,
+        {
+            "id": uuid4().hex if conn.dialect.name == "sqlite" else uuid4(),
+            "company_id": company_id,
+            "person_id": person_id,
+            "phone_normalized": _phone_for_profile(conn, company_id, phone_normalized, user_id, report),
+            "user_id": user_id,
+            "created_at": now,
+        },
+    )
+    report.profiles_created += 1
+
+
 def backfill_directory_profiles(conn: Connection, report: BackfillReport) -> None:
-    """Step 4: every company attachment gets an active, user-linked directory profile."""
+    """Every company attachment gets an active, user-linked directory profile."""
     now = datetime.now(timezone.utc)
-    is_sqlite = conn.dialect.name == "sqlite"
     for user_id, company_id in conn.execute(_ACCESS_PAIRS_SQL).fetchall():
-        person_id, phone_normalized = _person_for_user(conn, user_id, now, report)
-        if person_id is None:
-            continue
-
-        profile = conn.execute(
-            _COMPANY_PERSON_SQL, {"company_id": str(company_id), "person_id": str(person_id)}
-        ).fetchone()
-        if profile is not None:
-            if not profile[1]:
-                conn.execute(_REACTIVATE_COMPANY_PERSON_SQL, {"id": profile[0]})
-                report.profiles_reactivated += 1
-            continue
-
-        conn.execute(
-            _INSERT_COMPANY_PERSON_SQL,
-            {
-                "id": uuid4().hex if is_sqlite else uuid4(),
-                "company_id": company_id,
-                "person_id": person_id,
-                "phone_normalized": _phone_for_profile(conn, company_id, phone_normalized, user_id, report),
-                "user_id": user_id,
-                "created_at": now,
-            },
-        )
-        report.profiles_created += 1
+        ensure_directory_profile(conn, user_id, company_id, report, now=now)
