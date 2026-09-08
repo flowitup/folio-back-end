@@ -107,7 +107,7 @@ def _insert_user_and_project(session):
         ),
         {"id": str(project_id), "name": "Test project", "owner": str(user_id), "now": now},
     )
-    # Add user as project member (no role required — user_projects role_id is nullable in tests)
+    # Assign the user to the project (an assignment carries no role)
     session.execute(
         text(
             "INSERT INTO user_projects (user_id, project_id, assigned_at) "

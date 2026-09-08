@@ -152,14 +152,13 @@ def analyses_app(invitation_app):
         db.session.execute(
             text(
                 "INSERT INTO user_projects "
-                "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
-                "VALUES (:uid, :pid, :rid, NULL, :at) "
+                "(user_id, project_id, invited_by_user_id, assigned_at) "
+                "VALUES (:uid, :pid, NULL, :at) "
                 "ON CONFLICT (user_id, project_id) DO NOTHING"
             ),
             {
                 "uid": invitation_app._test_admin_user_id,
                 "pid": invitation_app._test_project_id,
-                "rid": invitation_app._test_member_role_id,  # Use member role, not admin
                 "at": datetime.now(timezone.utc),
             },
         )

@@ -51,7 +51,6 @@ def mg_app():
         now = datetime.now(timezone.utc)
 
         # Neutral legacy role: zero permissions, exists only so `user_projects`
-        # rows can carry a non-NULL role_id (see module docstring).
         db.session.flush()
 
         def _user(email: str) -> UserModel:

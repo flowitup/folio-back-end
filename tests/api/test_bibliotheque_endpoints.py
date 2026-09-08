@@ -342,12 +342,12 @@ class TestListSuppliersEndpoint:
         )
         assert resp.status_code == 403
 
-    def test_422_missing_company_id(self, bib_client, member_token):
+    def test_missing_company_id_falls_back_to_the_primary_company(self, bib_client, member_token):
         resp = bib_client.get(
             "/api/v1/bibliotheque/suppliers",
             headers=_auth(member_token),
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 200
 
     def test_422_invalid_company_id(self, bib_client, member_token):
         resp = bib_client.get(

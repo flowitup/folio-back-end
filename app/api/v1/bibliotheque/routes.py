@@ -53,25 +53,27 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
     return jsonify({"error": error, "message": message}), code
 
 
-def _get_company_id() -> UUID | None:
+def _resolve_company_id() -> "tuple[UUID | None, tuple[Response, int] | None]":
     """Resolve the company these library reads apply to.
 
-    ``?company_id=`` wins when present and well-formed; otherwise the caller's
-    primary company is used, so a client that knows only its own session does
-    not have to pass one. Returns None only when the caller is attached to no
-    company at all (the use-cases then answer 403 on their own membership
-    check — never a cross-tenant read).
+    ``?company_id=`` wins when present; a malformed one is a client error.
+    Without it the caller's primary company is used, so a client that knows
+    only its own session does not have to pass one. Returns
+    ``(None, 403 response)`` when the caller is attached to no company — the
+    use-cases still run their own membership check, so this is never a
+    cross-tenant read.
     """
     raw = request.args.get("company_id")
     if raw:
         try:
-            return UUID(raw)
+            return UUID(raw), None
         except ValueError:
-            return None
+            return None, _err(422, "ValidationError", "company_id must be a valid UUID.")
     reader = getattr(get_container(), "authz_reader", None)
-    if reader is None:
-        return None
-    return reader.primary_company_id(UUID(get_jwt_identity()))
+    primary = reader.primary_company_id(UUID(get_jwt_identity())) if reader is not None else None
+    if primary is None:
+        return None, _err(403, "Forbidden", "You are not a member of any company.")
+    return primary, None
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +86,9 @@ def _get_company_id() -> UUID | None:
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_suppliers() -> Any:
     """List all suppliers for the company. Requires company membership."""
-    company_id = _get_company_id()
-    if company_id is None:
-        return _err(403, "Forbidden", "You are not a member of any company.")
+    company_id, company_error = _resolve_company_id()
+    if company_error is not None:
+        return company_error
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -111,9 +113,9 @@ def list_suppliers() -> Any:
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_categories() -> Any:
     """List distinct product categories for the company."""
-    company_id = _get_company_id()
-    if company_id is None:
-        return _err(403, "Forbidden", "You are not a member of any company.")
+    company_id, company_error = _resolve_company_id()
+    if company_error is not None:
+        return company_error
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -138,9 +140,9 @@ def list_categories() -> Any:
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_products() -> Any:
     """List products with optional filters: supplier, category, q, page."""
-    company_id = _get_company_id()
-    if company_id is None:
-        return _err(403, "Forbidden", "You are not a member of any company.")
+    company_id, company_error = _resolve_company_id()
+    if company_error is not None:
+        return company_error
 
     supplier_raw = request.args.get("supplier")
     supplier_id: UUID | None = None

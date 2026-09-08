@@ -73,7 +73,8 @@ def push_app():
         }
         test_app.config["_push"] = recorder
         # Permissions come from the company role + project assignment (see the helper).
-        seed_company_tenancy(test_app)
+        # `chef` validates attendance: that is the company `manager` role now.
+        seed_company_tenancy(test_app, roles={chef.id: "manager"})
 
         yield test_app
         db.session.remove()

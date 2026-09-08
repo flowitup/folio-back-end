@@ -33,10 +33,7 @@ PASSWORD = "Pass1234!"
 # Literal substrings unique to SqlAlchemyAuthzReader's raw-text queries (both
 # the SQLite-normalized and plain forms share these SELECT-clause fragments —
 # only the WHERE clause differs by dialect). Deliberately narrow so the ORM's
-# full-row project/company queries (and the LEGACY per-project membership-role
-# lookup `SELECT role_id FROM user_projects ...` in
-# app.api.v1.projects.decorators._membership_role_permissions, which also
-# touches `user_projects` but is not the resolver) are never counted.
+# full-row project/company queries are never counted.
 _RESOLVER_MARKERS = (
     "FROM user_company_access",
     "SELECT 1 FROM user_projects",

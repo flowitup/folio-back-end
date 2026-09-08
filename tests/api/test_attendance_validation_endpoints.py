@@ -94,7 +94,8 @@ def av_app():
 
         # Permissions come from the company role + assignment: owner and chef
         # become company managers, linked/unlinked members (see the helper).
-        seed_company_tenancy(test_app, legal_name="AV Test Co")
+        # `chef` validates attendance: that is the company `manager` role now.
+        seed_company_tenancy(test_app, legal_name="AV Test Co", roles={chef.id: "manager"})
 
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)

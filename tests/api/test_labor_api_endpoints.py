@@ -66,6 +66,8 @@ def labor_app():
             email="laboradmin@test.com",
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
+            # The legacy `*:*` role this fixture used to seed mapped to platform ops.
+            is_platform_ops=True,
         )
         db.session.add(admin_user)
         db.session.flush()

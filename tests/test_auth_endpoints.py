@@ -7,8 +7,6 @@ from typing import Optional
 from app import create_app, db
 from app.infrastructure.database.models import UserModel
 from app.domain.entities.user import User
-from app.domain.entities.role import Role
-from app.domain.entities.permission import Permission
 from app.application.ports.user_repository import UserRepositoryPort
 from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
 from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
@@ -41,40 +39,14 @@ class SQLAlchemyUserRepository(UserRepositoryPort):
 
     def _to_domain(self, model: UserModel) -> User:
         """Convert database model to domain entity."""
-        user = User(
+        return User(
             id=model.id,
             email=model.email,
             password_hash=model.password_hash,
             is_active=model.is_active,
             created_at=model.created_at,
             updated_at=model.updated_at,
-            roles=[],
         )
-
-        # Convert roles
-        for role_model in model.roles:
-            role = Role(
-                id=role_model.id,
-                name=role_model.name,
-                description=role_model.description,
-                created_at=role_model.created_at,
-                permissions=[],
-            )
-
-            # Convert permissions
-            for perm_model in role_model.permissions:
-                perm = Permission(
-                    id=perm_model.id,
-                    name=perm_model.name,
-                    resource=perm_model.resource,
-                    action=perm_model.action,
-                    created_at=perm_model.created_at,
-                )
-                role.permissions.append(perm)
-
-            user.roles.append(role)
-
-        return user
 
 
 @pytest.fixture(scope="module")
@@ -106,8 +78,6 @@ def app():
 
         # Create test user with hashed password
         hasher = Argon2PasswordHasher()
-
-        # Create roles and permissions
 
         # Create active and inactive users
         active_user = UserModel(email="active@example.com", password_hash=hasher.hash("password123"), is_active=True)
@@ -156,24 +126,22 @@ class TestLoginEndpoint:
         assert "refresh_token" in data
         assert "user" in data
         assert data["user"]["email"] == "active@example.com"
-        assert "permissions" in data["user"]
-        # `roles` is deprecated and always empty for a non-ops account; what the
-        # user may do comes from their company role, and this account has none.
-        assert data["user"]["roles"] == []
+        # What the user may do comes from their company role, and this account
+        # has none. The token itself carries no permissions at all.
+        assert "roles" not in data["user"]
         assert data["user"]["permissions"] == []
         assert data["user"]["is_platform_ops"] is False
         # Same shape as /auth/me: companies[] present even with no company_repo wired.
         assert data["user"]["companies"] == []
 
-    def test_login_with_legacy_admin_role_grants_nothing(self, client):
-        """A legacy global "admin" role is inert: permissions come from company roles."""
+    def test_login_without_a_company_grants_nothing(self, client):
+        """An account attached to no company resolves to an empty permission set."""
         response = client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "admin123"})
 
         assert response.status_code == 200
         data = response.get_json()
 
         assert data["user"]["email"] == "admin@example.com"
-        assert data["user"]["roles"] == []
         assert data["user"]["permissions"] == []
 
     def test_login_with_invalid_email(self, client):
@@ -362,7 +330,7 @@ class TestGetCurrentUserEndpoint:
         assert data["email"] == "active@example.com"
         assert "id" in data
         assert "permissions" in data
-        assert "roles" in data
+        assert "roles" not in data
 
     def test_get_current_user_without_token(self, client):
         """Test getting current user without token."""

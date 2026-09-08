@@ -31,7 +31,6 @@ class TestBulkAddHappyPath:
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": [invitation_app._test_project_2_id],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
@@ -46,33 +45,31 @@ class TestBulkAddHappyPath:
         assert "status" in item
         assert item["status"] == "added"
 
-    def test_200_already_member_same_role_status_in_response(self, inv_client, superadmin_token, invitation_app):
+    def test_200_already_member_status_in_response(self, inv_client, superadmin_token, invitation_app):
         """target_user is already a member of project (P1) with member_role → same_role status."""
         resp = inv_client.post(
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
-                # P1 = _test_project_id; target_user is already member with member_role
+                # P1 = _test_project_id; target_user is already assigned to it
                 "project_ids": [invitation_app._test_project_id],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
         assert resp.status_code == 200
         item = resp.get_json()["results"][0]
-        assert item["status"] == "already_member_same_role"
+        assert item["status"] == "already_member"
 
     def test_200_per_status_discriminator_visible_in_mixed_batch(self, inv_client, superadmin_token, invitation_app):
-        """Single request: 1 added + 1 already_member_same_role + 1 project_not_found."""
+        """Single request: 1 added + 1 already_member + 1 project_not_found."""
         nonexistent_pid = str(uuid.uuid4())
         resp = inv_client.post(
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": [
                     invitation_app._test_project_3_id,  # new project → added
-                    invitation_app._test_project_id,  # already member same role
+                    invitation_app._test_project_id,  # already assigned
                     nonexistent_pid,  # not found
                 ],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
@@ -81,7 +78,7 @@ class TestBulkAddHappyPath:
         assert len(results) == 3
         statuses = {r["project_id"]: r["status"] for r in results}
         assert statuses[invitation_app._test_project_3_id] == "added"
-        assert statuses[invitation_app._test_project_id] == "already_member_same_role"
+        assert statuses[invitation_app._test_project_id] == "already_member"
         assert statuses[nonexistent_pid] == "project_not_found"
 
 
@@ -96,29 +93,26 @@ class TestBulkAddAuth:
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": [invitation_app._test_project_2_id],
-                "role_id": invitation_app._test_member_role_id,
             },
         )
         assert resp.status_code == 401
 
-    def test_403_non_superadmin_member(self, inv_client, member_token, invitation_app):
+    def test_403_plain_member(self, inv_client, member_token, invitation_app):
         resp = inv_client.post(
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": [invitation_app._test_project_2_id],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(member_token),
         )
         assert resp.status_code == 403
 
-    def test_403_admin_without_star_perm(self, inv_client, admin_token, invitation_app):
+    def test_403_company_admin_without_the_ops_flag(self, inv_client, admin_token, invitation_app):
         """admin role has project:invite but not *:* → 403."""
         resp = inv_client.post(
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": [invitation_app._test_project_2_id],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(admin_token),
         )
@@ -134,15 +128,7 @@ class TestBulkAddValidation:
     def test_422_missing_project_ids(self, inv_client, superadmin_token, invitation_app):
         resp = inv_client.post(
             _bulk_add_url(invitation_app._test_target_user_id),
-            json={"role_id": invitation_app._test_member_role_id},
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 422
-
-    def test_422_missing_role_id(self, inv_client, superadmin_token, invitation_app):
-        resp = inv_client.post(
-            _bulk_add_url(invitation_app._test_target_user_id),
-            json={"project_ids": [invitation_app._test_project_2_id]},
+            json={},
             headers=_auth(superadmin_token),
         )
         assert resp.status_code == 422
@@ -152,7 +138,6 @@ class TestBulkAddValidation:
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": "not-a-list",
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
@@ -163,7 +148,6 @@ class TestBulkAddValidation:
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": ["not-a-uuid"],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
@@ -175,7 +159,6 @@ class TestBulkAddValidation:
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": [],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
@@ -189,7 +172,6 @@ class TestBulkAddValidation:
             _bulk_add_url(invitation_app._test_target_user_id),
             json={
                 "project_ids": fifty_one_ids,
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
@@ -208,35 +190,10 @@ class TestBulkAddDomainErrors:
             _bulk_add_url(nonexistent_user_id),
             json={
                 "project_ids": [invitation_app._test_project_2_id],
-                "role_id": invitation_app._test_member_role_id,
             },
             headers=_auth(superadmin_token),
         )
         assert resp.status_code == 404
-
-    def test_404_missing_role(self, inv_client, superadmin_token, invitation_app):
-        nonexistent_role_id = str(uuid.uuid4())
-        resp = inv_client.post(
-            _bulk_add_url(invitation_app._test_target_user_id),
-            json={
-                "project_ids": [invitation_app._test_project_2_id],
-                "role_id": nonexistent_role_id,
-            },
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 404
-
-    def test_403_superadmin_role_assignment_not_allowed(self, inv_client, superadmin_token, invitation_app):
-        """Assigning the 'superadmin' role via bulk-add must be rejected with 403."""
-        resp = inv_client.post(
-            _bulk_add_url(invitation_app._test_target_user_id),
-            json={
-                "project_ids": [invitation_app._test_project_2_id],
-                "role_id": invitation_app._test_superadmin_role_id,
-            },
-            headers=_auth(superadmin_token),
-        )
-        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +223,6 @@ class TestBulkAddInternalError:
                 _bulk_add_url(invitation_app._test_target_user_id),
                 json={
                     "project_ids": [invitation_app._test_project_2_id],
-                    "role_id": invitation_app._test_member_role_id,
                 },
                 headers=_auth(superadmin_token),
             )

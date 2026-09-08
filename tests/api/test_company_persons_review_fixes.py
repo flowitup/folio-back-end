@@ -548,10 +548,7 @@ class TestM9ProjectMembershipRemoveNormalizesUuid:
             # produces — mirrors the ORM UUID TypeDecorator's dashless-hex
             # SQLite storage that other insert paths in this codebase use.
             db.session.execute(
-                text(
-                    "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
-                    "VALUES (:uid, :pid, NULL, :at)"
-                ),
+                text("INSERT INTO user_projects (user_id, project_id, assigned_at) " "VALUES (:uid, :pid, :at)"),
                 {"uid": user_id.hex, "pid": project_id.hex, "at": datetime.now(timezone.utc)},
             )
             db.session.commit()

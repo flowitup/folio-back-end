@@ -57,7 +57,8 @@ def test_labor_roles_are_untouched() -> None:
 
 
 def test_the_roles_endpoint_is_gone() -> None:
-    assert not (APP_ROOT / "api" / "v1" / "roles").exists()
+    # The package, not the directory: a stale __pycache__/ can outlive `git rm`.
+    assert not (APP_ROOT / "api" / "v1" / "roles" / "__init__.py").exists()
     assert not (APP_ROOT / "infrastructure" / "database" / "repositories" / "sqlalchemy_role.py").exists()
     assert not (APP_ROOT / "domain" / "entities" / "role.py").exists()
     assert not (APP_ROOT / "domain" / "entities" / "permission.py").exists()

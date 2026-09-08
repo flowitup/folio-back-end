@@ -164,8 +164,8 @@ class TestCompanyEvents:
             db.session.flush()
             db.session.execute(
                 text(
-                    "INSERT INTO user_projects (user_id, project_id, role_id, invited_by_user_id, assigned_at) "
-                    "VALUES (:uid, :pid, NULL, NULL, :at)"
+                    "INSERT INTO user_projects (user_id, project_id, invited_by_user_id, assigned_at) "
+                    "VALUES (:uid, :pid, NULL, :at)"
                 ),
                 {"uid": str(member_id), "pid": str(project.id), "at": now},
             )

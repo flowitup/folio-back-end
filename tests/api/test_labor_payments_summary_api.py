@@ -70,6 +70,8 @@ def pay_app():
             email="pay_admin@test.com",
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
+            # The legacy `*:*` role this fixture used to seed mapped to platform ops.
+            is_platform_ops=True,
         )
 
         # No roles/membership at all — used for the 403 non-member test.
