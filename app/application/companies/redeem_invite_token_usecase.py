@@ -20,9 +20,11 @@ asserting redeemed_at and writing user_company_access.
 
 from __future__ import annotations
 
+from typing import Any, Optional
 from uuid import UUID
 
 from app.application.companies.dtos import RedeemInviteTokenInput
+from app.application.company_persons.ensure_company_person import ensure_company_person
 from app.application.companies.ports import (
     Argon2HasherPort,
     ClockPort,
@@ -72,11 +74,19 @@ class RedeemInviteTokenUseCase:
         access_repo: UserCompanyAccessRepositoryPort,
         hasher: Argon2HasherPort,
         clock: ClockPort,
+        person_repo: Optional[Any] = None,
+        company_person_repo: Optional[Any] = None,
+        user_repo: Optional[Any] = None,
     ) -> None:
         self._token_repo = token_repo
         self._access_repo = access_repo
         self._hasher = hasher
         self._clock = clock
+        # Directory repositories: an attached user must be listed among the
+        # company's people, or an admin cannot assign them to a project.
+        self._persons = person_repo
+        self._company_persons = company_person_repo
+        self._users = user_repo
 
     def execute(
         self,
@@ -139,5 +149,14 @@ class RedeemInviteTokenUseCase:
             role=token.role,
         )
         self._access_repo.save(access)
+
+        ensure_company_person(
+            persons=self._persons,
+            company_persons=self._company_persons,
+            users=self._users,
+            user_id=inp.user_id,
+            company_id=token.company_id,
+            now=now,
+        )
 
         db_session.commit()

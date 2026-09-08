@@ -156,55 +156,14 @@ class JoinCompanyByCodeUseCase:
         return CompanyResponse.from_entity(company)
 
     def _ensure_company_person(self, user_id: UUID, company_id: UUID, now: datetime) -> None:
-        """Create an active company_persons row for the joiner, reactivating
-        a previously-booted one (M1) rather than leaving it deactivated."""
-        if self._persons is None or self._company_persons is None:
-            return
-        import dataclasses
-        from uuid import uuid4
+        """Keep the "attached ⇒ listed in the directory" invariant (shared helper)."""
+        from app.application.company_persons.ensure_company_person import ensure_company_person
 
-        from app.domain.entities.company_person import CompanyPerson
-        from app.domain.entities.person import Person
-
-        person = self._persons.find_by_user_id(user_id)
-        if person is None:
-            if self._users is None:
-                # No global identity yet and no way to derive one (e.g. an
-                # email/password account that never had a Worker/Person
-                # backfilled, in a minimal test fixture) — skip.
-                return
-            user = self._users.find_by_id(user_id)
-            if user is None:
-                return
-            display_name = user.display_name or user.email
-            person = self._persons.create(
-                Person(
-                    id=uuid4(),
-                    name=display_name,
-                    normalized_name=Person.normalize(display_name),
-                    created_by_user_id=user_id,
-                    created_at=now,
-                    phone=user.phone,
-                    phone_normalized=user.phone,
-                    user_id=user_id,
-                ),
-                commit=False,
-            )
-        existing = self._company_persons.find(company_id, person.id)
-        if existing is not None:
-            # M1: reactivate a previously-booted profile; an already-active
-            # row is untouched (plain idempotent re-join).
-            if not existing.is_active:
-                self._company_persons.save(dataclasses.replace(existing, is_active=True, pending_expires_at=None))
-            return
-        self._company_persons.save(
-            CompanyPerson(
-                id=uuid4(),
-                company_id=company_id,
-                person_id=person.id,
-                created_at=now,
-                is_active=True,
-                phone_normalized=person.phone_normalized,
-                created_by_user_id=user_id,
-            )
+        ensure_company_person(
+            persons=self._persons,
+            company_persons=self._company_persons,
+            users=self._users,
+            user_id=user_id,
+            company_id=company_id,
+            now=now,
         )

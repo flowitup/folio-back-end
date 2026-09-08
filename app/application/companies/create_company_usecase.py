@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import Any, TYPE_CHECKING, Optional
 from uuid import uuid4
 
 from app.application.companies._helpers import (
@@ -18,6 +18,7 @@ from app.application.companies.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
+from app.application.company_persons.ensure_company_person import ensure_company_person
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
@@ -59,11 +60,19 @@ class CreateCompanyUseCase:
         access_repo: UserCompanyAccessRepositoryPort,
         seed_payment_methods: Optional["SeedPaymentMethodsForCompanyUseCase"] = None,
         seed_default_labor_roles: Optional["SeedDefaultLaborRolesUseCase"] = None,
+        person_repo: Optional[Any] = None,
+        company_person_repo: Optional[Any] = None,
+        user_repo: Optional[Any] = None,
     ) -> None:
         self._company_repo = company_repo
         self._access_repo = access_repo
         self._seed_payment_methods = seed_payment_methods
         self._seed_default_labor_roles = seed_default_labor_roles
+        # Directory repositories: the creator must be listed among the
+        # company's people, or no one can assign them to a project.
+        self._persons = person_repo
+        self._company_persons = company_person_repo
+        self._users = user_repo
 
     def execute(
         self,
@@ -106,6 +115,15 @@ class CreateCompanyUseCase:
                 attached_at=now,
                 role=CompanyRole.ADMIN.value,
             )
+        )
+
+        ensure_company_person(
+            persons=self._persons,
+            company_persons=self._company_persons,
+            users=self._users,
+            user_id=inp.caller_id,
+            company_id=saved.id,
+            now=now,
         )
 
         db_session.commit()

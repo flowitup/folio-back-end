@@ -573,11 +573,25 @@ def invitation_app():
             access_repo=_access_repo,
             role_checker=_role_checker,
         )
+        # Directory repos: "attached ⇒ listed in the company directory".
+        from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+            SqlAlchemyCompanyPersonRepository as _CompanyPersonRepo,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_person_repository import (
+            SqlAlchemyPersonRepository as _PersonRepo,
+        )
+
+        _c.person_repo = _PersonRepo(db.session)
+        _c.company_person_repo = _CompanyPersonRepo(db.session)
+
         _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
             token_repo=_token_repo,
             access_repo=_access_repo,
             hasher=_argon2_hasher,
             clock=_clock,
+            person_repo=_c.person_repo,
+            company_person_repo=_c.company_person_repo,
+            user_repo=user_repo,
         )
         _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(access_repo=_access_repo)
         _c.detach_company_usecase = _DetachCompanyUseCase(access_repo=_access_repo)
@@ -839,6 +853,9 @@ def invitation_app():
             company_repo=_company_repo,
             access_repo=_access_repo,
             seed_payment_methods=_c.seed_payment_methods_usecase,
+            person_repo=_c.person_repo,
+            company_person_repo=_c.company_person_repo,
+            user_repo=user_repo,
         )
 
         # ------------------------------------------------------------------
