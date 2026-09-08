@@ -30,6 +30,7 @@ from app.application.labor import (
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
+    WorkerAlreadyLinkedError,
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -134,7 +135,7 @@ def create_worker(project_id: str):
             CreateWorkerDTO(
                 project_id=UUID(project_id),
                 name=data.name,
-                daily_rate=Decimal(str(data.daily_rate)),
+                daily_rate=Decimal(str(data.daily_rate)) if data.daily_rate is not None else None,
                 phone=data.phone,
                 person_id=UUID(data.person_id) if data.person_id else None,
                 created_by_user_id=creator_id,
@@ -144,6 +145,8 @@ def create_worker(project_id: str):
         )
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
+    except WorkerAlreadyLinkedError as e:
+        return _error_response("Conflict", str(e), 409)
 
     return jsonify(_worker_response(result).model_dump()), 201
 

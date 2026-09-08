@@ -27,3 +27,5 @@ users_me_bp = Blueprint("users_me", __name__)
 from app.api.v1.companies import routes  # noqa: E402, F401
 
 __all__ = ["companies_bp", "users_me_bp"]
+from app.api.v1.companies import grants_routes  # noqa: E402,F401
+from app.api.v1.companies import members_routes  # noqa: E402,F401

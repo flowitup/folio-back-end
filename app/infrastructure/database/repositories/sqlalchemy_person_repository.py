@@ -29,6 +29,8 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             normalized_name=person.normalized_name,
             created_by_user_id=person.created_by_user_id,
             created_at=person.created_at,
+            user_id=person.user_id,
+            phone_normalized=person.phone_normalized,
         )
         self._session.add(model)
         self._session.commit()

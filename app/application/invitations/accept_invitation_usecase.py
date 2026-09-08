@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
 
 from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
@@ -13,10 +15,17 @@ from app.application.invitations.ports import (
 )
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
+from app.domain.companies.roles import CompanyRole
+from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.project_membership import ProjectMembership
 from app.domain.entities.user import User
 from app.domain.exceptions.invitation_exceptions import InvalidInvitationTokenError
 from app.domain.value_objects.invite_token import hash_token
+
+if TYPE_CHECKING:
+    from app.application.authz.ports import AuthzReaderPort
+    from app.application.companies.ports import UserCompanyAccessRepositoryPort
+    from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
 
 _MIN_PASSWORD_LEN = 8
 _MAX_PASSWORD_LEN = 128
@@ -24,7 +33,17 @@ _MAX_NAME_LEN = 100
 
 
 class AcceptInvitationUseCase:
-    """Accept an invitation: create user + membership, return JWT pair."""
+    """Accept an invitation: create user + membership, return JWT pair.
+
+    Invitations stay the OUTSIDER path (Phase 2): no company-membership
+    precondition on the acceptor. Once accepted, the acceptor becomes a
+    `member` of the invited project's company (derived from the project —
+    invitations carry no `company_id` column, no schema change in this
+    slice) in addition to the existing project assignment (`user_projects`
+    row added below). `authz_reader`/`access_repo` are optional so existing
+    callers/tests that construct this use case without the companies BC
+    keep working unchanged (company attachment is then simply skipped).
+    """
 
     _DEFAULT_GLOBAL_ROLE = "user"
 
@@ -37,6 +56,9 @@ class AcceptInvitationUseCase:
         token_issuer: TokenIssuerPort,
         db_session: TransactionalSessionPort,
         role_repo: RoleRepositoryPort,
+        authz_reader: "Optional[AuthzReaderPort]" = None,
+        access_repo: "Optional[UserCompanyAccessRepositoryPort]" = None,
+        link_person_on_signup: "Optional[LinkPersonOnSignupUseCase]" = None,
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
@@ -45,6 +67,9 @@ class AcceptInvitationUseCase:
         self._tokens = token_issuer
         self._db = db_session
         self._role_repo = role_repo
+        self._authz_reader = authz_reader
+        self._access_repo = access_repo
+        self._link_person_on_signup = link_person_on_signup
 
     # ------------------------------------------------------------------
 
@@ -53,6 +78,7 @@ class AcceptInvitationUseCase:
         raw_token: str,
         name: str,
         password: str,
+        phone: "Optional[str]" = None,
     ) -> AcceptInvitationResultDto:
         """Process acceptance of an invitation.
 
@@ -93,11 +119,18 @@ class AcceptInvitationUseCase:
                     password_hash=password_hash,
                     display_name=name,
                 )
+                if phone:
+                    user.phone = phone
                 user = self._user_repo.save(user)
 
                 default_role = self._role_repo.find_by_name(self._DEFAULT_GLOBAL_ROLE)
                 if default_role is not None:
                     self._user_repo.assign_role(user.id, default_role.id)
+
+                # Same pending-profile linking as phone-OTP sign-up (Phase 2):
+                # only meaningful when the invitee supplied a phone.
+                if phone and self._link_person_on_signup is not None:
+                    self._link_person_on_signup.execute(user.id, phone)
 
             if not self._membership_repo.exists(user.id, inv.project_id):
                 membership = ProjectMembership.create(
@@ -107,6 +140,23 @@ class AcceptInvitationUseCase:
                     invited_by=inv.invited_by,
                 )
                 self._membership_repo.add(membership)
+
+            # Invitations are the outsider path (Phase 2): no company-membership
+            # precondition, but the acceptor becomes a `member` of the invited
+            # project's company (derived from the project — invitations carry
+            # no company_id of their own).
+            if self._authz_reader is not None and self._access_repo is not None:
+                company_id = self._authz_reader.project_company_id(inv.project_id)
+                if company_id is not None and self._access_repo.find(user.id, company_id) is None:
+                    self._access_repo.save(
+                        UserCompanyAccess(
+                            user_id=user.id,
+                            company_id=company_id,
+                            is_primary=len(self._access_repo.list_for_user(user.id)) == 0,
+                            attached_at=datetime.now(timezone.utc),
+                            role=CompanyRole.MEMBER.value,
+                        )
+                    )
 
             self._inv_repo.save(accepted_inv)
         self._db.commit()

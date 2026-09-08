@@ -287,6 +287,20 @@ class ListAllCompaniesResult:
 
 
 @dataclass(frozen=True)
+class NewMemberEvent:
+    """One derived `company_events[]` row for GET /notifications (admins only).
+
+    Surfaces a member attached in the last 7 days with no project assignment
+    yet in that company (see `ListNewMembersUseCase`).
+    """
+
+    user_id: UUID
+    display_name: str
+    company_id: UUID
+    attached_at: datetime
+
+
+@dataclass(frozen=True)
 class InviteTokenResponse:
     """Serialisable invite token (no plaintext, no hash — metadata only)."""
 

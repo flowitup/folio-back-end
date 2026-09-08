@@ -77,6 +77,22 @@ class SqlAlchemyProjectMembershipRepository:
         raw = row[0]
         return raw if isinstance(raw, _UUID) else _UUID(str(raw))
 
+    def remove(self, user_id: UUID, project_id: UUID) -> bool:
+        """Delete a membership row (project assignment removal). Returns True if a row was deleted.
+
+        Used by the project-assignment endpoints and by the company boot/detach
+        cleanup (Phase 2 onboarding slice) to unassign a manager/member from a
+        project. Flushes only (no commit) — same convention as `add()`/`delete()`
+        elsewhere in this repository, so a caller can compose this with other
+        writes into one atomic transaction.
+        """
+        result = self._session.execute(
+            text("DELETE FROM user_projects WHERE user_id = :uid AND project_id = :pid"),
+            {"uid": str(user_id), "pid": str(project_id)},
+        )
+        self._session.flush()
+        return result.rowcount > 0
+
     def set_role(self, user_id: UUID, project_id: UUID, role_id: UUID) -> bool:
         """Update an existing membership's role. Returns True if a row was updated.
 

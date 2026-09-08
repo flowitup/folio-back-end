@@ -143,15 +143,20 @@ def list_companies():
 
 @companies_bp.route("/companies", methods=["POST"])
 @openapi_doc(
-    summary="Create a new company (admin only)",
+    summary="Create a new company (self-service — any authenticated user)",
     request=CreateCompanyRequest,
     tags=["companies"],
 )
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
-@require_admin
 def create_company():
-    """Create a new company (admin only)."""
+    """Create a new company (self-service).
+
+    Any authenticated user may create a company — no platform `*:*` permission
+    required (Phase 2 D1/goal 1). The caller is attached as the company's
+    `admin`, `is_primary` when it is their first company, and the default
+    labor role roster is seeded.
+    """
     try:
         body = CreateCompanyRequest.model_validate(request.get_json(force=True) or {})
     except ValidationError as exc:
@@ -173,10 +178,7 @@ def create_company():
 
     from app import db
 
-    try:
-        result = get_container().create_company_usecase.execute(inp, db.session)
-    except ForbiddenCompanyError:
-        return _err("Forbidden", "Admin permission required", 403)
+    result = get_container().create_company_usecase.execute(inp, db.session)
 
     return jsonify(_company_to_dict(result)), 201
 

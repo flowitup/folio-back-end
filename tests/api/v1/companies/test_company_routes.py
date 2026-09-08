@@ -102,14 +102,15 @@ class TestCreateCompany:
         )
         assert resp.status_code == 422
 
-    def test_create_forbidden_for_non_admin(self, inv_client, member_token_co):
-        """Non-admin user lacks *:* permission → 403."""
+    def test_create_allowed_for_non_admin_self_service(self, inv_client, member_token_co):
+        """Phase 2 D1/goal 1: company creation is self-service — any authenticated
+        user may create a company, no platform ``*:*`` permission required."""
         resp = inv_client.post(
             "/api/v1/companies",
             json={"legal_name": "Member Corp", "address": "1 rue Test"},
             headers=_auth(member_token_co),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 201, resp.get_data(as_text=True)
 
 
 # ---------------------------------------------------------------------------

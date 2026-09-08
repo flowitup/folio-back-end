@@ -199,6 +199,75 @@ class SqlAlchemyAuthzReader:
             cache[key] = result
         return result
 
+    def project_ids_for_company(self, company_id: UUID) -> "list[UUID]":
+        """Return every project id owned by `company_id`."""
+        cache = self._cache()
+        key = ("project_ids_for_company", company_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        rows = self._session.execute(
+            text(f"SELECT id FROM projects WHERE {self._eq('company_id', 'cid')}"),
+            {"cid": self._bind_uuid(company_id)},
+        ).fetchall()
+        result = [self._as_uuid_or_none(r[0]) for r in rows]
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def assigned_project_ids(self, user_id: UUID, project_ids: "list[UUID]") -> "list[UUID]":
+        """Return the subset of `project_ids` the user has a `user_projects` row for."""
+        if not project_ids:
+            return []
+        unique_ids = list(dict.fromkeys(project_ids))
+        if self._is_sqlite():
+            id_col = _norm("up.project_id")
+            placeholders = ", ".join(_norm(f":id{i}") for i in range(len(unique_ids)))
+        else:
+            id_col = "up.project_id"
+            placeholders = ", ".join(f":id{i}" for i in range(len(unique_ids)))
+        params = {f"id{i}": self._bind_uuid(pid) for i, pid in enumerate(unique_ids)}
+        params["uid"] = self._bind_uuid(user_id)
+        rows = self._session.execute(
+            text(
+                f"SELECT up.project_id FROM user_projects up "
+                f"WHERE {self._eq('up.user_id', 'uid')} AND {id_col} IN ({placeholders})"
+            ),
+            params,
+        ).fetchall()
+        return [self._as_uuid_or_none(r[0]) for r in rows]
+
+    def has_project_assignment_in_company(self, user_id: UUID, company_id: UUID) -> bool:
+        """Return True if `user_id` has a `user_projects` row on any project of `company_id`.
+
+        The JOIN condition (`projects.id` vs `user_projects.project_id`) is
+        itself dialect-normalized, not just the WHERE clause: on SQLite,
+        `projects.id` is written by the ORM's UUID TypeDecorator (dashless
+        hex) while `user_projects.project_id` is written by several
+        raw-`text()` insert paths elsewhere in this codebase (dashed
+        `str(uuid)`) — comparing them with plain `=` silently returns zero
+        rows.
+        """
+        cache = self._cache()
+        key = ("has_project_assignment_in_company", user_id, company_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        if self._is_sqlite():
+            join_clause = f"{_norm('p.id')} = {_norm('up.project_id')}"
+        else:
+            join_clause = "p.id = up.project_id"
+        row = self._session.execute(
+            text(
+                "SELECT 1 FROM user_projects up "
+                f"JOIN projects p ON {join_clause} "
+                f"WHERE {self._eq('up.user_id', 'uid')} AND {self._eq('p.company_id', 'cid')} LIMIT 1"
+            ),
+            {"uid": self._bind_uuid(user_id), "cid": self._bind_uuid(company_id)},
+        ).fetchone()
+        result = row is not None
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def grants_for(self, user_id: UUID, company_id: UUID, project_id: "UUID | None") -> "list[tuple[str, str]]":
         """Return the caller's D8 grant/deny rows applicable to this scope.
 

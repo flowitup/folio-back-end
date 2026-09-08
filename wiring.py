@@ -450,6 +450,15 @@ class Container:
     set_member_role_usecase: Optional[SetMemberRoleUseCase] = None
     detach_company_usecase: Optional[DetachCompanyUseCase] = None
 
+    # Onboarding (Phase 2 slice B): add member by phone, import, directory,
+    # derived "new members" notification feed, project assignments.
+    add_member_by_phone_usecase: Optional[Any] = None  # AddMemberByPhoneUseCase
+    import_members_usecase: Optional[Any] = None  # ImportMembersUseCase
+    list_directory_usecase: Optional[Any] = None  # ListDirectoryUseCase
+    list_new_members_usecase: Optional[Any] = None  # ListNewMembersUseCase
+    assign_project_member_usecase: Optional[Any] = None  # AssignProjectMemberUseCase
+    unassign_project_member_usecase: Optional[Any] = None  # UnassignProjectMemberUseCase
+
     # -----------------------------------------------------------------------
     # Payment methods repo + use-cases (invoice-payment-method feature)
     # -----------------------------------------------------------------------

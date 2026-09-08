@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -12,6 +12,18 @@ from sqlalchemy.orm import Session
 from app.application.company_persons.ports import CompanyPersonRepositoryPort
 from app.domain.entities.company_person import CompanyPerson
 from app.infrastructure.database.models.company_person import CompanyPersonModel
+
+
+def _ensure_utc(dt: "Optional[datetime]") -> "Optional[datetime]":
+    """Attach UTC to a naive datetime — SQLite returns naive values for
+    ``DateTime(timezone=True)`` columns, Postgres returns aware ones (same
+    normalisation as ``company_serializers._ensure_utc``, duplicated here to
+    avoid a companies -> company_persons module dependency)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
@@ -113,11 +125,11 @@ class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
             id=row.id,
             company_id=row.company_id,
             person_id=row.person_id,
-            created_at=row.created_at,
+            created_at=_ensure_utc(row.created_at),
             labor_role_id=row.labor_role_id,
             default_daily_rate=row.default_daily_rate,
             is_active=row.is_active,
             phone_normalized=row.phone_normalized,
-            pending_expires_at=row.pending_expires_at,
+            pending_expires_at=_ensure_utc(row.pending_expires_at),
             created_by_user_id=row.created_by_user_id,
         )

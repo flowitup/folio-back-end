@@ -18,7 +18,6 @@ import pytest
 from app.application.companies.create_company_usecase import CreateCompanyUseCase
 from app.application.companies.dtos import CreateCompanyInput
 from app.domain.companies.company import Company
-from app.domain.companies.exceptions import ForbiddenCompanyError
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +209,10 @@ class TestCreateCompanyWithoutSeeder:
         stored = company_repo.find_by_id(result.id)
         assert stored is not None
 
-    def test_non_admin_still_raises_without_seeder(self, company_repo, role_service, fake_session):
+    def test_non_admin_still_creates_without_seeder(self, company_repo, role_service, fake_session):
+        """Phase 2 D1/goal 1: company creation is self-service — a caller with
+        no platform `*:*` permission still succeeds (no ForbiddenCompanyError),
+        with or without a seeder injected."""
         user_id = uuid4()  # not in admin set
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
@@ -218,5 +220,6 @@ class TestCreateCompanyWithoutSeeder:
             seed_payment_methods=None,
         )
 
-        with pytest.raises(ForbiddenCompanyError):
-            uc.execute(_inp(user_id), fake_session)
+        result = uc.execute(_inp(user_id), fake_session)
+
+        assert result.legal_name == "Dupont SARL"

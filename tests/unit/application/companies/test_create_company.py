@@ -7,7 +7,6 @@ import pytest
 
 from app.application.companies.create_company_usecase import CreateCompanyUseCase
 from app.application.companies.dtos import CreateCompanyInput
-from app.domain.companies.exceptions import ForbiddenCompanyError
 
 
 @pytest.fixture
@@ -59,9 +58,11 @@ class TestCreateCompanyHappyPath:
 
 
 class TestCreateCompanyGuards:
-    def test_non_admin_raises_forbidden(self, usecase, user_id, fake_session):
-        with pytest.raises(ForbiddenCompanyError):
-            usecase.execute(_inp(user_id), fake_session)
+    def test_non_admin_creates_company_self_service(self, usecase, user_id, fake_session):
+        """Phase 2 D1/goal 1: company creation is self-service — a caller with
+        no platform `*:*` permission succeeds (no ForbiddenCompanyError)."""
+        result = usecase.execute(_inp(user_id), fake_session)
+        assert result.legal_name == "Test Corp SAS"
 
     def test_blank_legal_name_raises(self, usecase, admin_id, fake_session):
         with pytest.raises(ValueError):

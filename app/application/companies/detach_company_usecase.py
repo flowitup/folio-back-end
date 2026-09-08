@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any, Optional
+
 from app.application.companies.dtos import DetachCompanyInput
+from app.application.companies.join_code_usecases import rotate_join_code_unchecked
 from app.application.companies.ports import (
+    ClockPort,
+    CompanyRepositoryPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
@@ -24,6 +29,12 @@ class DetachCompanyUseCase:
     Users can only detach themselves; admins booting a user should use
     BootAttachedUserUseCase instead.
 
+    Phase 2 onboarding cleanup, same transaction as the access-row delete:
+    the departing user's assignments on this company's projects are removed,
+    their `company_persons` profile (if any) is deactivated, and the join
+    code is rotated (best-effort — skipped when the optional collaborators
+    are not injected, so existing callers/tests keep working).
+
     Raises:
         UserCompanyAccessNotFoundError: caller is not attached to the company.
         LastCompanyAdminError: caller is the company's last remaining admin —
@@ -33,8 +44,20 @@ class DetachCompanyUseCase:
     def __init__(
         self,
         access_repo: UserCompanyAccessRepositoryPort,
+        authz_reader: Optional[Any] = None,
+        membership_repo: Optional[Any] = None,
+        person_repo: Optional[Any] = None,
+        company_person_repo: Optional[Any] = None,
+        company_repo: Optional[CompanyRepositoryPort] = None,
+        clock: Optional[ClockPort] = None,
     ) -> None:
         self._access_repo = access_repo
+        self._authz_reader = authz_reader
+        self._membership_repo = membership_repo
+        self._person_repo = person_repo
+        self._company_person_repo = company_person_repo
+        self._company_repo = company_repo
+        self._clock = clock
 
     def execute(
         self,
@@ -69,5 +92,20 @@ class DetachCompanyUseCase:
                 first = min(remaining, key=lambda r: r.attached_at)
                 promoted = first.with_updates(is_primary=True)
                 self._access_repo.save(promoted)
+
+        # 4. Phase 2 onboarding cleanup, same transaction: drop the departing
+        # user's assignments on this company's projects, deactivate their
+        # directory profile, and rotate the join code.
+        if self._authz_reader is not None and self._membership_repo is not None:
+            for project_id in self._authz_reader.project_ids_for_company(inp.company_id):
+                self._membership_repo.remove(inp.user_id, project_id)
+
+        if self._person_repo is not None and self._company_person_repo is not None:
+            person = self._person_repo.find_by_user_id(inp.user_id)
+            if person is not None:
+                self._company_person_repo.deactivate(inp.company_id, person.id)
+
+        if self._company_repo is not None and self._clock is not None:
+            rotate_join_code_unchecked(self._company_repo, self._clock, inp.company_id)
 
         db_session.commit()
