@@ -450,6 +450,10 @@ def _configure_di_container() -> None:
     )
     from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository
 
+    from app.application.push.chat_push_notifier import ChatPushNotifier
+    from app.application.push.dispatcher import PushDispatcher
+    from app.infrastructure.adapters.sqlalchemy_chat_push_marker import SQLAlchemyChatPushMarkerRepository
+
     _c.push_device_repository = SQLAlchemyPushDeviceRepository(db.session)
     _c.notification_preference_repository = SQLAlchemyNotificationPreferenceRepository(db.session)
     _c.push_sender = (
@@ -467,6 +471,26 @@ def _configure_di_container() -> None:
             run_async=not _cfg.get("TESTING", False),
             preferences=_c.notification_preference_repository,
         )
+    # Chat pushes are coalesced per (user, channel); the notifier is attached to the
+    # already-constructed send use case because the push stack is wired later than chat.
+    _c.push_dispatcher = PushDispatcher(
+        devices=_c.push_device_repository,
+        sender=_c.push_sender,
+        preferences=_c.notification_preference_repository,
+        locale=_cfg.get("PUSH_LOCALE", "vi"),
+        run_async=not _cfg.get("TESTING", False),
+    )
+    _c.chat_push_marker_repository = SQLAlchemyChatPushMarkerRepository(db.session)
+    if _c.send_chat_message_usecase is not None:
+        _c.send_chat_message_usecase.notifier = ChatPushNotifier(
+            dispatcher=_c.push_dispatcher,
+            directory=_chat_repo,
+            markers=_c.chat_push_marker_repository,
+            reads=_chat_repo,
+            messages=_chat_repo,
+            names=_chat_repo,
+        )
+
     _c.login_otp_repository = _otp_repo
     if _c.user_repository is not None and _c.authorization_service is not None and _c.token_issuer is not None:
         _c.request_otp_usecase = RequestOtpUseCase(

@@ -331,6 +331,8 @@ class Container:
     # Push notifications (attendance): device registry, provider adapter, notifier
     push_device_repository: Optional[Any] = None
     notification_preference_repository: Optional[Any] = None
+    push_dispatcher: Optional[Any] = None
+    chat_push_marker_repository: Optional[Any] = None
     push_sender: Optional[Any] = None
     attendance_push_notifier: Optional[Any] = None
     login_otp_repository: Optional[Any] = None
