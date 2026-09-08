@@ -589,6 +589,11 @@ def _configure_di_container() -> None:
         if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
             _invitation_usecase.set_authz_reader(_c.authz_reader)
 
+    # Directly adding an existing user to a project also attaches them to the
+    # project's company — without an access row they resolve to no permissions.
+    if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_access_repo"):
+        _c.create_invitation_usecase.set_access_repo(_access_repo)
+
     # D3 day roster use case — needs worker_repository + labor_entry_repository
     # (wired earlier in configure_container) plus the authz reader just above.
     if _c.worker_repository is not None and _c.labor_entry_repository is not None:

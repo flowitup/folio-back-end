@@ -30,8 +30,9 @@ class _InviteReader:
     only need the gate open (or shut) so they can exercise the invite flow.
     """
 
-    def __init__(self, allow: bool = True) -> None:
+    def __init__(self, allow: bool = True, company_id=None) -> None:
         self._allow = allow
+        self._company_id = company_id
 
     def company_role_for(self, user_id, company_id):
         return "admin" if self._allow else "member"
@@ -40,7 +41,7 @@ class _InviteReader:
         return True
 
     def project_company_id(self, project_id):
-        return uuid4()
+        return self._company_id or uuid4()
 
     def grants_for(self, user_id, company_id, project_id):
         return []
@@ -118,6 +119,8 @@ def _make_usecase(
     queue_port=None,
     db_session=None,
     may_invite: bool = True,
+    access_repo=None,
+    company_id=None,
 ) -> CreateInvitationUseCase:
     renderer = MagicMock()
     renderer.render.return_value = ("Subject", "Text body", "<html>body</html>")
@@ -131,7 +134,8 @@ def _make_usecase(
         queue_port=queue_port or MagicMock(),
         app_base_url="http://localhost:3000",
         db_session=db_session or _FakeSession(),
-        authz_reader=_InviteReader(may_invite),
+        authz_reader=_InviteReader(may_invite, company_id),
+        access_repo=access_repo,
     )
 
 
@@ -551,3 +555,63 @@ class TestMissingResources:
                 project_id=uuid4(),
                 email="user@example.com",
             )
+
+
+# ---------------------------------------------------------------------------
+# Existing user → company attachment (permissions resolve through the company)
+# ---------------------------------------------------------------------------
+
+
+class TestDirectAddAttachesToTheProjectCompany:
+    def _run(self, access_repo, company_id):
+        inviter = _make_user(has_invite_perm=True)
+        project = _make_project()
+        existing_user = User(
+            id=uuid4(),
+            email="existing@example.com",
+            password_hash="hashed",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = inviter
+        user_repo.find_by_email.return_value = existing_user
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+
+        uc = _make_usecase(
+            membership_repo=membership_repo,
+            user_repo=user_repo,
+            project_repo=project_repo,
+            access_repo=access_repo,
+            company_id=company_id,
+        )
+        result = uc.execute(inviter_id=inviter.id, project_id=project.id, email="existing@example.com")
+        return result, existing_user
+
+    def test_an_unattached_user_becomes_a_company_member(self):
+        company_id = uuid4()
+        access_repo = MagicMock()
+        access_repo.find.return_value = None
+        access_repo.list_for_user.return_value = []
+
+        result, existing_user = self._run(access_repo, company_id)
+
+        assert result.kind == "direct_added"
+        access_repo.save.assert_called_once()
+        saved = access_repo.save.call_args[0][0]
+        assert saved.user_id == existing_user.id
+        assert saved.company_id == company_id
+        assert saved.role == "member"
+        assert saved.is_primary is True  # their first company
+
+    def test_an_already_attached_user_keeps_their_role(self):
+        access_repo = MagicMock()
+        access_repo.find.return_value = object()  # any existing access row
+
+        result, _ = self._run(access_repo, uuid4())
+
+        assert result.kind == "direct_added"
+        access_repo.save.assert_not_called()
