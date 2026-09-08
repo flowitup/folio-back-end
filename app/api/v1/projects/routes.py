@@ -628,4 +628,12 @@ def remove_user_from_project(project_id: str, user_id: str):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.project_repository.remove_user(UUID(project_id), UUID(user_id))
+    notifier = container.membership_push_notifier
+    if notifier is not None:
+        notifier.notify(
+            "project_member_removed",
+            user_id=UUID(user_id),
+            actor_id=caller_id,
+            entity_id=UUID(project_id),
+        )
     return "", 204

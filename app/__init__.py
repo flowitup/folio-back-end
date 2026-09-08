@@ -452,6 +452,8 @@ def _configure_di_container() -> None:
 
     from app.application.push.chat_push_notifier import ChatPushNotifier
     from app.application.push.dispatcher import PushDispatcher
+    from app.application.push.membership_push_notifier import MembershipPushNotifier
+    from app.application.push.task_push_notifier import TaskPushNotifier
     from app.infrastructure.adapters.sqlalchemy_chat_push_marker import SQLAlchemyChatPushMarkerRepository
 
     _c.push_device_repository = SQLAlchemyPushDeviceRepository(db.session)
@@ -490,6 +492,9 @@ def _configure_di_container() -> None:
             messages=_chat_repo,
             names=_chat_repo,
         )
+
+    if _c.project_repository is not None:
+        _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)
 
     _c.login_otp_repository = _otp_repo
     if _c.user_repository is not None and _c.authorization_service is not None and _c.token_issuer is not None:
@@ -589,6 +594,15 @@ def _configure_di_container() -> None:
     _c.company_repo = _company_repo
     _c.user_company_access_repo = _access_repo
     _c.company_invite_token_repo = _token_repo
+
+    # Membership pushes need both name sources, so they are wired here rather than in the
+    # push block above, where the company repo does not exist yet.
+    if _c.push_dispatcher is not None and _c.project_repository is not None:
+        _c.membership_push_notifier = MembershipPushNotifier(
+            dispatcher=_c.push_dispatcher,
+            project_repo=_c.project_repository,
+            company_repo=_company_repo,
+        )
 
     # Company-aware authz resolver read port (app/domain/authz/resolver.py).
     # Wired here, alongside the other company repos, so every route that goes

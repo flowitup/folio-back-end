@@ -559,6 +559,13 @@ def detach_company(company_id: str):
 # ---------------------------------------------------------------------------
 
 
+def _notify_company_membership(event: str, *, user_id, actor_id, company_id, role=None) -> None:
+    """Fire-and-forget; the notifier swallows its own failures."""
+    notifier = get_container().membership_push_notifier
+    if notifier is not None:
+        notifier.notify(event, user_id=user_id, actor_id=actor_id, entity_id=company_id, role=role)
+
+
 @companies_bp.route("/companies/<company_id>/access/<target_user_id>", methods=["DELETE"])
 @openapi_doc(summary="Remove a user from a company (admin only)", tags=["companies"])
 @jwt_required()
@@ -610,6 +617,9 @@ def boot_attached_user(company_id: str, target_user_id: str):
             409,
         )
 
+    _notify_company_membership(
+        "company_member_removed", user_id=target_uuid, actor_id=caller_id, company_id=company_uuid
+    )
     return "", 204
 
 
@@ -663,6 +673,13 @@ def set_member_role(company_id: str, target_user_id: str):
             409,
         )
 
+    _notify_company_membership(
+        "company_member_role_changed",
+        user_id=target_uuid,
+        actor_id=caller_id,
+        company_id=company_uuid,
+        role=getattr(result, "role", None),
+    )
     return jsonify(dataclasses.asdict(result))
 
 

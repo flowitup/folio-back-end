@@ -154,6 +154,20 @@ def _map_error(exc: Exception) -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
+def _notify_grants_changed(company_id, user_id) -> None:
+    """A permission change is invisible to its subject otherwise; the actor is the admin."""
+    from wiring import get_container
+
+    notifier = get_container().membership_push_notifier
+    if notifier is not None:
+        notifier.notify(
+            "company_member_grants_changed",
+            user_id=user_id,
+            actor_id=UUID(get_jwt_identity()),
+            entity_id=company_id,
+        )
+
+
 @companies_bp.route("/companies/<company_id>/members/<user_id>/grants", methods=["GET"])
 @openapi_doc(
     summary="List a company member's D8 grant/deny rows",
@@ -238,6 +252,7 @@ def set_member_grant(company_id: str, user_id: str):
     # The repository only flushes; the route owns the transaction boundary so the
     # row survives the request (flush alone is rolled back at teardown).
     db.session.commit()
+    _notify_grants_changed(company_uuid, target_uuid)
     return jsonify(_to_row(grant).model_dump(mode="json")), 200
 
 
@@ -286,4 +301,5 @@ def remove_member_grant(company_id: str, user_id: str):
     if not removed:
         return _err("NotFound", "No matching grant/deny row found", 404)
     db.session.commit()
+    _notify_grants_changed(company_uuid, target_uuid)
     return "", 204

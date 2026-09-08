@@ -49,6 +49,13 @@ def _err(error: str, message: str, status: int):
     return jsonify({"error": error, "message": message}), status
 
 
+def _notify_membership(event: str, *, user_id: UUID, actor_id: UUID, entity_id: UUID, role=None) -> None:
+    """Fire-and-forget; the notifier swallows its own failures."""
+    notifier = get_container().membership_push_notifier
+    if notifier is not None:
+        notifier.notify(event, user_id=user_id, actor_id=actor_id, entity_id=entity_id, role=role)
+
+
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["PUT"])
 @openapi_doc(
     summary="Assign a company member to a project; a company admin may pass role=manager to promote the target",
@@ -111,6 +118,13 @@ def assign_project_member(project_id: str, user_id: str):
         return _err("ValidationError", str(exc), 400)
 
     db.session.commit()
+    _notify_membership(
+        "project_member_added",
+        user_id=target_uuid,
+        actor_id=caller_id,
+        entity_id=UUID(project_id),
+        role=company_role,
+    )
     return jsonify({"project_id": project_id, "user_id": user_id, "role": company_role}), 200
 
 
@@ -141,4 +155,5 @@ def unassign_project_member(project_id: str, user_id: str):
     from app import db
 
     db.session.commit()
+    _notify_membership("project_member_removed", user_id=target_uuid, actor_id=caller_id, entity_id=UUID(project_id))
     return "", 204
