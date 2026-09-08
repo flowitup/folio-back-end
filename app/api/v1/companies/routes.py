@@ -25,6 +25,7 @@ from app.api.openapi import openapi_doc
 from app.api.v1.companies import companies_bp, users_me_bp
 from app.api.v1.companies.decorators import require_admin, require_attached_company, require_company_role
 from app.api.v1.companies.schemas import (
+    AttachedUsersListResponse,
     JoinCompanyRequest,
     JoinCodeResponse,
     CreateCompanyRequest,
@@ -746,7 +747,11 @@ def join_company_by_code():
 
 
 @companies_bp.route("/companies/<company_id>/attached-users", methods=["GET"])
-@openapi_doc(summary="List users attached to a company (admin only)", tags=["companies"])
+@openapi_doc(
+    summary="List users attached to a company (company admin)",
+    responses={200: AttachedUsersListResponse},
+    tags=["companies"],
+)
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_company_role("admin")

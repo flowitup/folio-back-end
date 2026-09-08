@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -114,6 +115,28 @@ class JoinCompanyRequest(_StrictBase):
     """Request body for POST /companies/join (shared join code, member role)."""
 
     code: str = Field(..., min_length=4, max_length=32)
+
+
+class AttachedUserRow(_StrictBase):
+    """One row of GET /companies/<id>/attached-users.
+
+    Access fields come from the use case; `email` / `display_name` / `phone`
+    are joined from `users` so clients can render the member list directly.
+    """
+
+    user_id: UUID
+    company_id: UUID
+    role: str
+    is_primary: bool
+    attached_at: datetime
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class AttachedUsersListResponse(_StrictBase):
+    items: list[AttachedUserRow]
+    total: int
 
 
 class JoinCodeResponse(_StrictBase):

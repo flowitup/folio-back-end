@@ -224,6 +224,10 @@ class TestListAttachedUsers:
         rows = resp.get_json()["items"]
         assert rows and all({"user_id", "role", "email", "display_name", "phone"} <= set(r) for r in rows)
         assert all(r["email"] and r["display_name"] for r in rows)
+        # The OpenAPI spec declares the same shape so typed clients see the label fields.
+        spec = cadm_client.get("/openapi.json").get_json()
+        schema = spec["components"]["schemas"]["AttachedUserRow"]["properties"]
+        assert {"email", "display_name", "phone"} <= set(schema)
 
     def test_company_admin_403_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
         resp = cadm_client.get(
