@@ -220,6 +220,10 @@ class TestListAttachedUsers:
         )
         assert resp.status_code == 200
         assert resp.get_json()["total"] >= 2  # company_a_admin + plain_member
+        # Rows carry a human label: clients render the member list from this payload alone.
+        rows = resp.get_json()["items"]
+        assert rows and all({"user_id", "role", "email", "display_name", "phone"} <= set(r) for r in rows)
+        assert all(r["email"] and r["display_name"] for r in rows)
 
     def test_company_admin_403_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
         resp = cadm_client.get(
