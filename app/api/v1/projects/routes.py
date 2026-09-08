@@ -102,6 +102,18 @@ def list_projects():
     from app import db
 
     project_ids = [UUID(str(p.id)) for p in projects]
+
+    # H1: prime the per-request authz-reader cache with every project's
+    # company_id in ONE query, so the per-project _effective_perms_for() call
+    # below hits the cache instead of issuing N separate `project_company_id`
+    # SELECTs (a company admin listing many projects would otherwise pay one
+    # resolver query per project). No-op if authz_reader isn't wired or
+    # doesn't support preloading (e.g. a minimal test double).
+    if project_ids and container.authz_reader is not None:
+        preload = getattr(container.authz_reader, "preload_project_company_ids", None)
+        if preload is not None:
+            preload(project_ids)
+
     spent_map = {}
     if project_ids and container.project_spent_reader is not None:
         spent_map = container.project_spent_reader.sum_spent_by_projects(project_ids)
@@ -234,6 +246,20 @@ def create_project():
             )
 
     if target_company_id is not None:
+        # A non-admin's body_company_id is already rejected above (it can
+        # never be in admin_ids for a company that doesn't exist), but a
+        # platform admin skips that check entirely — validate existence here
+        # so a bogus id 400s instead of hitting the projects.company_id FK
+        # constraint inside create_project_usecase (a 500).
+        if container.company_repo is not None and container.company_repo.find_by_id(target_company_id) is None:
+            return (
+                jsonify(
+                    ErrorResponse(
+                        error="ValidationError", message="company_id does not exist", status_code=400
+                    ).model_dump()
+                ),
+                400,
+            )
         reader = container.authz_reader
         perms = (
             _authz_effective_permissions(
@@ -265,10 +291,11 @@ def create_project():
     # Silently skipped if the legacy roles table has no "manager" row (fresh
     # DB before scripts/seed_auth.py has run) — no per-project role table is
     # a hard requirement for project creation.
+    creator_assigned = False
     if container.role_repository is not None and container.project_membership_repo is not None:
         manager_role = container.role_repository.find_by_name("manager")
         if manager_role is not None:
-            container.project_membership_repo.add(
+            creator_assigned = container.project_membership_repo.add(
                 ProjectMembership.create(user_id=user_id, project_id=UUID(result.id), role_id=manager_role.id)
             )
             # ProjectMembership.add() only flushes (mirrors BulkAddExistingUserUseCase);
@@ -284,7 +311,7 @@ def create_project():
                 name=result.name,
                 address=result.address,
                 owner_id=result.owner_id,
-                user_count=0,
+                user_count=1 if creator_assigned else 0,
                 created_at=result.created_at,
                 company_id=result.company_id,
                 invoice_prefix=result.invoice_prefix,

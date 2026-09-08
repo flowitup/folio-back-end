@@ -417,18 +417,19 @@ def invitation_app():
         # tests/api/test_project_my_permissions.py can exercise the legacy ∪
         # resolver union (configure_container() above replaced the Container
         # instance created by create_app(), so this must be re-wired here).
+        from app.api.v1.authz_context import get_reader_cache as _get_reader_cache
         from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
             SqlAlchemyAuthzReader as _SqlAlchemyAuthzReader,
         )
 
-        _c.authz_reader = _SqlAlchemyAuthzReader(db.session)
+        _c.authz_reader = _SqlAlchemyAuthzReader(db.session, cache_provider=_get_reader_cache)
 
         from app.application.companies.join_code_usecases import (
             JoinCompanyByCodeUseCase as _JoinByCodeUC,
             SetJoinCodeUseCase as _SetJoinCodeUC,
         )
 
-        _c.set_join_code_usecase = _SetJoinCodeUC(company_repo=_company_repo, clock=_clock)
+        _c.set_join_code_usecase = _SetJoinCodeUC(company_repo=_company_repo, clock=_clock, role_checker=_role_checker)
         _c.join_company_by_code_usecase = _JoinByCodeUC(
             company_repo=_company_repo, access_repo=_access_repo, clock=_clock
         )

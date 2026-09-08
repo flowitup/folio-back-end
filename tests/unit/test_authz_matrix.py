@@ -14,7 +14,7 @@ from app.domain.authz.matrix import (
     NON_DENIABLE,
     permissions_for,
 )
-from app.domain.authz.resolver import effective_permissions
+from app.domain.authz.resolver import denied_permissions, effective_permissions
 
 
 # ---------------------------------------------------------------------------
@@ -224,3 +224,40 @@ def test_deny_wins_over_a_grant_for_the_same_permission():
     )
     perms = effective_permissions(reader, uuid4(), project_id=reader.project_id)
     assert "project:manage_labor" not in perms
+
+
+# ---------------------------------------------------------------------------
+# denied_permissions() — H3: the isolated deny set a caller with its own
+# permission union (app.api.v1.projects.decorators) subtracts to make an
+# admin-managed deny override even a legacy global role.
+# ---------------------------------------------------------------------------
+
+
+def test_denied_permissions_returns_the_deny_set():
+    reader = _FakeReader(role="manager", assigned=True, grants=[("project:manage_labor", "deny")])
+    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id)
+    assert denied == frozenset({"project:manage_labor"})
+
+
+def test_denied_permissions_excludes_project_read():
+    reader = _FakeReader(role="manager", assigned=True, grants=[("project:read", "deny")])
+    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id)
+    assert denied == frozenset()
+
+
+def test_denied_permissions_empty_for_platform_admin():
+    reader = _FakeReader(role="manager", assigned=True, grants=[("project:manage_labor", "deny")])
+    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id, is_platform_admin=True)
+    assert denied == frozenset()
+
+
+def test_denied_permissions_empty_without_a_resolvable_company():
+    reader = _FakeReader(role="manager", assigned=True, grants=[("project:manage_labor", "deny")])
+    denied = denied_permissions(reader, uuid4())
+    assert denied == frozenset()
+
+
+def test_denied_permissions_empty_when_caller_has_no_role_there():
+    reader = _FakeReader(role=None, assigned=False, grants=[("project:manage_labor", "deny")])
+    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id)
+    assert denied == frozenset()

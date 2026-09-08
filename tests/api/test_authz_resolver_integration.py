@@ -267,9 +267,11 @@ def test_company_id_only_no_project(two_company_world, reader):
 
 
 def test_neither_project_nor_company_aggregates_admin_companies(two_company_world, reader):
+    """M3: `company:*` is never handed out without a resolved company — only
+    `project:create` (creation-only) + the universal `user:read`."""
     w = two_company_world
     perms = effective_permissions(reader, w["admin_a"])
-    assert perms == frozenset({"user:read", "project:create", "company:*"})
+    assert perms == frozenset({"user:read", "project:create"})
 
 
 def test_neither_project_nor_company_non_admin_gets_only_user_read(two_company_world, reader):

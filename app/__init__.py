@@ -111,6 +111,19 @@ def create_app(config_class: type = Config) -> Flask:
     with app.app_context():
         _configure_di_container()
 
+    # Clear the per-request authz resolver caches (app.api.v1.authz_context)
+    # at the start of every request. Flask reuses an already-pushed
+    # AppContext for a request whose app matches the top of the stack, so a
+    # test fixture (or any code) holding one `app.app_context()` open across
+    # several `test_client()` calls would otherwise share the SAME `flask.g`
+    # — and therefore a stale authz memo — across those calls. A role or D8
+    # grant/deny change must take effect on the very next request.
+    @app.before_request
+    def _clear_authz_request_memo() -> None:
+        from app.api.v1.authz_context import clear_request_memo
+
+        clear_request_memo()
+
     # Health check endpoint
     @app.route("/health", methods=["GET"])
     def health_check():
@@ -557,11 +570,15 @@ def _configure_di_container() -> None:
     # Company-aware authz resolver read port (app/domain/authz/resolver.py).
     # Wired here, alongside the other company repos, so every route that goes
     # through create_app() gets resolver-derived permissions for free.
+    # cache_provider wires in the per-request memo dict (app.api.v1.authz_context)
+    # so repeated sub-queries within one request (e.g. company_role_for once per
+    # project while listing N projects of one company) hit cache, not the DB.
+    from app.api.v1.authz_context import get_reader_cache
     from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
         SqlAlchemyAuthzReader,
     )
 
-    _c.authz_reader = SqlAlchemyAuthzReader(db.session)
+    _c.authz_reader = SqlAlchemyAuthzReader(db.session, cache_provider=get_reader_cache)
 
     # D3 day roster use case — needs worker_repository + labor_entry_repository
     # (wired earlier in configure_container) plus the authz reader just above.

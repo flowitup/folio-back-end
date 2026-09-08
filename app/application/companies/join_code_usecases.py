@@ -39,18 +39,19 @@ def normalize_join_code(raw: str) -> str:
 class SetJoinCodeUseCase:
     """Issue or revoke a company's join code (company or platform admin).
 
-    ``role_checker`` is optional so existing call sites that only enforce
-    authorization at the route decorator (``@require_company_role("admin")``)
-    keep working unchanged; passing both ``role_checker`` and ``caller_id``
-    adds the same use-case-level guard as every other company-management
-    use-case (defence in depth).
+    ``role_checker`` and ``caller_id`` are REQUIRED — this use-case-level
+    guard is the same defence-in-depth every other company-management
+    use-case applies (``_assert_company_admin``). It used to be optional so
+    call sites relying solely on the route decorator for authorization kept
+    working, but that let a caller silently skip the check by omitting
+    ``caller_id`` — every construction/call site now passes both.
     """
 
     def __init__(
         self,
         company_repo: CompanyRepositoryPort,
         clock: ClockPort,
-        role_checker: Optional[RoleCheckerPort] = None,
+        role_checker: RoleCheckerPort,
     ) -> None:
         self._companies = company_repo
         self._clock = clock
@@ -62,16 +63,13 @@ class SetJoinCodeUseCase:
         enable: bool,
         db_session: TransactionalSessionPort,
         *,
-        caller_id: Optional[UUID] = None,
+        caller_id: UUID,
     ) -> Optional[str]:
         company = self._companies.find_by_id(company_id)
         if company is None:
             raise CompanyNotFoundError(company_id)
 
-        # Use-case-level guard: only checked when both a role_checker was wired
-        # and a caller_id was supplied (see class docstring).
-        if self._role_checker is not None and caller_id is not None:
-            _assert_company_admin(self._role_checker, caller_id, company_id)
+        _assert_company_admin(self._role_checker, caller_id, company_id)
         code: Optional[str] = None
         if enable:
             for _ in range(10):

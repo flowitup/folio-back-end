@@ -71,8 +71,12 @@ def effective_permissions(
          URL-supplied id that may not exist.
       3. Only `company_id` given → used as-is.
       4. Neither given (non-project, non-company routes, e.g. a future
-         `/auth/me`) → the union, over every company where the caller is
-         admin, of `project:create` + `company:*` + the universal `user:read`.
+         `/auth/me`) → `project:create` + the universal `user:read` for every
+         admin of at least one company. Never `company:*` — that permission
+         only has meaning evaluated against one resolved company (see
+         `requires_company`), so it would be meaningless (and dangerous, if a
+         caller ever forgot to re-check `has_permission` against a real
+         company) to hand out here.
     Manager/member additionally require `AuthzReaderPort.is_assigned` on the
     resolved `project_id`; without a `project_id` they only get the
     always-on, non-project permissions (see `matrix.permissions_for`).
@@ -83,7 +87,7 @@ def effective_permissions(
     if project_id is None and company_id is None:
         perms = {"user:read"}
         if reader.admin_company_ids(user_id):
-            perms |= {"project:create", "company:*"}
+            perms |= {"project:create"}
         return frozenset(perms)
 
     resolved_company_id = _resolve_company_id(reader, project_id, company_id)
@@ -104,6 +108,46 @@ def effective_permissions(
     grants = {perm for perm, effect in grant_rows if effect == "grant"}
     denies = {perm for perm, effect in grant_rows if effect == "deny"} - NON_DENIABLE
     return frozenset((base | grants) - denies)
+
+
+def denied_permissions(
+    reader: "AuthzReaderPort",
+    user_id: UUID,
+    *,
+    project_id: "UUID | None" = None,
+    company_id: "UUID | None" = None,
+    is_platform_admin: bool = False,
+) -> "frozenset[str]":
+    """Return the caller's explicit D8 deny rows for this project/company scope.
+
+    Callers that maintain their OWN permission union outside this module
+    (e.g. `app.api.v1.projects.decorators._effective_permissions`, which
+    unions a legacy JWT-claim permission set with the resolver's output) must
+    subtract this result from that union — otherwise an admin-managed deny
+    row can never override a permission a legacy global role happens to also
+    grant, which defeats the point of D8 (deny always wins).
+
+    `effective_permissions` already applies deny rows to its OWN grant/base
+    union internally; this function exists only for a caller that needs the
+    deny set in isolation, and mirrors that logic exactly (never removes
+    `NON_DENIABLE` permissions, always empty for a platform `*:*` holder).
+
+    Returns an empty set whenever there is nothing to deny against: platform
+    admin, no resolvable company, or no company role for the caller there.
+    """
+    if is_platform_admin:
+        return frozenset()
+
+    resolved_company_id = _resolve_company_id(reader, project_id, company_id)
+    if resolved_company_id is None:
+        return frozenset()
+
+    role = reader.company_role_for(user_id, resolved_company_id)
+    if role is None:
+        return frozenset()
+
+    grant_rows = reader.grants_for(user_id, resolved_company_id, project_id)
+    return frozenset({perm for perm, effect in grant_rows if effect == "deny"} - NON_DENIABLE)
 
 
 def has_permission(

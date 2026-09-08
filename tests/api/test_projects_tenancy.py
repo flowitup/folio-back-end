@@ -79,6 +79,7 @@ def tenancy_app():
         attendance_perm = PermissionModel(
             name="project:log_own_attendance", resource="project", action="log_own_attendance"
         )
+        star_perm = PermissionModel(name="*:*", resource="*", action="*")
         manager_role = RoleModel(name="manager", description="Legacy per-project manager")
         manager_role.permissions.extend([read_perm, create_perm])
 
@@ -90,7 +91,24 @@ def tenancy_app():
         member_role = RoleModel(name="tn_member", description="Plain member")
         member_role.permissions.extend([read_perm, attendance_perm])
 
-        db.session.add_all([read_perm, create_perm, attendance_perm, manager_role, claim_role, member_role])
+        # Legacy global `*:*` — Low(b): a platform admin's body company_id
+        # skips the per-company admin_ids check entirely, so a nonexistent
+        # id must still 400 rather than hit the FK constraint (500).
+        platform_admin_role = RoleModel(name="tn_platform_admin", description="Legacy platform admin")
+        platform_admin_role.permissions.extend([star_perm, read_perm, create_perm])
+
+        db.session.add_all(
+            [
+                read_perm,
+                create_perm,
+                attendance_perm,
+                star_perm,
+                manager_role,
+                claim_role,
+                member_role,
+                platform_admin_role,
+            ]
+        )
         db.session.flush()
 
         def user(email: str, role: RoleModel) -> UserModel:
@@ -102,7 +120,8 @@ def tenancy_app():
         admin_b = user("tn_admin_b@test.com", member_role)
         claim_holder = user("tn_claim_holder@test.com", claim_role)
         outsider = user("tn_outsider@test.com", member_role)
-        db.session.add_all([admin_a, admin_b, claim_holder, outsider])
+        platform_admin = user("tn_platform_admin@test.com", platform_admin_role)
+        db.session.add_all([admin_a, admin_b, claim_holder, outsider, platform_admin])
         db.session.flush()
 
         now = datetime.now(timezone.utc)
@@ -159,15 +178,18 @@ def tenancy_app():
             role_repo=role_repo,
         )
 
+        from app.api.v1.authz_context import get_reader_cache
+
         _c = get_container()
         _c.company_repo = company_repo
         _c.user_company_access_repo = access_repo
-        _c.authz_reader = SqlAlchemyAuthzReader(db.session)
+        _c.authz_reader = SqlAlchemyAuthzReader(db.session, cache_provider=get_reader_cache)
 
         test_app._admin_a_id = admin_a.id
         test_app._admin_b_id = admin_b.id
         test_app._claim_holder_id = claim_holder.id
         test_app._outsider_id = outsider.id
+        test_app._platform_admin_id = platform_admin.id
         test_app._company_a_id = company_a.id
         test_app._company_b_id = company_b.id
         test_app._project_a_id = project_a.id
@@ -212,6 +234,11 @@ def outsider_h(client):
     return _login(client, "tn_outsider@test.com")
 
 
+@pytest.fixture
+def platform_admin_h(client):
+    return _login(client, "tn_platform_admin@test.com")
+
+
 # ---------------------------------------------------------------------------
 # GET /projects — company-scoped listing.
 # ---------------------------------------------------------------------------
@@ -241,12 +268,12 @@ def test_list_projects_claim_holder_sees_nothing_of_others(client, claim_holder_
 
 def test_admin_of_a_gets_denied_on_bs_project_get(client, admin_a_h, tenancy_app):
     resp = client.get(f"/api/v1/projects/{tenancy_app._project_b_id}", headers=admin_a_h)
-    assert resp.status_code in (403, 404)
+    assert resp.status_code == 403
 
 
 def test_admin_of_a_gets_denied_on_bs_project_put(client, admin_a_h, tenancy_app):
     resp = client.put(f"/api/v1/projects/{tenancy_app._project_b_id}", json={"name": "Hijacked"}, headers=admin_a_h)
-    assert resp.status_code in (403, 404)
+    assert resp.status_code == 403
 
 
 def test_admin_of_a_can_read_own_project(client, admin_a_h, tenancy_app):
@@ -284,6 +311,10 @@ def test_create_project_company_admin_no_star_gets_201_with_company_id(client, a
     assert resp.status_code == 201, resp.get_json()
     body = resp.get_json()
     assert body["company_id"] == str(tenancy_app._company_a_id)
+    # Low(a): the creator was actually assigned (legacy "manager" membership
+    # row) — the response must reflect that as user_count=1, not the
+    # hardcoded 0 that ignored whether the assignment succeeded.
+    assert body["user_count"] == 1
 
     # Creator is a project member — verified against user_projects directly
     # via the authz reader (dialect/insert-path-safe; the /members route's raw
@@ -327,3 +358,73 @@ def test_create_project_claim_holder_gets_400(client, claim_holder_h):
     """A bare JWT project:create claim is NOT a company — 400, not 201."""
     resp = client.post("/api/v1/projects", json={"name": "Should Not Exist"}, headers=claim_holder_h)
     assert resp.status_code == 400
+
+
+def test_create_project_platform_admin_nonexistent_company_id_gets_400(client, platform_admin_h):
+    """Low(b): a platform admin's body company_id skips the admin_ids check entirely —
+    a bogus id must 400, not hit the projects.company_id FK constraint (500)."""
+    resp = client.post(
+        "/api/v1/projects",
+        json={"name": "Bogus Company", "company_id": str(uuid4())},
+        headers=platform_admin_h,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_project_platform_admin_existing_company_id_still_works(client, platform_admin_h, tenancy_app):
+    """The 400 guard above must not regress the existing-company path."""
+    resp = client.post(
+        "/api/v1/projects",
+        json={"name": "Platform Admin Project", "company_id": str(tenancy_app._company_a_id)},
+        headers=platform_admin_h,
+    )
+    assert resp.status_code == 201, resp.get_json()
+    assert resp.get_json()["company_id"] == str(tenancy_app._company_a_id)
+
+
+# ---------------------------------------------------------------------------
+# M1 — role change applies on the very next request, even though this
+# fixture keeps one Flask app context open across every test-client call in
+# this module (see app.api.v1.authz_context module docstring).
+# ---------------------------------------------------------------------------
+
+
+def test_role_downgrade_takes_effect_on_the_next_request(client, admin_a_h, tenancy_app):
+    from app import db
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+    # First request: admin_a is still company "admin" — full resolver rights
+    # on their own project, including project:update.
+    resp1 = client.get(f"/api/v1/projects/{tenancy_app._project_a_id}", headers=admin_a_h)
+    assert resp1.status_code == 200
+    assert "project:update" in resp1.get_json()["my_permissions"]
+
+    # Demote admin_a to "member" directly in the DB (no re-login — the JWT
+    # carries identity only, never the role).
+    with tenancy_app.app_context():
+        row = (
+            db.session.query(UserCompanyAccessModel)
+            .filter_by(user_id=tenancy_app._admin_a_id, company_id=tenancy_app._company_a_id)
+            .one()
+        )
+        row.role = "member"
+        db.session.commit()
+
+    # Second request, same token: without clearing the per-request authz
+    # memo at the start of every request, flask.g would still hold the
+    # first request's cached resolver output (this fixture's outer
+    # app_context is reused across test_client() calls) and this would
+    # incorrectly still show project:update.
+    resp2 = client.get(f"/api/v1/projects/{tenancy_app._project_a_id}", headers=admin_a_h)
+    assert resp2.status_code == 200
+    assert "project:update" not in resp2.get_json()["my_permissions"]
+
+    # Restore state so later tests in this module see admin_a as admin again.
+    with tenancy_app.app_context():
+        row = (
+            db.session.query(UserCompanyAccessModel)
+            .filter_by(user_id=tenancy_app._admin_a_id, company_id=tenancy_app._company_a_id)
+            .one()
+        )
+        row.role = "admin"
+        db.session.commit()

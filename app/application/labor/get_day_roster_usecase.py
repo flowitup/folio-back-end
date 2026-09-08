@@ -16,6 +16,7 @@ the project's existence) rather than the usual 403.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Optional
@@ -27,6 +28,8 @@ from app.domain.entities.labor_entry import STATUS_PENDING
 
 if TYPE_CHECKING:
     from app.application.authz.ports import AuthzReaderPort
+
+logger = logging.getLogger(__name__)
 
 ROSTER_PERMISSION = "project:view_roster"
 
@@ -84,9 +87,16 @@ class GetDayRosterUseCase:
         if not self._authorized(request):
             return None
 
-        workers = self._workers.list_by_project(request.project_id, active_only=True)
+        # active_only=False + filter below: an archived (soft-deleted) worker
+        # can still have a labor entry logged for this day (e.g. their last
+        # day on the project, or a late correction) — the roster must show
+        # them for that one day rather than silently dropping a present/
+        # pending worker. Workers with neither an active status nor an entry
+        # that day are excluded entirely.
+        all_workers = self._workers.list_by_project(request.project_id, active_only=False)
         entries = self._entries.list_by_project(request.project_id, date_from=request.date, date_to=request.date)
         entry_by_worker_id = {entry.worker_id: entry for entry in entries}
+        workers = [w for w in all_workers if w.is_active or w.id in entry_by_worker_id]
 
         rows: list[RosterRow] = []
         for worker in workers:
@@ -97,7 +107,18 @@ class GetDayRosterUseCase:
                 )
                 continue
             status = STATUS_PENDING if entry.status == STATUS_PENDING else STATUS_PRESENT
-            base_hours = _SHIFT_BASE_HOURS.get(entry.shift_type, 0) if entry.shift_type else 0
+            if entry.shift_type is None:
+                base_hours = 0
+            elif entry.shift_type in _SHIFT_BASE_HOURS:
+                base_hours = _SHIFT_BASE_HOURS[entry.shift_type]
+            else:
+                logger.warning(
+                    "Unknown labor entry shift_type %r for worker %s on project %s — treating as a full day",
+                    entry.shift_type,
+                    worker.id,
+                    request.project_id,
+                )
+                base_hours = _STANDARD_WORKDAY_HOURS
             rows.append(
                 RosterRow(
                     worker_id=worker.id,

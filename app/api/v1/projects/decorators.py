@@ -103,14 +103,30 @@ def _resolver_permissions_for_project(user_id: UUID, project_id: UUID) -> frozen
     return resolve_for_request(user_id, project_id=project_id, is_platform_admin=_is_platform_admin())
 
 
+def _resolver_denies_for_project(user_id: UUID, project_id: UUID) -> frozenset:
+    """D8 explicit deny rows for a specific project (H3: deny must win over the legacy union).
+
+    Empty for a platform `*:*` holder (`_is_platform_admin()` short-circuit,
+    also enforced inside the resolver itself) and never includes `project:read`
+    (enforced by `app.domain.authz.resolver.denied_permissions`).
+    """
+    from app.api.v1.authz_context import resolve_denied_for_request
+
+    return resolve_denied_for_request(user_id, project_id=project_id, is_platform_admin=_is_platform_admin())
+
+
 def _effective_permissions(kwargs: dict) -> list:
-    """Caller's effective permissions for this request: legacy union ∪ resolver output.
+    """Caller's effective permissions for this request: (legacy union ∪ resolver allowed) − resolver denied.
 
     Legacy union — global-role JWT permissions UNION the caller's membership-role
     permissions on the request's target project — is unchanged and stays monotonic
     (only adds), so a user invited as a project admin/manager keeps working exactly
     as before. The resolver additively contributes the company-derived matrix
-    permissions (admin/manager/member) for that same project.
+    permissions (admin/manager/member) for that same project, and — H3 — its
+    explicit D8 deny rows are then subtracted from the WHOLE union so an
+    admin-managed deny on a manager/member overrides even a legacy global role
+    that happens to carry the same permission string. Deny is never applied to a
+    platform `*:*` holder (`_resolver_denies_for_project` returns empty for them).
 
     This raw union is used by the generic `require_permission()` decorator for
     permissions other than the read/mutate gate — `can_read_project` and
@@ -128,6 +144,8 @@ def _effective_permissions(kwargs: dict) -> list:
             return list(permissions)
         permissions |= _membership_role_permissions(user_id, project_id)
         permissions |= _resolver_permissions_for_project(user_id, project_id)
+        if not _is_platform_admin():
+            permissions -= _resolver_denies_for_project(user_id, project_id)
     return list(permissions)
 
 
@@ -176,10 +194,12 @@ def has_permission(permission: str) -> bool:
 
 
 def _effective_perms_for(project_id: UUID, user_id: UUID) -> list:
-    """Legacy union (global-role ∪ membership-role permissions) ∪ resolver output for a project."""
+    """(Legacy union ∪ resolver allowed) − resolver denied for a project (see `_effective_permissions`)."""
     permissions = set(get_jwt().get("permissions", []))
     permissions |= _membership_role_permissions(user_id, project_id)
     permissions |= _resolver_permissions_for_project(user_id, project_id)
+    if not _is_platform_admin():
+        permissions -= _resolver_denies_for_project(user_id, project_id)
     return list(permissions)
 
 

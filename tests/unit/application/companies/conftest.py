@@ -42,6 +42,12 @@ class InMemoryCompanyRepository:
     def find_by_id_for_update(self, company_id: UUID) -> Optional[Company]:
         return self.find_by_id(company_id)
 
+    def find_by_join_code(self, code: str) -> Optional[Company]:
+        for company in self._store.values():
+            if company.join_code == code:
+                return company
+        return None
+
     def list_all(self, limit: int = 50, offset: int = 0) -> tuple[list[Company], int]:
         all_companies = list(self._store.values())
         total = len(all_companies)

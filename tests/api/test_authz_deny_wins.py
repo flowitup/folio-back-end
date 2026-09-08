@@ -1,0 +1,161 @@
+"""H3 — a D8 deny row must win over the legacy JWT-claim union.
+
+Before this fix, `app.api.v1.projects.decorators._effective_permissions` /
+`_effective_perms_for` unioned the legacy global-role permission set with the
+resolver's ALLOWED output but never consulted the resolver's DENY rows — so
+an admin-managed deny on a manager/member could never override a permission
+a legacy global role happened to also carry (D8's "deny always wins" was
+silently defeated for anyone still holding a legacy role).
+
+This user holds BOTH: a legacy global "manager" role (JWT claim carries
+`project:manage_labor` directly) AND the company-tenant "manager" role
+assigned to the project (resolver ALSO grants `project:manage_labor`). A D8
+deny row on that exact permission must still remove it from both sources.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+import pytest
+
+from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models.company import CompanyModel
+from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+PASSWORD = "Pass1234!"
+
+
+@pytest.fixture(scope="module")
+def deny_app():
+    """One company, one project, one user who is BOTH a legacy global
+    "manager" (JWT claim carries project:manage_labor) and the company-tenant
+    "manager" assigned to the project (resolver also grants it)."""
+    from app import create_app, db
+    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+    from config import TestingConfig
+
+    class DenyTestConfig(TestingConfig):
+        JWT_TOKEN_LOCATION = ["headers", "cookies"]
+        RATELIMIT_ENABLED = False
+        RATELIMIT_STORAGE_URI = "memory://"
+
+    test_app = create_app(DenyTestConfig)
+
+    with test_app.app_context():
+        db.create_all()
+        hasher = Argon2PasswordHasher()
+        now = datetime.now(timezone.utc)
+
+        read_perm = PermissionModel(name="project:read", resource="project", action="read")
+        manage_labor_perm = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
+        legacy_manager_role = RoleModel(name="dw_legacy_manager", description="Legacy global manager")
+        legacy_manager_role.permissions.extend([read_perm, manage_labor_perm])
+        db.session.add_all([read_perm, manage_labor_perm, legacy_manager_role])
+        db.session.flush()
+
+        user = UserModel(email="dw_manager@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        user.roles.append(legacy_manager_role)
+        db.session.add(user)
+        db.session.flush()
+
+        company = CompanyModel(
+            id=uuid4(), legal_name="Deny Co", address="1 rue Deny", created_by=user.id, created_at=now, updated_at=now
+        )
+        db.session.add(company)
+        db.session.flush()
+
+        project = ProjectModel(name="Deny Project", owner_id=user.id, company_id=company.id)
+        db.session.add(project)
+        db.session.flush()
+
+        db.session.add(
+            UserCompanyAccessModel(
+                user_id=user.id, company_id=company.id, role="manager", is_primary=True, attached_at=now
+            )
+        )
+        db.session.commit()
+
+        from sqlalchemy import text as _text
+
+        # role_id must be non-NULL: SqlAlchemyProjectMembershipRepository.find_role_id
+        # (used by _membership_role_permissions on every project-scoped route)
+        # crashes converting a NULL role_id to UUID. Reuse legacy_manager_role's
+        # id so the per-project membership-role path ALSO grants
+        # project:manage_labor — this test then proves the deny wins over
+        # every source (legacy JWT claim, per-project membership role, AND
+        # the resolver's own company-role grant), not just one of them.
+        db.session.execute(
+            _text(
+                "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
+                "VALUES (:uid, :pid, :rid, :at)"
+            ),
+            {"uid": str(user.id), "pid": str(project.id), "rid": str(legacy_manager_role.id), "at": now},
+        )
+        db.session.commit()
+
+        test_app._user_id = user.id
+        test_app._project_id = project.id
+
+        db.session.expunge_all()
+
+        yield test_app
+
+        db.session.remove()
+        db.drop_all()
+
+
+@pytest.fixture
+def client(deny_app):
+    return deny_app.test_client()
+
+
+@pytest.fixture
+def manager_h(client):
+    resp = client.post("/api/v1/auth/login", json={"email": "dw_manager@test.com", "password": PASSWORD})
+    assert resp.status_code == 200, resp.get_json()
+    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+
+
+@pytest.fixture
+def denied_manage_labor(deny_app, monkeypatch):
+    """Monkeypatch the wired authz_reader so grants_for returns a deny row
+    for project:manage_labor on this user/project, as if a company admin
+    had just written a D8 deny row (Phase 2 storage doesn't exist yet)."""
+    from wiring import get_container
+
+    with deny_app.app_context():
+        reader = get_container().authz_reader
+
+        def _fake_grants_for(user_id, company_id, project_id):
+            return [("project:manage_labor", "deny")]
+
+        monkeypatch.setattr(reader, "grants_for", _fake_grants_for)
+    yield
+
+
+def test_legacy_role_permission_confirmed_present_before_deny(client, manager_h, deny_app):
+    """Sanity check: without the deny, both the legacy claim and the resolver
+    grant project:manage_labor (proves the deny test below isn't vacuous)."""
+    resp = client.get(f"/api/v1/projects/{deny_app._project_id}", headers=manager_h)
+    assert resp.status_code == 200
+    assert "project:manage_labor" in resp.get_json()["my_permissions"]
+
+
+def test_deny_removes_permission_despite_legacy_global_role(client, manager_h, deny_app, denied_manage_labor):
+    resp = client.get(f"/api/v1/projects/{deny_app._project_id}", headers=manager_h)
+    assert resp.status_code == 200
+    perms = resp.get_json()["my_permissions"]
+    assert "project:manage_labor" not in perms
+    # Scoped, not a blanket wipe — read access (NON_DENIABLE) survives.
+    assert "project:read" in perms
+
+
+def test_deny_causes_403_on_log_attendance_route(client, manager_h, deny_app, denied_manage_labor):
+    resp = client.post(
+        f"/api/v1/projects/{deny_app._project_id}/labor-entries",
+        json={"worker_id": str(uuid4()), "date": "2026-06-01", "shift_type": "full"},
+        headers=manager_h,
+    )
+    assert resp.status_code == 403
