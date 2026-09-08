@@ -16,7 +16,6 @@ import pytest
 
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.project import ProjectModel
-from app.infrastructure.database.models.role import RoleModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -36,11 +35,6 @@ def assign_app():
     test_app = create_app(AssignTestConfig)
     with test_app.app_context():
         db.create_all()
-        # Legacy project-membership roles the assignment use case resolves by name.
-        db.session.add_all(
-            [RoleModel(name="member", description="Member"), RoleModel(name="manager", description="Manager")]
-        )
-        db.session.commit()
         yield test_app
         db.session.remove()
         db.drop_all()
@@ -110,7 +104,7 @@ def _make_company_and_project(app, admin_id) -> tuple:
 
 
 class TestAdminAssigns:
-    def test_admin_assigns_any_company_member_any_role(self, assign_client, assign_app):
+    def test_admin_assigns_any_company_member(self, assign_client, assign_app):
         admin_id = _make_user(assign_app, "asg_admin1@test.com")
         target_id = _make_user(assign_app, "asg_target1@test.com")
         company_id, project_id = _make_company_and_project(assign_app, admin_id)
@@ -119,7 +113,6 @@ class TestAdminAssigns:
 
         resp = assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{target_id}",
-            json={"role": "manager"},
             headers=_auth(token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
@@ -129,12 +122,10 @@ class TestAdminAssigns:
 
         with assign_app.app_context():
             row = db.session.execute(
-                text("SELECT role_id FROM user_projects WHERE user_id=:u AND project_id=:p"),
+                text("SELECT 1 FROM user_projects WHERE user_id=:u AND project_id=:p"),
                 {"u": str(target_id), "p": str(project_id)},
             ).fetchone()
             assert row is not None
-            manager_role = db.session.query(RoleModel).filter_by(name="manager").first()
-            assert str(row[0]).replace("-", "") == str(manager_role.id).replace("-", "")
 
     def test_target_not_company_member_is_404(self, assign_client, assign_app):
         admin_id = _make_user(assign_app, "asg_admin2@test.com")
@@ -144,14 +135,13 @@ class TestAdminAssigns:
 
         resp = assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{stranger_id}",
-            json={"role": "member"},
             headers=_auth(token),
         )
         assert resp.status_code == 404
 
 
 class TestManagerAssigns:
-    def test_manager_assigned_to_project_can_assign_member_only(self, assign_client, assign_app):
+    def test_manager_assigned_to_project_can_assign_a_company_member(self, assign_client, assign_app):
         admin_id = _make_user(assign_app, "asg_admin3@test.com")
         manager_id = _make_user(assign_app, "asg_manager3@test.com")
         target_id = _make_user(assign_app, "asg_target3@test.com")
@@ -163,37 +153,33 @@ class TestManagerAssigns:
         admin_token = _login(assign_client, "asg_admin3@test.com")
         assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{manager_id}",
-            json={"role": "manager"},
             headers=_auth(admin_token),
         )
 
         manager_token = _login(assign_client, "asg_manager3@test.com")
         resp = assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{target_id}",
-            json={"role": "member"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
 
-    def test_manager_cannot_promote_to_manager(self, assign_client, assign_app):
+    def test_manager_cannot_assign_another_manager(self, assign_client, assign_app):
         admin_id = _make_user(assign_app, "asg_admin4@test.com")
         manager_id = _make_user(assign_app, "asg_manager4@test.com")
         target_id = _make_user(assign_app, "asg_target4@test.com")
         company_id, project_id = _make_company_and_project(assign_app, admin_id)
         _attach(assign_app, manager_id, company_id, "manager")
-        _attach(assign_app, target_id, company_id, "member")
+        _attach(assign_app, target_id, company_id, "manager")
 
         admin_token = _login(assign_client, "asg_admin4@test.com")
         assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{manager_id}",
-            json={"role": "manager"},
             headers=_auth(admin_token),
         )
 
         manager_token = _login(assign_client, "asg_manager4@test.com")
         resp = assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{target_id}",
-            json={"role": "manager"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 403
@@ -209,7 +195,6 @@ class TestManagerAssigns:
         manager_token = _login(assign_client, "asg_manager5@test.com")
         resp = assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{target_id}",
-            json={"role": "member"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 403
@@ -225,7 +210,6 @@ class TestUnassign:
 
         put_resp = assign_client.put(
             f"/api/v1/projects/{project_id}/assignments/{target_id}",
-            json={"role": "member"},
             headers=_auth(token),
         )
         assert put_resp.status_code == 200

@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
+from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -38,12 +38,6 @@ def lag_app():
     with test_app.app_context():
         db.create_all()
         hasher = Argon2PasswordHasher()
-        no_perm_role = RoleModel(name="lag_no_perm_role", description="No global permission")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        no_perm_role.permissions.append(read_perm)
-        db.session.add_all([read_perm, no_perm_role])
-        db.session.flush()
-        test_app._no_perm_role_id = no_perm_role.id
         test_app._password_hash = hasher.hash("Passw0rd!")
         db.session.commit()
         yield test_app
@@ -77,7 +71,6 @@ def _make_company_with_admins(lag_app, *, admin_count: int):
 
     with lag_app.app_context():
         now = datetime.now(timezone.utc)
-        role = db.session.get(RoleModel, lag_app._no_perm_role_id)
 
         company = CompanyModel(
             id=uuid4(),
@@ -95,7 +88,6 @@ def _make_company_with_admins(lag_app, *, admin_count: int):
         for i in range(admin_count):
             email = f"lag_admin_{uuid4().hex[:10]}@test.com"
             user = UserModel(email=email, password_hash=lag_app._password_hash, is_active=True)
-            user.roles.append(role)
             db.session.add(user)
             db.session.flush()
             db.session.add(

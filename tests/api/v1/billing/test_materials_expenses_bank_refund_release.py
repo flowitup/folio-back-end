@@ -21,7 +21,7 @@ import pytest
 
 from app import db
 from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 
@@ -106,10 +106,6 @@ def bank_refund_app():
 
         hasher = Argon2PasswordHasher()
 
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        superadmin_role = RoleModel(name="bank_refund_superadmin", description="Superadmin")
-        superadmin_role.permissions.append(star_perm)
-        db.session.add_all([star_perm, superadmin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -117,7 +113,6 @@ def bank_refund_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(superadmin_role)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
         db.session.add(admin_user)

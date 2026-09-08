@@ -172,9 +172,7 @@ def test_reader_matches_rows_regardless_of_insert_path(session, two_company_worl
 
     w = two_company_world
     membership_repo = SqlAlchemyProjectMembershipRepository(session)
-    assert membership_repo.add(
-        ProjectMembership.create(user_id=w["admin_b"], project_id=w["project_b"], role_id=uuid4())
-    )
+    assert membership_repo.add(ProjectMembership.create(user_id=w["admin_b"], project_id=w["project_b"]))
 
     reader = SqlAlchemyAuthzReader(session)
     assert reader.is_assigned(w["admin_b"], w["project_b"]) is True

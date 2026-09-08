@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -33,14 +33,9 @@ def tenancy_app():
     Seed layout:
       - company_a: admin_a (company role "admin"), project_a (owner=admin_a)
       - company_b: admin_b (company role "admin"), project_b (owner=admin_b)
-      - claim_holder: NO company relation anywhere, global role carries the
-        legacy `project:create` JWT claim (regression guard for the removed
-        proxy) plus `project:read` (so the outer decorator's baseline check
-        still passes — the tenancy gate under test is can_read/mutate_project).
-      - outsider: no company relation, no elevated claim — plain "member"
-        global role (project:read, log_own_attendance only).
-      - "manager" legacy per-project role seeded so POST /projects can assign
-        the creator to it.
+      - claim_holder: NO company relation anywhere (regression guard: nothing
+        outside a company grants project:create or project:read any more).
+      - outsider: no company relation either.
     """
     from app import create_app, db
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
@@ -57,7 +52,6 @@ def tenancy_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from app.infrastructure.database.repositories.sqlalchemy_authz_reader import SqlAlchemyAuthzReader
     from config import TestingConfig
     from wiring import configure_container, get_container
@@ -74,54 +68,17 @@ def tenancy_app():
 
         hasher = Argon2PasswordHasher()
 
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        create_perm = PermissionModel(name="project:create", resource="project", action="create")
-        attendance_perm = PermissionModel(
-            name="project:log_own_attendance", resource="project", action="log_own_attendance"
-        )
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        manager_role = RoleModel(name="manager", description="Legacy per-project manager")
-        manager_role.permissions.extend([read_perm, create_perm])
+        def user(email: str) -> UserModel:
+            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
 
-        # global role carrying the legacy project:create claim, WITHOUT any
-        # company relation — this is exactly the "tenancy hole" JWT shape.
-        claim_role = RoleModel(name="legacy_claim_holder", description="Legacy admin claim, no company")
-        claim_role.permissions.extend([read_perm, create_perm])
-
-        member_role = RoleModel(name="tn_member", description="Plain member")
-        member_role.permissions.extend([read_perm, attendance_perm])
-
-        # Legacy global `*:*` — Low(b): a platform admin's body company_id
-        # skips the per-company admin_ids check entirely, so a nonexistent
-        # id must still 400 rather than hit the FK constraint (500).
-        platform_admin_role = RoleModel(name="tn_platform_admin", description="Legacy platform admin")
-        platform_admin_role.permissions.extend([star_perm, read_perm, create_perm])
-
-        db.session.add_all(
-            [
-                read_perm,
-                create_perm,
-                attendance_perm,
-                star_perm,
-                manager_role,
-                claim_role,
-                member_role,
-                platform_admin_role,
-            ]
-        )
-        db.session.flush()
-
-        def user(email: str, role: RoleModel) -> UserModel:
-            u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
-            u.roles.append(role)
-            return u
-
-        admin_a = user("tn_admin_a@test.com", member_role)
-        admin_b = user("tn_admin_b@test.com", member_role)
-        claim_holder = user("tn_claim_holder@test.com", claim_role)
-        outsider = user("tn_outsider@test.com", member_role)
-        platform_admin = user("tn_platform_admin@test.com", platform_admin_role)
-        # Platform access is the ops flag now, not the legacy `*:*` role.
+        admin_a = user("tn_admin_a@test.com")
+        admin_b = user("tn_admin_b@test.com")
+        claim_holder = user("tn_claim_holder@test.com")
+        outsider = user("tn_outsider@test.com")
+        platform_admin = user("tn_platform_admin@test.com")
+        # Low(b): a platform admin's body company_id skips the per-company
+        # admin_ids check entirely, so a nonexistent id must still 400 rather
+        # than hit the FK constraint (500).
         platform_admin.is_platform_ops = True
         db.session.add_all([admin_a, admin_b, claim_holder, outsider, platform_admin])
         db.session.flush()
@@ -168,7 +125,6 @@ def tenancy_app():
         company_repo = SqlAlchemyCompanyRepository(db.session)
         access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-        role_repo = SqlAlchemyRoleRepository(db.session)
 
         configure_container(
             user_repository=user_repo,
@@ -177,7 +133,6 @@ def tenancy_app():
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             project_membership_repo=membership_repo,
-            role_repo=role_repo,
         )
 
         from app.api.v1.authz_context import get_reader_cache

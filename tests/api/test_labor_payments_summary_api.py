@@ -24,7 +24,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
 from tests.company_tenancy_helper import seed_company_tenancy
@@ -64,16 +64,6 @@ def pay_app():
 
         hasher = Argon2PasswordHasher()
 
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        manage_perm = PermissionModel(name="project:manage_invoices", resource="project", action="manage_invoices")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-
-        admin_role = RoleModel(name="pay_admin", description="Admin")
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(manage_perm)
-        admin_role.permissions.append(star_perm)
-
-        db.session.add_all([read_perm, manage_perm, star_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -81,7 +71,6 @@ def pay_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
 
         # No roles/membership at all — used for the 403 non-member test.
         outsider_user = UserModel(

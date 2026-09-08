@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel, WorkerModel
+from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
 from tests.company_tenancy_helper import seed_company_tenancy
 
@@ -46,34 +46,20 @@ def cr_app():
 
         get_container().list_due_notifications_usecase = ListDueNotificationsUseCase(note_query=_NoNotes())
         hasher = Argon2PasswordHasher()
-        perms = {
-            name: PermissionModel(name=name, resource="project", action=name.split(":")[1])
-            for name in ("project:read", "project:manage_labor", "project:log_own_attendance")
-        }
-        manager_role = RoleModel(name="manager", description="Manager")
-        manager_role.permissions.extend(perms.values())
-        member_role = RoleModel(name="member", description="Member")
-        member_role.permissions.extend([perms["project:read"], perms["project:log_own_attendance"]])
-        db.session.add_all([*perms.values(), manager_role, member_role])
-        db.session.flush()
 
-        def user(email, role):
-            u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
-            u.roles.append(role)
-            return u
+        def user(email):
+            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
 
-        owner = user("owner@cr-test.com", manager_role)
-        linked = user("linked@cr-test.com", member_role)
-        unlinked = user("unlinked@cr-test.com", member_role)
+        owner = user("owner@cr-test.com")
+        linked = user("linked@cr-test.com")
+        unlinked = user("unlinked@cr-test.com")
         db.session.add_all([owner, linked, unlinked])
         db.session.flush()
         project = ProjectModel(name="Chantier CR", owner_id=owner.id)
         db.session.add(project)
         db.session.flush()
         for u in (linked, unlinked):
-            db.session.execute(
-                user_projects.insert().values(user_id=u.id, project_id=project.id, role_id=member_role.id)
-            )
+            db.session.execute(user_projects.insert().values(user_id=u.id, project_id=project.id))
         own = WorkerModel(project_id=project.id, name="Linked", daily_rate=100, user_id=linked.id)
         other = WorkerModel(project_id=project.id, name="Other", daily_rate=80)
         db.session.add_all([own, other])

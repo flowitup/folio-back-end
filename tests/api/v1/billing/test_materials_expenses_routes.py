@@ -28,7 +28,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app import db
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
@@ -112,18 +112,7 @@ def mat_exp_app():
         hasher = Argon2PasswordHasher()
 
         # Permissions
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        inv_perm = PermissionModel(name="project:manage_invoices", resource="project", action="manage_invoices")
 
-        superadmin_role = RoleModel(name="mat_exp_superadmin", description="Superadmin")
-        superadmin_role.permissions.append(star_perm)
-
-        member_role = RoleModel(name="mat_exp_member", description="Member")
-        member_role.permissions.append(read_perm)
-        member_role.permissions.append(inv_perm)
-
-        db.session.add_all([star_perm, read_perm, inv_perm, superadmin_role, member_role])
         db.session.flush()
 
         # Users
@@ -132,8 +121,6 @@ def mat_exp_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(superadmin_role)  # superadmin so JWT has "*:*"
-        # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
 
         non_admin_user = UserModel(
@@ -141,7 +128,6 @@ def mat_exp_app():
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        non_admin_user.roles.append(member_role)
 
         # Plain company-A admin: has member_role (no *:*), will get company-admin
         # access row for company_a only — used to exercise non-superadmin code path.
@@ -150,7 +136,6 @@ def mat_exp_app():
             password_hash=hasher.hash("CompanyA1234!"),
             is_active=True,
         )
-        plain_company_a_admin_user.roles.append(member_role)
 
         db.session.add_all([admin_user, non_admin_user, plain_company_a_admin_user])
         db.session.flush()

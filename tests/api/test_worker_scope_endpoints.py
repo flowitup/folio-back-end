@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel, WorkerModel
+from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
 from tests.company_tenancy_helper import seed_company_tenancy
 
@@ -38,31 +38,13 @@ def ws_app():
     with test_app.app_context():
         db.create_all()
         hasher = Argon2PasswordHasher()
-        perms = {
-            name: PermissionModel(name=name, resource=name.split(":")[0], action=name.split(":")[1])
-            for name in (
-                "project:read",
-                "project:manage_labor",
-                "project:manage_invoices",
-                "project:log_own_attendance",
-                "user:read",
-            )
-        }
-        manager_role = RoleModel(name="manager", description="Manager")
-        manager_role.permissions.extend(perms.values())
-        member_role = RoleModel(name="member", description="Member")
-        member_role.permissions.extend([perms["project:read"], perms["project:log_own_attendance"]])
-        db.session.add_all([*perms.values(), manager_role, member_role])
-        db.session.flush()
 
-        def user(email, role):
-            u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
-            u.roles.append(role)
-            return u
+        def user(email):
+            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
 
-        owner = user("owner@ws-test.com", manager_role)
-        linked = user("linked@ws-test.com", member_role)
-        unlinked = user("unlinked@ws-test.com", member_role)
+        owner = user("owner@ws-test.com")
+        linked = user("linked@ws-test.com")
+        unlinked = user("unlinked@ws-test.com")
         db.session.add_all([owner, linked, unlinked])
         db.session.flush()
 
@@ -70,9 +52,7 @@ def ws_app():
         db.session.add(project)
         db.session.flush()
         for u in (linked, unlinked):
-            db.session.execute(
-                user_projects.insert().values(user_id=u.id, project_id=project.id, role_id=member_role.id)
-            )
+            db.session.execute(user_projects.insert().values(user_id=u.id, project_id=project.id))
         own = WorkerModel(project_id=project.id, name="Linked", daily_rate=100, user_id=linked.id)
         other = WorkerModel(project_id=project.id, name="Other", daily_rate=80)
         db.session.add_all([own, other])
@@ -272,14 +252,11 @@ def test_view_pay_grant_widens_read_but_not_write(ws_app, client, monkeypatch):
     with ws_app.app_context():
         hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
-        member_role = db.session.query(RoleModel).filter_by(name="member").first()
-
         # A separate owner logs the entry — vp_user must NOT be the project
         # owner or manage_labor holder, else caller_manages_labor already
         # widens the scope and the grant path under test is never exercised.
         owner_user = UserModel(email="viewpay_owner@ws-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
         vp_user = UserModel(email="viewpay@ws-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
-        vp_user.roles.append(member_role)
         db.session.add_all([owner_user, vp_user])
         db.session.flush()
 
@@ -298,9 +275,7 @@ def test_view_pay_grant_widens_read_but_not_write(ws_app, client, monkeypatch):
         db.session.add(project)
         db.session.flush()
 
-        db.session.execute(
-            user_projects.insert().values(user_id=vp_user.id, project_id=project.id, role_id=member_role.id)
-        )
+        db.session.execute(user_projects.insert().values(user_id=vp_user.id, project_id=project.id))
         db.session.add(
             UserCompanyAccessModel(
                 user_id=vp_user.id, company_id=company.id, role="member", is_primary=True, attached_at=now

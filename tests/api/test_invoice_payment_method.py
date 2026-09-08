@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
@@ -72,16 +72,7 @@ def inv_pm_app():
         # Permissions — name must be "*:*" so AuthorizationService.has_permission("*:*") works.
         # "*:*" grants all access including project:create (checked by can_mutate_project),
         # project:read and project:manage_invoices checked from JWT permissions list.
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        manage_perm = PermissionModel(name="project:manage_invoices", resource="project", action="manage_invoices")
 
-        admin_role = RoleModel(name="inv_pm_admin", description="Admin")
-        admin_role.permissions.append(star_perm)
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(manage_perm)
-
-        db.session.add_all([star_perm, read_perm, manage_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -89,7 +80,6 @@ def inv_pm_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
         db.session.add(admin_user)

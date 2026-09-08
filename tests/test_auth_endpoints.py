@@ -5,7 +5,7 @@ from uuid import uuid4, UUID
 from typing import Optional
 
 from app import create_app, db
-from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel
+from app.infrastructure.database.models import UserModel
 from app.domain.entities.user import User
 from app.domain.entities.role import Role
 from app.domain.entities.permission import Permission
@@ -108,28 +108,17 @@ def app():
         hasher = Argon2PasswordHasher()
 
         # Create roles and permissions
-        admin_role = RoleModel(name="admin", description="Admin role")
-        user_role = RoleModel(name="user", description="User role")
-
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        write_perm = PermissionModel(name="project:write", resource="project", action="write")
-
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(write_perm)
-        user_role.permissions.append(read_perm)
 
         # Create active and inactive users
         active_user = UserModel(email="active@example.com", password_hash=hasher.hash("password123"), is_active=True)
-        active_user.roles.append(user_role)
 
         admin_user = UserModel(email="admin@example.com", password_hash=hasher.hash("admin123"), is_active=True)
-        admin_user.roles.append(admin_role)
 
         inactive_user = UserModel(
             email="inactive@example.com", password_hash=hasher.hash("password123"), is_active=False
         )
 
-        db.session.add_all([admin_role, user_role, read_perm, write_perm, active_user, admin_user, inactive_user])
+        db.session.add_all([active_user, admin_user, inactive_user])
         db.session.commit()
 
         yield test_app

@@ -20,14 +20,13 @@ from tests.authz_reader_fake import FakeAuthzReader
 # ---------------------------------------------------------------------------
 
 
-def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, role_id=None, inviter_id=None) -> Invitation:
+def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=None) -> Invitation:
     _, token_hash = generate_token()
     now = datetime.now(timezone.utc)
     return Invitation(
         id=uuid4(),
         email="user@example.com",
         project_id=uuid4(),
-        role_id=role_id or uuid4(),
         token_hash=token_hash,
         status=status,
         expires_at=now + timedelta(days=7),
@@ -44,7 +43,6 @@ def _make_user(email="member@example.com") -> User:
         password_hash="h",
         is_active=True,
         created_at=datetime.now(timezone.utc),
-        roles=[],
     )
 
 
@@ -53,10 +51,9 @@ def _reader(project_id, *, role="manager", assigned=True, ops=False) -> FakeAuth
     return FakeAuthzReader(role=role, company_id=uuid4(), project_id=project_id, assigned=assigned, ops=ops)
 
 
-def _make_uc(inv_repo=None, role_repo=None, user_repo=None, authz_reader=None) -> ListInvitationsUseCase:
+def _make_uc(inv_repo=None, user_repo=None, authz_reader=None) -> ListInvitationsUseCase:
     return ListInvitationsUseCase(
         invitation_repo=inv_repo or MagicMock(),
-        role_repo=role_repo or MagicMock(),
         user_repo=user_repo or MagicMock(),
         authz_reader=authz_reader,
     )
@@ -71,16 +68,11 @@ class TestListInvitations:
     def test_returns_dtos_with_safe_fields_only(self):
         requester = _make_user()
         project_id = uuid4()
-        role_id = uuid4()
         inviter_id = uuid4()
-        inv = _make_inv(role_id=role_id, inviter_id=inviter_id)
+        inv = _make_inv(inviter_id=inviter_id)
 
         inv_repo = MagicMock()
         inv_repo.list_by_project.return_value = [inv]
-        role_repo = MagicMock()
-        mock_role = MagicMock()
-        mock_role.name = "member"
-        role_repo.find_by_id.return_value = mock_role
         user_repo = MagicMock()
         user_repo.find_by_id.side_effect = lambda uid: (
             requester if uid == requester.id else MagicMock(display_or_email="Inviter")
@@ -88,7 +80,6 @@ class TestListInvitations:
 
         uc = _make_uc(
             inv_repo=inv_repo,
-            role_repo=role_repo,
             user_repo=user_repo,
             authz_reader=_reader(project_id),
         )
@@ -97,6 +88,7 @@ class TestListInvitations:
         assert len(result) == 1
         item = result[0]
         assert item.email == inv.email
+        # Every invitation grants the same thing: company `member`.
         assert item.role_name == "member"
         assert item.status == inv.status
         assert item.expires_at == inv.expires_at
@@ -118,7 +110,6 @@ class TestListInvitations:
 
         uc = _make_uc(
             inv_repo=inv_repo,
-            role_repo=role_repo,
             user_repo=user_repo,
             authz_reader=_reader(project_id),
         )
@@ -224,7 +215,6 @@ class TestListInvitations:
 
         uc = _make_uc(
             inv_repo=inv_repo,
-            role_repo=role_repo,
             user_repo=user_repo,
             authz_reader=_reader(project_id),
         )

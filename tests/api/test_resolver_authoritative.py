@@ -144,13 +144,11 @@ def personas(invitation_app):
         )
         db.session.commit()
 
-        # Assignments (role_id deliberately NULL: per-project roles grant nothing now).
+        # Assignments carry no role: permissions come from the company role.
         from app.infrastructure.database.models.associations import user_projects
 
         for uid in (manager.id, grantee.id, denied.id):
-            db.session.execute(
-                user_projects.insert().values(user_id=uid, project_id=project_id, role_id=None, assigned_at=now)
-            )
+            db.session.execute(user_projects.insert().values(user_id=uid, project_id=project_id, assigned_at=now))
         db.session.commit()
 
         ids = {

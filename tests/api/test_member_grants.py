@@ -13,10 +13,6 @@ Fixture layout:
     member_a (member, assigned to P and Q), stranger (no access row at all).
   - Company B: admin_b (admin), project_r (used to prove a project from a
     DIFFERENT company is rejected).
-  - `neutral_role` backs every `user_projects` row's (legacy) `role_id` column
-    purely so `SqlAlchemyProjectMembershipRepository.find_role_id` doesn't
-    crash converting a NULL role_id to UUID (see test_authz_deny_wins.py) — it
-    carries zero permissions, so it never itself grants anything.
 """
 
 from __future__ import annotations
@@ -26,7 +22,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from app.infrastructure.database.models.worker import WorkerModel
@@ -56,13 +52,10 @@ def mg_app():
 
         # Neutral legacy role: zero permissions, exists only so `user_projects`
         # rows can carry a non-NULL role_id (see module docstring).
-        neutral_role = RoleModel(name="mg_neutral_role", description="No global permission")
-        db.session.add(neutral_role)
         db.session.flush()
 
         def _user(email: str) -> UserModel:
             u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
-            u.roles.append(neutral_role)
             db.session.add(u)
             return u
 
@@ -119,11 +112,8 @@ def mg_app():
 
         def _assign(user_id: UUID, project_id: UUID) -> None:
             db.session.execute(
-                _text(
-                    "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
-                    "VALUES (:uid, :pid, :rid, :at)"
-                ),
-                {"uid": str(user_id), "pid": str(project_id), "rid": str(neutral_role.id), "at": now},
+                _text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:uid, :pid, :at)"),
+                {"uid": str(user_id), "pid": str(project_id), "at": now},
             )
 
         _assign(manager_a.id, project_p.id)

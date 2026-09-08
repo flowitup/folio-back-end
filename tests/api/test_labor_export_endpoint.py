@@ -21,8 +21,6 @@ import pytest
 from app.infrastructure.database.models import (
     UserModel,
     ProjectModel,
-    RoleModel,
-    PermissionModel,
     WorkerModel,
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
@@ -65,16 +63,11 @@ def export_app():
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
         # Permissions
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
 
         # Role with project:read only — *:* omitted so require_permission("project:read") is exercised
-        admin_role = RoleModel(name="export_admin", description="Export Admin")
-        admin_role.permissions.append(read_perm)
 
         # Role without project:read
-        noperm_role = RoleModel(name="no_read_role", description="No Read")
 
-        db.session.add_all([read_perm, admin_role, noperm_role])
         db.session.flush()
 
         # Admin user (has project:read)
@@ -83,7 +76,6 @@ def export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.flush()
 
@@ -93,7 +85,6 @@ def export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        noperm_user.roles.append(noperm_role)
         db.session.add(noperm_user)
         db.session.flush()
 
@@ -596,13 +587,8 @@ def worker_export_app():
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
         # Permissions
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
         # *:* omitted — require_permission("project:read") must actually match
-        admin_role = RoleModel(name="wexport_admin", description="Worker Export Admin")
-        admin_role.permissions.append(read_perm)
-        noperm_role = RoleModel(name="wexport_noperm", description="No Perm")
 
-        db.session.add_all([read_perm, admin_role, noperm_role])
         db.session.flush()
 
         # Users
@@ -611,7 +597,6 @@ def worker_export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
 
         noperm_user = UserModel(
@@ -619,7 +604,6 @@ def worker_export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        noperm_user.roles.append(noperm_role)
         db.session.add(noperm_user)
         db.session.flush()
 
@@ -1059,12 +1043,8 @@ def cjk_worker_export_app():
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
         # *:* omitted — require_permission("project:read") must actually match
-        admin_role = RoleModel(name="cjk_admin_role", description="CJK Admin")
-        admin_role.permissions.append(read_perm)
 
-        db.session.add_all([read_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -1072,7 +1052,6 @@ def cjk_worker_export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.flush()
 

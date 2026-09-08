@@ -19,8 +19,6 @@ import pytest
 from app.infrastructure.database.models import (
     UserModel,
     ProjectModel,
-    RoleModel,
-    PermissionModel,
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
@@ -61,16 +59,6 @@ def role_app():
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)
 
-        manage_labor_perm = PermissionModel(name="project:manage_labor", resource="project", action="manage_labor")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-
-        admin_role = RoleModel(name="lr_admin", description="LR Admin")
-        admin_role.permissions.append(manage_labor_perm)
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(star_perm)
-
-        db.session.add_all([manage_labor_perm, read_perm, star_perm, admin_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -78,7 +66,6 @@ def role_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.flush()
 

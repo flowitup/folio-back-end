@@ -99,8 +99,7 @@ def invitation_app():
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
-    from app.infrastructure.database.models import UserModel, RoleModel, PermissionModel, ProjectModel
+    from app.infrastructure.database.models import UserModel, ProjectModel
     from config import TestingConfig
     from wiring import configure_container
     import wiring as _wiring
@@ -127,7 +126,6 @@ def invitation_app():
         project_repo = SQLAlchemyProjectRepository(db.session)
         inv_repo = SqlAlchemyInvitationRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-        role_repo = SqlAlchemyRoleRepository(db.session)
 
         configure_container(
             user_repository=user_repo,
@@ -137,37 +135,7 @@ def invitation_app():
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
             project_membership_repo=membership_repo,
-            role_repo=role_repo,
         )
-
-        # ------------------------------------------------------------------
-        # Seed roles + permissions (SQLite in-memory: no migration fixtures)
-        # ------------------------------------------------------------------
-        invite_perm = PermissionModel(name="project:invite", resource="project", action="invite")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-
-        admin_role = RoleModel(name="admin", description="Admin")
-        member_role = RoleModel(name="member", description="Member")
-        superadmin_role = RoleModel(name="superadmin", description="Superadmin")
-
-        admin_role.permissions.append(invite_perm)
-        admin_role.permissions.append(read_perm)
-        member_role.permissions.append(read_perm)
-        superadmin_role.permissions.append(star_perm)
-
-        # Seed roles + permissions first so they get IDs before users reference them
-        db.session.add_all(
-            [
-                invite_perm,
-                read_perm,
-                star_perm,
-                admin_role,
-                member_role,
-                superadmin_role,
-            ]
-        )
-        db.session.flush()  # assign DB-generated UUIDs
 
         # Seed users
         admin_user = UserModel(
@@ -175,14 +143,12 @@ def invitation_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
 
         member_user = UserModel(
             email="member@invite-test.com",
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        member_user.roles.append(member_role)
 
         outsider_user = UserModel(
             email="outsider@invite-test.com",
@@ -191,16 +157,13 @@ def invitation_app():
         )
 
         # Seed the platform-ops user (needed for admin bulk-add + search endpoint
-        # tests). Ops is the `users.is_platform_ops` flag, not a role — the legacy
-        # superadmin role is kept only so `user_roles` rows still exist for the
-        # tests that assert the deprecated /auth/me `roles` field.
+        # tests). Ops is the `users.is_platform_ops` flag, not a role.
         superadmin_user = UserModel(
             email="superadmin@invite-test.com",
             password_hash=hasher.hash("Superadmin1234!"),
             is_active=True,
             is_platform_ops=True,
         )
-        superadmin_user.roles.append(superadmin_role)
 
         # Seed target user — the user being bulk-added in admin tests
         target_user = UserModel(
@@ -298,8 +261,6 @@ def invitation_app():
         test_app._test_project_id = str(project.id)
         test_app._test_project_2_id = str(project2.id)
         test_app._test_project_3_id = str(project3.id)
-        test_app._test_member_role_id = str(member_role.id)
-        test_app._test_superadmin_role_id = str(superadmin_role.id)
         test_app._test_admin_user_id = str(admin_user.id)
         test_app._test_member_user_id = str(member_user.id)
         test_app._test_superadmin_user_id = str(superadmin_user.id)
@@ -314,31 +275,29 @@ def invitation_app():
         db.session.execute(
             text(
                 "INSERT INTO user_projects "
-                "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
-                "VALUES (:uid, :pid, :rid, NULL, :at) "
+                "(user_id, project_id, invited_by_user_id, assigned_at) "
+                "VALUES (:uid, :pid, NULL, :at) "
                 "ON CONFLICT (user_id, project_id) DO NOTHING"
             ),
             {
                 "uid": str(member_user.id),
                 "pid": str(project.id),
-                "rid": str(member_role.id),
                 "at": datetime.now(timezone.utc),
             },
         )
 
-        # Add target_user as a member of project (P1 only) with member_role
-        # so bulk-add tests can exercise ALREADY_MEMBER_SAME_ROLE against project.id
+        # Add target_user as a member of project (P1 only)
+        # so bulk-add tests can exercise ALREADY_MEMBER against project.id
         db.session.execute(
             text(
                 "INSERT INTO user_projects "
-                "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
-                "VALUES (:uid, :pid, :rid, NULL, :at) "
+                "(user_id, project_id, invited_by_user_id, assigned_at) "
+                "VALUES (:uid, :pid, NULL, :at) "
                 "ON CONFLICT (user_id, project_id) DO NOTHING"
             ),
             {
                 "uid": str(target_user.id),
                 "pid": str(project.id),
-                "rid": str(member_role.id),
                 "at": datetime.now(timezone.utc),
             },
         )
@@ -348,14 +307,13 @@ def invitation_app():
             db.session.execute(
                 text(
                     "INSERT INTO user_projects "
-                    "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
-                    "VALUES (:uid, :pid, :rid, NULL, :at) "
+                    "(user_id, project_id, invited_by_user_id, assigned_at) "
+                    "VALUES (:uid, :pid, NULL, :at) "
                     "ON CONFLICT (user_id, project_id) DO NOTHING"
                 ),
                 {
                     "uid": str(admin_user.id),
                     "pid": str(_pid),
-                    "rid": str(admin_role.id),
                     "at": datetime.now(timezone.utc),
                 },
             )
@@ -490,10 +448,9 @@ def invitation_app():
         _c.user_company_access_repo = _access_repo
         _c.company_invite_token_repo = _token_repo
 
-        # Company-aware authz resolver read port — additive Phase 1 wiring so
-        # tests/api/test_project_my_permissions.py can exercise the legacy ∪
-        # resolver union (configure_container() above replaced the Container
-        # instance created by create_app(), so this must be re-wired here).
+        # Company-aware authz resolver read port (configure_container() above
+        # replaced the Container instance created by create_app(), so this must
+        # be re-wired here).
         from app.api.v1.authz_context import get_reader_cache as _get_reader_cache
         from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
             SqlAlchemyAuthzReader as _SqlAlchemyAuthzReader,
@@ -608,7 +565,6 @@ def invitation_app():
                 password_hasher=_c.password_hasher,
                 token_issuer=_c.token_issuer,
                 db_session=db.session,
-                role_repo=_c.role_repository,
                 authz_reader=_c.authz_reader,
                 access_repo=_access_repo,
                 link_person_on_signup=_LinkPersonOnSignupUseCase(
@@ -1223,7 +1179,7 @@ def invitation_app():
 
         _c.request_signup_otp_usecase = _RequestSignupUC(user_repo, _otp_repo, _sms)
         _c.verify_signup_otp_usecase = _VerifySignupUC(
-            user_repo, _otp_repo, role_repo, hasher, _c.authorization_service, token_issuer
+            user_repo, _otp_repo, hasher, _c.authorization_service, token_issuer
         )
         test_app._sms = _sms
 

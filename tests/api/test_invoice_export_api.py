@@ -25,9 +25,7 @@ import pytest
 
 from app.infrastructure.database.models import (
     InvoiceModel,
-    PermissionModel,
     ProjectModel,
-    RoleModel,
     UserModel,
 )
 from tests.company_tenancy_helper import seed_company_tenancy
@@ -67,16 +65,11 @@ def inv_export_app():
         invoice_repo = SQLAlchemyInvoiceRepository(db.session)
 
         # Permissions
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
 
         # Role with project:read only — *:* omitted so require_permission("project:read") is exercised
-        admin_role = RoleModel(name="inv_export_admin", description="Inv Export Admin")
-        admin_role.permissions.append(read_perm)
 
         # Role without project:read
-        noperm_role = RoleModel(name="inv_export_noperm", description="No Read")
 
-        db.session.add_all([read_perm, admin_role, noperm_role])
         db.session.flush()
 
         # Admin user
@@ -85,7 +78,6 @@ def inv_export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
         db.session.add(admin_user)
         db.session.flush()
 
@@ -95,7 +87,6 @@ def inv_export_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        noperm_user.roles.append(noperm_role)
         db.session.add(noperm_user)
         db.session.flush()
 

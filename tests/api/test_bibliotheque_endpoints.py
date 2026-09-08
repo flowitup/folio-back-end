@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.associations import user_projects
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -75,23 +75,7 @@ def bibliotheque_app():
         hasher = Argon2PasswordHasher()
 
         # Permissions
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-        manage_perm = PermissionModel(name="bibliotheque:manage", resource="bibliotheque", action="manage")
 
-        admin_role = RoleModel(name="bib_admin_role", description="Admin")
-        admin_role.permissions.append(star_perm)
-        admin_role.permissions.append(read_perm)
-        admin_role.permissions.append(manage_perm)
-
-        member_role = RoleModel(name="bib_member_role", description="Member")
-        member_role.permissions.append(read_perm)
-
-        manager_role = RoleModel(name="bib_manager_role", description="Manager")
-        manager_role.permissions.append(read_perm)
-        manager_role.permissions.append(manage_perm)
-
-        db.session.add_all([star_perm, read_perm, manage_perm, admin_role, member_role, manager_role])
         db.session.flush()
 
         admin_user = UserModel(
@@ -99,21 +83,18 @@ def bibliotheque_app():
             password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
-        admin_user.roles.append(admin_role)
 
         member_user = UserModel(
             email="bib_member@test.com",
             password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
-        member_user.roles.append(member_role)
 
         manager_user = UserModel(
             email="bib_manager@test.com",
             password_hash=hasher.hash("Manager1234!"),
             is_active=True,
         )
-        manager_user.roles.append(manager_role)
 
         outsider_user = UserModel(
             email="bib_outsider@test.com",
@@ -154,9 +135,7 @@ def bibliotheque_app():
         db.session.add(project)
         db.session.flush()
         db.session.execute(
-            user_projects.insert().values(
-                user_id=manager_user.id, project_id=project.id, role_id=manager_role.id, assigned_at=now
-            )
+            user_projects.insert().values(user_id=manager_user.id, project_id=project.id, assigned_at=now)
         )
 
         db.session.commit()

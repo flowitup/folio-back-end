@@ -19,7 +19,6 @@ import pytest
 
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.project import ProjectModel
-from app.infrastructure.database.models.role import RoleModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -39,10 +38,7 @@ def accept_app():
     test_app = create_app(AcceptTestConfig)
     with test_app.app_context():
         db.create_all()
-        role = RoleModel(name="accept_test_project_role", description="Project role")
-        db.session.add(role)
         db.session.commit()
-        test_app._role_id = str(role.id)
         yield test_app
         db.session.remove()
         db.drop_all()
@@ -103,7 +99,7 @@ def _invite_and_accept(client, app, admin_token, project_id) -> str:
     invitee_email = f"ial-invitee-{uuid.uuid4().hex[:8]}@example.com"
     create_resp = client.post(
         "/api/v1/invitations",
-        json={"project_id": str(project_id), "email": invitee_email, "role_id": app._role_id},
+        json={"project_id": str(project_id), "email": invitee_email},
         headers=_auth(admin_token),
     )
     assert create_resp.status_code == 201, create_resp.get_data(as_text=True)

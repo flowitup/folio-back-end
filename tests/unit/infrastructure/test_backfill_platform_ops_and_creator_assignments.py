@@ -1,4 +1,9 @@
-"""Legacy roles → company tenancy mapping (shared with migration 9a4c1e7b2d05)."""
+"""Relationship backfills: creator assignments + directory profiles.
+
+The legacy-role → ops/company-role mapping these used to sit next to now lives
+inside migration 9a4c1e7b2d05 and is covered by the Postgres migration tests —
+its tables no longer exist in the models, so SQLite cannot host it.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ from sqlalchemy import text
 
 from app.domain.authz.resolver import has_permission
 from app.infrastructure.database.backfills.platform_ops_and_creator_assignments import run_backfill
-from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -37,16 +42,6 @@ def _company(session, created_by) -> CompanyModel:
     return company
 
 
-def _global_role(session, name: str, permission: "str | None" = None) -> RoleModel:
-    role = RoleModel(id=uuid4(), name=name, description=name)
-    if permission is not None:
-        perm = PermissionModel(id=uuid4(), name=permission, resource=permission.split(":")[0], action="x")
-        session.add(perm)
-        role.permissions.append(perm)
-    session.add(role)
-    return role
-
-
 def _attach(session, user, company, role: str, is_primary: bool = True) -> None:
     session.add(
         UserCompanyAccessModel(
@@ -55,51 +50,7 @@ def _attach(session, user, company, role: str, is_primary: bool = True) -> None:
     )
 
 
-def test_star_role_becomes_ops_and_admin_of_the_primary_company(session):
-    ops_role = _global_role(session, "admin", "*:*")
-    ops = _user(session, "ops@test.com")
-    ops.roles.append(ops_role)
-    session.flush()
-    primary = _company(session, ops.id)
-    secondary = _company(session, ops.id)
-    session.flush()
-    _attach(session, ops, primary, "member", is_primary=True)
-    _attach(session, ops, secondary, "member", is_primary=False)
-    session.flush()
-
-    report = run_backfill(session.connection())
-    session.expire_all()  # the backfill writes in SQL; drop the ORM identity map
-
-    assert report.ops_users == 1
-    assert session.get(UserModel, ops.id).is_platform_ops is True
-    assert session.get(UserCompanyAccessModel, (ops.id, primary.id)).role == "admin"
-    # Ops is a support flag, not a tenant role: the other company is untouched.
-    assert session.get(UserCompanyAccessModel, (ops.id, secondary.id)).role == "member"
-
-
-def test_global_manager_is_raised_where_attached_but_never_demotes_an_admin(session):
-    manager_role = _global_role(session, "manager")
-    user = _user(session, "manager@test.com")
-    user.roles.append(manager_role)
-    session.flush()
-    company_a = _company(session, user.id)
-    company_b = _company(session, user.id)
-    session.flush()
-    _attach(session, user, company_a, "member")
-    _attach(session, user, company_b, "admin", is_primary=False)
-    session.flush()
-
-    report = run_backfill(session.connection())
-    session.expire_all()  # the backfill writes in SQL; drop the ORM identity map
-
-    assert report.global_managers == 1
-    assert session.get(UserCompanyAccessModel, (user.id, company_a.id)).role == "manager"
-    assert session.get(UserCompanyAccessModel, (user.id, company_b.id)).role == "admin"
-    assert session.get(UserModel, user.id).is_platform_ops is False
-
-
 def test_creator_is_assigned_and_can_read_their_project_afterwards(session):
-    _global_role(session, "manager")
     owner = _user(session, "owner@test.com")
     session.flush()
     company = _company(session, owner.id)
@@ -150,9 +101,7 @@ def test_every_attachment_gets_a_directory_profile(session):
 
 
 def test_backfill_is_idempotent(session):
-    ops_role = _global_role(session, "admin", "*:*")
     ops = _user(session, "idempotent@test.com")
-    ops.roles.append(ops_role)
     session.flush()
     company = _company(session, ops.id)
     session.flush()
@@ -167,7 +116,6 @@ def test_backfill_is_idempotent(session):
 
     assert first.creator_assignments == 1
     assert second.creator_assignments == 0
-    assert second.ops_company_admins == 0
     assert second.profiles_created == 0
 
 
@@ -276,7 +224,6 @@ def test_a_phone_already_used_in_the_company_yields_a_profile_without_it(session
 
 def test_projects_without_a_company_are_counted_and_warned_about(session):
     """H3: no abort (migrations run at container start) — a WARNING line instead."""
-    _global_role(session, "manager")
     owner = _user(session, "orphanowner@test.com")
     session.flush()
     session.add(ProjectModel(id=uuid4(), name="No company", owner_id=owner.id, company_id=None))

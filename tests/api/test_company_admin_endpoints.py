@@ -21,7 +21,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
+from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -58,30 +58,18 @@ def cadm_app():
 
         hasher = Argon2PasswordHasher()
 
-        star_perm = PermissionModel(name="*:*", resource="*", action="*")
-        read_perm = PermissionModel(name="project:read", resource="project", action="read")
-
-        platform_admin_role = RoleModel(name="cadm_platform_admin_role", description="Platform admin")
-        platform_admin_role.permissions.append(star_perm)
-
-        no_perm_role = RoleModel(name="cadm_no_perm_role", description="No global permission")
-        no_perm_role.permissions.append(read_perm)
-
-        db.session.add_all([star_perm, read_perm, platform_admin_role, no_perm_role])
         db.session.flush()
 
-        def _user(email: str, role) -> UserModel:
+        def _user(email: str) -> UserModel:
             u = UserModel(email=email, password_hash=hasher.hash("Passw0rd!"), is_active=True)
-            u.roles.append(role)
             db.session.add(u)
             return u
 
-        platform_admin = _user("cadm_platform_admin@test.com", platform_admin_role)
-        # Platform access is the ops flag now, not the legacy `*:*` role.
+        platform_admin = _user("cadm_platform_admin@test.com")
         platform_admin.is_platform_ops = True
-        company_a_admin = _user("cadm_company_a_admin@test.com", no_perm_role)
-        company_b_admin = _user("cadm_company_b_admin@test.com", no_perm_role)
-        plain_member = _user("cadm_plain_member@test.com", no_perm_role)
+        company_a_admin = _user("cadm_company_a_admin@test.com")
+        company_b_admin = _user("cadm_company_b_admin@test.com")
+        plain_member = _user("cadm_plain_member@test.com")
         db.session.flush()
 
         now = datetime.now(timezone.utc)
