@@ -15,8 +15,7 @@ class BulkAddStatus(Enum):
     """Result status for a single project in a bulk-add operation."""
 
     ADDED = "added"
-    ALREADY_MEMBER_SAME_ROLE = "already_member_same_role"
-    ALREADY_MEMBER_DIFFERENT_ROLE = "already_member_different_role"
+    ALREADY_MEMBER = "already_member"
     PROJECT_NOT_FOUND = "project_not_found"
 
 

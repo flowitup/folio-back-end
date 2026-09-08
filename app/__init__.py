@@ -140,7 +140,6 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.invoices.export_routes import invoice_export_bp
     from app.api.v1.tasks import task_bp
     from app.api.v1.invitations import invitations_bp
-    from app.api.v1.roles import roles_bp
     from app.api.v1.admin import admin_bp
     from app.api.v1.chiffrage import chiffrage_bp
     from app.api.v1.notes import notes_bp
@@ -166,7 +165,6 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(task_bp, url_prefix="/api/v1")
     app.register_blueprint(chiffrage_bp, url_prefix="/api/v1")
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
-    app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
     app.register_blueprint(chat_bp, url_prefix="/api/v1")
@@ -221,7 +219,6 @@ def _configure_di_container() -> None:
     from app.infrastructure.database.repositories.sqlalchemy_project_membership import (
         SqlAlchemyProjectMembershipRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_role import SqlAlchemyRoleRepository
     from app.infrastructure.database.repositories.sqlalchemy_note_repository import SqlAlchemyNoteRepository
     from app.infrastructure.database.repositories.sqlalchemy_note_dismissal_repository import (
         SqlAlchemyNoteDismissalRepository,
@@ -265,7 +262,6 @@ def _configure_di_container() -> None:
 
     invitation_repo = SqlAlchemyInvitationRepository(db.session)
     membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
-    role_repo = SqlAlchemyRoleRepository(db.session)
 
     configure_container(
         user_repository=SQLAlchemyUserRepository(db.session),
@@ -281,7 +277,6 @@ def _configure_di_container() -> None:
         session_manager=FlaskSessionManager(),
         invitation_repo=invitation_repo,
         project_membership_repo=membership_repo,
-        role_repo=role_repo,
     )
 
     # Wire labor activity use-cases
@@ -493,11 +488,10 @@ def _configure_di_container() -> None:
             resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
             hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
         )
-        if _c.role_repository is not None and _c.password_hasher is not None:
+        if _c.password_hasher is not None:
             _c.verify_signup_otp_usecase = VerifySignupOtpUseCase(
                 _c.user_repository,
                 _otp_repo,
-                _c.role_repository,
                 _c.password_hasher,
                 _c.authorization_service,
                 _c.token_issuer,
@@ -674,7 +668,7 @@ def _configure_di_container() -> None:
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
     )
-    # Company join code (mobile onboarding): superadmin issues it, anyone with it joins as member.
+    # Company join code (mobile onboarding): a company admin issues it, anyone with it joins as member.
     from app.application.companies.join_code_usecases import JoinCompanyByCodeUseCase, SetJoinCodeUseCase
 
     _c.set_join_code_usecase = SetJoinCodeUseCase(company_repo=_company_repo, clock=_clock, role_checker=_role_checker)
@@ -801,10 +795,9 @@ def _configure_di_container() -> None:
         company_person_repo=_c.company_person_repo,
     )
 
-    # Project assignment use cases (Phase 2 onboarding): admin/manager assign
-    # or unassign an existing company member to/from a project. Needs the
-    # membership repo (wired earlier in configure_container) + role_repository
-    # for the legacy member/manager role_id lookup.
+    # Project assignment use cases: admin/manager assign or unassign an
+    # existing company member to/from a project. Needs the membership repo
+    # (wired earlier in configure_container).
     if _c.project_membership_repo is not None:
         from app.application.projects.assignments import (
             AssignProjectMemberUseCase as _AssignProjectMemberUseCase,
@@ -815,13 +808,11 @@ def _configure_di_container() -> None:
             authz_reader=_c.authz_reader,
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
-            role_repo=_c.role_repository,
         )
         _c.unassign_project_member_usecase = _UnassignProjectMemberUseCase(
             authz_reader=_c.authz_reader,
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
-            role_repo=_c.role_repository,
         )
 
     # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
@@ -842,13 +833,12 @@ def _configure_di_container() -> None:
     # Re-wire VerifySignupOtpUseCase with sign-up linking now that
     # company_person_repo/person_repo/access_repo exist — it is constructed
     # earlier (OTP DI block, before the companies section) without them.
-    if _c.verify_signup_otp_usecase is not None and _c.role_repository is not None and _c.password_hasher is not None:
+    if _c.verify_signup_otp_usecase is not None and _c.password_hasher is not None:
         from app.application.usecases.otp_login import VerifySignupOtpUseCase as _VerifySignupOtpUseCaseV2
 
         _c.verify_signup_otp_usecase = _VerifySignupOtpUseCaseV2(
             _c.user_repository,
             _otp_repo,
-            _c.role_repository,
             _c.password_hasher,
             _c.authorization_service,
             _c.token_issuer,
@@ -873,7 +863,6 @@ def _configure_di_container() -> None:
             password_hasher=_c.password_hasher,
             token_issuer=_c.token_issuer,
             db_session=db.session,
-            role_repo=_c.role_repository,
             authz_reader=_c.authz_reader,
             access_repo=_access_repo,
             link_person_on_signup=_link_person_on_signup,

@@ -18,7 +18,6 @@ class InvitationModel(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     email = Column(Text, nullable=False)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    role_id = Column(UUID(as_uuid=True), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False)
     token_hash = Column(Text, nullable=False, unique=True)
     status = Column(String(20), nullable=False, default="pending")
     expires_at = Column(DateTime(timezone=True), nullable=False)
@@ -33,7 +32,6 @@ class InvitationModel(Base):
             id=self.id,
             email=self.email,
             project_id=self.project_id,
-            role_id=self.role_id,
             token_hash=self.token_hash,
             status=InvitationStatus(self.status),
             expires_at=self.expires_at,
@@ -50,7 +48,6 @@ class InvitationModel(Base):
             id=inv.id,
             email=inv.email,
             project_id=inv.project_id,
-            role_id=inv.role_id,
             token_hash=inv.token_hash,
             status=inv.status.value,
             expires_at=inv.expires_at,

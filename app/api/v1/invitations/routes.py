@@ -19,10 +19,8 @@ from app.api.v1.invitations.schemas import (
 )
 from app.api.v1.auth.schemas import ErrorResponse
 from app.application.invitations.exceptions import (
-    AlreadyMemberError,
     PermissionDeniedError,
     RateLimitedError,
-    RoleNotFoundError,
     ProjectNotFoundError,
 )
 from app.domain.exceptions.invitation_exceptions import (
@@ -31,7 +29,6 @@ from app.domain.exceptions.invitation_exceptions import (
     InvitationNotFoundError,
     InvitationRevokedError,
     InvalidInvitationTokenError,
-    RoleNotAllowedError,
 )
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.infrastructure.rate_limiter import limiter
@@ -97,18 +94,11 @@ def create_invitation():
             inviter_id=user_id,
             project_id=data.project_id,
             email=str(data.email),
-            role_id=data.role_id,
         )
     except PermissionDeniedError as e:
         return _err(403, "Forbidden", str(e))
     except ProjectNotFoundError as e:
         return _err(404, "NotFound", str(e))
-    except RoleNotFoundError as e:
-        return _err(404, "NotFound", str(e))
-    except RoleNotAllowedError as e:
-        return _err(403, "Forbidden", str(e))
-    except AlreadyMemberError as e:
-        return _err(409, "Conflict", str(e))
     except RateLimitedError as e:
         return _err(429, "RateLimited", str(e))
     except Exception:

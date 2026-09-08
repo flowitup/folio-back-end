@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.infrastructure.database.models.base import Base
-from app.infrastructure.database.models.associations import user_roles, user_projects
+from app.infrastructure.database.models.associations import user_projects
 
 
 class UserModel(Base):
@@ -33,7 +33,6 @@ class UserModel(Base):
     )
 
     # Relationships
-    roles = relationship("RoleModel", secondary=user_roles, back_populates="users")
     # primaryjoin/secondaryjoin required because user_projects now has two FKs
     # to users (user_id + invited_by_user_id); we must pin to user_id only.
     projects = relationship(

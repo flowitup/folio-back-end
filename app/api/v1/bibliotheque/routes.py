@@ -54,14 +54,24 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 
 
 def _get_company_id() -> UUID | None:
-    """Parse ?company_id= from query string; return None on missing/invalid."""
+    """Resolve the company these library reads apply to.
+
+    ``?company_id=`` wins when present and well-formed; otherwise the caller's
+    primary company is used, so a client that knows only its own session does
+    not have to pass one. Returns None only when the caller is attached to no
+    company at all (the use-cases then answer 403 on their own membership
+    check — never a cross-tenant read).
+    """
     raw = request.args.get("company_id")
-    if not raw:
+    if raw:
+        try:
+            return UUID(raw)
+        except ValueError:
+            return None
+    reader = getattr(get_container(), "authz_reader", None)
+    if reader is None:
         return None
-    try:
-        return UUID(raw)
-    except ValueError:
-        return None
+    return reader.primary_company_id(UUID(get_jwt_identity()))
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +86,7 @@ def list_suppliers() -> Any:
     """List all suppliers for the company. Requires company membership."""
     company_id = _get_company_id()
     if company_id is None:
-        return _err(422, "ValidationError", "company_id query parameter is required and must be a valid UUID.")
+        return _err(403, "Forbidden", "You are not a member of any company.")
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -103,7 +113,7 @@ def list_categories() -> Any:
     """List distinct product categories for the company."""
     company_id = _get_company_id()
     if company_id is None:
-        return _err(422, "ValidationError", "company_id query parameter is required and must be a valid UUID.")
+        return _err(403, "Forbidden", "You are not a member of any company.")
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -130,7 +140,7 @@ def list_products() -> Any:
     """List products with optional filters: supplier, category, q, page."""
     company_id = _get_company_id()
     if company_id is None:
-        return _err(422, "ValidationError", "company_id query parameter is required and must be a valid UUID.")
+        return _err(403, "Forbidden", "You are not a member of any company.")
 
     supplier_raw = request.args.get("supplier")
     supplier_id: UUID | None = None

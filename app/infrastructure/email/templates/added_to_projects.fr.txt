@@ -2,7 +2,7 @@ Vous avez été ajouté à {{ added_projects|length }} projet(s) sur {{ app_name
 
 Bonjour,
 
-{{ inviter_name }} vous a ajouté aux projets suivants sur {{ app_name }} en tant que {{ role_name }} :
+{{ inviter_name }} vous a ajouté aux projets suivants sur {{ app_name }} :
 
 {% for proj in added_projects %}
 - {{ proj.name }}

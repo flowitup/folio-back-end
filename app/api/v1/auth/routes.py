@@ -172,14 +172,6 @@ def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
 
 
-def _deprecated_roles(user) -> list[str]:
-    """Legacy global role names — kept in the payload until released clients drop it.
-
-    Empty for everyone except platform ops, whose support tooling still shows it.
-    """
-    return [r.name for r in user.roles] if getattr(user, "is_platform_ops", False) else []
-
-
 def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
     """Companies the user is attached to — shared by login and /auth/me responses."""
     companies: list[UserCompanySummary] = []
@@ -206,7 +198,6 @@ def _login_response(container, result: LoginResult):
             id=user.id,
             email=user.email,
             permissions=result.permissions,
-            roles=_deprecated_roles(user),
             phone=user.phone,
             companies=_user_companies(container, result.user_id),
             is_platform_ops=bool(getattr(user, "is_platform_ops", False)),
@@ -348,11 +339,9 @@ def refresh():
     user_id = get_jwt_identity()
     container = get_container()
 
-    # Get fresh permissions
-    permissions = list(container.authorization_service.get_user_permissions(UUID(user_id)))
-
-    # Create new access token
-    new_access_token = container.token_issuer.create_access_token(UUID(user_id), {"permissions": permissions})
+    # Identity only: the token carries no permissions, so a role or grant
+    # change applies on the next request without a refresh.
+    new_access_token = container.token_issuer.create_access_token(UUID(user_id))
 
     response_data = RefreshResponse(access_token=new_access_token)
     response = make_response(jsonify(response_data.model_dump()))
@@ -387,7 +376,6 @@ def get_current_user():
             id=user.id,
             email=user.email,
             permissions=permissions,
-            roles=_deprecated_roles(user),
             phone=user.phone,
             companies=_user_companies(container, UUID(user_id)),
             is_platform_ops=bool(user.is_platform_ops),

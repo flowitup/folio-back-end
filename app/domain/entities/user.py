@@ -1,12 +1,10 @@
 """User domain entity."""
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID, uuid4
-
-from app.domain.entities.role import Role
 
 # Simple email regex - validates basic format
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -23,7 +21,8 @@ class User:
     """
     User entity representing an authenticated user.
 
-    Users have email/password credentials and assigned roles.
+    Identity only: what a user may do is resolved per request from their
+    company role and grant/deny rows, never stored on the user.
     """
 
     id: UUID
@@ -32,7 +31,6 @@ class User:
     is_active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    roles: List[Role] = field(default_factory=list)
     display_name: Optional[str] = None
     # E.164 number for SMS-code sign-in; assigned by an admin, unique across users.
     phone: Optional[str] = None
@@ -87,24 +85,5 @@ class User:
             is_active=True,
             created_at=now,
             updated_at=now,
-            roles=[],
             display_name=display_name,
         )
-
-    def add_role(self, role: Role) -> None:
-        """Assign a role to this user."""
-        if role not in self.roles:
-            self.roles.append(role)
-
-    def remove_role(self, role: Role) -> None:
-        """Remove a role from this user."""
-        if role in self.roles:
-            self.roles.remove(role)
-
-    def has_permission(self, resource: str, action: str) -> bool:
-        """Check if user has permission through any of their roles."""
-        return any(role.has_permission(resource, action) for role in self.roles)
-
-    def has_role(self, role_name: str) -> bool:
-        """Check if user has a specific role by name."""
-        return any(r.name == role_name.lower() for r in self.roles)

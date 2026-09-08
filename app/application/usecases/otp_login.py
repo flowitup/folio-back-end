@@ -25,7 +25,6 @@ from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
 from app.application.usecases.login import LoginResult
 from app.domain.entities.login_otp import LoginOtp
-from app.application.invitations.ports import RoleRepositoryPort
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.domain.entities.user import User
 from app.domain.exceptions.auth_exceptions import (
@@ -49,7 +48,6 @@ SIGNUP_MESSAGE = "Folio: ma dang ky tai khoan cua ban la {code}. Ma het han sau 
 # happy. It must pass strict email validation (admin responses use EmailStr), so no reserved TLD
 # (.local/.invalid/.test are rejected); the host has no mailbox, nothing is ever sent to it.
 SIGNUP_EMAIL_DOMAIN = "no-email.folio.flowitup.com"
-DEFAULT_SIGNUP_ROLE = "user"
 
 
 def _hash_code(phone: str, code: str) -> str:
@@ -188,7 +186,7 @@ class VerifyOtpUseCase:
         permissions: List[str] = list(self._authz.get_user_permissions(user.id))
         return LoginResult(
             user_id=user.id,
-            access_token=self._tokens.create_access_token(user.id, {"permissions": permissions}),
+            access_token=self._tokens.create_access_token(user.id),
             refresh_token=self._tokens.create_refresh_token(user.id, persistent=persistent),
             permissions=permissions,
         )
@@ -243,7 +241,6 @@ class VerifySignupOtpUseCase:
         self,
         user_repo: UserRepositoryPort,
         otp_repo: LoginOtpRepositoryPort,
-        role_repo: RoleRepositoryPort,
         password_hasher: PasswordHasherPort,
         authorization_service: AuthorizationService,
         token_issuer: TokenIssuerPort,
@@ -254,7 +251,6 @@ class VerifySignupOtpUseCase:
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
-        self._roles = role_repo
         self._hasher = password_hasher
         self._authz = authorization_service
         self._tokens = token_issuer
@@ -288,9 +284,6 @@ class VerifySignupOtpUseCase:
         )
         user.phone = phone
         self._users.save(user)
-        default_role = self._roles.find_by_name(DEFAULT_SIGNUP_ROLE)
-        if default_role is not None:
-            self._users.assign_role(user.id, default_role.id)
 
         # Phase 2 onboarding: attach any pending company profiles an admin
         # created for this phone before the account existed. The use case
@@ -308,7 +301,7 @@ class VerifySignupOtpUseCase:
         permissions: List[str] = list(self._authz.get_user_permissions(user.id))
         return LoginResult(
             user_id=user.id,
-            access_token=self._tokens.create_access_token(user.id, {"permissions": permissions}),
+            access_token=self._tokens.create_access_token(user.id),
             refresh_token=self._tokens.create_refresh_token(user.id, persistent=persistent),
             permissions=permissions,
         )

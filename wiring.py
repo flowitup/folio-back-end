@@ -350,7 +350,6 @@ class Container:
     # Invitation repos (bound in phase 05)
     invitation_repo: Optional[Any] = None  # SqlAlchemyInvitationRepository
     project_membership_repo: Optional[Any] = None  # SqlAlchemyProjectMembershipRepository
-    role_repository: Optional[Any] = None  # SqlAlchemyRoleRepository (also used by roles API)
 
     # Invitation use cases (repos wired in phase 05)
     # app_base_url is read from APP_BASE_URL env var at configure_container time
@@ -715,7 +714,6 @@ def configure_container(
     task_repository: Optional[ITaskRepository] = None,
     invitation_repo: Optional[Any] = None,
     project_membership_repo: Optional[Any] = None,
-    role_repo: Optional[Any] = None,
 ) -> Container:
     """
     Configure the dependency injection container.
@@ -740,7 +738,6 @@ def configure_container(
         task_repository=task_repository,
         invitation_repo=invitation_repo,
         project_membership_repo=project_membership_repo,
-        role_repository=role_repo,
     )
 
     # Wire up domain services if repositories are provided
@@ -885,7 +882,6 @@ def configure_container(
         invitation_repo is not None
         and project_membership_repo is not None
         and project_repository is not None
-        and role_repo is not None
         and user_repository is not None
     ):
         # InMemory queue shim — use email_port directly if no real queue configured
@@ -901,7 +897,6 @@ def configure_container(
             project_membership_repo=project_membership_repo,
             user_repo=user_repository,
             project_repo=project_repository,
-            role_repo=role_repo,
             email_port=container.email_port,
             email_renderer=container.email_renderer,
             queue_port=_queue,
@@ -912,7 +907,6 @@ def configure_container(
         container.verify_invitation_usecase = VerifyInvitationUseCase(
             invitation_repo=invitation_repo,
             project_repo=project_repository,
-            role_repo=role_repo,
             user_repo=user_repository,
         )
         container.revoke_invitation_usecase = RevokeInvitationUseCase(
@@ -923,7 +917,6 @@ def configure_container(
         )
         container.list_invitations_usecase = ListInvitationsUseCase(
             invitation_repo=invitation_repo,
-            role_repo=role_repo,
             user_repo=user_repository,
             authz_reader=container.authz_reader,
         )
@@ -939,23 +932,16 @@ def configure_container(
                 password_hasher=password_hasher,
                 token_issuer=token_issuer,
                 db_session=_db.session,
-                role_repo=role_repo,
             )
 
-    # Wire admin use cases (requires user, project, role, membership repos)
-    if (
-        user_repository is not None
-        and project_repository is not None
-        and role_repo is not None
-        and project_membership_repo is not None
-    ):
+    # Wire admin use cases (requires user, project and membership repos)
+    if user_repository is not None and project_repository is not None and project_membership_repo is not None:
         _queue = queue_service if queue_service is not None else _DirectEmailQueue(container.email_port)
         from app import db as _db
 
         container.bulk_add_existing_user_usecase = BulkAddExistingUserUseCase(
             user_repo=user_repository,
             project_repo=project_repository,
-            role_repo=role_repo,
             membership_repo=project_membership_repo,
             email_renderer=container.email_renderer,
             queue_port=_queue,

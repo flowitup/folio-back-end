@@ -12,9 +12,6 @@ class CreateInviteRequest(BaseModel):
 
     project_id: UUID
     email: EmailStr
-    # Legacy roles-table id. Optional: the member role is used when omitted
-    # (clients no longer read GET /roles, a deprecated stub since Phase 3).
-    role_id: Optional[UUID] = None
 
 
 class CreateInviteResponse(BaseModel):
@@ -39,6 +36,7 @@ class VerifyInviteResponse(BaseModel):
 
     email: EmailStr
     project_name: str
+    # Always the company role granted on acceptance: `member`.
     role_name: str
     inviter_name: str
     expires_at: datetime
@@ -57,6 +55,7 @@ class InvitationListItem(BaseModel):
 
     id: UUID
     email: EmailStr
+    # Always `member` — an invitation grants no other role.
     role_name: str
     status: Literal["pending", "accepted", "revoked", "expired"]
     expires_at: datetime

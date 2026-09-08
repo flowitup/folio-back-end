@@ -53,7 +53,6 @@ class Invitation:
     id: UUID
     email: str
     project_id: UUID
-    role_id: UUID
     token_hash: str
     status: InvitationStatus
     expires_at: datetime
@@ -71,7 +70,6 @@ class Invitation:
         cls,
         email: str,
         project_id: UUID,
-        role_id: UUID,
         invited_by: UUID,
         ttl_days: int = 7,
     ) -> tuple["Invitation", str]:
@@ -81,7 +79,6 @@ class Invitation:
         Args:
             email: Recipient email address (normalized + validated).
             project_id: Target project UUID.
-            role_id: Role to grant on acceptance.
             invited_by: UUID of the user sending the invitation.
             ttl_days: Days until the invitation expires (default 7).
 
@@ -97,7 +94,6 @@ class Invitation:
             id=uuid4(),
             email=normalized_email,
             project_id=project_id,
-            role_id=role_id,
             token_hash=token_hash,
             status=InvitationStatus.PENDING,
             expires_at=now + timedelta(days=ttl_days),

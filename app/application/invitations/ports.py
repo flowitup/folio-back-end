@@ -7,7 +7,6 @@ from uuid import UUID
 from app.domain.entities.invitation import Invitation, InvitationStatus
 from app.domain.entities.project_membership import ProjectMembership
 from app.domain.entities.project import Project
-from app.domain.entities.role import Role
 from app.domain.entities.user import User
 
 
@@ -93,7 +92,7 @@ class ProjectMembershipRepositoryPort(Protocol):
         """Insert a new membership row IF NOT ALREADY PRESENT.
 
         Returns True if a row was actually inserted, False if (user_id, project_id)
-        already existed (the row is left untouched — no role override). Callers use
+        already existed (the row is left untouched). Callers use
         this to distinguish "I added them" from "they were already in there" without
         the false-success that ``ON CONFLICT DO NOTHING`` alone would produce.
         """
@@ -101,14 +100,6 @@ class ProjectMembershipRepositoryPort(Protocol):
 
     def exists(self, user_id: UUID, project_id: UUID) -> bool:
         """Return True if the user is already a member of the project."""
-        ...
-
-    def find_role_id(self, user_id: UUID, project_id: UUID) -> Optional[UUID]:
-        """
-        Return the role_id of an existing (user, project) membership, or None
-        if no such membership exists. Used by CreateInvitationUseCase to
-        distinguish 'not a member' from 'already a member with same/different role'.
-        """
         ...
 
     def remove(self, user_id: UUID, project_id: UUID) -> bool:
@@ -128,18 +119,6 @@ class ProjectRepositoryPort(Protocol):
         ...
 
 
-class RoleRepositoryPort(Protocol):
-    """Minimal read-only role contract needed by invitation use-cases."""
-
-    def find_by_id(self, role_id: UUID) -> Optional[Role]:
-        """Look up a role by UUID. Returns None if not found."""
-        ...
-
-    def find_by_name(self, name: str) -> Optional[Role]:
-        """Look up a role by name. Returns None if not found."""
-        ...
-
-
 class UserWriteRepositoryPort(Protocol):
     """Write contract for user persistence used during invitation acceptance."""
 
@@ -155,15 +134,11 @@ class UserWriteRepositoryPort(Protocol):
         """Persist a user (insert or update). Returns the saved instance."""
         ...
 
-    def assign_role(self, user_id: UUID, role_id: UUID) -> None:
-        """Assign a global role to a user via the user_roles association."""
-        ...
-
     def search_by_email_or_name(self, query: str, limit: int = 20) -> list[User]:
         """Search users by email or display_name (case-insensitive prefix/substring match).
 
-        Used by the superadmin user-search endpoint (phase 03). Declared here at
-        the port level so the application layer never imports from infrastructure.
+        Used by the platform-ops user-search endpoint. Declared here at the
+        port level so the application layer never imports from infrastructure.
 
         Returns up to ``limit`` matching User entities, ordered by email asc.
         """

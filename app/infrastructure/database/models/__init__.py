@@ -6,14 +6,8 @@ Domain entities are pure Python; these models bridge to the database.
 """
 
 from app.infrastructure.database.models.base import Base
-from app.infrastructure.database.models.associations import (
-    user_roles,
-    role_permissions,
-    user_projects,
-)
+from app.infrastructure.database.models.associations import user_projects
 from app.infrastructure.database.models.user import UserModel
-from app.infrastructure.database.models.role import RoleModel
-from app.infrastructure.database.models.permission import PermissionModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
@@ -55,12 +49,8 @@ from app.infrastructure.database.models.company_member_grant import CompanyMembe
 
 __all__ = [
     "Base",
-    "user_roles",
-    "role_permissions",
     "user_projects",
     "UserModel",
-    "RoleModel",
-    "PermissionModel",
     "ProjectModel",
     "PersonModel",
     "WorkerModel",

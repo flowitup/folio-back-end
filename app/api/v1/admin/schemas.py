@@ -10,7 +10,6 @@ class BulkAddRequest(BaseModel):
     """POST /admin/users/<user_id>/memberships request body."""
 
     project_ids: list[UUID] = Field(min_length=1, max_length=50)
-    role_id: UUID
 
 
 class BulkAddResultItem(BaseModel):
@@ -18,12 +17,7 @@ class BulkAddResultItem(BaseModel):
 
     project_id: UUID
     project_name: str | None
-    status: Literal[
-        "added",
-        "already_member_same_role",
-        "already_member_different_role",
-        "project_not_found",
-    ]
+    status: Literal["added", "already_member", "project_not_found"]
 
 
 class BulkAddResponse(BaseModel):
@@ -35,7 +29,7 @@ class BulkAddResponse(BaseModel):
 class UpdateUserRequest(BaseModel):
     """PATCH /admin/users/<user_id> request body. All fields optional; at least one required.
 
-    ``email`` is the login identity — changing it is superadmin-only and must stay unique.
+    ``email`` is the login identity — changing it is platform-ops-only and must stay unique.
     ``display_name`` may be set to null/empty to clear it.
     """
 

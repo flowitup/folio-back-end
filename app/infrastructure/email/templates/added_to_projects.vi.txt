@@ -2,7 +2,7 @@ Bạn đã được thêm vào {{ added_projects|length }} dự án trên {{ app
 
 Xin chào,
 
-{{ inviter_name }} đã thêm bạn vào các dự án sau trên {{ app_name }} với vai trò {{ role_name }}:
+{{ inviter_name }} đã thêm bạn vào các dự án sau trên {{ app_name }}:
 
 {% for proj in added_projects %}
 - {{ proj.name }}

@@ -1,4 +1,4 @@
-"""Admin API routes — superadmin-gated endpoints: bulk-add memberships + user search."""
+"""Admin API routes — platform-ops endpoints: bulk project assignment + user search."""
 
 import logging
 from uuid import UUID
@@ -22,8 +22,6 @@ from app.api.v1.auth.schemas import ErrorResponse
 from app.application.admin.exceptions import (
     EmptyProjectListError,
     PermissionDeniedError,
-    RoleNotAllowedError,
-    RoleNotFoundError,
     TargetUserNotFoundError,
     TooManyProjectsError,
 )
@@ -52,7 +50,7 @@ def _validation_err(e: ValidationError):
     return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
 
 
-def _require_superadmin():
+def _require_platform_ops():
     """Return a 403 tuple unless the caller holds the platform-ops flag, else None.
 
     These routes are flowitup support tooling (cross-tenant user search, bulk
@@ -80,12 +78,12 @@ def _require_superadmin():
 @limiter.limit("5 per hour", key_func=jwt_user_key)
 @limiter.limit("10 per hour")
 def bulk_add_memberships(user_id: UUID):
-    """Bulk-add an existing user to multiple projects with the given role.
+    """Assign an existing user to multiple projects at once.
 
-    Gated to superadmin (*:*) permission. Rate-limited: 5/h per caller user,
+    Gated to the platform-ops flag. Rate-limited: 5/h per caller user,
     10/h per IP (Flask-Limiter applies the strictest matching limit).
     """
-    guard = _require_superadmin()
+    guard = _require_platform_ops()
     if guard is not None:
         return guard
 
@@ -102,16 +100,11 @@ def bulk_add_memberships(user_id: UUID):
             requester_id=requester_id,
             target_user_id=user_id,
             project_ids=data.project_ids,
-            role_id=data.role_id,
         )
     except PermissionDeniedError as e:
         return _err(403, "Forbidden", str(e))
     except TargetUserNotFoundError as e:
         return _err(404, "NotFound", str(e))
-    except RoleNotFoundError as e:
-        return _err(404, "NotFound", str(e))
-    except RoleNotAllowedError as e:
-        return _err(403, "Forbidden", str(e))
     except (EmptyProjectListError, TooManyProjectsError) as e:
         return _err(400, "BadRequest", str(e))
     except Exception:
@@ -137,11 +130,11 @@ def bulk_add_memberships(user_id: UUID):
 
 
 @admin_bp.route("/users", methods=["GET"])
-@openapi_doc(summary="Search users by email or display name (superadmin only)", tags=["admin"])
+@openapi_doc(summary="Search users by email or display name (platform ops only)", tags=["admin"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def search_users():
-    """Search users by email or display name (superadmin only).
+    """Search users by email or display name (platform ops only).
 
     Query params:
       search  — substring to match against email / display_name (required, max 100 chars)
@@ -150,7 +143,7 @@ def search_users():
     Decision: queries longer than 100 chars are rejected with 400 (not silently
     truncated) to surface misconfigured callers and prevent LIKE-clause abuse.
     """
-    guard = _require_superadmin()
+    guard = _require_platform_ops()
     if guard is not None:
         return guard
 
@@ -174,7 +167,7 @@ def search_users():
     container = get_container()
     users = container.user_repository.search_by_email_or_name(q, limit)
 
-    # H3 — audit every superadmin user-search call. Logs requester id + query + result count
+    # H3 — audit every platform-ops user-search call. Logs requester id + query + result count
     # so abusive enumeration patterns are detectable post-hoc.
     requester_id = get_jwt_identity()
     logger.info(
@@ -201,7 +194,7 @@ def search_users():
 
 
 @admin_bp.route("/users/<user_id>", methods=["PATCH"])
-@openapi_doc(summary="Update a user's email / display name (superadmin only)", tags=["admin"])
+@openapi_doc(summary="Update a user's email / display name (platform ops only)", tags=["admin"])
 @jwt_required()
 @limiter.limit("20 per hour", key_func=jwt_user_key)
 def update_user(user_id: str):
@@ -210,7 +203,7 @@ def update_user(user_id: str):
     Email is the login identity, so it is normalised to lowercase and must stay
     unique across users (409 on collision). At least one field must be provided.
     """
-    guard = _require_superadmin()
+    guard = _require_platform_ops()
     if guard is not None:
         return guard
 
