@@ -21,6 +21,14 @@ DEFAULT_PERMISSIONS = [
     {"name": "project:manage_invoices", "resource": "project", "action": "manage_invoices"},
     {"name": "bibliotheque:manage", "resource": "bibliotheque", "action": "manage"},
     {"name": "user:read", "resource": "user", "action": "read"},
+    # Phase 1 (roles & permissions redesign): new permission strings derived
+    # by app.domain.authz.matrix, not attached to any legacy role below —
+    # legacy roles must not gain company-tenant or roster/pay capabilities.
+    {"name": "project:view_roster", "resource": "project", "action": "view_roster"},
+    {"name": "project:view_pay", "resource": "project", "action": "view_pay"},
+    {"name": "company:manage_members", "resource": "company", "action": "manage_members"},
+    {"name": "company:manage_settings", "resource": "company", "action": "manage_settings"},
+    {"name": "company:manage_billing", "resource": "company", "action": "manage_billing"},
 ]
 
 DEFAULT_ROLES = [

@@ -60,6 +60,15 @@ class LogoutBody(BaseModel):
     refresh_token: Optional[str] = None
 
 
+class UserCompanySummary(BaseModel):
+    """One company the user is attached to — company role, not global RBAC."""
+
+    id: UUID
+    legal_name: str
+    role: str  # "admin" | "manager" | "member" — see app.domain.companies.roles.CompanyRole
+    is_primary: bool
+
+
 class UserResponse(BaseModel):
     """User info response."""
 
@@ -68,6 +77,7 @@ class UserResponse(BaseModel):
     permissions: List[str]
     roles: List[str]
     phone: Optional[str] = None
+    companies: List[UserCompanySummary] = []
 
 
 class LoginResponse(BaseModel):

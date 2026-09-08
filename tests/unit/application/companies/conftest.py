@@ -42,6 +42,12 @@ class InMemoryCompanyRepository:
     def find_by_id_for_update(self, company_id: UUID) -> Optional[Company]:
         return self.find_by_id(company_id)
 
+    def find_by_join_code(self, code: str) -> Optional[Company]:
+        for company in self._store.values():
+            if company.join_code == code:
+                return company
+        return None
+
     def list_all(self, limit: int = 50, offset: int = 0) -> tuple[list[Company], int]:
         all_companies = list(self._store.values())
         total = len(all_companies)
@@ -76,6 +82,10 @@ class InMemoryUserCompanyAccessRepository:
 
     def list_for_company(self, company_id: UUID) -> list[UserCompanyAccess]:
         return [a for (_, cid), a in self._store.items() if cid == company_id]
+
+    def list_admins_for_update(self, company_id: UUID) -> list[UserCompanyAccess]:
+        """In-memory fake — no real locking, mirrors list_for_company filtered to admins."""
+        return [a for a in self.list_for_company(company_id) if a.role == "admin"]
 
     def save(self, access: UserCompanyAccess) -> UserCompanyAccess:
         self._store[(access.user_id, access.company_id)] = access
@@ -155,21 +165,36 @@ class FakeSecureTokenGenerator:
 
 
 class FakeRoleService:
-    """Controls admin status per user_id for tests."""
+    """Controls platform-admin and per-company-admin status for tests."""
 
     def __init__(self, admin_ids: set[UUID] | None = None):
         self._admin_ids: set[UUID] = admin_ids or set()
+        self._company_admins: set[tuple[UUID, UUID]] = set()
 
     def set_admin(self, user_id: UUID, is_admin: bool = True) -> None:
+        """Grant/revoke the legacy global '*:*' wildcard permission."""
         if is_admin:
             self._admin_ids.add(user_id)
         else:
             self._admin_ids.discard(user_id)
 
+    def set_company_admin(self, user_id: UUID, company_id: UUID, is_admin: bool = True) -> None:
+        """Grant/revoke a per-company 'admin' role for (user_id, company_id)."""
+        if is_admin:
+            self._company_admins.add((user_id, company_id))
+        else:
+            self._company_admins.discard((user_id, company_id))
+
     def has_permission(self, user_id: UUID, permission: str) -> bool:
         if permission == "*:*":
             return user_id in self._admin_ids
         return False
+
+    def is_platform_admin(self, user_id: UUID) -> bool:
+        return user_id in self._admin_ids
+
+    def is_company_admin(self, user_id: UUID, company_id: UUID) -> bool:
+        return (user_id, company_id) in self._company_admins
 
 
 class FakeClock:
@@ -239,12 +264,14 @@ def make_access(
     user_id: UUID,
     company_id: UUID,
     is_primary: bool = True,
+    role: str = "member",
 ) -> UserCompanyAccess:
     return UserCompanyAccess(
         user_id=user_id,
         company_id=company_id,
         is_primary=is_primary,
         attached_at=datetime.now(timezone.utc),
+        role=role,
     )
 
 

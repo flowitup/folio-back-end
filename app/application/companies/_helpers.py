@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
 from app.domain.companies.exceptions import ForbiddenCompanyError
+
+if TYPE_CHECKING:
+    from app.application.companies.ports import RoleCheckerPort
 
 _TOKEN_EXPIRY_DAYS = 7
 _PREFIX_PATTERN = re.compile(r"^[A-Z0-9]{1,8}$")
@@ -38,6 +41,20 @@ def _assert_admin(caller_id: UUID, company_id: UUID, is_admin: bool) -> None:
     """
     if not is_admin:
         raise ForbiddenCompanyError(caller_id, company_id)
+
+
+def _assert_company_admin(role_checker: "RoleCheckerPort", caller_id: UUID, company_id: UUID) -> None:
+    """Raise ForbiddenCompanyError unless caller manages this specific company.
+
+    Authorized callers are: a platform admin (legacy global '*:*'), OR a user
+    whose per-company role for company_id is 'admin'. This is the company-scoped
+    replacement for the old global-'*:*'-only _assert_admin check, used by every
+    company-management use-case (member roster, invite tokens, join code,
+    payment methods) so a company admin no longer needs platform rights.
+    """
+    if role_checker.is_platform_admin(caller_id) or role_checker.is_company_admin(caller_id, company_id):
+        return
+    raise ForbiddenCompanyError(caller_id, company_id)
 
 
 def _validate_prefix_override(prefix_override: Optional[str]) -> None:

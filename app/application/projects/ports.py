@@ -53,8 +53,13 @@ class IProjectRepository(ABC):
     """Port for project persistence operations."""
 
     @abstractmethod
-    def create(self, project: Project) -> Project:
-        """Create a new project. Returns created project."""
+    def create(self, project: Project, company_id: Optional[UUID] = None) -> Project:
+        """Create a new project, optionally attaching it to a company.
+
+        `company_id` is kept out of the `Project` domain entity (deliberately
+        infrastructure-only, see `app.infrastructure.database.models.project`)
+        so it is threaded through as a separate argument here.
+        """
         ...
 
     @abstractmethod
@@ -70,6 +75,20 @@ class IProjectRepository(ABC):
     @abstractmethod
     def list_all(self) -> List[Project]:
         """List all projects (admin only)."""
+        ...
+
+    @abstractmethod
+    def list_for_user_and_companies(self, user_id: UUID, company_ids: List[UUID]) -> List[Project]:
+        """List projects visible to a non-platform-admin caller.
+
+        A project is visible when the caller owns it, is a `user_projects`
+        member of it, OR it belongs to one of `company_ids` (the companies
+        where the caller holds the "admin" company role — see
+        `app.application.billing.ports.admin_company_ids`). Replaces the old
+        `project:create`-as-see-everything proxy: `company_ids` is the only
+        source of "sees more than their own memberships" visibility now, and
+        it is scoped to the caller's own companies, never global.
+        """
         ...
 
     @abstractmethod

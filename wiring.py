@@ -427,6 +427,11 @@ class Container:
     user_company_access_repo: Optional[Any] = None  # SqlAlchemyUserCompanyAccessRepository
     company_invite_token_repo: Optional[Any] = None  # SqlAlchemyCompanyInviteTokenRepository
 
+    # Company-aware authz resolver read port (app.application.authz.ports.AuthzReaderPort).
+    # Wired in app/__init__.py alongside the other company repos; None in test fixtures
+    # that don't need resolver-derived permissions — callers must degrade gracefully.
+    authz_reader: Optional[Any] = None  # SqlAlchemyAuthzReader
+
     # companies use-cases: admin
     create_company_usecase: Optional[CreateCompanyUseCase] = None
     update_company_usecase: Optional[UpdateCompanyUseCase] = None
@@ -536,6 +541,9 @@ class Container:
     list_labor_entries_usecase: Optional[ListLaborEntriesUseCase] = None
     get_labor_summary_usecase: Optional[GetLaborSummaryUseCase] = None
     get_monthly_labor_summary_usecase: Optional[GetMonthlyLaborSummaryUseCase] = None
+    # D3 day roster — wired in app/__init__.py once authz_reader exists (needs
+    # worker_repository + labor_entry_repository + the company-aware authz reader).
+    get_day_roster_usecase: Optional[Any] = None  # GetDayRosterUseCase
     export_labor_usecase: Optional[ExportLaborUseCase] = None
     # Attendance validation — worker self-log → manager validate / reject, bell feed.
     submit_own_attendance_usecase: Optional[SubmitOwnAttendanceUseCase] = None

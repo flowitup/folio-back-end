@@ -22,14 +22,13 @@ from app.domain.payment_methods.exceptions import (
     PaymentMethodNotFoundError,
 )
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class DeletePaymentMethodUseCase:
-    """Soft-delete a payment method (admin only).
+    """Soft-delete a payment method (company or platform admin).
 
     Raises:
-        ForbiddenCompanyError: Caller does not hold admin permission.
+        ForbiddenCompanyError: Caller is neither a platform admin nor an
+            admin of this company.
         PaymentMethodNotFoundError: No method exists for the given ID.
         BuiltinPaymentMethodDeletionError: The method is builtin and cannot
             be deleted.
@@ -53,9 +52,11 @@ class DeletePaymentMethodUseCase:
     ) -> None:
         from app.domain.companies.exceptions import ForbiddenCompanyError
 
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(requester_id, _ADMIN_PERMISSION)
-        if not is_admin:
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        is_authorized = self._role_checker.is_platform_admin(requester_id) or self._role_checker.is_company_admin(
+            requester_id, company_id
+        )
+        if not is_authorized:
             raise ForbiddenCompanyError(requester_id, payment_method_id)
 
         # 2. Load with lock to serialise concurrent soft-delete attempts

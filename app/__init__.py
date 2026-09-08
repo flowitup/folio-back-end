@@ -111,6 +111,19 @@ def create_app(config_class: type = Config) -> Flask:
     with app.app_context():
         _configure_di_container()
 
+    # Clear the per-request authz resolver caches (app.api.v1.authz_context)
+    # at the start of every request. Flask reuses an already-pushed
+    # AppContext for a request whose app matches the top of the stack, so a
+    # test fixture (or any code) holding one `app.app_context()` open across
+    # several `test_client()` calls would otherwise share the SAME `flask.g`
+    # — and therefore a stale authz memo — across those calls. A role or D8
+    # grant/deny change must take effect on the very next request.
+    @app.before_request
+    def _clear_authz_request_memo() -> None:
+        from app.api.v1.authz_context import clear_request_memo
+
+        clear_request_memo()
+
     # Health check endpoint
     @app.route("/health", methods=["GET"])
     def health_check():
@@ -538,9 +551,45 @@ def _configure_di_container() -> None:
     # Reuse authorization_service as RoleCheckerPort (structurally compatible)
     _role_checker = _c.authorization_service
 
+    # AuthorizationService is constructed in wiring.py before _access_repo
+    # exists (it only takes a UserRepositoryPort there), so the per-company
+    # role lookup used by is_company_admin() is injected here instead, once
+    # SqlAlchemyUserCompanyAccessRepository is available.
+    if _role_checker is not None and hasattr(_role_checker, "set_company_role_lookup"):
+
+        def _company_role_for(user_id, company_id):
+            access = _access_repo.find(user_id, company_id)
+            return access.role if access is not None else None
+
+        _role_checker.set_company_role_lookup(_company_role_for)
+
     _c.company_repo = _company_repo
     _c.user_company_access_repo = _access_repo
     _c.company_invite_token_repo = _token_repo
+
+    # Company-aware authz resolver read port (app/domain/authz/resolver.py).
+    # Wired here, alongside the other company repos, so every route that goes
+    # through create_app() gets resolver-derived permissions for free.
+    # cache_provider wires in the per-request memo dict (app.api.v1.authz_context)
+    # so repeated sub-queries within one request (e.g. company_role_for once per
+    # project while listing N projects of one company) hit cache, not the DB.
+    from app.api.v1.authz_context import get_reader_cache
+    from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
+        SqlAlchemyAuthzReader,
+    )
+
+    _c.authz_reader = SqlAlchemyAuthzReader(db.session, cache_provider=get_reader_cache)
+
+    # D3 day roster use case — needs worker_repository + labor_entry_repository
+    # (wired earlier in configure_container) plus the authz reader just above.
+    if _c.worker_repository is not None and _c.labor_entry_repository is not None:
+        from app.application.labor.get_day_roster_usecase import GetDayRosterUseCase
+
+        _c.get_day_roster_usecase = GetDayRosterUseCase(
+            worker_repo=_c.worker_repository,
+            entry_repo=_c.labor_entry_repository,
+            authz_reader=_c.authz_reader,
+        )
 
     # admin use-cases
     _c.create_company_usecase = _CreateCompanyUseCase(
@@ -611,7 +660,7 @@ def _configure_di_container() -> None:
     # Company join code (mobile onboarding): superadmin issues it, anyone with it joins as member.
     from app.application.companies.join_code_usecases import JoinCompanyByCodeUseCase, SetJoinCodeUseCase
 
-    _c.set_join_code_usecase = SetJoinCodeUseCase(company_repo=_company_repo, clock=_clock)
+    _c.set_join_code_usecase = SetJoinCodeUseCase(company_repo=_company_repo, clock=_clock, role_checker=_role_checker)
     _c.join_company_by_code_usecase = JoinCompanyByCodeUseCase(
         company_repo=_company_repo, access_repo=_access_repo, clock=_clock
     )

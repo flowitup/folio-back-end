@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.application.companies._helpers import _assert_admin
+from app.application.companies._helpers import _assert_company_admin
 from app.application.companies.dtos import (
     ListAttachedUsersInput,
     ListAttachedUsersResult,
@@ -15,11 +15,9 @@ from app.application.companies.ports import (
 )
 from app.domain.companies.exceptions import CompanyNotFoundError
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class ListAttachedUsersUseCase:
-    """Return paginated user_company_access rows for a given company (admin only).
+    """Return paginated user_company_access rows for a company (company or platform admin).
 
     H5: supports limit/offset pagination; returns ListAttachedUsersResult
     with items and total count.
@@ -36,9 +34,8 @@ class ListAttachedUsersUseCase:
         self._role_checker = role_checker
 
     def execute(self, inp: ListAttachedUsersInput) -> ListAttachedUsersResult:
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
-        _assert_admin(inp.caller_id, inp.company_id, is_admin)
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        _assert_company_admin(self._role_checker, inp.caller_id, inp.company_id)
 
         # 2. Assert company exists
         company = self._company_repo.find_by_id(inp.company_id)

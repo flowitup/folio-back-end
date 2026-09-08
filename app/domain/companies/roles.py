@@ -13,11 +13,18 @@ from enum import Enum
 class CompanyRole(str, Enum):
     """Role a user holds within a specific company.
 
-    admin  → may view and manage the company's billing + members.
-    member → attached to the company but without billing/member-admin access.
+    admin   → full company management (billing, members, settings) and
+              implicit admin/read-write on every project of the company.
+    manager → assigned per-project; full labor/invoice/document read-write on
+              projects they are assigned to, no company management, no
+              project create/delete. See app.domain.authz.matrix for the
+              exact permission set derived from this role.
+    member  → assigned per-project; read-only on assigned projects plus
+              logging their own attendance.
     """
 
     ADMIN = "admin"
+    MANAGER = "manager"
     MEMBER = "member"
 
     @classmethod

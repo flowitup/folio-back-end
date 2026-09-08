@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-from app.application.companies._helpers import _assert_admin
+from app.application.companies._helpers import _assert_company_admin
 from app.application.companies.dtos import (
     GenerateInviteTokenInput,
     GenerateInviteTokenOutput,
@@ -26,7 +26,6 @@ from app.domain.companies.exceptions import (
 from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.roles import CompanyRole
 
-_ADMIN_PERMISSION = "*:*"
 _TOKEN_EXPIRY_DAYS = 7
 _TOKEN_BYTE_LENGTH = 32
 
@@ -39,7 +38,7 @@ def _normalize_role(role: str) -> str:
 
 
 class GenerateInviteTokenUseCase:
-    """Generate a new invite token for a company (admin only).
+    """Generate a new invite token for a company (company or platform admin).
 
     Behaviour:
       - If regenerate=False and an active token exists: raises
@@ -76,9 +75,8 @@ class GenerateInviteTokenUseCase:
         inp: GenerateInviteTokenInput,
         db_session: TransactionalSessionPort,
     ) -> GenerateInviteTokenOutput:
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
-        _assert_admin(inp.caller_id, inp.company_id, is_admin)
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        _assert_company_admin(self._role_checker, inp.caller_id, inp.company_id)
 
         # 2. Assert company exists
         company = self._company_repo.find_by_id(inp.company_id)

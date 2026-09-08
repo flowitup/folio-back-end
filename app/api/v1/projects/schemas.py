@@ -13,6 +13,10 @@ class CreateProjectRequest(BaseModel):
     address: Optional[str] = Field(None, max_length=500)
     budget: Optional[Decimal] = Field(None, ge=0)
     budget_source: Optional[str] = Field(None, max_length=120)
+    # Target company (tenant). Must be a company where the caller is admin —
+    # otherwise 403. Omitted → the route falls back to the caller's primary
+    # company, then the single company they admin, else 400.
+    company_id: Optional[str] = Field(None, max_length=36)
 
 
 class UpdateProjectRequest(BaseModel):

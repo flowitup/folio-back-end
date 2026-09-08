@@ -7,7 +7,8 @@ from app.application.companies.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
-from app.domain.companies.exceptions import UserCompanyAccessNotFoundError
+from app.domain.companies.exceptions import LastCompanyAdminError, UserCompanyAccessNotFoundError
+from app.domain.companies.roles import CompanyRole
 
 
 class DetachCompanyUseCase:
@@ -22,6 +23,11 @@ class DetachCompanyUseCase:
 
     Users can only detach themselves; admins booting a user should use
     BootAttachedUserUseCase instead.
+
+    Raises:
+        UserCompanyAccessNotFoundError: caller is not attached to the company.
+        LastCompanyAdminError: caller is the company's last remaining admin —
+            self-detach is rejected so the company never ends with zero admins.
     """
 
     def __init__(
@@ -39,6 +45,14 @@ class DetachCompanyUseCase:
         access = self._access_repo.find(inp.user_id, inp.company_id)
         if access is None:
             raise UserCompanyAccessNotFoundError(inp.user_id, inp.company_id)
+
+        # 1b. Last-admin guard: self-detaching the company's only admin is
+        # rejected. Locks the admin rows (FOR UPDATE) so a concurrent
+        # demote/boot of another admin cannot race past this count.
+        if access.role == CompanyRole.ADMIN.value:
+            admins = self._access_repo.list_admins_for_update(inp.company_id)
+            if len(admins) <= 1:
+                raise LastCompanyAdminError(inp.company_id)
 
         was_primary = access.is_primary
 

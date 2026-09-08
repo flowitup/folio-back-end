@@ -248,6 +248,94 @@ def test_labor_payments_summary_only_own_worker(client, ids, seeded, owner_h, li
     assert client.get(url, headers=unlinked_h).get_json()["months"] == []
 
 
+def test_view_pay_grant_widens_read_but_not_write(ws_app, client, monkeypatch):
+    """A member with a D8 project:view_pay grant (stubbed via authz_reader.grants_for,
+    since Phase 2's company_member_grants table doesn't exist yet) reads every worker
+    on labor-summary like a manager would, but the write gate (manage_labor) is
+    completely unaffected — still 403 on POST labor-entries."""
+    from datetime import date, datetime, timezone
+    from uuid import uuid4
+
+    from app import db
+    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+    from app.infrastructure.database.models.company import CompanyModel
+    from app.infrastructure.database.models.labor_entry import LaborEntryModel
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+    from wiring import get_container
+
+    with ws_app.app_context():
+        hasher = Argon2PasswordHasher()
+        now = datetime.now(timezone.utc)
+        member_role = db.session.query(RoleModel).filter_by(name="member").first()
+
+        # A separate owner logs the entry — vp_user must NOT be the project
+        # owner or manage_labor holder, else caller_manages_labor already
+        # widens the scope and the grant path under test is never exercised.
+        owner_user = UserModel(email="viewpay_owner@ws-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        vp_user = UserModel(email="viewpay@ws-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        vp_user.roles.append(member_role)
+        db.session.add_all([owner_user, vp_user])
+        db.session.flush()
+
+        company = CompanyModel(
+            id=uuid4(),
+            legal_name="VP Co",
+            address="1 rue VP",
+            created_by=owner_user.id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(company)
+        db.session.flush()
+
+        project = ProjectModel(name="VP Project", owner_id=owner_user.id, company_id=company.id, budget=1000)
+        db.session.add(project)
+        db.session.flush()
+
+        db.session.execute(
+            user_projects.insert().values(user_id=vp_user.id, project_id=project.id, role_id=member_role.id)
+        )
+        db.session.add(
+            UserCompanyAccessModel(
+                user_id=vp_user.id, company_id=company.id, role="member", is_primary=True, attached_at=now
+            )
+        )
+        worker = WorkerModel(project_id=project.id, name="Someone Else", daily_rate=120)
+        db.session.add(worker)
+        db.session.flush()
+        db.session.add(
+            LaborEntryModel(worker_id=worker.id, date=date(2026, 4, 1), shift_type="full", status="validated")
+        )
+        db.session.commit()
+
+        project_id = str(project.id)
+        worker_id = str(worker.id)
+
+    h = _login(client, "viewpay@ws-test.com")
+
+    # No grant yet: this member is restricted and unlinked → sees no rows.
+    resp = client.get(f"/api/v1/projects/{project_id}/labor-summary", headers=h)
+    assert resp.status_code == 200
+    assert resp.get_json()["rows"] == []
+
+    # Stub the D8 grant row the Phase 2 table would otherwise carry.
+    with ws_app.app_context():
+        reader = get_container().authz_reader
+        monkeypatch.setattr(reader, "grants_for", lambda uid, cid, pid: [("project:view_pay", "grant")])
+
+        resp = client.get(f"/api/v1/projects/{project_id}/labor-summary", headers=h)
+        assert resp.status_code == 200
+        assert {r["worker_id"] for r in resp.get_json()["rows"]} == {worker_id}
+
+        # Read-only: the write gate (manage_labor) is untouched by the grant.
+        resp = client.post(
+            f"/api/v1/projects/{project_id}/labor-entries",
+            json={"worker_id": worker_id, "date": "2026-04-01", "shift_type": "full"},
+            headers=h,
+        )
+        assert resp.status_code == 403
+
+
 def test_project_money_fields_hidden_from_restricted_members(client, ids, seeded, owner_h, linked_h):
     detail = f"/api/v1/projects/{ids['project']}"
     full = client.get(detail, headers=owner_h).get_json()

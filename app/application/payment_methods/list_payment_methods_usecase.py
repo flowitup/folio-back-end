@@ -1,12 +1,13 @@
 """ListPaymentMethodsUseCase — returns payment methods for a company.
 
 Access rules:
-  - Global admin (*:*): can list for any company; however still returns 404
+  - Platform admin (*:*): can list for any company; however still returns 404
     if the company does not exist (no info leak even for admins).
   - Company member (non-admin): must have a user_company_access row for
     company_id else 404 (hide existence per red-team spec).
-  - ``include_inactive=True`` is admin-only (soft-deleted rows for the
-    management UI that shows the full history).
+  - ``include_inactive=True`` requires platform admin OR company admin of
+    company_id (soft-deleted rows for the management UI that shows the full
+    history); plain members never see inactive rows.
 """
 
 from __future__ import annotations
@@ -19,8 +20,6 @@ from app.application.payment_methods.ports import (
     IUserCompanyAccessRepository,
     RoleCheckerPort,
 )
-
-_ADMIN_PERMISSION = "*:*"
 
 
 class ListPaymentMethodsUseCase:
@@ -54,7 +53,7 @@ class ListPaymentMethodsUseCase:
     ) -> list[PaymentMethodResponse]:
         from app.domain.payment_methods.exceptions import PaymentMethodNotFoundError
 
-        is_admin = self._role_checker.has_permission(requester_id, _ADMIN_PERMISSION)
+        is_platform_admin = self._role_checker.is_platform_admin(requester_id)
 
         # Guard 1: company must exist — even admins get 404 for non-existent companies
         # (no info leak: attacker cannot distinguish "company exists but no access"
@@ -63,14 +62,16 @@ class ListPaymentMethodsUseCase:
         if company is None:
             raise PaymentMethodNotFoundError(company_id)
 
-        # Guard 2: non-admin must have a user_company_access row for this company.
-        if not is_admin:
+        # Guard 2: non-platform-admin must have a user_company_access row for this company.
+        if not is_platform_admin:
             access = self._access_repo.find(requester_id, company_id)
             if access is None:
                 raise PaymentMethodNotFoundError(company_id)
 
-        # Inactive rows are admin-only; non-admins always get active-only list.
-        effective_include_inactive = include_inactive and is_admin
+        # Inactive rows are admin-only (platform or company admin of this company);
+        # plain members always get active-only list.
+        is_company_admin = self._role_checker.is_company_admin(requester_id, company_id)
+        effective_include_inactive = include_inactive and (is_platform_admin or is_company_admin)
 
         pairs = self._repo.find_all_by_company_with_usage_count(company_id, include_inactive=effective_include_inactive)
 

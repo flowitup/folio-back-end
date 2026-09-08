@@ -28,17 +28,15 @@ def _validate_label(label: str) -> str:
     return stripped
 
 
-_ADMIN_PERMISSION = "*:*"
-
-
 class UpdatePaymentMethodUseCase:
-    """Partially update a payment method (admin only).
+    """Partially update a payment method (company or platform admin).
 
     ``label`` and ``is_active`` may be supplied independently or together.
     Only supplied (non-None) fields are applied; all others carry over.
 
     Raises:
-        ForbiddenCompanyError: Caller does not hold admin permission.
+        ForbiddenCompanyError: Caller is neither a platform admin nor an
+            admin of this company.
         PaymentMethodNotFoundError: No method exists for the given ID.
         PaymentMethodAlreadyExistsError: The new label collides (case-insensitive)
             with an existing active method in the same company.
@@ -63,9 +61,11 @@ class UpdatePaymentMethodUseCase:
     ) -> PaymentMethodResponse:
         from app.domain.companies.exceptions import ForbiddenCompanyError
 
-        # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.requester_id, _ADMIN_PERMISSION)
-        if not is_admin:
+        # 1. Company-admin guard (platform '*:*' OR admin of this company)
+        is_authorized = self._role_checker.is_platform_admin(inp.requester_id) or self._role_checker.is_company_admin(
+            inp.requester_id, inp.company_id
+        )
+        if not is_authorized:
             raise ForbiddenCompanyError(inp.requester_id, inp.payment_method_id)
 
         # 2. Load entity with lock (low-contention admin write, but keeps snapshot safe)
