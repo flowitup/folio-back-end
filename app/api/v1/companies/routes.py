@@ -777,7 +777,29 @@ def list_attached_users(company_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
-    return jsonify({"items": [dataclasses.asdict(r) for r in result.items], "total": result.total})
+    items = [dataclasses.asdict(r) for r in result.items]
+    _attach_user_identity(items)
+    return jsonify({"items": items, "total": result.total})
+
+
+def _attach_user_identity(items: list[dict]) -> None:
+    """Add `email` / `display_name` / `phone` to attached-user rows (one batch query).
+
+    The use case returns access rows only (user_id, role, …); clients render the
+    member list and need a human label without a second round-trip per row.
+    """
+    from app import db
+    from app.infrastructure.database.models import UserModel
+
+    ids = [row["user_id"] for row in items]
+    if not ids:
+        return
+    users = {u.id: u for u in db.session.query(UserModel).filter(UserModel.id.in_(ids)).all()}
+    for row in items:
+        user = users.get(row["user_id"])
+        row["email"] = user.email if user else None
+        row["display_name"] = (user.display_name if user else None) or (user.email.split("@", 1)[0] if user else None)
+        row["phone"] = user.phone if user else None
 
 
 # ---------------------------------------------------------------------------
