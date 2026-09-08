@@ -203,46 +203,6 @@ def has_permission_anywhere(
     return False
 
 
-def denied_permissions(
-    reader: "AuthzReaderPort",
-    user_id: UUID,
-    *,
-    project_id: "UUID | None" = None,
-    company_id: "UUID | None" = None,
-    is_platform_admin: bool = False,
-) -> "frozenset[str]":
-    """Return the caller's explicit D8 deny rows for this project/company scope.
-
-    Callers that maintain their OWN permission union outside this module
-    (e.g. `app.api.v1.projects.decorators._effective_permissions`, which
-    unions a legacy JWT-claim permission set with the resolver's output) must
-    subtract this result from that union — otherwise an admin-managed deny
-    row can never override a permission a legacy global role happens to also
-    grant, which defeats the point of D8 (deny always wins).
-
-    `effective_permissions` already applies deny rows to its OWN grant/base
-    union internally; this function exists only for a caller that needs the
-    deny set in isolation, and mirrors that logic exactly (never removes
-    `NON_DENIABLE` permissions, always empty for a platform `*:*` holder).
-
-    Returns an empty set whenever there is nothing to deny against: platform
-    admin, no resolvable company, or no company role for the caller there.
-    """
-    if is_platform_admin:
-        return frozenset()
-
-    resolved_company_id = _resolve_company_id(reader, project_id, company_id)
-    if resolved_company_id is None:
-        return frozenset()
-
-    role = reader.company_role_for(user_id, resolved_company_id)
-    if role is None:
-        return frozenset()
-
-    grant_rows = reader.grants_for(user_id, resolved_company_id, project_id)
-    return frozenset({perm for perm, effect in grant_rows if effect == "deny"} - NON_DENIABLE)
-
-
 def has_permission(
     reader: "AuthzReaderPort",
     user_id: UUID,

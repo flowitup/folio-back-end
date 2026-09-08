@@ -140,7 +140,10 @@ def _cleanup(conn, ids: dict) -> None:
 def test_migration_9a4c1e7b2d05_round_trip(alembic_cfg, pg_engine, migration_app):
     from alembic import command
 
+    # Reach the pre-migration revision from either side: the database may be
+    # fresh (below it) or already at head (another migration test ran first).
     _run(migration_app, command.upgrade, alembic_cfg, _PREVIOUS)
+    _run(migration_app, command.downgrade, alembic_cfg, _PREVIOUS)
 
     with pg_engine.connect() as conn:
         assert not _column_exists(conn, "users", "is_platform_ops")

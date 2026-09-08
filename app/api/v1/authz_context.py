@@ -40,10 +40,9 @@ from uuid import UUID
 
 import flask
 
-from app.domain.authz.resolver import denied_permissions, effective_permissions
+from app.domain.authz.resolver import effective_permissions
 
 _MEMO_ATTR = "_authz_resolver_memo"
-_DENY_MEMO_ATTR = "_authz_resolver_deny_memo"
 _READER_CACHE_ATTR = "_authz_reader_cache"
 
 
@@ -67,7 +66,7 @@ def clear_request_memo() -> None:
     """Drop every per-request authz cache. Call once at the start of each request."""
     if not flask.has_app_context():
         return
-    for attr in (_MEMO_ATTR, _DENY_MEMO_ATTR, _READER_CACHE_ATTR):
+    for attr in (_MEMO_ATTR, _READER_CACHE_ATTR):
         if hasattr(flask.g, attr):
             delattr(flask.g, attr)
 
@@ -102,50 +101,6 @@ def resolve_for_request(
         result: "frozenset[str]" = frozenset({"*:*"}) if is_platform_admin else frozenset()
     else:
         result = effective_permissions(
-            reader,
-            user_id,
-            project_id=project_id,
-            company_id=company_id,
-            is_platform_admin=is_platform_admin,
-        )
-    if memo is not None:
-        memo[key] = result
-    return result
-
-
-def resolve_denied_for_request(
-    user_id: UUID,
-    *,
-    project_id: "UUID | None" = None,
-    company_id: "UUID | None" = None,
-    is_platform_admin: bool = False,
-) -> "frozenset[str]":
-    """Return the resolver's D8 deny set for this request, memoized.
-
-    Companion to `resolve_for_request` — a caller that unions its own
-    permission set with the resolver's ALLOWED output (e.g.
-    `app.api.v1.projects.decorators._effective_permissions`) needs the DENY
-    set too, so an admin-managed deny row can override a permission a legacy
-    global role also happens to grant (H3: deny must win over the legacy
-    union). Same memoization/degradation behavior as `resolve_for_request`.
-    """
-    key = (user_id, project_id, company_id, is_platform_admin)
-    memo = None
-    if flask.has_app_context():
-        memo = getattr(flask.g, _DENY_MEMO_ATTR, None)
-        if memo is None:
-            memo = {}
-            setattr(flask.g, _DENY_MEMO_ATTR, memo)
-        if key in memo:
-            return memo[key]
-
-    from wiring import get_container
-
-    reader = getattr(get_container(), "authz_reader", None)
-    if reader is None:
-        result: "frozenset[str]" = frozenset()
-    else:
-        result = denied_permissions(
             reader,
             user_id,
             project_id=project_id,

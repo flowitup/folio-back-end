@@ -289,3 +289,226 @@ def test_company_admin_mutates_without_an_assignment(monkeypatch):
     project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
     assert dec.can_read_project(project, user_id) is True
     assert dec.can_mutate_project(project, user_id, "project:delete") is True
+
+
+# ---------------------------------------------------------------------------
+# Access decorators: id validation, 404s, and the company-admin read fallback
+# ---------------------------------------------------------------------------
+
+
+def _wire_project(monkeypatch, reader, user_id, project, **kwargs):
+    """Like `_wire`, but with a project repository that returns `project`."""
+    import wiring
+
+    container = SimpleNamespace(
+        authz_reader=reader,
+        project_repository=SimpleNamespace(find_by_id=lambda pid: project),
+        invoice_repository=SimpleNamespace(find_by_id=lambda iid: kwargs.get("invoice")),
+        task_repository=SimpleNamespace(find_by_id=lambda tid: kwargs.get("task")),
+        invoice_attachment_repository=SimpleNamespace(find_by_id=lambda aid: kwargs.get("attachment")),
+        user_company_access_repo=None,
+    )
+    monkeypatch.setattr(wiring, "get_container", lambda: container)
+    monkeypatch.setattr(dec, "get_jwt_identity", lambda: str(user_id))
+    import app.api.v1.ops_context as ops_context
+
+    monkeypatch.setattr(ops_context, "get_jwt_identity", lambda: str(user_id))
+
+
+def _view(decorator):
+    @decorator
+    def view(**kwargs):
+        return "ok"
+
+    return view
+
+
+def test_resource_wildcard_matches():
+    assert dec._has_permission(["project:*"], "project:read") is True
+    assert dec._has_permission(["labor:*"], "project:read") is False
+
+
+def test_resolve_project_id_rejects_a_malformed_id(monkeypatch):
+    reader, user_id, _pid = _ctx()
+    _wire(monkeypatch, reader, user_id)
+    assert dec._resolve_project_id({"project_id": "not-a-uuid"}) is None
+    assert dec._resolve_project_id({}) is None
+
+
+def test_resolve_project_id_through_a_missing_entity(monkeypatch):
+    reader, user_id, _pid = _ctx()
+    _wire(monkeypatch, reader, user_id)  # every repo returns None
+    assert dec._resolve_project_id({"invoice_id": str(uuid4())}) is None
+    assert dec._resolve_project_id({"task_id": str(uuid4())}) is None
+    assert dec._resolve_project_id({"attachment_id": str(uuid4())}) is None
+    assert dec._resolve_project_id({"attachment_id": "not-a-uuid"}) is None
+
+
+def test_require_project_access_validates_the_id(monkeypatch, app_ctx):
+    reader, user_id, project_id = _ctx()
+    _wire_project(monkeypatch, reader, user_id, SimpleNamespace(id=project_id, owner_id=user_id, user_ids=[]))
+    view = _view(dec.require_project_access())
+
+    _body, status = view()
+    assert status == 403  # missing project id
+    _body, status = view(project_id="not-a-uuid")
+    assert status == 403
+
+
+def test_require_project_access_404s_and_403s(monkeypatch, app_ctx):
+    reader, user_id, project_id = _ctx()
+    _wire_project(monkeypatch, reader, user_id, None)
+    _body, status = _view(dec.require_project_access())(project_id=str(project_id))
+    assert status == 404
+
+    project = SimpleNamespace(id=project_id, owner_id=user_id, user_ids=[])
+    reader, user_id, project_id = _ctx(role="member")
+    project = SimpleNamespace(id=project_id, owner_id=user_id, user_ids=[])
+    _wire_project(monkeypatch, reader, user_id, project)
+    assert _view(dec.require_project_access())(project_id=str(project_id)) == "ok"
+    _body, status = _view(dec.require_project_access(write=True))(project_id=str(project_id))
+    assert status == 403
+
+
+def test_require_invoice_access_paths(monkeypatch, app_ctx):
+    reader, user_id, project_id = _ctx()
+    project = SimpleNamespace(id=project_id, owner_id=user_id, user_ids=[])
+    invoice = SimpleNamespace(project_id=project_id)
+
+    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice)
+    assert _view(dec.require_invoice_access())(invoice_id=str(uuid4())) == "ok"
+    assert _view(dec.require_invoice_access(write=True))(invoice_id=str(uuid4())) == "ok"
+
+    _body, status = _view(dec.require_invoice_access())()
+    assert status == 403  # missing invoice id
+    _body, status = _view(dec.require_invoice_access())(invoice_id="not-a-uuid")
+    assert status == 403
+
+    _wire_project(monkeypatch, reader, user_id, project, invoice=None)
+    _body, status = _view(dec.require_invoice_access())(invoice_id=str(uuid4()))
+    assert status == 404
+
+    _wire_project(monkeypatch, reader, user_id, None, invoice=invoice)
+    _body, status = _view(dec.require_invoice_access())(invoice_id=str(uuid4()))
+    assert status == 404
+
+
+def test_require_task_access_paths(monkeypatch, app_ctx):
+    reader, user_id, project_id = _ctx()
+    project = SimpleNamespace(id=project_id, owner_id=user_id, user_ids=[])
+    task = SimpleNamespace(project_id=project_id)
+
+    _wire_project(monkeypatch, reader, user_id, project, task=task)
+    assert _view(dec.require_task_access())(task_id=str(uuid4())) == "ok"
+    assert _view(dec.require_task_access(write=True))(task_id=str(uuid4())) == "ok"
+
+    _body, status = _view(dec.require_task_access())()
+    assert status == 403
+    _body, status = _view(dec.require_task_access())(task_id="not-a-uuid")
+    assert status == 403
+
+    _wire_project(monkeypatch, reader, user_id, project, task=None)
+    _body, status = _view(dec.require_task_access())(task_id=str(uuid4()))
+    assert status == 404
+
+    _wire_project(monkeypatch, reader, user_id, None, task=task)
+    _body, status = _view(dec.require_task_access())(task_id=str(uuid4()))
+    assert status == 404
+
+    reader, user_id, project_id = _ctx(role="member")
+    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
+    _wire_project(monkeypatch, reader, user_id, project, task=SimpleNamespace(project_id=project_id))
+    _body, status = _view(dec.require_task_access(write=True))(task_id=str(uuid4()))
+    assert status == 403
+
+
+def test_require_attachment_access_paths(monkeypatch, app_ctx):
+    reader, user_id, project_id = _ctx()
+    project = SimpleNamespace(id=project_id, owner_id=user_id, user_ids=[])
+    invoice = SimpleNamespace(project_id=project_id)
+    attachment = SimpleNamespace(invoice_id=uuid4())
+
+    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice, attachment=attachment)
+    assert _view(dec.require_attachment_access())(attachment_id=str(uuid4())) == "ok"
+    assert _view(dec.require_attachment_access(write=True))(attachment_id=str(uuid4())) == "ok"
+
+    _body, status = _view(dec.require_attachment_access())()
+    assert status == 403
+    _body, status = _view(dec.require_attachment_access())(attachment_id="not-a-uuid")
+    assert status == 403
+
+    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice, attachment=None)
+    _body, status = _view(dec.require_attachment_access())(attachment_id=str(uuid4()))
+    assert status == 404
+
+    _wire_project(monkeypatch, reader, user_id, project, invoice=None, attachment=attachment)
+    _body, status = _view(dec.require_attachment_access())(attachment_id=str(uuid4()))
+    assert status == 404
+
+    _wire_project(monkeypatch, reader, user_id, None, invoice=invoice, attachment=attachment)
+    _body, status = _view(dec.require_attachment_access())(attachment_id=str(uuid4()))
+    assert status == 404
+
+
+def test_company_admin_read_fallback_without_a_company_is_false(monkeypatch, app_ctx):
+    """`allow_company_admin` degrades to False when the project has no company."""
+    reader, user_id, project_id = _ctx(role="member", assigned=False)
+    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
+    invoice = SimpleNamespace(project_id=project_id)
+    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice)
+    monkeypatch.setattr(dec, "_get_project_company_id_from_orm", lambda pid: None)
+
+    _body, status = _view(dec.require_invoice_access(allow_company_admin=True))(invoice_id=str(uuid4()))
+    assert status == 403
+
+
+def test_company_admin_read_fallback_uses_the_access_repo(monkeypatch, app_ctx):
+    """`allow_company_admin` lets a company admin read an attachment's invoice."""
+    reader, user_id, project_id = _ctx(role="member", assigned=False)
+    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
+    invoice = SimpleNamespace(project_id=project_id)
+    company_id = uuid4()
+
+    import wiring
+
+    container = SimpleNamespace(
+        authz_reader=reader,
+        project_repository=SimpleNamespace(find_by_id=lambda pid: project),
+        invoice_repository=SimpleNamespace(find_by_id=lambda iid: invoice),
+        task_repository=SimpleNamespace(find_by_id=lambda tid: None),
+        invoice_attachment_repository=SimpleNamespace(find_by_id=lambda aid: None),
+        user_company_access_repo=SimpleNamespace(
+            list_for_user=lambda uid: [SimpleNamespace(company_id=company_id, role="admin")]
+        ),
+    )
+    monkeypatch.setattr(wiring, "get_container", lambda: container)
+    monkeypatch.setattr(dec, "get_jwt_identity", lambda: str(user_id))
+    import app.api.v1.ops_context as ops_context
+
+    monkeypatch.setattr(ops_context, "get_jwt_identity", lambda: str(user_id))
+    monkeypatch.setattr(dec, "_get_project_company_id_from_orm", lambda pid: company_id)
+
+    assert _view(dec.require_invoice_access(allow_company_admin=True))(invoice_id=str(uuid4())) == "ok"
+    assert dec._is_company_admin_for_project(project, user_id) is True
+
+    # No access repo wired → the fallback answers False rather than raising.
+    container.user_company_access_repo = None
+    assert dec._is_company_admin_for_project(project, user_id) is False
+
+
+def test_attachment_company_admin_read_fallback(monkeypatch, app_ctx):
+    """Same fallback on the attachment route: admin reads, non-admin is refused."""
+    reader, user_id, project_id = _ctx(role="member", assigned=False)
+    project = SimpleNamespace(id=project_id, owner_id=uuid4(), user_ids=[])
+    invoice = SimpleNamespace(project_id=project_id)
+    attachment = SimpleNamespace(invoice_id=uuid4())
+    company_id = uuid4()
+
+    _wire_project(monkeypatch, reader, user_id, project, invoice=invoice, attachment=attachment)
+    monkeypatch.setattr(dec, "_get_project_company_id_from_orm", lambda pid: company_id)
+    monkeypatch.setattr(dec, "_is_company_admin_for_project", lambda p, uid: True)
+    assert _view(dec.require_attachment_access(allow_company_admin=True))(attachment_id=str(uuid4())) == "ok"
+
+    monkeypatch.setattr(dec, "_is_company_admin_for_project", lambda p, uid: False)
+    _body, status = _view(dec.require_attachment_access(allow_company_admin=True))(attachment_id=str(uuid4()))
+    assert status == 403
