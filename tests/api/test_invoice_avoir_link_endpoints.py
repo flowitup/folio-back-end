@@ -21,6 +21,7 @@ import pytest
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +130,9 @@ def avoir_app():
         test_app._test_project_id = str(project_1.id)
         test_app._test_project_2_id = str(project_2.id)
         test_app._test_admin_user_id = str(admin_user.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

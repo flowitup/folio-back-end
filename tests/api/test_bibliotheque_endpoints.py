@@ -12,7 +12,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.infrastructure.database.models import PermissionModel, RoleModel, UserModel
+from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
+from app.infrastructure.database.models.associations import user_projects
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
@@ -136,15 +137,27 @@ def bibliotheque_app():
         db.session.add(company)
         db.session.flush()
 
-        # Grant members access to company
-        for user in [admin_user, member_user, manager_user]:
-            access = UserCompanyAccessModel(
-                user_id=user.id,
-                company_id=company.id,
-                is_primary=True,
-                attached_at=now,
+        # Company roles drive `bibliotheque:manage`: admin holds it company-wide,
+        # a manager on the projects they are assigned to, a member never.
+        for user, company_role in ((admin_user, "admin"), (manager_user, "manager"), (member_user, "member")):
+            db.session.add(
+                UserCompanyAccessModel(
+                    user_id=user.id,
+                    company_id=company.id,
+                    role=company_role,
+                    is_primary=True,
+                    attached_at=now,
+                )
             )
-            db.session.add(access)
+
+        project = ProjectModel(id=uuid4(), name="Bib Project", owner_id=admin_user.id, company_id=company.id)
+        db.session.add(project)
+        db.session.flush()
+        db.session.execute(
+            user_projects.insert().values(
+                user_id=manager_user.id, project_id=project.id, role_id=manager_role.id, assigned_at=now
+            )
+        )
 
         db.session.commit()
 

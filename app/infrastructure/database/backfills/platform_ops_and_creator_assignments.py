@@ -113,8 +113,9 @@ _PERSON_BY_USER_SQL = text("SELECT id FROM persons WHERE CAST(user_id AS TEXT) =
 
 _INSERT_PERSON_SQL = text(
     """
-    INSERT INTO persons (id, name, normalized_name, phone, phone_normalized, user_id, created_by_user_id, created_at)
-    VALUES (:id, :name, :normalized_name, :phone, :phone_normalized, :user_id, :user_id, :created_at)
+    INSERT INTO persons
+      (id, name, normalized_name, phone, phone_normalized, user_id, created_by_user_id, created_at, updated_at)
+    VALUES (:id, :name, :normalized_name, :phone, :phone_normalized, :user_id, :user_id, :created_at, :created_at)
     """
 )
 

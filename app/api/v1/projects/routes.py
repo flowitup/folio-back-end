@@ -78,15 +78,14 @@ def _spend_fields(rollup: ProjectSpent) -> dict:
 @projects_bp.route("", methods=["GET"])
 @openapi_doc(summary="List projects for current user", tags=["projects"])
 @jwt_required()
-@require_permission("project:read")
 def list_projects():
     """List projects visible to current user.
 
-    Visible = projects of companies where the caller is company admin ∪
-    projects the caller owns or is a member of ∪ every project when the
-    caller holds the legacy global `*:*` claim. A raw `project:create` JWT
-    claim no longer implies "see every project" (the tenancy hole this
-    phase closes) — company admin-ship is resolved per company, never global.
+    Visible = every project of a company the caller administers ∪ the projects
+    they are assigned to ∪ everything for platform ops. The list is its own
+    authorization: it is scoped per caller, so it carries no
+    `require_permission` gate (there is no project to resolve one against) and
+    answers an empty list to a caller who can see nothing.
     """
     container = get_container()
     user_id = get_jwt_identity()

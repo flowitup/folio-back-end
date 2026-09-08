@@ -28,6 +28,7 @@ from app.infrastructure.database.models import (
     RoleModel,
     UserModel,
 )
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +158,9 @@ def rate_app():
         test_app._test_reader_password = "Reader1234!"
         test_app._test_project_id = str(project.id)
         test_app._test_admin_user_id = str(admin_user.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

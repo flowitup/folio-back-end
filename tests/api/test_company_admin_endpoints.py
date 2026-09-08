@@ -77,6 +77,8 @@ def cadm_app():
             return u
 
         platform_admin = _user("cadm_platform_admin@test.com", platform_admin_role)
+        # Platform access is the ops flag now, not the legacy `*:*` role.
+        platform_admin.is_platform_ops = True
         company_a_admin = _user("cadm_company_a_admin@test.com", no_perm_role)
         company_b_admin = _user("cadm_company_b_admin@test.com", no_perm_role)
         plain_member = _user("cadm_plain_member@test.com", no_perm_role)

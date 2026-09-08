@@ -102,7 +102,14 @@ def _make_platform_admin(app, email: str) -> str:
         )
         role = RoleModel(name=f"cp_platform_admin_{uuid4().hex[:8]}", description="Platform admin")
         role.permissions.append(star_perm)
-        user = UserModel(id=uuid4(), email=email, password_hash=Argon2PasswordHasher().hash(PASSWORD), is_active=True)
+        user = UserModel(
+            id=uuid4(),
+            email=email,
+            password_hash=Argon2PasswordHasher().hash(PASSWORD),
+            is_active=True,
+            # Platform access is the ops flag now, not the legacy `*:*` role.
+            is_platform_ops=True,
+        )
         user.roles.append(role)
         db.session.add_all([star_perm, role, user])
         db.session.commit()

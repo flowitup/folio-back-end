@@ -16,6 +16,7 @@ import pytest
 
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
+from tests.company_tenancy_helper import seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 
@@ -78,6 +79,9 @@ def cr_app():
         db.session.add_all([own, other])
         db.session.commit()
         test_app.config["_ids"] = {"project": str(project.id), "own": str(own.id), "other": str(other.id)}
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
+
         yield test_app
         db.session.remove()
         db.drop_all()

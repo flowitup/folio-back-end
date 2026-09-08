@@ -27,6 +27,7 @@ from app.infrastructure.database.models import (
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,9 @@ def export_app():
         test_app._test_noperm_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
         test_app._test_nonascii_project_id = str(nonascii_project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 
@@ -664,6 +668,9 @@ def worker_export_app():
         test_app._test_other_project_worker_id = str(other_project_worker.id)
         test_app._test_inactive_worker_id = str(inactive_worker.id)
 
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
+
         yield test_app
 
         db.session.remove()
@@ -1086,6 +1093,9 @@ def cjk_worker_export_app():
         test_app._test_worker_id = str(cjk_worker.id)
         test_app._test_admin_email = "cjkadmin@test.com"
         test_app._test_admin_password = "Admin1234!"
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

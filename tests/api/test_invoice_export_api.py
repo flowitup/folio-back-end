@@ -30,6 +30,7 @@ from app.infrastructure.database.models import (
     RoleModel,
     UserModel,
 )
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,9 @@ def inv_export_app():
         test_app._test_admin_email = "invexportadmin@test.com"
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 
@@ -213,10 +217,13 @@ def test_from_after_to_returns_422(inv_export_client, inv_export_app, admin_toke
     assert resp.get_json()["error"] == "validation_error"
 
 
-def test_unknown_project_returns_404(inv_export_client, inv_export_app, admin_token):
-    """Non-existent project UUID → 404.
+def test_unknown_project_returns_403(inv_export_client, inv_export_app, admin_token):
+    """Non-existent project UUID → 403.
 
-    @require_project_access() intercepts before route body and returns {"error": "NotFound"}.
+    Permissions are resolved from the project's company; an id that resolves to
+    no company resolves to no permission, so `@require_permission` answers
+    before `@require_project_access()` can report 404. Nobody can learn from a
+    403 whether the id exists.
     """
     url = _export_url(str(uuid4()))
     resp = inv_export_client.get(
@@ -224,9 +231,8 @@ def test_unknown_project_returns_404(inv_export_client, inv_export_app, admin_to
         query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
         headers=_auth(admin_token),
     )
-    assert resp.status_code == 404
-    data = resp.get_json()
-    assert data["error"] in ("NotFound", "project_not_found")
+    assert resp.status_code == 403
+    assert resp.get_json()["error"] == "Forbidden"
 
 
 def test_xlsx_smoke(inv_export_client, inv_export_app, admin_token):

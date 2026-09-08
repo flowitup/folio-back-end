@@ -1082,6 +1082,26 @@ def configure_container(
     container.create_chiffrage_store_usecase = CreateStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.update_chiffrage_store_usecase = UpdateStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_store_usecase = DeleteStoreUseCase(_chiffrage_repo, _chiffrage_session)
+    # ---------------------------------------------------------------------
+    # Permission resolver read port — every authorization decision in the app
+    # goes through it, so it is wired here (not only in app/__init__.py):
+    # callers that rebuild the container after create_app() would otherwise be
+    # left without a reader, and every check fails closed.
+    # ---------------------------------------------------------------------
+    from app import db as _authz_db
+    from app.api.v1.authz_context import get_reader_cache as _get_reader_cache
+    from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
+        SqlAlchemyAuthzReader as _SqlAlchemyAuthzReader,
+    )
+
+    container.authz_reader = _SqlAlchemyAuthzReader(_authz_db.session, cache_provider=_get_reader_cache)
+    if container.authorization_service is not None:
+        container.authorization_service.set_authz_reader(container.authz_reader)
+    if container.create_invitation_usecase is not None and hasattr(
+        container.create_invitation_usecase, "set_authz_reader"
+    ):
+        container.create_invitation_usecase.set_authz_reader(container.authz_reader)
+
     container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_unit_usecase = DeleteUnitUseCase(_chiffrage_repo, _chiffrage_session)

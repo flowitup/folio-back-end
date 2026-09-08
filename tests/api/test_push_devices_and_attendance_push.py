@@ -13,6 +13,7 @@ import pytest
 
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
+from tests.company_tenancy_helper import seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 OWNER_TOKEN = "ExponentPushToken[owner-device-000000]"
@@ -87,6 +88,9 @@ def push_app():
             "chef": str(chef.id),
         }
         test_app.config["_push"] = recorder
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
+
         yield test_app
         db.session.remove()
         db.drop_all()

@@ -11,6 +11,8 @@ import uuid
 
 import pytest
 
+from tests.company_tenancy_helper import seed_company_tenancy
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -68,6 +70,11 @@ def chiffrage_world(invitation_app):
         other = ProjectModel(name="Chiffrage Other Project", owner_id=writer.id)
         db.session.add_all([project, other])
         db.session.commit()
+
+        # The writer owns both projects (→ company manager, assigned) and the
+        # reader is a plain member of the first one: capability now comes from
+        # those company roles, not from the legacy roles above.
+        seed_company_tenancy(invitation_app)
 
         return {
             "project_id": str(project.id),

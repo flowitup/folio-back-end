@@ -813,6 +813,14 @@ def invitation_app():
             _inv_repo = _InvRepo(db.session)
             _c.invoice_repository = _inv_repo
 
+        # Read-side invoice use-cases (configure_container() only wires them when
+        # it is handed an invoice repository, which this fixture builds later).
+        from app.application.invoice.get_invoice import GetInvoiceUseCase as _GetInvoiceUC
+        from app.application.invoice.list_invoices import ListInvoicesUseCase as _ListInvoicesUC
+
+        _c.get_invoice_usecase = _GetInvoiceUC(_c.invoice_repository)
+        _c.list_invoices_usecase = _ListInvoicesUC(_c.invoice_repository)
+
         # Wire labor-payments-summary use-case (Labor Payments Hub).
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the invitation_app test fixture will drift from prod.

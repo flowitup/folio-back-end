@@ -26,6 +26,7 @@ import io
 from uuid import uuid4
 
 import pytest
+from tests.company_tenancy_helper import seed_company_tenancy
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -246,6 +247,9 @@ def doc_app():
         test_app._doc_superadmin_email = "doc_superadmin@test.com"
         test_app._doc_superadmin_password = "Superadmin1234!"
         test_app._doc_project_id = str(project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 
@@ -1010,6 +1014,9 @@ class TestCrossProjectDownloadAdversarial:
             test_app._xp_project_a_id = str(project_a.id)
             test_app._xp_project_b_id = str(project_b.id)
             test_app._xp_doc_storage = doc_storage
+
+            # Permissions come from the company role + project assignment (see the helper).
+            seed_company_tenancy(test_app)
 
             yield test_app
 
