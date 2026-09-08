@@ -452,6 +452,7 @@ def _configure_di_container() -> None:
 
     from app.application.push.chat_push_notifier import ChatPushNotifier
     from app.application.push.dispatcher import PushDispatcher
+    from app.application.push.billing_push_notifier import BillingPushNotifier
     from app.application.push.membership_push_notifier import MembershipPushNotifier
     from app.application.push.task_push_notifier import TaskPushNotifier
     from app.infrastructure.adapters.sqlalchemy_chat_push_marker import SQLAlchemyChatPushMarkerRepository
@@ -602,6 +603,11 @@ def _configure_di_container() -> None:
             dispatcher=_c.push_dispatcher,
             project_repo=_c.project_repository,
             company_repo=_company_repo,
+        )
+        _c.billing_push_notifier = BillingPushNotifier(
+            dispatcher=_c.push_dispatcher,
+            project_repo=_c.project_repository,
+            access_repo=_access_repo,
         )
 
     # Company-aware authz resolver read port (app/domain/authz/resolver.py).

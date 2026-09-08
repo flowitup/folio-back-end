@@ -23,20 +23,10 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
         "fr": ("Vous avez rejoint un chantier", "{name}"),
         "en": ("You were added to a project", "{name}"),
     },
-    "project_member_role_changed": {
-        "vi": ("Quyền của bạn đã thay đổi", "{name} · {role}"),
-        "fr": ("Votre rôle a changé", "{name} · {role}"),
-        "en": ("Your role changed", "{name} · {role}"),
-    },
     "project_member_removed": {
         "vi": ("Bạn đã rời khỏi công trình", "{name}"),
         "fr": ("Vous avez été retiré d'un chantier", "{name}"),
         "en": ("You were removed from a project", "{name}"),
-    },
-    "company_member_added": {
-        "vi": ("Bạn được thêm vào công ty", "{name}"),
-        "fr": ("Vous avez rejoint une entreprise", "{name}"),
-        "en": ("You were added to a company", "{name}"),
     },
     "company_member_role_changed": {
         "vi": ("Vai trò công ty đã thay đổi", "{name} · {role}"),
@@ -48,6 +38,11 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
         "fr": ("Vos permissions ont changé", "{name}"),
         "en": ("Your permissions changed", "{name}"),
     },
+    "invitation_accepted": {
+        "vi": ("Lời mời đã được chấp nhận", "{name}"),
+        "fr": ("Invitation acceptée", "{name}"),
+        "en": ("Invitation accepted", "{name}"),
+    },
     "company_member_removed": {
         "vi": ("Bạn đã rời khỏi công ty", "{name}"),
         "fr": ("Vous avez été retiré d'une entreprise", "{name}"),
@@ -55,7 +50,11 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
     },
 }
 
-_PROJECT_EVENTS = ("project_member_added", "project_member_role_changed", "project_member_removed")
+_PROJECT_EVENTS = (
+    "project_member_added",
+    "project_member_removed",
+    "invitation_accepted",
+)
 
 
 class NamedEntityReader(Protocol):
