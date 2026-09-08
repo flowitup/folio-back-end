@@ -46,7 +46,7 @@ def push_app():
         recorder = RecordingPushSender()
         c = get_container()
         c.push_sender = recorder
-        c.attendance_push_notifier._sender = recorder  # notifier was built with the log sender
+        c.attendance_push_notifier.sender = recorder  # notifier was built with the log sender
         hasher = Argon2PasswordHasher()
 
         def user(email):
@@ -213,3 +213,89 @@ def test_unregister_removes_the_device(client, ids, recorder, owner_h, linked_h)
     recorder.sent.clear()
     client.post(f"/api/v1/projects/{ids['project']}/labor-entries/{entry}/validate", headers=owner_h)
     assert recorder.sent == []
+
+
+# ---------------------------------------------------------------------------
+# Notification preferences — GET/PUT, and the mute actually suppressing a push
+# ---------------------------------------------------------------------------
+
+
+def _prefs(client, headers):
+    return client.get("/api/v1/notifications/preferences", headers=headers)
+
+
+def test_preferences_default_to_everything_on_without_a_stored_row(client, linked_h):
+    body = _prefs(client, linked_h).get_json()
+    assert body == {
+        "push_enabled": True,
+        "chat": True,
+        "attendance": True,
+        "tasks": True,
+        "membership": True,
+        "billing": True,
+    }
+
+
+def test_preferences_partial_update_keeps_untouched_categories(client, owner_h):
+    updated = client.put("/api/v1/notifications/preferences", json={"chat": False}, headers=owner_h).get_json()
+    assert updated["chat"] is False
+    assert updated["attendance"] is True and updated["push_enabled"] is True
+    # Persisted, and a second partial update does not resurrect the first one.
+    again = client.put("/api/v1/notifications/preferences", json={"tasks": False}, headers=owner_h).get_json()
+    assert again["chat"] is False and again["tasks"] is False
+    # Restore so later tests in this module see the default.
+    client.put("/api/v1/notifications/preferences", json={"chat": True, "tasks": True}, headers=owner_h)
+
+
+def test_preferences_reject_an_unknown_category(client, owner_h):
+    r = client.put("/api/v1/notifications/preferences", json={"chatt": False}, headers=owner_h)
+    assert r.status_code == 422
+
+
+def test_preferences_require_auth(client):
+    assert client.get("/api/v1/notifications/preferences").status_code == 401
+
+
+def test_muting_attendance_suppresses_the_worker_push(client, ids, recorder, owner_h, linked_h):
+    """The worker mutes attendance, so validating their day must reach nobody."""
+    _register(client, linked_h, WORKER_TOKEN)
+    day = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+    entry = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries/self",
+        json={"date": day, "shift_type": "full"},
+        headers=linked_h,
+    ).get_json()["id"]
+    client.put("/api/v1/notifications/preferences", json={"attendance": False}, headers=linked_h)
+    try:
+        recorder.sent.clear()
+        assert (
+            client.post(
+                f"/api/v1/projects/{ids['project']}/labor-entries/{entry}/validate", headers=owner_h
+            ).status_code
+            == 200
+        )
+        assert [m.token for m in recorder.sent] == []
+    finally:
+        client.put("/api/v1/notifications/preferences", json={"attendance": True}, headers=linked_h)
+
+
+def test_global_switch_mutes_every_category(client, linked_h, push_app):
+    """push_enabled=false must mute categories the user never touched individually."""
+    from wiring import get_container
+
+    from app import db
+
+    with push_app.app_context():
+        linked_id = db.session.query(UserModel).filter_by(email="linked@push-test.com").one().id
+
+    client.put("/api/v1/notifications/preferences", json={"push_enabled": False}, headers=linked_h)
+    try:
+        with push_app.app_context():
+            repo = get_container().notification_preference_repository
+            for category in ("chat", "attendance", "tasks", "membership", "billing"):
+                assert repo.muted_user_ids([linked_id], category) == {linked_id}
+    finally:
+        client.put("/api/v1/notifications/preferences", json={"push_enabled": True}, headers=linked_h)
+        with push_app.app_context():
+            repo = get_container().notification_preference_repository
+            assert repo.muted_user_ids([linked_id], "chat") == set()

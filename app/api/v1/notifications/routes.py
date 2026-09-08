@@ -1,4 +1,4 @@
-"""Notifications API routes — user-scoped due-reminder endpoints."""
+"""Notifications API routes — user-scoped due reminders and push preferences."""
 
 from __future__ import annotations
 
@@ -6,11 +6,17 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from flask import Response, jsonify
+from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.openapi import openapi_doc
 from app.api.v1.notifications import notifications_bp
+from app.api.v1.notifications.schemas import (
+    NotificationPreferencesResponse,
+    UpdateNotificationPreferencesRequest,
+)
 from app.application.notes.exceptions import NoteNotFoundError, NotProjectMemberError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -149,3 +155,51 @@ def dismiss_notification(note_id: UUID) -> Any:
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# GET / PUT /api/v1/notifications/preferences
+# ---------------------------------------------------------------------------
+
+
+def _preferences_repo() -> Any:
+    repo = get_container().notification_preference_repository
+    if repo is None:
+        raise RuntimeError("notification_preference_repository not wired in container")
+    return repo
+
+
+@notifications_bp.get("/notifications/preferences")
+@openapi_doc(
+    summary="Read the caller's push notification preferences",
+    responses={200: NotificationPreferencesResponse},
+    tags=["notifications"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def get_notification_preferences() -> Any:
+    """All-on is the default, so a user who never changed anything still gets a full body."""
+    return jsonify(_preferences_repo().get(UUID(get_jwt_identity())))
+
+
+@notifications_bp.put("/notifications/preferences")
+@openapi_doc(
+    summary="Update the caller's push notification preferences (partial)",
+    request=UpdateNotificationPreferencesRequest,
+    responses={200: NotificationPreferencesResponse},
+    tags=["notifications"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def update_notification_preferences() -> Any:
+    """Partial update: omitted fields keep their value, unknown fields are a 422."""
+    try:
+        body = UpdateNotificationPreferencesRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        return _err(422, "ValidationError", exc.errors()[0].get("msg", "invalid body"))
+
+    changes = body.model_dump(exclude_none=True)
+    user_id = UUID(get_jwt_identity())
+    if not changes:
+        return jsonify(_preferences_repo().get(user_id))
+    return jsonify(_preferences_repo().update(user_id, changes))

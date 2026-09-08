@@ -445,9 +445,13 @@ def _configure_di_container() -> None:
     from app.application.push.attendance_push_notifier import AttendancePushNotifier
     from app.infrastructure.adapters.expo_push_sender import ExpoPushSender
     from app.infrastructure.adapters.logging_push_sender import LoggingPushSender
+    from app.infrastructure.adapters.sqlalchemy_notification_preference import (
+        SQLAlchemyNotificationPreferenceRepository,
+    )
     from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository
 
     _c.push_device_repository = SQLAlchemyPushDeviceRepository(db.session)
+    _c.notification_preference_repository = SQLAlchemyNotificationPreferenceRepository(db.session)
     _c.push_sender = (
         ExpoPushSender(_cfg.get("EXPO_ACCESS_TOKEN", ""))
         if _cfg.get("PUSH_PROVIDER") == "expo"
@@ -461,6 +465,7 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             locale=_cfg.get("PUSH_LOCALE", "vi"),
             run_async=not _cfg.get("TESTING", False),
+            preferences=_c.notification_preference_repository,
         )
     _c.login_otp_repository = _otp_repo
     if _c.user_repository is not None and _c.authorization_service is not None and _c.token_issuer is not None:
