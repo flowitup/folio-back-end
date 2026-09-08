@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from flask import jsonify
+from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.decorators import require_project_access
+from app.application.companies._helpers import ForbiddenCompanyError
+from app.application.companies.dtos import SetMemberRoleInput
 from app.application.projects.assignments import (
     AssignmentForbiddenError,
     AssignProjectMemberInput,
@@ -36,14 +38,24 @@ def _err(error: str, message: str, status: int):
 
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["PUT"])
 @openapi_doc(
-    summary="Assign a company member to a project (admin: anyone; manager: company members only)",
+    summary="Assign a company member to a project; a company admin may pass role=manager to promote the target",
     tags=["projects"],
 )
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_project_access(write=True, permission="project:manage_users")
 def assign_project_member(project_id: str, user_id: str):
-    """Assign a company member to this project (idempotent, no request body)."""
+    """Assign a company member to this project (idempotent).
+
+    Optional body `{"role": "member" | "manager"}`: `manager` asks to raise the
+    target's COMPANY role to manager (company admins only — the role lives on
+    the company, the assignment only says who works on this project); `member`
+    never demotes anyone. The response echoes the target's company role.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    wanted_role = body.get("role", "member")
+    if wanted_role not in ("member", "manager"):
+        return _err("ValidationError", "role must be 'member' or 'manager'", 400)
     try:
         target_uuid = UUID(user_id)
     except ValueError:
@@ -69,8 +81,37 @@ def assign_project_member(project_id: str, user_id: str):
 
     from app import db
 
+    company_role = _company_role_after_assignment(container, caller_id, UUID(project_id), target_uuid, wanted_role)
+    if company_role is None:
+        db.session.rollback()
+        return _err("Forbidden", "Only a company admin can assign as manager", 403)
+
     db.session.commit()
-    return jsonify({"project_id": project_id, "user_id": user_id}), 200
+    return jsonify({"project_id": project_id, "user_id": user_id, "role": company_role}), 200
+
+
+def _company_role_after_assignment(container, caller_id: UUID, project_id: UUID, target_id: UUID, wanted_role: str):
+    """Promote a company `member` to `manager` when asked; return the target's company role.
+
+    Returns None when the promotion was refused (caller is not a company admin).
+    """
+    from app import db
+    from app.infrastructure.database.models import ProjectModel
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+    project = db.session.get(ProjectModel, project_id)
+    access = db.session.get(UserCompanyAccessModel, (target_id, project.company_id))
+    current = access.role if access is not None else "member"
+    if wanted_role != "manager" or current != "member":
+        return current
+    try:
+        container.set_member_role_usecase.execute(
+            SetMemberRoleInput(caller_id=caller_id, company_id=project.company_id, user_id=target_id, role="manager"),
+            db.session,
+        )
+    except ForbiddenCompanyError:
+        return None
+    return "manager"
 
 
 @projects_bp.route("/<project_id>/assignments/<user_id>", methods=["DELETE"])

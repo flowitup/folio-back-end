@@ -229,3 +229,77 @@ class TestUnassign:
                 {"u": str(target_id), "p": str(project_id)},
             ).fetchone()
             assert row is None
+
+
+class TestAssignWithRole:
+    def _company_role(self, app, user_id, company_id):
+        from app import db
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        with app.app_context():
+            db.session.expire_all()
+            return db.session.get(UserCompanyAccessModel, (user_id, company_id)).role
+
+    def test_admin_assigning_as_manager_raises_the_company_role(self, assign_client, assign_app):
+        admin_id = _make_user(assign_app, "asg_admin_r1@test.com")
+        target_id = _make_user(assign_app, "asg_target_r1@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, target_id, company_id, "member")
+        token = _login(assign_client, "asg_admin_r1@test.com")
+
+        resp = assign_client.put(
+            f"/api/v1/projects/{project_id}/assignments/{target_id}",
+            json={"role": "manager"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["role"] == "manager"
+        assert self._company_role(assign_app, target_id, company_id) == "manager"
+
+    def test_role_member_never_demotes_and_is_echoed(self, assign_client, assign_app):
+        admin_id = _make_user(assign_app, "asg_admin_r2@test.com")
+        target_id = _make_user(assign_app, "asg_target_r2@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, target_id, company_id, "manager")
+        token = _login(assign_client, "asg_admin_r2@test.com")
+
+        resp = assign_client.put(
+            f"/api/v1/projects/{project_id}/assignments/{target_id}",
+            json={"role": "member"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["role"] == "manager"
+        assert self._company_role(assign_app, target_id, company_id) == "manager"
+
+    def test_manager_cannot_assign_as_manager(self, assign_client, assign_app):
+        admin_id = _make_user(assign_app, "asg_admin_r3@test.com")
+        manager_id = _make_user(assign_app, "asg_manager_r3@test.com")
+        target_id = _make_user(assign_app, "asg_target_r3@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, manager_id, company_id, "manager")
+        _attach(assign_app, target_id, company_id, "member")
+        admin_token = _login(assign_client, "asg_admin_r3@test.com")
+        assign_client.put(f"/api/v1/projects/{project_id}/assignments/{manager_id}", headers=_auth(admin_token))
+        token = _login(assign_client, "asg_manager_r3@test.com")
+
+        resp = assign_client.put(
+            f"/api/v1/projects/{project_id}/assignments/{target_id}",
+            json={"role": "manager"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 403
+        assert self._company_role(assign_app, target_id, company_id) == "member"
+
+    def test_invalid_role_is_400(self, assign_client, assign_app):
+        admin_id = _make_user(assign_app, "asg_admin_r4@test.com")
+        target_id = _make_user(assign_app, "asg_target_r4@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, target_id, company_id, "member")
+        token = _login(assign_client, "asg_admin_r4@test.com")
+        resp = assign_client.put(
+            f"/api/v1/projects/{project_id}/assignments/{target_id}",
+            json={"role": "owner"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 400
