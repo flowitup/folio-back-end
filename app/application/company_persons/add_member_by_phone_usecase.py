@@ -50,6 +50,25 @@ _PENDING_WINDOW_DAYS = 30
 _ASSIGNABLE_ROLES = (CompanyRole.MEMBER.value, CompanyRole.MANAGER.value)
 
 
+def _display_name_for(explicit_name, user, phone: str) -> str:
+    """Best human-readable name for a profile created from an existing account.
+
+    Order: the name typed by the admin → the account's display name → the
+    e-mail local part (skipped for the synthetic phone-sign-up mailbox) → the
+    phone number as a last resort.
+    """
+    if explicit_name and explicit_name.strip():
+        return explicit_name.strip()
+    display = getattr(user, "display_name", None)
+    if display and display.strip():
+        return display.strip()
+    email = getattr(user, "email", "") or ""
+    local = email.split("@", 1)[0]
+    if local and not local.startswith("phone-"):
+        return local
+    return phone
+
+
 class AddMemberByPhoneUseCase:
     def __init__(
         self,
@@ -101,8 +120,8 @@ class AddMemberByPhoneUseCase:
                 person = self._persons.create(
                     Person(
                         id=uuid4(),
-                        name=(inp.name or user.display_name or phone).strip(),
-                        normalized_name=Person.normalize(inp.name or user.display_name or phone),
+                        name=_display_name_for(inp.name, user, phone),
+                        normalized_name=Person.normalize(_display_name_for(inp.name, user, phone)),
                         created_by_user_id=inp.caller_id,
                         created_at=now,
                         phone=phone,

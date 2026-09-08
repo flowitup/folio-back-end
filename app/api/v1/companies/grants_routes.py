@@ -30,6 +30,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app import db
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
@@ -87,7 +88,6 @@ class _OrmProjectCompanyResolver:
     """
 
     def company_id_for_project(self, project_id: UUID) -> Optional[UUID]:
-        from app import db
         from app.infrastructure.database.models.project import ProjectModel
 
         row = db.session.get(ProjectModel, project_id)
@@ -222,6 +222,9 @@ def set_member_grant(company_id: str, user_id: str):
             raise
         return _map_error(exc)
 
+    # The repository only flushes; the route owns the transaction boundary so the
+    # row survives the request (flush alone is rolled back at teardown).
+    db.session.commit()
     return jsonify(_to_row(grant).model_dump(mode="json")), 200
 
 
@@ -269,4 +272,5 @@ def remove_member_grant(company_id: str, user_id: str):
 
     if not removed:
         return _err("NotFound", "No matching grant/deny row found", 404)
+    db.session.commit()
     return "", 204

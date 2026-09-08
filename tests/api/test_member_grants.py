@@ -503,3 +503,38 @@ class TestLaborEntriesDenyExample:
         assert allowed_on_q.status_code == 201, allowed_on_q.get_data(as_text=True)
 
         _remove_grant(client, admin_a_h, mg_app, mg_app._manager_a_id, "project:manage_labor", mg_app._project_p_id)
+
+
+# ---------------------------------------------------------------------------
+# Persistence: the write path must COMMIT, not just flush. Under the shared
+# test session a flushed-but-uncommitted row is still visible to the next
+# request, which is exactly how the missing commit slipped through on
+# Postgres (rows vanished at request teardown). Rolling the session back
+# between the write and the read reproduces that teardown.
+# ---------------------------------------------------------------------------
+
+
+class TestGrantWritesAreCommitted:
+    def test_put_survives_session_rollback(self, client, mg_app, admin_a_h):
+        from app import db
+
+        resp = _set_grant(
+            client, admin_a_h, mg_app, mg_app._member_a_id, "project:invite", "grant", mg_app._project_p_id
+        )
+        assert resp.status_code == 200
+        db.session.rollback()
+
+        listing = client.get(_grants_url(mg_app, mg_app._member_a_id), headers=admin_a_h)
+        rows = [g for g in listing.get_json()["grants"] if g["permission"] == "project:invite"]
+        assert rows and rows[0]["project_id"] == mg_app._project_p_id
+
+    def test_delete_survives_session_rollback(self, client, mg_app, admin_a_h):
+        from app import db
+
+        _set_grant(client, admin_a_h, mg_app, mg_app._member_a_id, "project:invite", "grant", mg_app._project_p_id)
+        resp = _remove_grant(client, admin_a_h, mg_app, mg_app._member_a_id, "project:invite", mg_app._project_p_id)
+        assert resp.status_code == 204
+        db.session.rollback()
+
+        listing = client.get(_grants_url(mg_app, mg_app._member_a_id), headers=admin_a_h)
+        assert not [g for g in listing.get_json()["grants"] if g["permission"] == "project:invite"]
