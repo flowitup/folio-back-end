@@ -594,7 +594,7 @@ def _configure_di_container() -> None:
     # admin use-cases
     _c.create_company_usecase = _CreateCompanyUseCase(
         company_repo=_company_repo,
-        role_checker=_role_checker,
+        access_repo=_access_repo,
     )
     _c.update_company_usecase = _UpdateCompanyUseCase(
         company_repo=_company_repo,
@@ -603,6 +603,7 @@ def _configure_di_container() -> None:
     _c.delete_company_usecase = _DeleteCompanyUseCase(
         company_repo=_company_repo,
         role_checker=_role_checker,
+        authz_reader=_c.authz_reader,
     )
     _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
         company_repo=_company_repo,
@@ -686,6 +687,169 @@ def _configure_di_container() -> None:
         db_session=db.session,
     )
 
+    # Company-scoped person directory (Phase 2).
+    from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+        SqlAlchemyCompanyPersonRepository,
+    )
+
+    _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+
+    # Onboarding use cases (Phase 2 slice B): add member by phone, import
+    # from another company, company directory, and the derived "new members"
+    # notification feed. All need company_person_repo + person_repo, just
+    # wired above/below this point respectively.
+    from app.application.company_persons import (
+        AddMemberByPhoneUseCase as _AddMemberByPhoneUseCase,
+        ImportMembersUseCase as _ImportMembersUseCase,
+        ListDirectoryUseCase as _ListDirectoryUseCase,
+    )
+    from app.application.companies import ListNewMembersUseCase as _ListNewMembersUseCase
+
+    _c.add_member_by_phone_usecase = _AddMemberByPhoneUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        user_repo=_c.user_repository,
+        role_checker=_role_checker,
+    )
+    _c.import_members_usecase = _ImportMembersUseCase(
+        access_repo=_access_repo,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        role_checker=_role_checker,
+    )
+    # Re-wire JoinCompanyByCodeUseCase now that person_repo/company_person_repo
+    # exist — it is constructed earlier (companies admin/user use-case block,
+    # before the Persons DI section) without them.
+    from app.application.companies.join_code_usecases import JoinCompanyByCodeUseCase as _JoinCompanyByCodeUseCaseV2
+
+    _c.join_company_by_code_usecase = _JoinCompanyByCodeUseCaseV2(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        clock=_clock,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        user_repo=_c.user_repository,
+    )
+
+    _c.list_directory_usecase = _ListDirectoryUseCase(
+        company_person_repo=_c.company_person_repo,
+        person_repo=_person_repo,
+        authz_reader=_c.authz_reader,
+    )
+    _c.list_new_members_usecase = _ListNewMembersUseCase(
+        access_repo=_access_repo,
+        company_person_repo=_c.company_person_repo,
+        person_repo=_person_repo,
+        authz_reader=_c.authz_reader,
+    )
+
+    # Re-wire boot/detach with the Phase 2 onboarding cleanup collaborators
+    # (project assignments + directory profile + join code rotation) now
+    # that person_repo/company_person_repo exist — both use cases are
+    # constructed earlier (companies admin/user use-case block) without them.
+    from app.application.companies.boot_attached_user_usecase import (
+        BootAttachedUserUseCase as _BootAttachedUserUseCaseV2,
+    )
+    from app.application.companies.detach_company_usecase import DetachCompanyUseCase as _DetachCompanyUseCaseV2
+
+    _c.boot_attached_user_usecase = _BootAttachedUserUseCaseV2(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+        authz_reader=_c.authz_reader,
+        membership_repo=_c.project_membership_repo,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        clock=_clock,
+    )
+    _c.detach_company_usecase = _DetachCompanyUseCaseV2(
+        access_repo=_access_repo,
+        authz_reader=_c.authz_reader,
+        membership_repo=_c.project_membership_repo,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+    )
+
+    # Project assignment use cases (Phase 2 onboarding): admin/manager assign
+    # or unassign an existing company member to/from a project. Needs the
+    # membership repo (wired earlier in configure_container) + role_repository
+    # for the legacy member/manager role_id lookup.
+    if _c.project_membership_repo is not None:
+        from app.application.projects.assignments import (
+            AssignProjectMemberUseCase as _AssignProjectMemberUseCase,
+            UnassignProjectMemberUseCase as _UnassignProjectMemberUseCase,
+        )
+
+        _c.assign_project_member_usecase = _AssignProjectMemberUseCase(
+            authz_reader=_c.authz_reader,
+            access_repo=_access_repo,
+            membership_repo=_c.project_membership_repo,
+            role_repo=_c.role_repository,
+        )
+        _c.unassign_project_member_usecase = _UnassignProjectMemberUseCase(
+            authz_reader=_c.authz_reader,
+            access_repo=_access_repo,
+            membership_repo=_c.project_membership_repo,
+            role_repo=_c.role_repository,
+        )
+
+    # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
+    # access_repo — all wired above regardless of OTP configuration. M7: this
+    # is hoisted OUT of the OTP-specific conditional below so an invitation
+    # acceptor (AcceptInvitationUseCase) becomes a real company member even
+    # on a deployment where phone-OTP sign-up itself is not configured.
+    from app.application.company_persons.link_person_on_signup_usecase import (
+        LinkPersonOnSignupUseCase as _LinkPersonOnSignupUseCase,
+    )
+
+    _link_person_on_signup = _LinkPersonOnSignupUseCase(
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        access_repo=_access_repo,
+    )
+
+    # Re-wire VerifySignupOtpUseCase with sign-up linking now that
+    # company_person_repo/person_repo/access_repo exist — it is constructed
+    # earlier (OTP DI block, before the companies section) without them.
+    if _c.verify_signup_otp_usecase is not None and _c.role_repository is not None and _c.password_hasher is not None:
+        from app.application.usecases.otp_login import VerifySignupOtpUseCase as _VerifySignupOtpUseCaseV2
+
+        _c.verify_signup_otp_usecase = _VerifySignupOtpUseCaseV2(
+            _c.user_repository,
+            _otp_repo,
+            _c.role_repository,
+            _c.password_hasher,
+            _c.authorization_service,
+            _c.token_issuer,
+            max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+            link_person_on_signup=_link_person_on_signup,
+        )
+
+    # Re-wire AcceptInvitationUseCase (invitations are the outsider path,
+    # Phase 2): the acceptor becomes a `member` of the invited project's
+    # company. Constructed earlier (invitations DI block, before the
+    # companies section) without these pieces. M7: unconditional on OTP
+    # configuration — company attachment on accept must work regardless.
+    if _c.accept_invitation_usecase is not None:
+        from app.application.invitations.accept_invitation_usecase import (
+            AcceptInvitationUseCase as _AcceptInvitationUseCaseV2,
+        )
+
+        _c.accept_invitation_usecase = _AcceptInvitationUseCaseV2(
+            invitation_repo=_c.invitation_repo,
+            user_repo=_c.user_repository,
+            project_membership_repo=_c.project_membership_repo,
+            password_hasher=_c.password_hasher,
+            token_issuer=_c.token_issuer,
+            db_session=db.session,
+            role_repo=_c.role_repository,
+            authz_reader=_c.authz_reader,
+            access_repo=_access_repo,
+            link_person_on_signup=_link_person_on_signup,
+        )
+
     # Re-wire CreateWorkerUseCase with person_repo now that the latter
     # exists. configure_container() in wiring.py wires it with the worker
     # repo only — cook 1d-ii-b adds the inline-Person-create branch which
@@ -699,6 +863,8 @@ def _configure_di_container() -> None:
         _c.create_worker_usecase = _CreateWorkerUseCase(
             worker_repo=_c.worker_repository,
             person_repo=_person_repo,
+            company_person_repo=_c.company_person_repo,
+            authz_reader=_c.authz_reader,
         )
 
     # -----------------------------------------------------------------------
@@ -716,6 +882,13 @@ def _configure_di_container() -> None:
     _c.update_labor_role_usecase = _UpdateLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.delete_labor_role_usecase = _DeleteLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.list_labor_roles_usecase = _ListLaborRolesUseCase(repo=_labor_role_repo)
+
+    # Default role roster for a newly created company (Phase 2 onboarding
+    # slice wires this into company creation; exposed here so seeds/tests
+    # can call it directly).
+    from app.application.labor.seed_default_labor_roles import SeedDefaultLaborRolesUseCase as _SeedDefaultLRUC
+
+    _c.seed_default_labor_roles_usecase = _SeedDefaultLRUC(repo=_labor_role_repo, db_session=db.session)
 
     # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)
@@ -944,8 +1117,9 @@ def _configure_di_container() -> None:
 
     _c.create_company_usecase = _CreateCompanyUseCaseV2(
         company_repo=_company_repo,
-        role_checker=_role_checker,
+        access_repo=_access_repo,
         seed_payment_methods=_c.seed_payment_methods_usecase,
+        seed_default_labor_roles=_c.seed_default_labor_roles_usecase,
     )
 
     # -----------------------------------------------------------------------

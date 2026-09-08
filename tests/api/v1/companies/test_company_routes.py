@@ -102,14 +102,15 @@ class TestCreateCompany:
         )
         assert resp.status_code == 422
 
-    def test_create_forbidden_for_non_admin(self, inv_client, member_token_co):
-        """Non-admin user lacks *:* permission → 403."""
+    def test_create_allowed_for_non_admin_self_service(self, inv_client, member_token_co):
+        """Phase 2 D1/goal 1: company creation is self-service — any authenticated
+        user may create a company, no platform ``*:*`` permission required."""
         resp = inv_client.post(
             "/api/v1/companies",
             json={"legal_name": "Member Corp", "address": "1 rue Test"},
             headers=_auth(member_token_co),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 201, resp.get_data(as_text=True)
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +183,14 @@ class TestInviteTokenLifecycle:
         assert "token" in data
         assert len(data["token"]) > 10
 
-    def test_redeem_valid_token_returns_200(self, inv_client, admin_token):
-        """Redeem a valid token → 200."""
+    def test_redeem_valid_token_returns_200(self, inv_client, admin_token, member_token_co):
+        """Redeem a valid token → 200.
+
+        Redeemed by a DIFFERENT user than the creator: self-service company
+        creation (D6) auto-attaches the creator as admin, so the creator
+        redeeming their own invite token would correctly conflict
+        (CompanyAlreadyAttachedError) rather than exercise the happy path.
+        """
         company = _make_company(inv_client, admin_token)
         token_resp = inv_client.post(
             f"/api/v1/companies/{company['id']}/invite-tokens",
@@ -196,7 +203,7 @@ class TestInviteTokenLifecycle:
         resp = inv_client.post(
             "/api/v1/companies/attach-by-token",
             json={"token": plaintext},
-            headers=_auth(admin_token),
+            headers=_auth(member_token_co),
         )
         assert resp.status_code == 200
 
@@ -209,8 +216,12 @@ class TestInviteTokenLifecycle:
         )
         assert resp.status_code == 410
 
-    def test_redeem_already_redeemed_token_returns_410(self, inv_client, admin_token):
-        """Spec #11: reusing a redeemed token returns 410 Gone."""
+    def test_redeem_already_redeemed_token_returns_410(self, inv_client, admin_token, member_token_co):
+        """Spec #11: reusing a redeemed token returns 410 Gone.
+
+        First redeem by a DIFFERENT user than the creator (D6 self-service
+        auto-attaches the creator as admin — see test_redeem_valid_token_returns_200).
+        """
         company = _make_company(inv_client, admin_token)
         token_resp = inv_client.post(
             f"/api/v1/companies/{company['id']}/invite-tokens",
@@ -220,17 +231,18 @@ class TestInviteTokenLifecycle:
         plaintext = token_resp.get_json()["token"]
 
         # First redeem
-        inv_client.post(
+        first = inv_client.post(
             "/api/v1/companies/attach-by-token",
             json={"token": plaintext},
-            headers=_auth(admin_token),
+            headers=_auth(member_token_co),
         )
+        assert first.status_code == 200, first.get_data(as_text=True)
 
         # Second redeem of same token → 410
         resp = inv_client.post(
             "/api/v1/companies/attach-by-token",
             json={"token": plaintext},
-            headers=_auth(admin_token),
+            headers=_auth(member_token_co),
         )
         assert resp.status_code == 410
 

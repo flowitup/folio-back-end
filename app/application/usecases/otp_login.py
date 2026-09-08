@@ -16,7 +16,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 from uuid import UUID, uuid4
 
 from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
@@ -36,6 +36,9 @@ from app.domain.exceptions.auth_exceptions import (
 )
 from app.domain.services.authorization import AuthorizationService
 from app.domain.value_objects.phone_number import normalize_phone
+
+if TYPE_CHECKING:
+    from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +250,7 @@ class VerifySignupOtpUseCase:
         *,
         max_attempts: int = 5,
         clock: Callable[[], datetime] = _utcnow,
+        link_person_on_signup: "Optional[LinkPersonOnSignupUseCase]" = None,
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
@@ -256,6 +260,12 @@ class VerifySignupOtpUseCase:
         self._tokens = token_issuer
         self._max_attempts = max_attempts
         self._clock = clock
+        # Phase 2 onboarding: LinkPersonOnSignupUseCase — links non-expired
+        # pending `company_persons` profiles created for this phone (admin
+        # added the person before they signed up) to the fresh account.
+        # Optional so existing wiring/tests that construct this use case
+        # without the onboarding pieces keep working unchanged.
+        self._link_person_on_signup = link_person_on_signup
 
     def execute(self, raw_phone: str, code: str, display_name: str, persistent: bool = False) -> LoginResult:
         phone = normalize_phone(raw_phone)
@@ -281,6 +291,19 @@ class VerifySignupOtpUseCase:
         default_role = self._roles.find_by_name(DEFAULT_SIGNUP_ROLE)
         if default_role is not None:
             self._users.assign_role(user.id, default_role.id)
+
+        # Phase 2 onboarding: attach any pending company profiles an admin
+        # created for this phone before the account existed. The use case
+        # itself CAN raise (e.g. a repository failure while merging several
+        # duplicate pending profiles — C1) — wrapped here so a broken pending
+        # row never blocks sign-up itself.
+        if self._link_person_on_signup is not None:
+            try:
+                self._link_person_on_signup.execute(user.id, phone)
+            except Exception:
+                logger.exception(
+                    "link_person_on_signup failed during sign-up for user %s; continuing without it", user.id
+                )
 
         permissions: List[str] = list(self._authz.get_user_permissions(user.id))
         return LoginResult(

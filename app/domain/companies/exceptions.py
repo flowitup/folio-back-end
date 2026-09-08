@@ -99,6 +99,21 @@ class LastCompanyAdminError(CompaniesDomainError):
         super().__init__(f"Company {company_id} must keep at least one admin")
 
 
+class CompanyHasProjectsError(CompaniesDomainError):
+    """Raised when deleting a company that still owns projects.
+
+    `projects.company_id` is `ON DELETE RESTRICT` (migration 2ca24be9e3a8) —
+    a company is a project's owner, not just a label, so deleting it while
+    projects remain must fail loudly with the project count rather than let
+    the DB raise an opaque IntegrityError.
+    """
+
+    def __init__(self, company_id: UUID, project_count: int) -> None:
+        self.company_id = company_id
+        self.project_count = project_count
+        super().__init__(f"Company {company_id} still owns {project_count} project(s); delete or reassign them first")
+
+
 class InviteTokenSystemOverloadError(CompaniesDomainError):
     """Raised when the DOS guard fires: too many active invite tokens in the system.
 

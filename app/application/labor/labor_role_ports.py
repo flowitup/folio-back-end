@@ -19,12 +19,21 @@ class ILaborRoleRepository(Protocol):
         """Return a role by UUID, or None if not found."""
         ...
 
-    def find_by_name(self, name: str) -> Optional[LaborRole]:
-        """Return a role matching *name* exactly (case-sensitive), or None."""
+    def find_by_name(self, name: str, company_id: Optional[UUID] = None) -> Optional[LaborRole]:
+        """Return a role matching *name* exactly within *company_id*'s scope, or None.
+
+        `company_id=None` matches legacy/unscoped rows (`company_id IS NULL`)
+        — the pre-Phase-2 default, still exercised by callers that have no
+        company context (see `matrix.py`/labor role use cases).
+        """
         ...
 
-    def list_all(self) -> List[LaborRole]:
-        """Return all labor roles ordered by name ASC."""
+    def list_all(self, company_id: Optional[UUID] = None) -> List[LaborRole]:
+        """Return labor roles ordered by name ASC, scoped to *company_id*.
+
+        `company_id=None` returns legacy/unscoped rows only (`company_id IS
+        NULL`) — same convention as `find_by_name`.
+        """
         ...
 
     def update(self, role: LaborRole) -> LaborRole:

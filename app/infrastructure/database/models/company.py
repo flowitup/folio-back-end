@@ -47,6 +47,12 @@ class CompanyModel(Base):
     # Shared short code (8 chars, unique) used by the mobile app to join the company as a member.
     join_code = Column(String(16), nullable=True, unique=True)
 
+    # ISO 3166-1 alpha-2 region used by app.domain.value_objects.phone_number
+    # to resolve a national-format phone (e.g. "06 12 34 56 78") to E.164 for
+    # this company's persons/company_persons rows. Ops-settable; defaults to
+    # France, Folio's primary market.
+    default_phone_region = Column(String(2), nullable=False, default="FR", server_default="FR")
+
     # Audit
     created_by = Column(
         UUID(as_uuid=True),

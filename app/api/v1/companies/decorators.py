@@ -118,6 +118,58 @@ def require_attached_company(company_id_kwarg: str = "company_id"):
     return decorator
 
 
+def require_company_role_any(*roles: str, company_id_kwarg: str = "company_id"):
+    """Decorator factory: assert caller holds ANY of *roles* in the target company, or is a platform admin.
+
+    Same 404-then-403 semantics as `require_company_role`, generalised to a
+    whitelist of acceptable roles (e.g. the member directory is readable by
+    both "admin" and "manager", never "member").
+
+    Usage::
+
+        @companies_bp.route("/companies/<company_id>/persons", methods=["GET"])
+        @jwt_required()
+        @require_company_role_any("admin", "manager")
+        def list_directory(company_id: str): ...
+    """
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            from wiring import get_container
+
+            cid_str = kwargs.get(company_id_kwarg)
+            if not cid_str:
+                return _not_found(f"Missing {company_id_kwarg}")
+            try:
+                company_uuid = UUID(cid_str)
+            except ValueError:
+                return _not_found(f"Invalid company id: {cid_str!r}")
+
+            container = get_container()
+
+            if _has_superadmin():
+                company = container.company_repo.find_by_id(company_uuid)
+                if company is None:
+                    return _not_found(f"Company {cid_str} not found")
+                return fn(*args, **kwargs)
+
+            company = container.company_repo.find_by_id(company_uuid)
+            if company is None:
+                return _not_found(f"Company {cid_str} not found")
+
+            caller_id = UUID(get_jwt_identity())
+            access = container.user_company_access_repo.find(caller_id, company_uuid)
+            if access is None or access.role not in roles:
+                return _forbidden(f"Company role in {list(roles)!r} required for company {cid_str}")
+
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def require_company_role(role: str = "admin", company_id_kwarg: str = "company_id"):
     """Decorator factory: assert caller holds *role* in the target company, or is a platform admin.
 

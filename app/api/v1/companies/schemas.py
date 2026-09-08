@@ -137,3 +137,31 @@ class SetPrimaryCompanyRequest(_StrictBase):
     """Request body for PUT /users/me/primary-company."""
 
     company_id: UUID
+
+
+# ---------------------------------------------------------------------------
+# Member onboarding request schemas (Phase 2 onboarding slice)
+# ---------------------------------------------------------------------------
+
+
+class AddMemberByPhoneRequest(_StrictBase):
+    """Request body for POST /companies/<id>/members.
+
+    ``person_id`` lets the caller resend the request after a 409
+    (several un-linked candidates matched the phone) to pick one explicitly.
+    """
+
+    phone: str = Field(..., min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    # Not pattern-restricted to member|manager here: 'admin' (and anything
+    # else invalid) is rejected by the use case with a 400 business error
+    # (AdminRoleNotAssignableError), not a 422 schema error.
+    role: str = Field(default="member", min_length=1, max_length=20)
+    person_id: Optional[UUID] = None
+
+
+class ImportMembersRequest(_StrictBase):
+    """Request body for POST /companies/<id>/members/import."""
+
+    from_company_id: UUID
+    person_ids: list[UUID] = Field(..., min_length=1, max_length=200)

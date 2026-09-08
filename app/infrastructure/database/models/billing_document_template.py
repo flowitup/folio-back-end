@@ -38,6 +38,16 @@ class BillingDocumentTemplateModel(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Phase 2: scopes the template to a company for shared, per-company
+    # listing. Nullable — backfilled from the owner's primary (else sole)
+    # company; rows left NULL (ambiguous owner) are excluded from
+    # company-scoped listings. ON DELETE SET NULL mirrors billing_documents:
+    # deleting a company must not lose historical template content.
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     kind = Column(
         Enum("devis", "facture", name="billing_document_kind", create_type=False),
         nullable=False,
@@ -65,16 +75,18 @@ class BillingDocumentTemplateModel(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "company_id",
             "user_id",
             "kind",
             "name",
-            name="uq_billing_template_user_kind_name",
+            name="uq_billing_template_company_user_kind_name",
         ),
         Index(
             "ix_billing_document_templates_user_kind",
             "user_id",
             "kind",
         ),
+        Index("ix_billing_document_templates_company_id", "company_id"),
     )
 
     def __repr__(self) -> str:

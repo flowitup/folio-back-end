@@ -111,6 +111,14 @@ class ProjectMembershipRepositoryPort(Protocol):
         """
         ...
 
+    def remove(self, user_id: UUID, project_id: UUID) -> bool:
+        """Delete a membership row. Returns True if a row was deleted.
+
+        Used by the project-assignment endpoints (Phase 2 onboarding slice)
+        to unassign a manager/member from a single project.
+        """
+        ...
+
 
 class ProjectRepositoryPort(Protocol):
     """Minimal read-only project contract needed by invitation use-cases."""

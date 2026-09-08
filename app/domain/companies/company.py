@@ -52,6 +52,11 @@ class Company:
     # --- onboarding: short reusable code that attaches whoever types it as a member ---
     join_code: Optional[str] = None
 
+    # --- ISO 3166-1 alpha-2 region used to resolve a national-format phone
+    # (e.g. "06 12 34 56 78") to E.164 for this company's persons/company_persons
+    # rows (Phase 2 onboarding). Ops-settable; defaults to France. ---
+    default_phone_region: str = "FR"
+
     # ------------------------------------------------------------------
     # Mutation helper
     # ------------------------------------------------------------------

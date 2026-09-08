@@ -17,7 +17,7 @@ from typing import Tuple
 from uuid import UUID
 
 from flask import Response, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
@@ -34,9 +34,45 @@ from app.application.billing import (
     BillingTemplateNameConflictError,
     ForbiddenBillingDocumentError,
 )
+from app.application.billing.ports import is_company_admin
 from app.domain.billing.enums import BillingDocumentKind
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+
+def _has_superadmin() -> bool:
+    return "*:*" in set(get_jwt().get("permissions", []))
+
+
+def _resolve_template_company_scope(caller_id: UUID, requested_raw: "str | None"):
+    """Resolve the company scope for list/create (Phase 2).
+
+    Returns (company_id_or_None, error_response_or_None). An explicit
+    `requested_raw` (query param or request body field) must be a company the
+    caller administers (or superadmin). With none given, falls back to the
+    caller's own admin company if they have exactly one primary — this keeps
+    every caller with no company context working exactly as before Phase 2
+    (unscoped, user-owned templates).
+    """
+    container = get_container()
+    access_repo = getattr(container, "user_company_access_repo", None)
+
+    if requested_raw:
+        try:
+            requested = UUID(requested_raw)
+        except ValueError:
+            return None, _err("ValidationError", f"Invalid company id: {requested_raw!r}", 400)
+        if not _has_superadmin() and not is_company_admin(access_repo, caller_id, requested):
+            return None, _err("Forbidden", f"Admin role required for company {requested_raw}", 403)
+        return requested, None
+
+    authz_reader = getattr(container, "authz_reader", None)
+    if authz_reader is not None:
+        admin_ids = authz_reader.admin_company_ids(caller_id)
+        primary = authz_reader.primary_company_id(caller_id)
+        if primary is not None and primary in admin_ids:
+            return primary, None
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +109,12 @@ def _tpl_to_json(dto) -> dict:
 @openapi_doc(summary="List all billing templates for the authenticated user", tags=["billing"])
 @jwt_required()
 def list_billing_templates():
-    """List all billing templates for the authenticated user.
+    """List billing templates for the authenticated user, or for a company (Phase 2).
 
-    Optional query param: kind (devis | facture).
+    Optional query params: kind (devis | facture), company_id — when given,
+    the caller must administer that company (or be superadmin); the
+    response then lists every template of the company, not just the
+    caller's own.
     """
     kind_str = request.args.get("kind", "").strip()
     kind = None
@@ -86,9 +125,14 @@ def list_billing_templates():
             return _err("ValidationError", f"Invalid kind: {kind_str!r}", 400)
 
     user_id = UUID(get_jwt_identity())
+    company_id, error = _resolve_template_company_scope(user_id, request.args.get("company_id"))
+    if error is not None:
+        return error
+
     templates = get_container().list_billing_templates_usecase.execute(
         user_id=user_id,
         kind=kind,
+        company_id=company_id,
     )
     return jsonify({"items": [_tpl_to_json(t) for t in templates], "total": len(templates)})
 
@@ -114,6 +158,10 @@ def create_billing_template():
         return format_validation_error(exc)
 
     user_id = UUID(get_jwt_identity())
+    company_id, error = _resolve_template_company_scope(user_id, body.company_id)
+    if error is not None:
+        return error
+
     inp = CreateTemplateInput(
         user_id=user_id,
         kind=BillingDocumentKind(body.kind),
@@ -122,6 +170,7 @@ def create_billing_template():
         notes=body.notes,
         terms=body.terms,
         default_vat_rate=body.default_vat_rate,
+        company_id=company_id,
     )
 
     from app import db

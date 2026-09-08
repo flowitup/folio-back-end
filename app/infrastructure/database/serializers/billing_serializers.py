@@ -159,6 +159,7 @@ def serialize_template_to_orm(
     """Write all domain fields from *template* into *model* (in-place mutation)."""
     model.id = template.id
     model.user_id = template.user_id
+    model.company_id = template.company_id
     model.kind = template.kind.value
     model.name = template.name
     model.notes = template.notes
@@ -196,4 +197,5 @@ def deserialize_orm_to_template(
         items=items,
         created_at=created_at,
         updated_at=updated_at,
+        company_id=UUID(str(model.company_id)) if model.company_id is not None else None,
     )

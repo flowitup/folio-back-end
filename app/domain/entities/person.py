@@ -27,6 +27,10 @@ class Person:
     created_at: datetime
     phone: Optional[str] = None
     updated_at: Optional[datetime] = None
+    # Phase 2: link to the account this person signed up with, once they do.
+    user_id: Optional[UUID] = None
+    # Phase 2: E.164 form of `phone` — a matching hint, never unique globally.
+    phone_normalized: Optional[str] = None
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Person):

@@ -35,7 +35,9 @@ def list_notifications() -> Any:
 
     ``items`` keeps its note-only shape (existing clients index ``item.note``);
     worker-submitted attendance awaiting this user's validation ships in the
-    separate ``attendance_pending`` list. ``count`` covers both.
+    separate ``attendance_pending`` list. ``count`` covers both — NOT
+    ``company_events`` (Phase 2 onboarding, finding 12: no client has shipped
+    UI for this feed yet, so it must not bump the notification badge).
     """
     user_id = UUID(get_jwt_identity())
     container = get_container()
@@ -47,6 +49,11 @@ def list_notifications() -> Any:
     try:
         dtos = container.list_due_notifications_usecase.execute(user_id=user_id)
         pending = container.list_pending_attendance_usecase.execute(user_id=user_id)
+        company_events = (
+            container.list_new_members_usecase.execute(admin_user_id=user_id)
+            if container.list_new_members_usecase is not None
+            else []
+        )
     except Exception:
         logger.exception("list_notifications unexpected error user_id=%s", user_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
@@ -90,8 +97,24 @@ def list_notifications() -> Any:
         for p in pending
     ]
 
+    company_events_json = [
+        {
+            "user_id": str(event.user_id),
+            "display_name": event.display_name,
+            "company_id": str(event.company_id),
+            "attached_at": event.attached_at.isoformat(),
+        }
+        for event in company_events
+    ]
+
     response = jsonify(
-        {"items": items, "attendance_pending": attendance_pending, "count": len(items) + len(attendance_pending)}
+        {
+            "items": items,
+            "attendance_pending": attendance_pending,
+            "company_events": company_events_json,
+            # NOT company_events — see docstring above (finding 12).
+            "count": len(items) + len(attendance_pending),
+        }
     )
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response, 200

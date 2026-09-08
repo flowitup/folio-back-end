@@ -25,10 +25,10 @@ projects of one company) collapse to a single query. Without a provider (the
 default — e.g. tests that construct this class directly), every call queries
 fresh; still correct, just uncached.
 
-`grants_for` always returns `[]` — the `company_member_grants` table (D8)
-lands in Phase 2. Every other method degrades to "no relationship" (None /
-False / empty list) rather than raising, since a missing row is a normal,
-expected outcome (e.g. a user with no access to a company).
+`grants_for` reads the Phase 2 `company_member_grants` table (D8). Every
+method degrades to "no relationship" (None / False / empty list) rather than
+raising, since a missing row is a normal, expected outcome (e.g. a user with
+no access to a company, or no grant/deny row at all).
 """
 
 from __future__ import annotations
@@ -199,9 +199,156 @@ class SqlAlchemyAuthzReader:
             cache[key] = result
         return result
 
+    def project_ids_for_company(self, company_id: UUID) -> "list[UUID]":
+        """Return every project id owned by `company_id`."""
+        cache = self._cache()
+        key = ("project_ids_for_company", company_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        rows = self._session.execute(
+            text(f"SELECT id FROM projects WHERE {self._eq('company_id', 'cid')}"),
+            {"cid": self._bind_uuid(company_id)},
+        ).fetchall()
+        result = [self._as_uuid_or_none(r[0]) for r in rows]
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def assigned_project_ids(self, user_id: UUID, project_ids: "list[UUID]") -> "list[UUID]":
+        """Return the subset of `project_ids` the user has a `user_projects` row for."""
+        if not project_ids:
+            return []
+        unique_ids = list(dict.fromkeys(project_ids))
+        if self._is_sqlite():
+            id_col = _norm("up.project_id")
+            placeholders = ", ".join(_norm(f":id{i}") for i in range(len(unique_ids)))
+        else:
+            id_col = "up.project_id"
+            placeholders = ", ".join(f":id{i}" for i in range(len(unique_ids)))
+        params = {f"id{i}": self._bind_uuid(pid) for i, pid in enumerate(unique_ids)}
+        params["uid"] = self._bind_uuid(user_id)
+        rows = self._session.execute(
+            text(
+                f"SELECT up.project_id FROM user_projects up "
+                f"WHERE {self._eq('up.user_id', 'uid')} AND {id_col} IN ({placeholders})"
+            ),
+            params,
+        ).fetchall()
+        return [self._as_uuid_or_none(r[0]) for r in rows]
+
+    def assigned_project_ids_for_users(self, company_id: UUID, user_ids: "list[UUID]") -> "dict[UUID, list[UUID]]":
+        """Batch form of `assigned_project_ids` for every user of one company (H5).
+
+        One `user_projects JOIN projects` query for the whole `user_ids`
+        list, instead of the directory calling `assigned_project_ids` once
+        per person. The JOIN condition mirrors `has_project_assignment_in_company`
+        (dialect-normalized on SQLite for the same insert-path-agnostic reason).
+        """
+        result: "dict[UUID, list[UUID]]" = {}
+        if not user_ids:
+            return result
+        unique_users = list(dict.fromkeys(user_ids))
+        if self._is_sqlite():
+            join_clause = f"{_norm('p.id')} = {_norm('up.project_id')}"
+            user_col = _norm("up.user_id")
+            placeholders = ", ".join(_norm(f":uid{i}") for i in range(len(unique_users)))
+        else:
+            join_clause = "p.id = up.project_id"
+            user_col = "up.user_id"
+            placeholders = ", ".join(f":uid{i}" for i in range(len(unique_users)))
+        params = {f"uid{i}": self._bind_uuid(uid) for i, uid in enumerate(unique_users)}
+        params["cid"] = self._bind_uuid(company_id)
+        rows = self._session.execute(
+            text(
+                "SELECT up.user_id, up.project_id FROM user_projects up "
+                f"JOIN projects p ON {join_clause} "
+                f"WHERE {self._eq('p.company_id', 'cid')} AND {user_col} IN ({placeholders})"
+            ),
+            params,
+        ).fetchall()
+        for row in rows:
+            uid = self._as_uuid_or_none(row[0])
+            pid = self._as_uuid_or_none(row[1])
+            if uid is None or pid is None:
+                continue
+            result.setdefault(uid, []).append(pid)
+        return result
+
+    def has_project_assignment_in_company(self, user_id: UUID, company_id: UUID) -> bool:
+        """Return True if `user_id` has a `user_projects` row on any project of `company_id`.
+
+        The JOIN condition (`projects.id` vs `user_projects.project_id`) is
+        itself dialect-normalized, not just the WHERE clause: on SQLite,
+        `projects.id` is written by the ORM's UUID TypeDecorator (dashless
+        hex) while `user_projects.project_id` is written by several
+        raw-`text()` insert paths elsewhere in this codebase (dashed
+        `str(uuid)`) — comparing them with plain `=` silently returns zero
+        rows.
+        """
+        cache = self._cache()
+        key = ("has_project_assignment_in_company", user_id, company_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        if self._is_sqlite():
+            join_clause = f"{_norm('p.id')} = {_norm('up.project_id')}"
+        else:
+            join_clause = "p.id = up.project_id"
+        row = self._session.execute(
+            text(
+                "SELECT 1 FROM user_projects up "
+                f"JOIN projects p ON {join_clause} "
+                f"WHERE {self._eq('up.user_id', 'uid')} AND {self._eq('p.company_id', 'cid')} LIMIT 1"
+            ),
+            {"uid": self._bind_uuid(user_id), "cid": self._bind_uuid(company_id)},
+        ).fetchone()
+        result = row is not None
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def grants_for(self, user_id: UUID, company_id: UUID, project_id: "UUID | None") -> "list[tuple[str, str]]":
-        """D8 per-user grant/deny rows — always empty until Phase 2 ships the table."""
-        return []
+        """Return the caller's D8 grant/deny rows applicable to this scope.
+
+        Reads `company_member_grants` for `(user_id, company_id)`, keeping
+        rows that are either company-wide (`project_id IS NULL` — always
+        applicable) or scoped to the SAME `project_id` passed in. A row
+        scoped to a DIFFERENT project never matches — that is the whole
+        point of D8's per-project scoping (a grant on project P must not
+        leak onto project Q).
+
+        Caching key includes `project_id` (even though a company-wide row
+        would also apply project-agnostically) because the resolver calls
+        this once per resolved `(user_id, company_id, project_id)` triple —
+        caching at that same granularity avoids a second cache dimension
+        for no benefit within one request.
+        """
+        cache = self._cache()
+        key = ("grants_for", user_id, company_id, project_id)
+        if cache is not None and key in cache:
+            return cache[key]
+
+        if project_id is None:
+            scope_clause = "project_id IS NULL"
+            params = {"uid": self._bind_uuid(user_id), "cid": self._bind_uuid(company_id)}
+        else:
+            scope_clause = f"(project_id IS NULL OR {self._eq('project_id', 'pid')})"
+            params = {
+                "uid": self._bind_uuid(user_id),
+                "cid": self._bind_uuid(company_id),
+                "pid": self._bind_uuid(project_id),
+            }
+
+        rows = self._session.execute(
+            text(
+                f"SELECT permission, effect FROM company_member_grants "
+                f"WHERE {self._eq('user_id', 'uid')} AND {self._eq('company_id', 'cid')} AND {scope_clause}"
+            ),
+            params,
+        ).fetchall()
+        result = [(r[0], r[1]) for r in rows]
+        if cache is not None:
+            cache[key] = result
+        return result
 
     @staticmethod
     def _as_uuid_or_none(raw) -> "UUID | None":

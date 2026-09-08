@@ -43,12 +43,13 @@ class CreateTemplateUseCase:
             items=items,
             created_at=now,
             updated_at=now,
+            company_id=inp.company_id,
         )
 
         try:
             saved = self._template_repo.save(template)
             db_session.commit()
         except IntegrityError as exc:
-            # M2: unique constraint (user_id, kind, name) violated → 409, not 500
+            # M2: unique constraint (company_id, user_id, kind, name) violated → 409, not 500
             raise BillingTemplateNameConflictError(name) from exc
         return BillingTemplateResponse.from_entity(saved)

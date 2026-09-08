@@ -47,7 +47,7 @@ class UpdateLaborRoleUseCase:
         new_color = color if color is not None else role.color
 
         if name is not None and name != role.name:
-            conflict = self._repo.find_by_name(name)
+            conflict = self._repo.find_by_name(name, company_id=role.company_id)
             if conflict is not None:
                 raise DuplicateLaborRoleError(name)
 
@@ -57,6 +57,8 @@ class UpdateLaborRoleUseCase:
             color=new_color,
             created_at=role.created_at,
             updated_at=datetime.now(timezone.utc),
+            company_id=role.company_id,
+            slug=role.slug,
         )
         saved = self._repo.update(updated)
         self._db.commit()

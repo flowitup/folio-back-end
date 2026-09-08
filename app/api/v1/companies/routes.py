@@ -47,6 +47,7 @@ from app.application.companies import (
     UpdateCompanyInput,
     ActiveInviteTokenAlreadyExistsError,
     CompanyAlreadyAttachedError,
+    CompanyHasProjectsError,
     CompanyNotFoundError,
     ForbiddenCompanyError,
     InviteTokenAlreadyRedeemedError,
@@ -76,10 +77,19 @@ def _has_superadmin() -> bool:
     return "*:*" in jwt_claims.get("permissions", [])
 
 
-def _company_to_dict(dto: CompanyResponse) -> dict:
+def _may_read_join_code(caller_id: UUID, company_id: UUID) -> bool:
+    """H4: the join code lets anyone become a member — only a platform admin
+    or an admin of THIS company (who manages it) may read it back. Managers
+    and members never see it."""
+    if _has_superadmin():
+        return True
+    access = get_container().user_company_access_repo.find(caller_id, company_id)
+    return access is not None and access.role == "admin"
+
+
+def _company_to_dict(dto: CompanyResponse, caller_id: UUID) -> dict:
     data = dataclasses.asdict(dto)
-    # The join code lets anyone become a member: only superadmins (who manage it) may read it.
-    if not _has_superadmin():
+    if not _may_read_join_code(caller_id, dto.id):
         data.pop("join_code", None)
     return data
 
@@ -117,7 +127,7 @@ def list_companies():
         result = container.list_all_companies_usecase.execute(inp)
         return jsonify(
             {
-                "items": [_company_to_dict(c) for c in result.items],
+                "items": [_company_to_dict(c, caller_id) for c in result.items],
                 "total": result.total,
                 "limit": limit,
                 "offset": offset,
@@ -128,7 +138,7 @@ def list_companies():
     result = container.list_my_companies_usecase.execute(caller_id)
     items = [
         {
-            "company": _company_to_dict(r.company),
+            "company": _company_to_dict(r.company, caller_id),
             "access": dataclasses.asdict(r.access),
         }
         for r in result.items
@@ -143,15 +153,20 @@ def list_companies():
 
 @companies_bp.route("/companies", methods=["POST"])
 @openapi_doc(
-    summary="Create a new company (admin only)",
+    summary="Create a new company (self-service — any authenticated user)",
     request=CreateCompanyRequest,
     tags=["companies"],
 )
 @jwt_required()
 @limiter.limit("10 per minute", key_func=jwt_user_key)
-@require_admin
 def create_company():
-    """Create a new company (admin only)."""
+    """Create a new company (self-service).
+
+    Any authenticated user may create a company — no platform `*:*` permission
+    required (Phase 2 D1/goal 1). The caller is attached as the company's
+    `admin`, `is_primary` when it is their first company, and the default
+    labor role roster is seeded.
+    """
     try:
         body = CreateCompanyRequest.model_validate(request.get_json(force=True) or {})
     except ValidationError as exc:
@@ -173,12 +188,9 @@ def create_company():
 
     from app import db
 
-    try:
-        result = get_container().create_company_usecase.execute(inp, db.session)
-    except ForbiddenCompanyError:
-        return _err("Forbidden", "Admin permission required", 403)
+    result = get_container().create_company_usecase.execute(inp, db.session)
 
-    return jsonify(_company_to_dict(result)), 201
+    return jsonify(_company_to_dict(result, caller_id)), 201
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +221,7 @@ def get_company(company_id: str):
     except CompanyNotFoundError:
         return _err("NotFound", f"Company {company_id} not found", 404)
 
-    return jsonify(_company_to_dict(result))
+    return jsonify(_company_to_dict(result, caller_id))
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +274,7 @@ def update_company(company_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
-    return jsonify(_company_to_dict(result))
+    return jsonify(_company_to_dict(result, caller_id))
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +308,18 @@ def delete_company(company_id: str):
         return _err("NotFound", f"Company {company_id} not found", 404)
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
+    except CompanyHasProjectsError as exc:
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": str(exc),
+                    "reason": "company_has_projects",
+                    "project_count": exc.project_count,
+                }
+            ),
+            409,
+        )
 
     return "", 204
 
@@ -713,7 +737,7 @@ def join_company_by_code():
         return _err("NotFound", "Unknown or revoked company code", 404)
     except CompanyAlreadyAttachedError:
         return _err("Conflict", "You already belong to this company", 409)
-    return jsonify(_company_to_dict(result)), 200
+    return jsonify(_company_to_dict(result, caller_id)), 200
 
 
 # ---------------------------------------------------------------------------

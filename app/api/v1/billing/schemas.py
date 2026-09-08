@@ -158,6 +158,9 @@ class CreateTemplateRequest(_StrictBase):
     notes: Optional[str] = None
     terms: Optional[str] = None
     default_vat_rate: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
+    # Phase 2: explicit target company (must be one the caller administers).
+    # Omitted → falls back to the caller's own admin company, if any.
+    company_id: Optional[str] = None
 
 
 class UpdateTemplateRequest(_StrictBase):

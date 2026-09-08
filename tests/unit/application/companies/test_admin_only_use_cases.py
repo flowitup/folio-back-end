@@ -11,11 +11,9 @@ from uuid import uuid4
 import pytest
 
 from app.application.companies.boot_attached_user_usecase import BootAttachedUserUseCase
-from app.application.companies.create_company_usecase import CreateCompanyUseCase
 from app.application.companies.delete_company_usecase import DeleteCompanyUseCase
 from app.application.companies.dtos import (
     BootAttachedUserInput,
-    CreateCompanyInput,
     GenerateInviteTokenInput,
     ListAllCompaniesInput,
     UpdateCompanyInput,
@@ -45,13 +43,10 @@ def test_role_guard_on_admin_endpoints(
     """
     dummy_company_id = seeded_company.id
 
-    # CreateCompany
-    create_uc = CreateCompanyUseCase(company_repo=company_repo, role_checker=role_service)
-    with pytest.raises(ForbiddenCompanyError):
-        create_uc.execute(
-            CreateCompanyInput(caller_id=user_id, legal_name="X", address="Y"),
-            fake_session,
-        )
+    # CreateCompany: Phase 2 D1/goal 1 made this self-service (any
+    # authenticated user) — no longer part of this admin-only regression.
+    # See tests/unit/application/companies/test_create_company.py for its
+    # own (now-updated) coverage.
 
     # UpdateCompany
     update_uc = UpdateCompanyUseCase(company_repo=company_repo, role_checker=role_service)

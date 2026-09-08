@@ -8,9 +8,10 @@ Phase 1 plugs it in additively alongside the legacy JWT-claim union — see
     effective = (matrix[role] ∪ grants) − denies
 
 ``grants``/``denies`` come from ``AuthzReaderPort.grants_for`` (D8 per-user
-customisation), stubbed to ``[]`` until Phase 2. ``project:read`` is never
-removed by a deny, even if the reader returns one (defense in depth — the
-D8 write path is also expected to reject a ``project:read`` deny outright).
+customisation, backed by the ``company_member_grants`` table since Phase 2).
+``project:read`` is never removed by a deny, even if the reader returns one
+(defense in depth — the D8 write path is also expected to reject a
+``project:read`` deny outright).
 
 Pure Python aside from the ``AuthzReaderPort`` it is handed — no Flask,
 no direct SQLAlchemy import. The Flask-request memoization layer lives in

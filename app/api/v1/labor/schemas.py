@@ -22,10 +22,16 @@ class CreateWorkerRequest(BaseModel):
     legacy flow runs: name + phone create a fresh Person via the
     CreateWorkerUseCase before linking. Either path produces a Worker
     with a non-null person_id once Phase 1c backfill has completed.
+
+    Phase 2 onboarding ("workers from person"): when ``person_id`` refers
+    to a person with a company profile (``company_persons``) on this
+    project's company, ``name``/``daily_rate`` become optional here — the
+    use case fills them from that profile. The use case still rejects the
+    request if neither the body nor the profile can supply them.
     """
 
-    name: str = Field(..., min_length=1, max_length=255)
-    daily_rate: float = Field(..., gt=0)
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    daily_rate: Optional[float] = Field(None, gt=0)
     phone: Optional[str] = Field(None, max_length=50)
     person_id: Optional[str] = Field(None, min_length=36, max_length=36)
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from app.application.companies._helpers import _assert_company_admin
@@ -34,6 +34,44 @@ class JoinCodeNotFoundError(Exception):
 def normalize_join_code(raw: str) -> str:
     """Upper-case and strip separators: ``"k7q2-m9xr"`` → ``"K7Q2M9XR"``."""
     return "".join(ch for ch in raw.strip().upper() if ch.isalnum())
+
+
+def _allocate_unique_code(company_repo: CompanyRepositoryPort) -> str:
+    """Generate a join code not already in use. Raises RuntimeError on exhaustion (32^8 space)."""
+    for _ in range(10):
+        candidate = "".join(secrets.choice(_ALPHABET) for _ in range(_CODE_LENGTH))
+        if company_repo.find_by_join_code(candidate) is None:
+            return candidate
+    raise RuntimeError("Could not allocate a unique join code")  # pragma: no cover - astronomically unlikely
+
+
+def rotate_join_code_unchecked(
+    company_repo: CompanyRepositoryPort,
+    clock: ClockPort,
+    company_id: UUID,
+) -> Optional[str]:
+    """Issue a fresh join code for `company_id` WITHOUT an admin-permission check.
+
+    Used internally by boot cleanup ONLY (Phase 2 onboarding, finding 11 /
+    H4): the caller there has already been authorized for the boot operation
+    itself (an admin booting someone) — that is a different authorization
+    question than "can this caller manage this company's join code", which
+    `SetJoinCodeUseCase` guards for the direct API route. Self-detach never
+    calls this (H4: a member leaving on their own must not invalidate the
+    code for everyone else).
+
+    No-op (returns None, does not allocate a new code) when the company does
+    not exist OR when it currently has no join code at all — rotation only
+    replaces an EXISTING code so a company that never issued one, or had it
+    revoked, is not silently handed a fresh one by an unrelated boot. Does
+    not commit — the caller's transaction owns that.
+    """
+    company = company_repo.find_by_id(company_id)
+    if company is None or company.join_code is None:
+        return None
+    code = _allocate_unique_code(company_repo)
+    company_repo.save(company.with_updates(join_code=code, updated_at=clock.now()))
+    return code
 
 
 class SetJoinCodeUseCase:
@@ -70,15 +108,7 @@ class SetJoinCodeUseCase:
             raise CompanyNotFoundError(company_id)
 
         _assert_company_admin(self._role_checker, caller_id, company_id)
-        code: Optional[str] = None
-        if enable:
-            for _ in range(10):
-                candidate = "".join(secrets.choice(_ALPHABET) for _ in range(_CODE_LENGTH))
-                if self._companies.find_by_join_code(candidate) is None:
-                    code = candidate
-                    break
-            if code is None:  # pragma: no cover - 32^8 space, collisions are theoretical
-                raise RuntimeError("Could not allocate a unique join code")
+        code: Optional[str] = _allocate_unique_code(self._companies) if enable else None
         self._companies.save(company.with_updates(join_code=code, updated_at=self._clock.now()))
         db_session.commit()
         return code
@@ -90,10 +120,19 @@ class JoinCompanyByCodeUseCase:
         company_repo: CompanyRepositoryPort,
         access_repo: UserCompanyAccessRepositoryPort,
         clock: ClockPort,
+        person_repo: Optional[Any] = None,
+        company_person_repo: Optional[Any] = None,
+        user_repo: Optional[Any] = None,
     ) -> None:
         self._companies = company_repo
         self._access = access_repo
         self._clock = clock
+        # Phase 2 onboarding: creates an active, linked company_persons row
+        # for the joiner so they show up in the company directory right away.
+        # Optional so existing wiring/tests without the Persons BC keep working.
+        self._persons = person_repo
+        self._company_persons = company_person_repo
+        self._users = user_repo
 
     def execute(self, user_id: UUID, raw_code: str, db_session: TransactionalSessionPort) -> CompanyResponse:
         code = normalize_join_code(raw_code)
@@ -112,5 +151,60 @@ class JoinCompanyByCodeUseCase:
                 role=CompanyRole.MEMBER.value,
             )
         )
+        self._ensure_company_person(user_id, company.id, now)
         db_session.commit()
         return CompanyResponse.from_entity(company)
+
+    def _ensure_company_person(self, user_id: UUID, company_id: UUID, now: datetime) -> None:
+        """Create an active company_persons row for the joiner, reactivating
+        a previously-booted one (M1) rather than leaving it deactivated."""
+        if self._persons is None or self._company_persons is None:
+            return
+        import dataclasses
+        from uuid import uuid4
+
+        from app.domain.entities.company_person import CompanyPerson
+        from app.domain.entities.person import Person
+
+        person = self._persons.find_by_user_id(user_id)
+        if person is None:
+            if self._users is None:
+                # No global identity yet and no way to derive one (e.g. an
+                # email/password account that never had a Worker/Person
+                # backfilled, in a minimal test fixture) — skip.
+                return
+            user = self._users.find_by_id(user_id)
+            if user is None:
+                return
+            display_name = user.display_name or user.email
+            person = self._persons.create(
+                Person(
+                    id=uuid4(),
+                    name=display_name,
+                    normalized_name=Person.normalize(display_name),
+                    created_by_user_id=user_id,
+                    created_at=now,
+                    phone=user.phone,
+                    phone_normalized=user.phone,
+                    user_id=user_id,
+                ),
+                commit=False,
+            )
+        existing = self._company_persons.find(company_id, person.id)
+        if existing is not None:
+            # M1: reactivate a previously-booted profile; an already-active
+            # row is untouched (plain idempotent re-join).
+            if not existing.is_active:
+                self._company_persons.save(dataclasses.replace(existing, is_active=True, pending_expires_at=None))
+            return
+        self._company_persons.save(
+            CompanyPerson(
+                id=uuid4(),
+                company_id=company_id,
+                person_id=person.id,
+                created_at=now,
+                is_active=True,
+                phone_normalized=person.phone_normalized,
+                created_by_user_id=user_id,
+            )
+        )

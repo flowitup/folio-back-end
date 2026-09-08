@@ -18,7 +18,6 @@ import pytest
 from app.application.companies.create_company_usecase import CreateCompanyUseCase
 from app.application.companies.dtos import CreateCompanyInput
 from app.domain.companies.company import Company
-from app.domain.companies.exceptions import ForbiddenCompanyError
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +55,23 @@ class _FakeRoleService:
 
     def has_permission(self, user_id: UUID, permission: str) -> bool:
         return user_id in self._admin_ids if permission == "*:*" else False
+
+
+class _InMemoryAccessRepo:
+    """Minimal UserCompanyAccessRepositoryPort fake — records attachments only."""
+
+    def __init__(self):
+        self._store: dict = {}
+
+    def find(self, user_id: UUID, company_id: UUID):
+        return self._store.get((user_id, company_id))
+
+    def list_for_user(self, user_id: UUID):
+        return [a for (uid, _), a in self._store.items() if uid == user_id]
+
+    def save(self, access):
+        self._store[(access.user_id, access.company_id)] = access
+        return access
 
 
 class _FakeSession:
@@ -122,6 +138,11 @@ def fake_session():
     return _FakeSession()
 
 
+@pytest.fixture
+def access_repo():
+    return _InMemoryAccessRepo()
+
+
 def _inp(caller_id, *, legal_name="Dupont SARL", address="1 rue de la Paix"):
     return CreateCompanyInput(
         caller_id=caller_id,
@@ -136,11 +157,11 @@ def _inp(caller_id, *, legal_name="Dupont SARL", address="1 rue de la Paix"):
 
 
 class TestCreateCompanyInvokesSeeder:
-    def test_seeder_invoked_after_company_created(self, company_repo, role_service, admin_id, fake_session):
+    def test_seeder_invoked_after_company_created(self, company_repo, admin_id, fake_session, access_repo):
         seeder = _SpySeeder()
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
-            role_checker=role_service,
+            access_repo=access_repo,
             seed_payment_methods=seeder,
         )
 
@@ -152,11 +173,11 @@ class TestCreateCompanyInvokesSeeder:
         assert call["legal_name"] == "Dupont SARL"
         assert call["created_by"] == admin_id
 
-    def test_seeder_receives_correct_legal_name(self, company_repo, role_service, admin_id, fake_session):
+    def test_seeder_receives_correct_legal_name(self, company_repo, admin_id, fake_session, access_repo):
         seeder = _SpySeeder()
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
-            role_checker=role_service,
+            access_repo=access_repo,
             seed_payment_methods=seeder,
         )
 
@@ -166,11 +187,11 @@ class TestCreateCompanyInvokesSeeder:
 
 
 class TestSeederFailureDoesNotRollBack:
-    def test_seeder_failure_swallowed_company_still_created(self, company_repo, role_service, admin_id, fake_session):
+    def test_seeder_failure_swallowed_company_still_created(self, company_repo, admin_id, fake_session, access_repo):
         seeder = _SpySeeder(raise_on_call=True)
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
-            role_checker=role_service,
+            access_repo=access_repo,
             seed_payment_methods=seeder,
         )
 
@@ -182,11 +203,11 @@ class TestSeederFailureDoesNotRollBack:
         assert stored is not None
         assert stored.legal_name == "Dupont SARL"
 
-    def test_seeder_failure_returns_company_response(self, company_repo, role_service, admin_id, fake_session):
+    def test_seeder_failure_returns_company_response(self, company_repo, admin_id, fake_session, access_repo):
         seeder = _SpySeeder(raise_on_call=True)
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
-            role_checker=role_service,
+            access_repo=access_repo,
             seed_payment_methods=seeder,
         )
 
@@ -196,11 +217,11 @@ class TestSeederFailureDoesNotRollBack:
 
 
 class TestCreateCompanyWithoutSeeder:
-    def test_works_without_seeder_injected(self, company_repo, role_service, admin_id, fake_session):
+    def test_works_without_seeder_injected(self, company_repo, admin_id, fake_session, access_repo):
         """Legacy DI: seed_payment_methods=None must not raise."""
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
-            role_checker=role_service,
+            access_repo=access_repo,
             seed_payment_methods=None,
         )
 
@@ -210,13 +231,17 @@ class TestCreateCompanyWithoutSeeder:
         stored = company_repo.find_by_id(result.id)
         assert stored is not None
 
-    def test_non_admin_still_raises_without_seeder(self, company_repo, role_service, fake_session):
+    def test_non_admin_still_creates_without_seeder(self, company_repo, fake_session, access_repo):
+        """Phase 2 D1/goal 1: company creation is self-service — a caller with
+        no platform `*:*` permission still succeeds (no ForbiddenCompanyError),
+        with or without a seeder injected."""
         user_id = uuid4()  # not in admin set
         uc = CreateCompanyUseCase(
             company_repo=company_repo,
-            role_checker=role_service,
+            access_repo=access_repo,
             seed_payment_methods=None,
         )
 
-        with pytest.raises(ForbiddenCompanyError):
-            uc.execute(_inp(user_id), fake_session)
+        result = uc.execute(_inp(user_id), fake_session)
+
+        assert result.legal_name == "Dupont SARL"

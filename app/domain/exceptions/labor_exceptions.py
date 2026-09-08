@@ -105,6 +105,21 @@ class RateChangeNotFoundError(LaborError):
         super().__init__(f"Rate change not found: {rc_id}")
 
 
+class WorkerAlreadyLinkedError(LaborError):
+    """Raised when creating a worker FROM a person (Phase 2 onboarding) whose
+    linked user account already has a worker on this project.
+
+    Distinct from the explicit-``user_id`` conflict (`InvalidWorkerDataError`,
+    a 400 client input error): this is a state conflict the caller could not
+    have known about from the request body alone, so it maps to 409.
+    """
+
+    def __init__(self, project_id: str, user_id: str) -> None:
+        self.project_id = project_id
+        self.user_id = user_id
+        super().__init__(f"User {user_id} already has a worker on project {project_id}")
+
+
 class WorkerNotLinkedError(LaborError):
     """Raised when the signed-in user has no worker row on the project (self-logging)."""
 

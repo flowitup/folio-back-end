@@ -20,14 +20,18 @@ class ProjectModel(Base):
     name = Column(String(255), nullable=False)
     address = Column(String(500), nullable=True)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    # Company FK is nullable during the Phase 1 rollout: migration
-    # b1c2d3e4f5a6 backfills it from the owner's primary company access
-    # row. A follow-up migration tightens it to NOT NULL once orphans
-    # are resolved. ondelete=SET NULL mirrors billing_documents — a
-    # company deletion orphans the project for admin re-assignment.
+    # Company FK is nullable during the Phase 1/2 rollout: migration
+    # b1c2d3e4f5a6 (and the follow-up backfill 15c1df3fdbfa) fill it in from
+    # the owner's primary company access row, but the seed DB still has a
+    # handful of orphans — tightening to NOT NULL is deferred to Phase 4
+    # once every environment is clean (see the plan's tenancy phases).
+    # ondelete=RESTRICT (Phase 2, migration 2ca24be9e3a8): a project is a
+    # company asset — deleting the owning company while projects still
+    # reference it must fail loudly (admin re-assigns or deletes the
+    # projects first), not silently orphan them the way SET NULL did.
     company_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("companies.id", ondelete="SET NULL"),
+        ForeignKey("companies.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )

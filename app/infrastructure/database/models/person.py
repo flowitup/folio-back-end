@@ -34,6 +34,19 @@ class PersonModel(Base):
     # Populated by the application layer as lower(trim(name)) on every
     # insert / update. Used for case-insensitive search and dedup hints.
     normalized_name = Column(String(255), nullable=False)
+    # Phase 2: link to the account this person signed up with, once they do.
+    # Nullable + unique — one user maps to at most one person (backfilled
+    # from workers.user_id; a user with no linked worker has no person yet).
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    # E.164 form of `phone`, computed via app.domain.value_objects.phone_number
+    # with the company's default_phone_region. A matching hint only — NOT
+    # unique (the family-device invariant on `phone` stands; see class docstring).
+    phone_normalized = Column(String(32), nullable=True)
 
     # Audit: who first registered this Person. Not used for authorization.
     created_by_user_id = Column(
@@ -67,6 +80,10 @@ class PersonModel(Base):
     __table_args__ = (
         Index("ix_persons_normalized_name", "normalized_name"),
         Index("ix_persons_created_by", "created_by_user_id"),
+        # Plain (non-unique) index — phone_normalized is a matching hint
+        # only, so unlike ix_persons_phone this one is not partial and is
+        # safe to declare here too (SQLite create_all() compatible).
+        Index("ix_persons_phone_normalized", "phone_normalized"),
         # NOTE: partial index on phone (WHERE phone IS NOT NULL) is
         # declared only in the Alembic migration (ix_persons_phone)
         # because the postgresql_where syntax is not SQLite-compatible.

@@ -15,6 +15,7 @@ from app.application.companies.generate_invite_token_usecase import GenerateInvi
 from app.application.companies.revoke_invite_token_usecase import RevokeInviteTokenUseCase
 from app.application.companies.list_attached_users_usecase import ListAttachedUsersUseCase
 from app.application.companies.boot_attached_user_usecase import BootAttachedUserUseCase
+from app.application.companies.list_new_members_usecase import ListNewMembersUseCase
 
 # --- Use-cases: authenticated user ---
 from app.application.companies.list_my_companies_usecase import ListMyCompaniesUseCase
@@ -46,6 +47,7 @@ from app.application.companies.dtos import (
     ListMyCompaniesResult,
     ListAllCompaniesResult,
     InviteTokenResponse,
+    NewMemberEvent,
 )
 
 # --- Ports ---
@@ -63,6 +65,7 @@ from app.application.companies.ports import (
 # --- Domain exceptions re-exported for convenience ---
 from app.domain.companies.exceptions import (
     CompaniesDomainError,
+    CompanyHasProjectsError,
     CompanyNotFoundError,
     UserCompanyAccessNotFoundError,
     InviteTokenNotFoundError,
@@ -86,6 +89,7 @@ __all__ = [
     "RevokeInviteTokenUseCase",
     "ListAttachedUsersUseCase",
     "BootAttachedUserUseCase",
+    "ListNewMembersUseCase",
     # use-cases: authenticated user
     "ListMyCompaniesUseCase",
     "GetCompanyUseCase",
@@ -114,6 +118,7 @@ __all__ = [
     "ListMyCompaniesResult",
     "ListAllCompaniesResult",
     "InviteTokenResponse",
+    "NewMemberEvent",
     # ports
     "CompanyRepositoryPort",
     "UserCompanyAccessRepositoryPort",
@@ -125,6 +130,7 @@ __all__ = [
     "TransactionalSessionPort",
     # exceptions
     "CompaniesDomainError",
+    "CompanyHasProjectsError",
     "CompanyNotFoundError",
     "UserCompanyAccessNotFoundError",
     "InviteTokenNotFoundError",
