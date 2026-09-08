@@ -193,3 +193,115 @@ def test_migration_9a4c1e7b2d05_round_trip(alembic_cfg, pg_engine, migration_app
         conn.commit()
 
     _run(migration_app, command.upgrade, alembic_cfg, "head")
+
+
+def _seed_phone_collision(conn) -> dict:
+    """A user whose phone is already taken in their company by a pending profile.
+
+    Postgres keeps `UNIQUE(company_id, phone_normalized) WHERE phone_normalized
+    IS NOT NULL` on `company_persons` (migration 2ca24be9e3a8) — the exact index
+    a naive directory backfill violates, aborting the deploy half-way.
+    """
+    ids = {k: uuid4() for k in ("user", "company", "person", "pending_person", "pending_profile")}
+    phone = f"+3360000{ids['user'].int % 10000:04d}"
+    ids["phone"] = phone
+    conn.execute(
+        text("INSERT INTO users (id, email, password_hash, is_active) VALUES (:id, :email, 'x', TRUE)"),
+        {"id": ids["user"], "email": f"phone-{ids['user'].hex[:8]}@migration-test.com"},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO companies (id, legal_name, address, created_by, created_at, updated_at) "
+            "VALUES (:id, 'Phone Collision Co', '1 rue', :u, NOW(), NOW())"
+        ),
+        {"id": ids["company"], "u": ids["user"]},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO user_company_access (user_id, company_id, is_primary, role, attached_at) "
+            "VALUES (:u, :c, TRUE, 'member', NOW())"
+        ),
+        {"u": ids["user"], "c": ids["company"]},
+    )
+    # The user's own identity carries the phone…
+    conn.execute(
+        text(
+            "INSERT INTO persons (id, name, normalized_name, phone, phone_normalized, user_id, "
+            "created_by_user_id, created_at, updated_at) "
+            "VALUES (:id, 'Attached User', 'attached user', :phone, :phone, :u, :u, NOW(), NOW())"
+        ),
+        {"id": ids["person"], "phone": phone, "u": ids["user"]},
+    )
+    # …and an admin already added a pending profile for the same number.
+    conn.execute(
+        text(
+            "INSERT INTO persons (id, name, normalized_name, phone, phone_normalized, "
+            "created_by_user_id, created_at, updated_at) "
+            "VALUES (:id, 'Pending Worker', 'pending worker', :phone, :phone, :u, NOW(), NOW())"
+        ),
+        {"id": ids["pending_person"], "phone": phone, "u": ids["user"]},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO company_persons (id, company_id, person_id, is_active, phone_normalized, "
+            "created_by_user_id, created_at) "
+            "VALUES (:id, :c, :p, TRUE, :phone, :u, NOW())"
+        ),
+        {
+            "id": ids["pending_profile"],
+            "c": ids["company"],
+            "p": ids["pending_person"],
+            "phone": phone,
+            "u": ids["user"],
+        },
+    )
+    return ids
+
+
+def _cleanup_phone_collision(conn, ids: dict) -> None:
+    conn.execute(text("DELETE FROM company_persons WHERE company_id = :c"), {"c": ids["company"]})
+    conn.execute(text("DELETE FROM user_company_access WHERE company_id = :c"), {"c": ids["company"]})
+    conn.execute(text("DELETE FROM companies WHERE id = :c"), {"c": ids["company"]})
+    conn.execute(text("DELETE FROM persons WHERE id IN (:p1, :p2)"), {"p1": ids["person"], "p2": ids["pending_person"]})
+    conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": ids["user"]})
+
+
+def test_directory_backfill_survives_a_phone_already_used_in_the_company(alembic_cfg, pg_engine, migration_app):
+    from alembic import command
+
+    _run(migration_app, command.upgrade, alembic_cfg, _PREVIOUS)
+    _run(migration_app, command.downgrade, alembic_cfg, _PREVIOUS)
+
+    with pg_engine.connect() as conn:
+        ids = _seed_phone_collision(conn)
+        conn.commit()
+
+    # Must not raise: an IntegrityError here aborts the deploy half-way.
+    _run(migration_app, command.upgrade, alembic_cfg, _TARGET)
+
+    with pg_engine.connect() as conn:
+        # The attached user is listed, without the phone the pending row owns.
+        linked_phone = conn.execute(
+            text(
+                "SELECT cp.phone_normalized FROM company_persons cp " "WHERE cp.company_id = :c AND cp.person_id = :p"
+            ),
+            {"c": ids["company"], "p": ids["person"]},
+        ).fetchone()
+        assert linked_phone is not None, "the attachment must still produce a directory profile"
+        assert linked_phone[0] is None
+        # The phone stays unique inside the company (the partial index holds).
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM company_persons " "WHERE company_id = :c AND phone_normalized = :phone"),
+                {"c": ids["company"], "phone": ids["phone"]},
+            ).scalar()
+            == 1
+        )
+
+    _run(migration_app, command.downgrade, alembic_cfg, _PREVIOUS)
+
+    with pg_engine.connect() as conn:
+        _cleanup_phone_collision(conn, ids)
+        conn.commit()
+
+    _run(migration_app, command.upgrade, alembic_cfg, "head")

@@ -68,6 +68,7 @@ _RAISE_ADMIN_SQL = text(
 )
 _SET_OPS_SQL = text("UPDATE users SET is_platform_ops = :value WHERE id = :user_id AND is_platform_ops <> :value")
 _DELETE_USER_SQL = text("DELETE FROM users WHERE id = :user_id")
+_PROJECTS_WITHOUT_COMPANY_SQL = text("SELECT COUNT(*) FROM projects WHERE company_id IS NULL")
 _SNAPSHOT_SQL = text(
     "SELECT u.email, u.is_platform_ops, "
     "(SELECT string_agg(c.legal_name || ':' || a.role, ', ' ORDER BY c.legal_name) "
@@ -118,11 +119,19 @@ def _ensure_admin(conn: Connection, user_id, company_id, report: CutoverReport, 
 
 
 def snapshot(conn: Connection) -> list[str]:
-    """One line per user: email, ops flag, company roles."""
-    return [
+    """One line per user (email, ops flag, company roles), then the tenancy gaps.
+
+    A project with no `company_id` resolves to no permission for everyone but
+    platform ops, and no endpoint can set that column — so the count belongs in
+    the cutover record, next to the decisions that were applied.
+    """
+    lines = [
         f"  {email}  ops={bool(is_ops)}  {roles or '(no company)'}"
         for email, is_ops, roles in conn.execute(_SNAPSHOT_SQL).fetchall()
     ]
+    orphans = conn.execute(_PROJECTS_WITHOUT_COMPANY_SQL).scalar() or 0
+    lines.append(f"  projects with company_id IS NULL: {orphans}")
+    return lines
 
 
 def apply_cutover(

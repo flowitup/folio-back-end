@@ -84,7 +84,25 @@ def ensure_company_person(
             person_id=person.id,
             created_at=now,
             is_active=True,
-            phone_normalized=person.phone_normalized,
+            phone_normalized=_free_phone(company_persons, company_id, person),
             created_by_user_id=user_id,
         )
     )
+
+
+def _free_phone(company_persons: Any, company_id: UUID, person) -> Optional[str]:
+    """The person's phone, or None when this company already has a profile using it.
+
+    PostgreSQL enforces a partial `UNIQUE(company_id, phone_normalized)` on
+    `company_persons` (migration `2ca24be9e3a8`; SQLite does not, so the test
+    suite cannot reproduce it). An admin who pre-added this human by phone
+    already owns that number in the company, and attaching a user must not
+    fail with an IntegrityError over it — the attachment is what the caller
+    asked for. The two rows stay separate identities until someone merges them
+    from the directory.
+    """
+    phone = getattr(person, "phone_normalized", None)
+    find_by_phone = getattr(company_persons, "find_by_phone", None)
+    if phone is None or find_by_phone is None:
+        return phone
+    return None if find_by_phone(company_id, phone) is not None else phone

@@ -8,7 +8,8 @@ this release back.
 Data steps live in
 app.infrastructure.database.backfills.platform_ops_and_creator_assignments
 (shared with the migration test) and print their mapping so it can be reviewed
-against a prod dump.
+against a prod dump. Users appear as a masked email plus their id — the mapping
+lands in deploy logs.
 
 Revision ID: 9a4c1e7b2d05
 Revises: 7d3e9a1b4c5f
@@ -37,6 +38,10 @@ def upgrade() -> None:
     print(report.summary())
     for line in report.lines:
         print(line)
+    # Never abort on these: migrations run at container start, so raising here
+    # would be an outage. They need a human decision after the deploy.
+    for warning in report.warnings:
+        print(warning)
 
 
 def downgrade() -> None:
