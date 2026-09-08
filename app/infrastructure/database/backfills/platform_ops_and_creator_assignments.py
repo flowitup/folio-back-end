@@ -10,8 +10,9 @@ and SQLite (tests), each in its own module:
      user-linked ``company_persons`` profile, so the assign-member pickers can
      see people attached before the directory shipped.
 
-The legacy-role mapping that used to run first lives in migration
-``9a4c1e7b2d05`` itself: it reads tables a later revision drops.
+The legacy-role mapping that used to run first lives in
+``scripts/migration_legacy_role_mapping.py``: it reads tables a later
+revision drops, so it cannot live here.
 
 Every step is idempotent: re-running changes nothing. The returned report is
 printed by the migration so the mapping can be reviewed against a prod dump;
@@ -32,13 +33,9 @@ from app.infrastructure.database.backfills.directory_profiles import (
 )
 
 
-def run_backfill(conn: Connection, report: "BackfillReport | None" = None) -> BackfillReport:
-    """Run both steps in order and return the mapping report.
-
-    Pass an existing `report` to append to it (migration 9a4c1e7b2d05 starts
-    one for its own legacy-role steps).
-    """
-    report = report if report is not None else BackfillReport()
+def run_backfill(conn: Connection) -> BackfillReport:
+    """Run both steps in order and return the mapping report."""
+    report = BackfillReport()
     backfill_creator_assignments(conn, report)
     backfill_directory_profiles(conn, report)
     return report

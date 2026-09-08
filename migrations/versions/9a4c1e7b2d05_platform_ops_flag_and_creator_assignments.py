@@ -11,9 +11,11 @@ app.infrastructure.database.backfills.platform_ops_and_creator_assignments
 against a prod dump. Users appear as a masked email plus their id — the mapping
 lands in deploy logs.
 
-The two steps that READ the legacy role tables live in this file rather than in
-the shared package: a later revision drops those tables, so the queries below
-are only ever valid while upgrading through this revision.
+The two steps that READ the legacy role tables live in
+``scripts/migration_legacy_role_mapping.py`` rather than in ``app``: a later
+revision drops those tables, so those queries are only ever valid while
+upgrading through this revision. Keeping them in an importable module keeps
+their unit tests (tests/unit/test_migration_legacy_role_mapping.py).
 
 Revision ID: 9a4c1e7b2d05
 Revises: 7d3e9a1b4c5f
@@ -25,36 +27,10 @@ from alembic import op
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from app.infrastructure.database.backfills.authz_backfill_report import (
-    BackfillReport,
-    access_rows,
-    company_label,
-    raise_role,
-    user_label,
-)
+from app.infrastructure.database.backfills.authz_backfill_report import BackfillReport
 from app.infrastructure.database.backfills.creator_assignments import backfill_creator_assignments
 from app.infrastructure.database.backfills.directory_profiles import backfill_directory_profiles
-
-_OPS_USERS_SQL = text(
-    """
-    SELECT DISTINCT ur.user_id
-    FROM user_roles ur
-    JOIN role_permissions rp ON rp.role_id = ur.role_id
-    JOIN permissions p ON p.id = rp.permission_id
-    WHERE p.name = '*:*'
-    """
-)
-
-_GLOBAL_ROLE_USERS_SQL = text(
-    """
-    SELECT DISTINCT ur.user_id
-    FROM user_roles ur
-    JOIN roles r ON r.id = ur.role_id
-    WHERE r.name = :role_name
-    """
-)
-
-_SET_OPS_SQL = text("UPDATE users SET is_platform_ops = TRUE WHERE CAST(id AS TEXT) = CAST(:user_id AS TEXT)")
+from scripts.migration_legacy_role_mapping import backfill_global_managers, backfill_platform_ops
 
 _ANY_ROLE_ID_SQL = text("SELECT id FROM roles WHERE name = :role_name")
 
@@ -86,36 +62,6 @@ def _insert_assignment_with_legacy_role(conn: Connection, user_id, project_id, a
         {"user_id": user_id, "project_id": project_id, "role_id": role_id, "assigned_at": assigned_at},
     )
     return True
-
-
-def backfill_platform_ops(conn: Connection, report: BackfillReport) -> None:
-    """Step 1: legacy `*:*` holders → ops flag + admin of their primary/sole company."""
-    for (user_id,) in conn.execute(_OPS_USERS_SQL).fetchall():
-        conn.execute(_SET_OPS_SQL, {"user_id": str(user_id)})
-        report.ops_users += 1
-        rows = access_rows(conn, user_id)
-        if len(rows) == 1:
-            target = rows[0]
-        else:
-            target = next((r for r in rows if r[2]), None)
-        if target is None:
-            report.lines.append(f"  ops: {user_label(conn, user_id)} (no company attachment — flag only)")
-            continue
-        company_id, role = target[0], target[1]
-        if raise_role(conn, user_id, company_id, "admin", role):
-            report.ops_company_admins += 1
-        report.lines.append(f"  ops: {user_label(conn, user_id)} → admin of {company_label(conn, company_id)}")
-
-
-def backfill_global_managers(conn: Connection, report: BackfillReport) -> None:
-    """Step 2: legacy global `manager` role → company `manager` wherever attached."""
-    for (user_id,) in conn.execute(_GLOBAL_ROLE_USERS_SQL, {"role_name": "manager"}).fetchall():
-        for company_id, role, _is_primary in access_rows(conn, user_id):
-            if raise_role(conn, user_id, company_id, "manager", role):
-                report.global_managers += 1
-                report.lines.append(
-                    f"  manager: {user_label(conn, user_id)} → manager of {company_label(conn, company_id)}"
-                )
 
 
 # revision identifiers, used by Alembic.
