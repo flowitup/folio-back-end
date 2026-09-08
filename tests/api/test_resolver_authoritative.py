@@ -357,7 +357,7 @@ class TestCompanyAdminVisibility:
 
 
 class TestNotesFollowTheResolver:
-    """`ProjectMembershipReaderPort` answers `project:read`, writes add `project:update`.
+    """`ProjectMembershipReaderPort` answers `project:read`, writes need `project:update`.
 
     Before this, the reader answered with `user_projects` OR `projects.owner_id`
     OR a legacy global `*:*` role row — so an ops revocation did not apply, the
@@ -389,14 +389,18 @@ class TestNotesFollowTheResolver:
         )
         assert resp.status_code == 201, resp.get_data(as_text=True)
 
-    def test_assigned_member_keeps_the_site_journal(self, inv_client, invitation_app, member_token):
-        """Notes sit at `project:read`, like documents and photos: the journal is
-        what an assigned member is there to fill. Money and management routes
-        are the ones a member cannot reach."""
+    def test_assigned_member_reads_the_site_journal_but_does_not_write_it(
+        self, inv_client, invitation_app, member_token
+    ):
+        """Reading notes sits at `project:read`, writing one at `project:update`.
+
+        An assigned member follows the site journal; filling it is the manager's
+        job, and documents are closed to a member entirely (see
+        test_project_write_gates_matrix.py)."""
         pid = invitation_app._test_project_id
         assert inv_client.get(f"/api/v1/projects/{pid}/notes", headers=_auth(member_token)).status_code == 200
         resp = inv_client.post(f"/api/v1/projects/{pid}/notes", json={"title": "Delivery"}, headers=_auth(member_token))
-        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.status_code == 403, resp.get_data(as_text=True)
 
     def test_outsider_gets_403_on_notes(self, inv_client, invitation_app, outsider_token):
         resp = inv_client.get(

@@ -1,19 +1,16 @@
 """Project analyses API routes — list, upload, metadata, content, edit, delete.
 
-Authorization note:
+Authorization note (D9):
     Two tiers, and they are not the same rule.
 
-    * Read (list, get, content): ``is_member()`` — the resolver's
+    * Read (list, tags, get, content): ``is_member()`` — the resolver's
       ``project:read`` — raising ``NotProjectMemberError``, which the route
-      maps to 403.
-    * Create: read access to the project, resolved at the route like
-      ``project_documents`` (its sibling resource) — uploading a report is part
-      of working on a project, and the uploader keeps control of what they
-      uploaded.
-    * Mutate (PATCH, DELETE): read access AND uploader-or-project-owner-or
-      -``project:update`` holder. Read access alone would let any project
-      member rewrite or delete a colleague's report; the uploader keeps
-      control of their own. This mirrors ``DeleteProjectDocumentUseCase``.
+      maps to 403. A company ``member`` reads the site journal.
+    * Write (POST, PATCH, DELETE): ``project:update`` at the route, so a
+      member is refused — reading a colleague's report is part of the journal,
+      rewriting it is not. The uploader/owner check inside the use-cases is
+      kept but additive only: a caller without ``project:update`` never
+      reaches it, so uploading a report no longer buys write rights on it.
 """
 
 from __future__ import annotations
@@ -185,8 +182,8 @@ def list_analysis_tags(project_id: UUID) -> Any:
     tags=["project_analyses"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
-@require_permission("project:read")
-@require_project_access(write=False)
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("20 per minute", key_func=jwt_user_key)
 def create_analysis(project_id: UUID) -> Any:
     """Upload a self-contained HTML report. Agent-callable via the same endpoint."""
@@ -348,6 +345,8 @@ def get_analysis_content(project_id: UUID, analysis_id: UUID) -> Any:
     tags=["project_analyses"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     """Update title/summary/source_url/tags. Omitted fields are left unchanged."""
@@ -373,9 +372,8 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     if container.update_project_analysis_usecase is None:
         raise RuntimeError("update_project_analysis_usecase not wired in container")
 
-    # Editing is restricted to the uploader, the project owner, or an admin —
-    # membership alone only grants read access. Re-load the project because the
-    # use-case needs its owner_id to make that call.
+    # The route gate already required project:update (D9); re-load the project
+    # because the use-case needs its owner_id for its own uploader/owner check.
     if container.project_repository is None:
         raise RuntimeError("project_repository not wired in container")
     project = container.project_repository.find_by_id(project_id)
@@ -394,8 +392,9 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
                 tags=tags_arg,
             ),
             project_owner_id=project.owner_id,
-            # The caller's resolved project:update permission (platform ops
-            # resolves to "*:*") bypasses the uploader/owner check.
+            # Additive only (D9): the route already demanded project:update,
+            # so this is True for every caller who gets here (platform ops
+            # resolves to "*:*").
             is_admin=_has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
         )
     except AnalysisNotFoundError:
@@ -421,6 +420,8 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
 @project_analyses_bp.delete("/projects/<uuid:project_id>/analyses/<uuid:analysis_id>")
 @openapi_doc(summary="Soft-delete an analysis report", tags=["project_analyses"])
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     """Soft-delete an analysis report. Actor must be a project member."""
@@ -429,7 +430,7 @@ def delete_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     if container.delete_project_analysis_usecase is None:
         raise RuntimeError("delete_project_analysis_usecase not wired in container")
 
-    # Same restriction as PATCH: uploader, project owner, or admin only.
+    # Same gate as PATCH: project:update at the route, uploader/owner below.
     if container.project_repository is None:
         raise RuntimeError("project_repository not wired in container")
     project = container.project_repository.find_by_id(project_id)
@@ -442,8 +443,9 @@ def delete_analysis(project_id: UUID, analysis_id: UUID) -> Any:
             analysis_id=analysis_id,
             expected_project_id=project_id,
             project_owner_id=project.owner_id,
-            # The caller's resolved project:update permission (platform ops
-            # resolves to "*:*") bypasses the uploader/owner check.
+            # Additive only (D9): the route already demanded project:update,
+            # so this is True for every caller who gets here (platform ops
+            # resolves to "*:*").
             is_admin=_has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
         )
     except AnalysisNotFoundError:

@@ -76,7 +76,7 @@ class TestDeleteNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        uc.execute(actor_id=uuid4(), note_id=note.id)
+        uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id)
 
         note_repo.delete.assert_called_once_with(note.id)
 
@@ -89,7 +89,7 @@ class TestDeleteNoteHappyPath:
         db = _FakeSession()
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership, db_session=db)
-        uc.execute(actor_id=uuid4(), note_id=note.id)
+        uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id)
 
         assert db.commit_calls == 1
 
@@ -101,7 +101,7 @@ class TestDeleteNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        result = uc.execute(actor_id=uuid4(), note_id=note.id)
+        result = uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id)
 
         assert result is None
 
@@ -115,7 +115,7 @@ class TestDeleteNoteHappyPath:
         membership.is_member.return_value = True
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        uc.execute(actor_id=actor_id, note_id=note.id)
+        uc.execute(actor_id=actor_id, note_id=note.id, expected_project_id=note.project_id)
 
         membership.is_member.assert_called_once_with(actor_id, project_id)
 
@@ -132,7 +132,7 @@ class TestDeleteNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo)
         with pytest.raises(NoteNotFoundError):
-            uc.execute(actor_id=uuid4(), note_id=uuid4())
+            uc.execute(actor_id=uuid4(), note_id=uuid4(), expected_project_id=uuid4())
 
     def test_non_member_raises(self):
         note = _make_note()
@@ -143,7 +143,21 @@ class TestDeleteNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(NotProjectMemberError):
-            uc.execute(actor_id=uuid4(), note_id=note.id)
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id)
+
+    def test_note_of_another_project_is_reported_missing(self):
+        """Write rights on the URL's project must not reach another project's note."""
+        note = _make_note()
+        note_repo = MagicMock()
+        note_repo.find_by_id.return_value = note
+        membership = MagicMock()
+
+        uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
+        with pytest.raises(NoteNotFoundError):
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=uuid4())
+
+        membership.is_member.assert_not_called()
+        note_repo.delete.assert_not_called()
 
     def test_not_found_checked_before_membership(self):
         membership = MagicMock()
@@ -152,7 +166,7 @@ class TestDeleteNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(NoteNotFoundError):
-            uc.execute(actor_id=uuid4(), note_id=uuid4())
+            uc.execute(actor_id=uuid4(), note_id=uuid4(), expected_project_id=uuid4())
 
         membership.is_member.assert_not_called()
 
@@ -165,6 +179,6 @@ class TestDeleteNoteAuthz:
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
         with pytest.raises(NotProjectMemberError):
-            uc.execute(actor_id=uuid4(), note_id=note.id)
+            uc.execute(actor_id=uuid4(), note_id=note.id, expected_project_id=note.project_id)
 
         note_repo.delete.assert_not_called()

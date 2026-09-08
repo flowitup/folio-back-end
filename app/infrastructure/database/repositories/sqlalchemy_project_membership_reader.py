@@ -7,7 +7,9 @@ a booted user loses access the moment their company role is gone, and neither
 project ownership nor a legacy global role is a bypass any more (D6).
 
 Consumers (notes, project analyses, chiffrage) use this as their read gate;
-their write routes additionally chain `require_project_access(write=True)`.
+their write routes additionally chain
+`require_project_access(write=True, permission="project:update")`, which is
+what keeps a company `member` read-only on the site journal (D9).
 """
 
 from __future__ import annotations
