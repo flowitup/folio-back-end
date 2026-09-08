@@ -77,8 +77,10 @@ class CreateProductUseCase:
             raise CompanyAccessDeniedError(f"User {requester_id} is not a member of company {company_id}.")
 
         # 2. Permission check.
-        if not self._permission_checker.has_permission(requester_id, _MANAGE_PERMISSION):
-            raise InsufficientPermissionError(f"User {requester_id} lacks '{_MANAGE_PERMISSION}' permission.")
+        if not self._permission_checker.has_permission_in_company(requester_id, _MANAGE_PERMISSION, company_id):
+            raise InsufficientPermissionError(
+                f"User {requester_id} lacks '{_MANAGE_PERMISSION}' in company " f"{company_id}."
+            )
 
         # 3. Resolve supplier — exactly one of supplier_id / supplier_name must be set.
         #    The route schema enforces this too; this is defense-in-depth.

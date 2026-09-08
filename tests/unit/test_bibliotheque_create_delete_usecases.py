@@ -125,10 +125,23 @@ class FakeMembershipReader:
 
 
 class FakePermissionChecker:
-    def __init__(self, permitted_ids: set[UUID]) -> None:
+    """ICompanyPermissionChecker double.
+
+    `permitted_ids` are allowed everywhere; `permitted_in_company` narrows a
+    user to specific companies, which is what the write use-cases ask about
+    (a role in company A must not answer for company B).
+    """
+
+    def __init__(self, permitted_ids: set[UUID], permitted_in_company: "dict[UUID, set[UUID]] | None" = None) -> None:
         self._permitted = permitted_ids
+        self._permitted_in_company = permitted_in_company or {}
 
     def has_permission(self, user_id: UUID, permission_name: str) -> bool:
+        return user_id in self._permitted or user_id in self._permitted_in_company
+
+    def has_permission_in_company(self, user_id: UUID, permission_name: str, company_id: UUID) -> bool:
+        if user_id in self._permitted_in_company:
+            return company_id in self._permitted_in_company[user_id]
         return user_id in self._permitted
 
 
@@ -344,6 +357,31 @@ class TestCreateProductUseCase:
         with pytest.raises(CompanyAccessDeniedError):
             uc.execute(
                 requester_id=outsider,
+                company_id=company_id,
+                name="Widget",
+                supplier_name="Acme",
+            )
+        assert len(product_repo._products) == 0
+
+    def test_manage_permission_from_another_company_does_not_apply(
+        self, supplier_repo, product_repo, membership, session, company_id, requester_id
+    ):
+        """`bibliotheque:manage` held in company A never unlocks company B's library.
+
+        Membership in B plus a manager role in A used to pass both guards,
+        because the permission was asked context-free.
+        """
+        other_company_id = uuid4()
+        uc = CreateProductUseCase(
+            supplier_repo=supplier_repo,
+            product_repo=product_repo,
+            membership_reader=membership,
+            permission_checker=FakePermissionChecker(set(), {requester_id: {other_company_id}}),
+            db_session=session,
+        )
+        with pytest.raises(InsufficientPermissionError):
+            uc.execute(
+                requester_id=requester_id,
                 company_id=company_id,
                 name="Widget",
                 supplier_name="Acme",

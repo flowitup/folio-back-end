@@ -78,8 +78,10 @@ class ImportPurchasesUseCase:
         # Authorization: membership + named permission
         if not self._membership.is_member(requester_id, company_id):
             raise CompanyAccessDeniedError(f"User {requester_id} is not a member of company {company_id}.")
-        if not self._permission_checker.has_permission(requester_id, _MANAGE_PERMISSION):
-            raise InsufficientPermissionError(f"User {requester_id} lacks '{_MANAGE_PERMISSION}' permission.")
+        if not self._permission_checker.has_permission_in_company(requester_id, _MANAGE_PERMISSION, company_id):
+            raise InsufficientPermissionError(
+                f"User {requester_id} lacks '{_MANAGE_PERMISSION}' in company " f"{company_id}."
+            )
 
         # Step 1: resolve supplier (idempotent get_or_create)
         supplier_template = Supplier.create(

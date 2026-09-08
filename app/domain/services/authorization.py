@@ -100,12 +100,20 @@ class AuthorizationService:
         return has_permission_anywhere(self._authz_reader, user_id, permission)
 
     def has_permission_in_company(self, user_id: UUID, permission: str, company_id: UUID) -> bool:
-        """Return True when `company_id` grants `permission` to the caller."""
+        """Return True when `company_id` grants `permission` to the caller.
+
+        The company-scoped counterpart of `has_permission`: a role held in
+        another company never answers this one. Use it for every write gated on
+        a specific company (library products, imports, product images).
+        """
         if self.is_platform_admin(user_id):
             return True
         if self._authz_reader is None:
             return False
-        return permission in permissions_in_company(self._authz_reader, user_id, company_id)
+        perms = permissions_in_company(self._authz_reader, user_id, company_id)
+        if permission in perms or "*:*" in perms:
+            return True
+        return f"{permission.split(':', 1)[0]}:*" in perms
 
     def get_user_permissions(self, user_id: UUID) -> Set[str]:
         """Resolver permissions for the caller's primary company (union when none).
