@@ -787,6 +787,7 @@ def invitation_app():
             ListProjectDocumentsUseCase as _ListDocUC,
             GetProjectDocumentUseCase as _GetDocUC,
             DeleteProjectDocumentUseCase as _DeleteDocUC,
+            RenameProjectDocumentUseCase as _RenameDocUC,
         )
 
         _doc_repo = _DocRepo(db.session)
@@ -803,6 +804,10 @@ def invitation_app():
         _c.list_project_documents_usecase = _ListDocUC(repo=_doc_repo)
         _c.get_project_document_usecase = _GetDocUC(repo=_doc_repo, storage=_doc_storage)
         _c.delete_project_document_usecase = _DeleteDocUC(
+            repo=_doc_repo,
+            db_session=db.session,
+        )
+        _c.rename_project_document_usecase = _RenameDocUC(
             repo=_doc_repo,
             db_session=db.session,
         )

@@ -1,9 +1,12 @@
-"""API integration tests: GET /auth/me `companies` field.
+"""API integration tests: `companies` field on /auth/me and POST /auth/login.
 
 Phase 1 (roles & permissions redesign): `/auth/me` gains a `companies` array
 built from `CompanyRepositoryPort.list_attached_for_user` — `{id, legal_name,
 role, is_primary}` per attached company. Existing fields (`permissions`,
-`roles`, `phone`) are untouched.
+`roles`, `phone`) are untouched. `POST /auth/login` (and the OTP login/sign-up
+responses, sharing `_login_response`) return the exact same `companies` shape
+so clients don't need a follow-up `/auth/me` call to know which companies the
+user belongs to.
 """
 
 from __future__ import annotations
@@ -143,3 +146,22 @@ def test_me_existing_fields_unchanged(client):
     resp = client.get("/api/v1/auth/me", headers=h)
     body = resp.get_json()
     assert "permissions" in body and "roles" in body and "phone" in body
+
+
+def test_login_response_includes_companies_matching_me(client, me_app):
+    """POST /auth/login returns the same companies[] shape as GET /auth/me, no extra call needed."""
+    resp = client.post("/api/v1/auth/login", json={"email": "me_multi@test.com", "password": PASSWORD})
+    assert resp.status_code == 200
+    body = resp.get_json()["user"]
+    by_id = {c["id"]: c for c in body["companies"]}
+    assert set(by_id.keys()) == {str(me_app._company_a_id), str(me_app._company_b_id)}
+    assert by_id[str(me_app._company_a_id)]["role"] == "admin"
+    assert by_id[str(me_app._company_a_id)]["is_primary"] is True
+    assert by_id[str(me_app._company_b_id)]["role"] == "member"
+    assert by_id[str(me_app._company_b_id)]["is_primary"] is False
+
+
+def test_login_response_companies_empty_for_user_with_no_company(client):
+    resp = client.post("/api/v1/auth/login", json={"email": "me_none@test.com", "password": PASSWORD})
+    assert resp.status_code == 200
+    assert resp.get_json()["user"]["companies"] == []

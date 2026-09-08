@@ -54,6 +54,8 @@ class TestPhoneSignup:
         phone = "06 00 00 11 22"
         body = _signup(inv_client, invitation_app, phone, "Nguyen Van A")
         assert body["user"]["phone"] == "+33600001122"
+        # Same companies[] shape as /auth/me (shared _login_response helper) — empty for a fresh signup.
+        assert body["user"]["companies"] == []
         me = inv_client.get("/api/v1/auth/me", headers=_auth(body["access_token"])).get_json()
         assert me["phone"] == "+33600001122"
         assert me["email"].endswith("@no-email.folio.flowitup.com")

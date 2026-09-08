@@ -172,6 +172,22 @@ def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
 
 
+def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
+    """Companies the user is attached to — shared by login and /auth/me responses."""
+    companies: list[UserCompanySummary] = []
+    if container.company_repo is not None:
+        for company, access in container.company_repo.list_attached_for_user(user_id):
+            companies.append(
+                UserCompanySummary(
+                    id=company.id,
+                    legal_name=company.legal_name,
+                    role=access.role,
+                    is_primary=access.is_primary,
+                )
+            )
+    return companies
+
+
 def _login_response(container, result: LoginResult):
     """200 body + auth cookies shared by password and SMS-code sign-in."""
     user = container.user_repository.find_by_id(result.user_id)
@@ -184,6 +200,7 @@ def _login_response(container, result: LoginResult):
             permissions=result.permissions,
             roles=[r.name for r in user.roles],
             phone=user.phone,
+            companies=_user_companies(container, result.user_id),
         ),
     )
     response = make_response(jsonify(response_data.model_dump()))
@@ -349,18 +366,6 @@ def get_current_user():
     if not user:
         return jsonify(ErrorResponse(error="NotFound", message="User not found", status_code=404).model_dump()), 404
 
-    companies: list[UserCompanySummary] = []
-    if container.company_repo is not None:
-        for company, access in container.company_repo.list_attached_for_user(UUID(user_id)):
-            companies.append(
-                UserCompanySummary(
-                    id=company.id,
-                    legal_name=company.legal_name,
-                    role=access.role,
-                    is_primary=access.is_primary,
-                )
-            )
-
     return jsonify(
         UserResponse(
             id=user.id,
@@ -368,7 +373,7 @@ def get_current_user():
             permissions=jwt_claims.get("permissions", []),
             roles=[r.name for r in user.roles],
             phone=user.phone,
-            companies=companies,
+            companies=_user_companies(container, UUID(user_id)),
         ).model_dump()
     )
 

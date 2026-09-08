@@ -252,6 +252,15 @@ def test_list_projects_scoped_to_own_company(client, admin_a_h, tenancy_app):
     assert str(tenancy_app._project_b_id) not in ids
 
 
+def test_list_projects_items_include_company_id(client, admin_a_h, tenancy_app):
+    """GET /projects list items carry company_id, same as the single GET /projects/<id>."""
+    resp = client.get("/api/v1/projects", headers=admin_a_h)
+    assert resp.status_code == 200
+    by_id = {p["id"]: p for p in resp.get_json()["projects"]}
+    project_a = by_id[str(tenancy_app._project_a_id)]
+    assert project_a["company_id"] == str(tenancy_app._company_a_id)
+
+
 def test_list_projects_claim_holder_sees_nothing_of_others(client, claim_holder_h, tenancy_app):
     """A bare global project:create claim, with no company/membership, sees no projects."""
     resp = client.get("/api/v1/projects", headers=claim_holder_h)
