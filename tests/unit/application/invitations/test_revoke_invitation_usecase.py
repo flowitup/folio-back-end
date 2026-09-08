@@ -11,11 +11,10 @@ import pytest
 from app.application.invitations.revoke_invitation_usecase import RevokeInvitationUseCase
 from app.application.invitations.exceptions import PermissionDeniedError
 from app.domain.entities.invitation import Invitation, InvitationStatus
-from app.domain.entities.permission import Permission
-from app.domain.entities.role import Role
 from app.domain.entities.user import User
 from app.domain.exceptions.invitation_exceptions import InvitationNotFoundError
 from app.domain.value_objects.invite_token import generate_token
+from tests.authz_reader_fake import FakeAuthzReader
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,26 +38,10 @@ def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=No
     )
 
 
-def _make_user_with_invite_perm() -> User:
-    user = User(
-        id=uuid4(),
-        email="admin@example.com",
-        password_hash="h",
-        is_active=True,
-        created_at=datetime.now(timezone.utc),
-        roles=[],
-    )
-    role = Role(id=uuid4(), name="member")
-    perm = Permission(id=uuid4(), name="project:invite", resource="project", action="invite")
-    role.permissions.append(perm)
-    user.roles.append(role)
-    return user
-
-
-def _make_plain_user() -> User:
+def _make_user(email="admin@example.com") -> User:
     return User(
         id=uuid4(),
-        email="plain@example.com",
+        email=email,
         password_hash="h",
         is_active=True,
         created_at=datetime.now(timezone.utc),
@@ -66,11 +49,22 @@ def _make_plain_user() -> User:
     )
 
 
-def _make_uc(inv_repo=None, user_repo=None, db_session=None) -> RevokeInvitationUseCase:
+# The legacy helper names read better as intent: both build a plain user now —
+# what a caller may do comes from the resolver, not from a role row.
+_make_user_with_invite_perm = _make_user
+_make_plain_user = _make_user
+
+
+def _reader(project_id, *, role="manager", assigned=True, ops=False) -> FakeAuthzReader:
+    return FakeAuthzReader(role=role, company_id=uuid4(), project_id=project_id, assigned=assigned, ops=ops)
+
+
+def _make_uc(inv_repo=None, user_repo=None, db_session=None, authz_reader=None) -> RevokeInvitationUseCase:
     return RevokeInvitationUseCase(
         invitation_repo=inv_repo or MagicMock(),
         user_repo=user_repo or MagicMock(),
         db_session=db_session or MagicMock(),
+        authz_reader=authz_reader,
     )
 
 
@@ -177,5 +171,67 @@ class TestRevokeInvitation:
 
         uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo)
         # Must not raise
+        uc.execute(inviter_id=actor.id, invitation_id=inv.id)
+        inv_repo.save.assert_called_once()
+
+
+class TestRevokeAuthorization:
+    """Revoking is `project:invite` on the invitation's own project (C2)."""
+
+    def test_manager_of_the_invitation_project_may_revoke(self):
+        actor = _make_user()
+        inv = _make_inv(InvitationStatus.PENDING, inviter_id=uuid4())
+
+        inv_repo = MagicMock()
+        inv_repo.find_by_id.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = actor
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, authz_reader=_reader(inv.project_id))
+        uc.execute(inviter_id=actor.id, invitation_id=inv.id)
+        inv_repo.save.assert_called_once()
+
+    def test_manager_of_another_project_may_not_revoke(self):
+        """The hole this closes: a global `manager` role reached every project."""
+        actor = _make_user()
+        inv = _make_inv(InvitationStatus.PENDING, inviter_id=uuid4())
+
+        inv_repo = MagicMock()
+        inv_repo.find_by_id.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = actor
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, authz_reader=_reader(uuid4()))
+        with pytest.raises(PermissionDeniedError):
+            uc.execute(inviter_id=actor.id, invitation_id=inv.id)
+        inv_repo.save.assert_not_called()
+
+    def test_member_of_the_project_may_not_revoke(self):
+        actor = _make_user()
+        inv = _make_inv(InvitationStatus.PENDING, inviter_id=uuid4())
+
+        inv_repo = MagicMock()
+        inv_repo.find_by_id.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = actor
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, authz_reader=_reader(inv.project_id, role="member"))
+        with pytest.raises(PermissionDeniedError):
+            uc.execute(inviter_id=actor.id, invitation_id=inv.id)
+
+    def test_platform_ops_may_revoke_anything(self):
+        actor = _make_user(email="ops@example.com")
+        inv = _make_inv(InvitationStatus.PENDING, inviter_id=uuid4())
+
+        inv_repo = MagicMock()
+        inv_repo.find_by_id.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = actor
+
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            authz_reader=_reader(inv.project_id, role="member", assigned=False, ops=True),
+        )
         uc.execute(inviter_id=actor.id, invitation_id=inv.id)
         inv_repo.save.assert_called_once()

@@ -919,12 +919,13 @@ def configure_container(
             invitation_repo=invitation_repo,
             user_repo=user_repository,
             db_session=_db.session,
+            authz_reader=container.authz_reader,
         )
         container.list_invitations_usecase = ListInvitationsUseCase(
             invitation_repo=invitation_repo,
-            project_membership_repo=project_membership_repo,
             role_repo=role_repo,
             user_repo=user_repository,
+            authz_reader=container.authz_reader,
         )
 
         # AcceptInvitationUseCase needs a db session; lazily import db here
@@ -960,6 +961,7 @@ def configure_container(
             queue_port=_queue,
             app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:3000"),
             db_session=_db.session,
+            role_checker=container.authorization_service,
         )
 
     # Wire notes use cases (phase 03) — always wired; repos are instantiated in
@@ -1097,10 +1099,15 @@ def configure_container(
     container.authz_reader = _SqlAlchemyAuthzReader(_authz_db.session, cache_provider=_get_reader_cache)
     if container.authorization_service is not None:
         container.authorization_service.set_authz_reader(container.authz_reader)
-    if container.create_invitation_usecase is not None and hasattr(
-        container.create_invitation_usecase, "set_authz_reader"
+    # Every invitation use-case resolves `project:invite` itself (create, list
+    # and revoke), and they are all built above, before the reader exists.
+    for _invitation_usecase in (
+        container.create_invitation_usecase,
+        container.list_invitations_usecase,
+        container.revoke_invitation_usecase,
     ):
-        container.create_invitation_usecase.set_authz_reader(container.authz_reader)
+        if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
+            _invitation_usecase.set_authz_reader(container.authz_reader)
 
     container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)

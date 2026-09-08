@@ -502,11 +502,16 @@ def invitation_app():
         _c.authz_reader = _SqlAlchemyAuthzReader(db.session, cache_provider=_get_reader_cache)
 
         # Mirrors app/__init__.py: the RoleCheckerPort implementation and the
-        # invitation use-case resolve through the same reader as the decorators.
+        # invitation use-cases resolve through the same reader as the decorators.
         if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
             _role_checker.set_authz_reader(_c.authz_reader)
-        if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_authz_reader"):
-            _c.create_invitation_usecase.set_authz_reader(_c.authz_reader)
+        for _invitation_usecase in (
+            _c.create_invitation_usecase,
+            _c.list_invitations_usecase,
+            _c.revoke_invitation_usecase,
+        ):
+            if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
+                _invitation_usecase.set_authz_reader(_c.authz_reader)
         if _role_checker is not None and hasattr(_role_checker, "set_company_role_lookup"):
 
             def _company_role_for(user_id, company_id):
@@ -583,6 +588,37 @@ def invitation_app():
 
         _c.person_repo = _PersonRepo(db.session)
         _c.company_person_repo = _CompanyPersonRepo(db.session)
+
+        # Re-wire AcceptInvitationUseCase exactly like app/__init__.py: accepting
+        # an invitation attaches the acceptor to the project's company AND lists
+        # them in its directory. Wiring it without the directory repos here is
+        # what let that invariant go untested.
+        if _c.accept_invitation_usecase is not None:
+            from app.application.company_persons.link_person_on_signup_usecase import (
+                LinkPersonOnSignupUseCase as _LinkPersonOnSignupUseCase,
+            )
+            from app.application.invitations.accept_invitation_usecase import (
+                AcceptInvitationUseCase as _AcceptInvitationUseCase,
+            )
+
+            _c.accept_invitation_usecase = _AcceptInvitationUseCase(
+                invitation_repo=_c.invitation_repo,
+                user_repo=_c.user_repository,
+                project_membership_repo=_c.project_membership_repo,
+                password_hasher=_c.password_hasher,
+                token_issuer=_c.token_issuer,
+                db_session=db.session,
+                role_repo=_c.role_repository,
+                authz_reader=_c.authz_reader,
+                access_repo=_access_repo,
+                link_person_on_signup=_LinkPersonOnSignupUseCase(
+                    person_repo=_c.person_repo,
+                    company_person_repo=_c.company_person_repo,
+                    access_repo=_access_repo,
+                ),
+                person_repo=_c.person_repo,
+                company_person_repo=_c.company_person_repo,
+            )
 
         _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
             token_repo=_token_repo,

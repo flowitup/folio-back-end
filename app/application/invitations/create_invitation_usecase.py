@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.application.invitations.authz import can_manage_project_invites
 from app.application.invitations.dtos import CreateInvitationResultDto
 from app.application.invitations.exceptions import (
     AlreadyMemberError,
@@ -200,11 +201,7 @@ class CreateInvitationUseCase:
         fallback: without a reader wired this fails closed, since the route
         that calls this use-case has already made the same check.
         """
-        if self._authz_reader is None:
-            return False
-        from app.domain.authz.resolver import has_permission
-
-        return has_permission(self._authz_reader, inviter_id, "project:invite", project_id=project_id)
+        return can_manage_project_invites(self._authz_reader, inviter_id, project_id)
 
     def _enqueue_invite_email(
         self,

@@ -586,9 +586,14 @@ def _configure_di_container() -> None:
     if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
         _role_checker.set_authz_reader(_c.authz_reader)
 
-    # Same reason: the invitation use-case resolves `project:invite` itself.
-    if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_authz_reader"):
-        _c.create_invitation_usecase.set_authz_reader(_c.authz_reader)
+    # Same reason: the invitation use-cases resolve `project:invite` themselves.
+    for _invitation_usecase in (
+        _c.create_invitation_usecase,
+        _c.list_invitations_usecase,
+        _c.revoke_invitation_usecase,
+    ):
+        if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
+            _invitation_usecase.set_authz_reader(_c.authz_reader)
 
     # D3 day roster use case — needs worker_repository + labor_entry_repository
     # (wired earlier in configure_container) plus the authz reader just above.
