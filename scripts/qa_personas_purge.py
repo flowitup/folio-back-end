@@ -7,11 +7,16 @@ QA company, one of its projects, one of the three QA users or one of their
 the metadata), so no foreign key is ever violated and nothing needs an
 ``ON DELETE CASCADE`` to work.
 
-Two guards make this safe to run against a real database:
+Three guards make this safe to run against production:
 
 * the company must be named ``Folio QA …`` — anything else is refused;
-* each named user must be attached to that company — a user who is not is
-  refused rather than deleted.
+* each named user must be attached to that company;
+* the QA company must be their ONLY attachment. A user who also belongs to a
+  real company is refused, not deleted: rows of theirs could then live outside
+  the QA scope.
+
+``dry_run=True`` counts the same rows and rolls back, so the exact blast radius
+can be read before anything is deleted.
 """
 
 from __future__ import annotations
@@ -21,6 +26,22 @@ from typing import Any
 from sqlalchemy import text
 
 _QA_COMPANY_PREFIX = "Folio QA "
+
+
+def id_sql(column: str) -> str:
+    """SQL normalising an id column to comparable text.
+
+    Postgres stores UUIDs as `uuid` (dashed text), SQLite as 32 hex chars;
+    the same id therefore has two textual forms. Comparing the normalised
+    form works on both. It also defeats every index — acceptable here: this
+    is a one-shot script over a handful of rows.
+    """
+    return f"REPLACE(LOWER(CAST({column} AS TEXT)), '-', '')"
+
+
+def id_param(value: Any) -> str:
+    """The same normalisation, for the Python side of a comparison."""
+    return str(value).replace("-", "").lower()
 
 
 def _scalars(session, sql: str, params: dict[str, Any]) -> list[Any]:
@@ -45,30 +66,32 @@ def _resolve_scope(session, company_name: str, emails: list[str]) -> dict[str, l
         if not rows:
             continue
         user_id = rows[0]
-        attached = session.execute(
-            text(
-                "SELECT 1 FROM user_company_access "
-                "WHERE CAST(user_id AS TEXT) = CAST(:uid AS TEXT) "
-                "AND CAST(company_id AS TEXT) = CAST(:cid AS TEXT)"
-            ),
-            {"uid": str(user_id), "cid": str(company_id)},
-        ).fetchone()
-        if attached is None:
+        attachments = _scalars(
+            session,
+            f"SELECT company_id FROM user_company_access WHERE {id_sql('user_id')} = :uid",
+            {"uid": id_param(user_id)},
+        )
+        if not any(id_param(cid) == id_param(company_id) for cid in attachments):
             raise ValueError(f"refusing to delete {email!r}: not attached to {company_name!r}")
+        if len(attachments) > 1:
+            raise ValueError(
+                f"refusing to delete {email!r}: attached to {len(attachments)} companies, "
+                f"not only {company_name!r} — this is not a QA-only account"
+            )
         user_ids.append(user_id)
 
     project_ids = _scalars(
         session,
-        "SELECT id FROM projects WHERE CAST(company_id AS TEXT) = CAST(:cid AS TEXT)",
-        {"cid": str(company_id)},
+        f"SELECT id FROM projects WHERE {id_sql('company_id')} = :cid",
+        {"cid": id_param(company_id)},
     )
     person_ids: list[Any] = []
     for user_id in user_ids:
         person_ids.extend(
             _scalars(
                 session,
-                "SELECT id FROM persons WHERE CAST(user_id AS TEXT) = CAST(:uid AS TEXT)",
-                {"uid": str(user_id)},
+                f"SELECT id FROM persons WHERE {id_sql('user_id')} = :uid",
+                {"uid": id_param(user_id)},
             )
         )
     return {
@@ -89,9 +112,9 @@ def _match_clauses(table, scope: dict[str, list[Any]]) -> tuple[list[str], dict[
             return
         prefix = f"p{len(clauses)}"
         placeholders = ", ".join(f":{prefix}_{i}" for i in range(len(ids)))
-        clauses.append(f"CAST({column_name} AS TEXT) IN ({placeholders})")
+        clauses.append(f"{id_sql(column_name)} IN ({placeholders})")
         for i, value in enumerate(ids):
-            params[f"{prefix}_{i}"] = str(value)
+            params[f"{prefix}_{i}"] = id_param(value)
 
     # The row IS one of the scoped entities.
     if table.name in scope:
@@ -105,12 +128,13 @@ def _match_clauses(table, scope: dict[str, list[Any]]) -> tuple[list[str], dict[
     return clauses, params
 
 
-def purge_company(company_name: str, emails: list[str]) -> dict[str, int]:
+def purge_company(company_name: str, emails: list[str], dry_run: bool = False) -> dict[str, int]:
     """Delete the QA company, its people and everything they produced.
 
-    Returns table name → deleted row count for the tables that had rows.
-    Raises ValueError when the scope guards reject the request; the whole
-    delete runs in the caller's transaction and is committed at the end.
+    Returns table name → row count for the tables that had rows. Raises
+    ValueError when the scope guards reject the request. With `dry_run=True`
+    nothing is written: the same rows are counted and the transaction is rolled
+    back. Otherwise the whole delete is committed as one transaction.
     """
     from app import db
     from app.infrastructure.database.models import Base
@@ -123,9 +147,16 @@ def purge_company(company_name: str, emails: list[str]) -> dict[str, int]:
         clauses, params = _match_clauses(table, scope)
         if not clauses:
             continue
-        result = session.execute(text(f"DELETE FROM {table.name} WHERE {' OR '.join(clauses)}"), params)
-        if result.rowcount:
-            counts[table.name] = result.rowcount
+        where = " OR ".join(clauses)
+        if dry_run:
+            count = session.execute(text(f"SELECT count(*) FROM {table.name} WHERE {where}"), params).scalar() or 0
+        else:
+            count = session.execute(text(f"DELETE FROM {table.name} WHERE {where}"), params).rowcount
+        if count:
+            counts[table.name] = count
 
-    session.commit()
+    if dry_run:
+        session.rollback()
+    else:
+        session.commit()
     return counts

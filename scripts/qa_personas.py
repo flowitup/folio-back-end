@@ -1,66 +1,63 @@
-"""Create or remove the three QA personas (admin / manager / member) of a QA company.
+"""Create the three QA personas (admin / manager / member) of a QA company.
 
 Every persona set is tagged by a suffix: the company is named
 ``Folio QA <suffix>`` and nothing outside that company is ever touched, so
 several QA runs can coexist and `--delete` can never reach production data.
+The CLI lives in ``scripts/qa_personas_cli.py``:
 
-    uv run python -m scripts.qa_personas --create --suffix smoke \\
+    QA_PASSWORD='…' uv run python -m scripts.qa_personas --create --suffix smoke \\
         --admin-email qa.admin@example.com \\
         --manager-email qa.manager@example.com \\
-        --member-email qa.member@example.com \\
-        --password 'password123'
+        --member-email qa.member@example.com
 
-    uv run python -m scripts.qa_personas --delete --suffix smoke \\
-        --admin-email ... --manager-email ... --member-email ...
+This script is run against PRODUCTION, so `--create` never takes over an
+account it did not make: an email that already exists is refused unless that
+user is already attached to this QA company, and a pre-existing user's
+password, activation state and primary company are left exactly as they were.
 
 `--create` is idempotent: re-running finds the company, the users, the
-attachments, the project and the assignments it made last time. `--delete`
-removes them and everything QA produced inside that company in a single
-transaction, and prints one line per table.
+attachments, the project and the assignments it made last time.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import text
 
 from app.infrastructure.database.backfills.authz_backfill_report import BackfillReport
 from app.infrastructure.database.backfills.directory_profiles import ensure_directory_profile
-from scripts.qa_personas_purge import purge_company
+from scripts.qa_personas_guards import (
+    QaPersonaRefused as QaPersonaRefused,  # re-exported: the create-side guard error
+    attached_company_ids,
+    find_company,
+    find_user,
+    refuse_accounts_we_do_not_own,
+)
+from scripts.qa_personas_purge import id_param, id_sql
 
 COMPANY_PREFIX = "Folio QA "
 DEFAULT_ADDRESS = "1 rue de la Recette, 75000 Paris"
 
-
-def _same_id(left, right) -> bool:
-    """Compare ids across insert paths (SQLite keeps UUIDs as dashless hex)."""
-    return str(left).replace("-", "").lower() == str(right).replace("-", "").lower()
+_COMPANY_ACCESS_SQL = text(f"SELECT user_id, company_id FROM user_company_access WHERE {id_sql('company_id')} = :cid")
 
 
-def _company_name(suffix: str) -> str:
+def company_name(suffix: str) -> str:
     return f"{COMPANY_PREFIX}{suffix.strip()}"
 
 
-def _project_name(suffix: str) -> str:
+def project_name(suffix: str) -> str:
     return f"Folio QA Project {suffix.strip()}"
 
 
-# ---------------------------------------------------------------------------
-# create
-# ---------------------------------------------------------------------------
-
-
 def _ensure_user(email: str, password_hash: str, display_name: str):
+    """Find the user, or create them. A pre-existing row is never modified."""
     from app import db
     from app.infrastructure.database.models import UserModel
 
-    user = db.session.query(UserModel).filter_by(email=email.lower()).first()
+    user = find_user(email)
     if user is not None:
-        user.password_hash = password_hash
-        user.is_active = True
         return user
     user = UserModel(
         email=email.lower(),
@@ -74,13 +71,11 @@ def _ensure_user(email: str, password_hash: str, display_name: str):
 
 
 def _ensure_company(suffix: str, address: str, admin_user):
-    from datetime import datetime, timezone
-
     from app import db
     from app.infrastructure.database.models import CompanyModel
 
-    name = _company_name(suffix)
-    company = db.session.query(CompanyModel).filter_by(legal_name=name).first()
+    name = company_name(suffix)
+    company = find_company(name)
     if company is not None:
         return company
     now = datetime.now(timezone.utc)
@@ -97,8 +92,7 @@ def _ensure_company(suffix: str, address: str, admin_user):
 
 
 def _ensure_access(company, user, role: str) -> None:
-    from datetime import datetime, timezone
-
+    """Attach the user to the QA company. `is_primary` only if they have no other."""
     from app import db
     from app.infrastructure.database.models import UserCompanyAccessModel
 
@@ -106,12 +100,14 @@ def _ensure_access(company, user, role: str) -> None:
     if access is not None:
         access.role = role
         return
+    others = [cid for cid in attached_company_ids(user.id) if id_param(cid) != id_param(company.id)]
     db.session.add(
         UserCompanyAccessModel(
             user_id=user.id,
             company_id=company.id,
             role=role,
-            is_primary=True,
+            # A second is_primary row would trip the partial unique index.
+            is_primary=not others,
             attached_at=datetime.now(timezone.utc),
         )
     )
@@ -121,7 +117,7 @@ def _ensure_project(suffix: str, company, owner):
     from app import db
     from app.infrastructure.database.models import ProjectModel
 
-    name = _project_name(suffix)
+    name = project_name(suffix)
     project = db.session.query(ProjectModel).filter_by(name=name, company_id=company.id).first()
     if project is not None:
         return project
@@ -132,8 +128,6 @@ def _ensure_project(suffix: str, company, owner):
 
 
 def _ensure_assignment(project, user) -> None:
-    from datetime import datetime, timezone
-
     from app import db
     from app.infrastructure.database.models import user_projects
 
@@ -155,10 +149,15 @@ def _ensure_assignment(project, user) -> None:
 def create_personas(suffix: str, emails: dict[str, str], password: str, address: str) -> dict[str, UUID]:
     """Create (or find) the QA company, its three personas and its project.
 
-    Returns the ids worth pasting into a QA session.
+    Returns the ids worth pasting into a QA session. Raises `QaPersonaRefused`
+    before writing anything when an email belongs to an account outside this
+    QA company.
     """
     from app import db
     from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
+
+    name = company_name(suffix)
+    refuse_accounts_we_do_not_own(emails, find_company(name), name)
 
     password_hash = Argon2PasswordHasher().hash(password)
     users = {
@@ -179,9 +178,8 @@ def create_personas(suffix: str, emails: dict[str, str], password: str, address:
     # The ids come back from the database so they carry whatever form this
     # dialect stored them in.
     report = BackfillReport()
-    for user_id, company_id in db.session.execute(text("SELECT user_id, company_id FROM user_company_access")):
-        if _same_id(company_id, company.id):
-            ensure_directory_profile(db.session.connection(), user_id, company_id, report)
+    for user_id, company_id in db.session.execute(_COMPANY_ACCESS_SQL, {"cid": id_param(company.id)}):
+        ensure_directory_profile(db.session.connection(), user_id, company_id, report)
 
     db.session.commit()
     return {
@@ -191,59 +189,7 @@ def create_personas(suffix: str, emails: dict[str, str], password: str, address:
     }
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def _parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--create", action="store_true", help="create (or refresh) the personas")
-    mode.add_argument("--delete", action="store_true", help="delete everything tagged with the suffix")
-    parser.add_argument("--suffix", required=True, help="tag for this persona set, e.g. 'smoke'")
-    parser.add_argument("--admin-email", required=True)
-    parser.add_argument("--manager-email", required=True)
-    parser.add_argument("--member-email", required=True)
-    parser.add_argument("--password", help="password for all three personas (required with --create)")
-    parser.add_argument("--address", default=DEFAULT_ADDRESS, help="company address")
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    from app import create_app
-
-    args = _parse_args(argv if argv is not None else sys.argv[1:])
-    if not args.suffix.strip():
-        print("--suffix must not be blank", file=sys.stderr)
-        return 2
-    if args.create and not args.password:
-        print("--create requires --password", file=sys.stderr)
-        return 2
-
-    emails = {"admin": args.admin_email, "manager": args.manager_email, "member": args.member_email}
-
-    app = create_app()
-    with app.app_context():
-        if args.create:
-            ids = create_personas(args.suffix, emails, args.password, args.address)
-            print(f"QA personas ready for '{_company_name(args.suffix)}':")
-            for key, value in ids.items():
-                print(f"  {key} = {value}")
-            for role, email in emails.items():
-                print(f"  {role}: {email}")
-            return 0
-
-        try:
-            counts = purge_company(_company_name(args.suffix), list(emails.values()))
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        print(f"Deleted QA data for '{_company_name(args.suffix)}':")
-        for table, count in counts.items():
-            print(f"  {table}: {count}")
-        return 0
-
-
 if __name__ == "__main__":
+    from scripts.qa_personas_cli import main
+
     raise SystemExit(main())
