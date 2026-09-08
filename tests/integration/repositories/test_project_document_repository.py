@@ -12,6 +12,7 @@ from app.domain.project_document import ProjectDocument
 from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
     SqlAlchemyProjectDocumentRepository,
 )
+from tests.company_tenancy_helper import company_for_projects
 
 # ---------------------------------------------------------------------------
 # Fixtures — use the session fixture from top-level conftest (SQLite in-memory)
@@ -89,7 +90,7 @@ def _seed_project_and_user(session) -> tuple[UUID, UUID]:
     session.flush()
 
     pid = uuid4()
-    project = ProjectModel(id=pid, name=f"Project {pid}", owner_id=uid)
+    project = ProjectModel(id=pid, name=f"Project {pid}", owner_id=uid, company_id=company_for_projects(session, uid))
     session.add(project)
     session.flush()
 

@@ -16,6 +16,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from tests.company_tenancy_helper import company_for_projects
 
 
 def _auth(token: str) -> dict:
@@ -166,7 +167,9 @@ def spent_reader_project(invitation_app):
         owner_id = UUID(invitation_app._test_admin_user_id)
 
         # Project
-        project = ProjectModel(name="SpentReader Test", owner_id=owner_id)
+        project = ProjectModel(
+            name="SpentReader Test", owner_id=owner_id, company_id=company_for_projects(db.session, owner_id)
+        )
         db.session.add(project)
         db.session.flush()
 
@@ -312,7 +315,9 @@ def test_spent_reader_batch_two_projects(invitation_app, spent_reader_project):
 
     with invitation_app.app_context():
         owner_id = UUID(invitation_app._test_admin_user_id)
-        p2 = ProjectModel(name="Empty Project for batch", owner_id=owner_id)
+        p2 = ProjectModel(
+            name="Empty Project for batch", owner_id=owner_id, company_id=company_for_projects(db.session, owner_id)
+        )
         db.session.add(p2)
         db.session.commit()
 
@@ -344,7 +349,9 @@ def test_spent_reader_no_rows_returns_zero(invitation_app):
 
     with invitation_app.app_context():
         owner_id = UUID(invitation_app._test_admin_user_id)
-        empty_p = ProjectModel(name="Truly Empty", owner_id=owner_id)
+        empty_p = ProjectModel(
+            name="Truly Empty", owner_id=owner_id, company_id=company_for_projects(db.session, owner_id)
+        )
         db.session.add(empty_p)
         db.session.commit()
 

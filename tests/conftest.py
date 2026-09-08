@@ -1310,11 +1310,15 @@ def note_other_project(invitation_app):
     from app.infrastructure.database.models import ProjectModel
     from app.infrastructure.database.models.note_orm import NoteOrm
 
+    from tests.company_tenancy_helper import company_for_projects
+
     with invitation_app.app_context():
         # Create a fresh project owned by superadmin — member_user is not in it
+        owner_id = UUID(invitation_app._test_superadmin_user_id)
         other_project = ProjectModel(
             name="Other Project (no member access)",
-            owner_id=UUID(invitation_app._test_superadmin_user_id),
+            owner_id=owner_id,
+            company_id=company_for_projects(db.session, owner_id),
         )
         db.session.add(other_project)
         db.session.flush()

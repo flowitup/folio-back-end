@@ -125,11 +125,7 @@ def cs_app():
             owner_id=admin_user.id,
             company_id=company.id,
         )
-        project_no_company = ProjectModel(
-            name="CS Project No Company",
-            owner_id=admin_user.id,
-        )
-        db.session.add_all([project_with_company, project_no_company])
+        db.session.add(project_with_company)
         db.session.commit()
 
         user_repo = SQLAlchemyUserRepository(db.session)
@@ -155,7 +151,6 @@ def cs_app():
         test_app._test_admin_email = "cs_admin@test.com"
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_with_company_id = str(project_with_company.id)
-        test_app._test_project_no_company_id = str(project_no_company.id)
         test_app._test_company_legal_name = "Spent Corp SARL"
         test_app._test_company_pm_id = str(company_pm.id)
         test_app._test_regular_pm_id = str(regular_pm.id)
@@ -423,19 +418,6 @@ class TestCompanySpentTotal:
         assert inactive_inv is not None, "Invoice with inactive company PM not found in response"
         assert inactive_inv["paid_by_company"] is True
 
-    def test_no_company_payment_returns_zero(self, cs_client, cs_app, admin_token):
-        """Project with no company-qualifying invoices returns company_spent_total=0."""
-        project_id = cs_app._test_project_no_company_id
-
-        _seed_invoice(cs_app, project_id, "materials_services", refundable_status="refundable")
-        _seed_invoice(cs_app, project_id, "labor", refundable_status=None)
-
-        resp = cs_client.get(_list_url(project_id), headers=_auth(admin_token))
-        assert resp.status_code == 200, resp.get_data(as_text=True)
-        data = resp.get_json()
-
-        assert data["company_spent_total"] == pytest.approx(0.0, abs=0.01)
-
 
 # ---------------------------------------------------------------------------
 # Tests: paid_by_company per-invoice flag
@@ -507,16 +489,6 @@ class TestCompanyName:
         data = resp.get_json()
 
         assert data["company_name"] == cs_app._test_company_legal_name
-
-    def test_company_name_null_when_project_has_no_company(self, cs_client, cs_app, admin_token):
-        """company_name is null when the project is not attached to a company."""
-        project_id = cs_app._test_project_no_company_id
-
-        resp = cs_client.get(_list_url(project_id), headers=_auth(admin_token))
-        assert resp.status_code == 200, resp.get_data(as_text=True)
-        data = resp.get_json()
-
-        assert data["company_name"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -167,9 +167,8 @@ def mat_exp_app():
         project_a1 = ProjectModel(name="Project A1", owner_id=admin_user.id, company_id=company_a.id)
         project_a2 = ProjectModel(name="Project A2", owner_id=admin_user.id, company_id=company_a.id)
         project_b = ProjectModel(name="Project B", owner_id=non_admin_user.id, company_id=company_b.id)
-        project_no_company = ProjectModel(name="No Company Project", owner_id=admin_user.id, company_id=None)
 
-        db.session.add_all([project_a1, project_a2, project_b, project_no_company])
+        db.session.add_all([project_a1, project_a2, project_b])
         db.session.commit()
 
         # UserCompanyAccess — admin_user is admin of company_a only
@@ -231,7 +230,6 @@ def mat_exp_app():
         test_app._project_a1_id = project_a1.id
         test_app._project_a2_id = project_a2.id
         test_app._project_b_id = project_b.id
-        test_app._project_no_company_id = project_no_company.id
 
         yield test_app
 
@@ -305,21 +303,6 @@ class TestListAggregation:
         assert resp.status_code == 200
         # Should be empty — non-admin with no admin companies sees nothing
         assert resp.get_json()["total"] == 0
-
-    def test_project_with_null_company_excluded(self, mat_client, admin_tok, mat_exp_app):
-        with mat_exp_app.app_context():
-            inv_nc = _make_invoice(
-                mat_exp_app._project_no_company_id, mat_exp_app._admin_user_id, refundable_status="refundable"
-            )
-            inv_nc_id = str(inv_nc.id)
-
-        resp = mat_client.get(
-            "/api/v1/billing/materials-expenses?refundable=true",
-            headers=_auth(admin_tok),
-        )
-        assert resp.status_code == 200
-        ids = [i["id"] for i in resp.get_json()["items"]]
-        assert inv_nc_id not in ids
 
     def test_project_name_present_in_response(self, mat_client, admin_tok, mat_exp_app):
         with mat_exp_app.app_context():

@@ -319,33 +319,6 @@ def test_company_methods_do_not_leak_across_companies(invitation_app, credit_pro
         db.session.commit()
 
 
-def test_project_without_company_has_no_credit_spend(invitation_app):
-    """A project with no company_id resolves to zero credit spend without crashing."""
-    from app import db
-
-    with invitation_app.app_context():
-        owner_id = UUID(invitation_app._test_admin_user_id)
-        project = ProjectModel(name="No Company Project", owner_id=owner_id)
-        db.session.add(project)
-        db.session.commit()
-
-        _add_invoice(db.session, project.id, number="CS-011", amount=80)
-
-        result = _reader(db.session).sum_spent_by_projects([project.id])[project.id]
-        assert result.total == pytest.approx(Decimal("80"))
-        assert result.by_credits == Decimal("0")
-
-        db.session.execute(
-            __import__("sqlalchemy").text("DELETE FROM invoices WHERE project_id = :id"),
-            {"id": str(project.id)},
-        )
-        db.session.execute(
-            __import__("sqlalchemy").text("DELETE FROM projects WHERE id = :id"),
-            {"id": str(project.id)},
-        )
-        db.session.commit()
-
-
 def test_credit_figure_matches_expense_page_kpi(invitation_app, credit_project):
     """The card's credit figure must equal the Expense page's sum_company_spent, always.
 

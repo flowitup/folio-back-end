@@ -20,7 +20,7 @@ from app.infrastructure.database.models import (
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +76,7 @@ def labor_app():
         project = ProjectModel(
             name="Labor API Test Project",
             owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
         )
         db.session.add(project)
         db.session.commit()
@@ -702,9 +703,11 @@ class TestLaborEntryRoutes:
         from app.infrastructure.database.models import ProjectModel
 
         with labor_app.app_context():
+            owner_id = _UUID(labor_app._test_admin_user_id)
             empty_project = ProjectModel(
                 name="Monthly Summary Empty Project",
-                owner_id=_UUID(labor_app._test_admin_user_id),
+                owner_id=owner_id,
+                company_id=company_for_projects(db.session, owner_id),
             )
             db.session.add(empty_project)
             db.session.commit()

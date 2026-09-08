@@ -17,7 +17,7 @@ import pytest
 
 from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 
@@ -48,7 +48,9 @@ def ws_app():
         db.session.add_all([owner, linked, unlinked])
         db.session.flush()
 
-        project = ProjectModel(name="Chantier WS", owner_id=owner.id, budget=50000)
+        project = ProjectModel(
+            name="Chantier WS", owner_id=owner.id, budget=50000, company_id=company_for_projects(db.session, owner.id)
+        )
         db.session.add(project)
         db.session.flush()
         for u in (linked, unlinked):

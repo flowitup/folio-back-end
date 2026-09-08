@@ -31,7 +31,7 @@ import io
 from uuid import uuid4
 
 import pytest
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -198,7 +198,9 @@ def doc_app():
         db.session.flush()
 
         # Seed project
-        project = ProjectModel(name="Doc Test Project", owner_id=owner_user.id)
+        project = ProjectModel(
+            name="Doc Test Project", owner_id=owner_user.id, company_id=company_for_projects(db.session, owner_user.id)
+        )
         db.session.add(project)
         db.session.flush()
 
@@ -577,7 +579,11 @@ class TestUploadRateLimit:
             db.session.add(owner_user)
             db.session.flush()
 
-            project = ProjectModel(name="RL Test Project", owner_id=owner_user.id)
+            project = ProjectModel(
+                name="RL Test Project",
+                owner_id=owner_user.id,
+                company_id=company_for_projects(db.session, owner_user.id),
+            )
             db.session.add(project)
             db.session.flush()
             db.session.commit()
@@ -958,8 +964,16 @@ class TestCrossProjectDownloadAdversarial:
             db.session.add_all([owner_user, dual_member])
             db.session.flush()
 
-            project_a = ProjectModel(name="Cross Project A", owner_id=owner_user.id)
-            project_b = ProjectModel(name="Cross Project B", owner_id=owner_user.id)
+            project_a = ProjectModel(
+                name="Cross Project A",
+                owner_id=owner_user.id,
+                company_id=company_for_projects(db.session, owner_user.id),
+            )
+            project_b = ProjectModel(
+                name="Cross Project B",
+                owner_id=owner_user.id,
+                company_id=company_for_projects(db.session, owner_user.id),
+            )
             db.session.add_all([project_a, project_b])
             db.session.flush()
 

@@ -25,7 +25,7 @@ from app.infrastructure.database.models import (
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +92,7 @@ def export_app():
         project = ProjectModel(
             name="Labor API Test Project",
             owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
         )
         db.session.add(project)
 
@@ -99,6 +100,7 @@ def export_app():
         nonascii_project = ProjectModel(
             name="🏗️工地",
             owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
         )
         db.session.add(nonascii_project)
 
@@ -608,10 +610,16 @@ def worker_export_app():
         db.session.flush()
 
         # Projects
-        project = ProjectModel(name="Worker Export Project", owner_id=admin_user.id)
+        project = ProjectModel(
+            name="Worker Export Project",
+            owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
+        )
         db.session.add(project)
 
-        other_project = ProjectModel(name="Other Project", owner_id=admin_user.id)
+        other_project = ProjectModel(
+            name="Other Project", owner_id=admin_user.id, company_id=company_for_projects(db.session, admin_user.id)
+        )
         db.session.add(other_project)
         db.session.flush()
 
@@ -1056,7 +1064,9 @@ def cjk_worker_export_app():
         db.session.flush()
 
         # Project whose name is pure CJK + emoji → slug falls back to UUID prefix
-        cjk_project = ProjectModel(name="工地🏗️", owner_id=admin_user.id)
+        cjk_project = ProjectModel(
+            name="工地🏗️", owner_id=admin_user.id, company_id=company_for_projects(db.session, admin_user.id)
+        )
         db.session.add(cjk_project)
         db.session.flush()
 

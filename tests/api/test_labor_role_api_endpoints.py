@@ -23,7 +23,7 @@ from app.infrastructure.database.models import (
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +74,7 @@ def role_app():
         project = ProjectModel(
             name="Labor Role API Test Project",
             owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
         )
         db.session.add(project)
         db.session.commit()

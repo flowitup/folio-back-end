@@ -26,7 +26,7 @@ from app.infrastructure.database.models import (
     ProjectModel,
     UserModel,
 )
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,11 @@ def rate_app():
         db.session.add_all([admin_user, reader_user])
         db.session.flush()
 
-        project = ProjectModel(name="Rate Change Test Project", owner_id=admin_user.id)
+        project = ProjectModel(
+            name="Rate Change Test Project",
+            owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
+        )
         db.session.add(project)
         db.session.commit()
 

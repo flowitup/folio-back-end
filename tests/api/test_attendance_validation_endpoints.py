@@ -24,7 +24,7 @@ from app.infrastructure.database.models import (
     WorkerModel,
 )
 from app.infrastructure.database.models.associations import user_projects
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 # Membership-role permission lookups use raw SQL with dashed UUID strings → Postgres only.
 _needs_pg = pytest.mark.skipif(
@@ -79,8 +79,12 @@ def av_app():
         db.session.add_all([owner, linked, unlinked, chef])
         db.session.flush()
 
-        project = ProjectModel(name="Chantier AV", owner_id=owner.id)
-        other_project = ProjectModel(name="Other site", owner_id=owner.id)
+        project = ProjectModel(
+            name="Chantier AV", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
+        other_project = ProjectModel(
+            name="Other site", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
         db.session.add_all([project, other_project])
         db.session.flush()
         for u in (linked, unlinked):

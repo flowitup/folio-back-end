@@ -16,7 +16,7 @@ import pytest
 
 from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 
@@ -55,7 +55,9 @@ def cr_app():
         unlinked = user("unlinked@cr-test.com")
         db.session.add_all([owner, linked, unlinked])
         db.session.flush()
-        project = ProjectModel(name="Chantier CR", owner_id=owner.id)
+        project = ProjectModel(
+            name="Chantier CR", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
         db.session.add(project)
         db.session.flush()
         for u in (linked, unlinked):

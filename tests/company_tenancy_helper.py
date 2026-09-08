@@ -41,6 +41,33 @@ def _key(value) -> str:
     return str(value).replace("-", "").lower()
 
 
+def company_for_projects(session, created_by, legal_name: str = "Test Tenancy Co") -> UUID:
+    """Return a company id to hang a project on — `projects.company_id` is NOT NULL.
+
+    Reuses the first company already in the database so a later
+    :func:`seed_company_tenancy` call keeps everything in one tenant; creates
+    one owned by `created_by` otherwise. Call it while building a fixture,
+    before the project row is inserted.
+    """
+    from app.infrastructure.database.models.company import CompanyModel
+
+    existing = session.query(CompanyModel).first()
+    if existing is not None:
+        return existing.id
+    now = datetime.now(timezone.utc)
+    company = CompanyModel(
+        id=uuid4(),
+        legal_name=legal_name,
+        address="1 rue des Tests",
+        created_by=created_by,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(company)
+    session.flush()
+    return company.id
+
+
 def seed_company_tenancy(
     app,
     *,
@@ -148,3 +175,27 @@ def seed_company_tenancy(
         db.session.commit()
 
     return company_id
+
+
+def relax_projects_company_id(engine) -> None:
+    """Recreate `projects` with a nullable `company_id`, as it was pre-migration.
+
+    Migration c2b8f1a0d743 makes the column NOT NULL and the model says so, but
+    the data steps of the revisions BEFORE it run against databases that still
+    have orphan projects. A test covering those steps needs the old shape;
+    call :func:`restore_projects_company_id` when the module is done.
+    """
+    from app.infrastructure.database.models import ProjectModel
+
+    ProjectModel.__table__.c.company_id.nullable = True
+    ProjectModel.__table__.drop(engine, checkfirst=True)
+    ProjectModel.__table__.create(engine)
+
+
+def restore_projects_company_id(engine) -> None:
+    """Undo :func:`relax_projects_company_id` — the constraint is back."""
+    from app.infrastructure.database.models import ProjectModel
+
+    ProjectModel.__table__.c.company_id.nullable = False
+    ProjectModel.__table__.drop(engine, checkfirst=True)
+    ProjectModel.__table__.create(engine)

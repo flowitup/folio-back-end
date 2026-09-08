@@ -13,7 +13,7 @@ import pytest
 
 from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 OWNER_TOKEN = "ExponentPushToken[owner-device-000000]"
@@ -57,7 +57,9 @@ def push_app():
         linked = user("linked@push-test.com")
         db.session.add_all([owner, chef, linked])
         db.session.flush()
-        project = ProjectModel(name="Chantier Push", owner_id=owner.id)
+        project = ProjectModel(
+            name="Chantier Push", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
+        )
         db.session.add(project)
         db.session.flush()
         db.session.execute(user_projects.insert().values(user_id=linked.id, project_id=project.id))

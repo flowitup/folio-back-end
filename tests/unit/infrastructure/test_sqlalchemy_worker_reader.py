@@ -16,6 +16,7 @@ from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.worker import WorkerModel
+from tests.company_tenancy_helper import company_for_projects
 
 
 def _now():
@@ -37,7 +38,9 @@ def _make_user(session) -> UUID:
 
 
 def _make_project(session, owner_id: UUID) -> UUID:
-    project = ProjectModel(id=uuid4(), name=f"P-{uuid4().hex[:6]}", owner_id=owner_id)
+    project = ProjectModel(
+        id=uuid4(), name=f"P-{uuid4().hex[:6]}", owner_id=owner_id, company_id=company_for_projects(session, owner_id)
+    )
     session.add(project)
     session.flush()
     return project.id

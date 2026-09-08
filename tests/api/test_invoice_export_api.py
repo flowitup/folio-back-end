@@ -28,7 +28,7 @@ from app.infrastructure.database.models import (
     ProjectModel,
     UserModel,
 )
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +94,7 @@ def inv_export_app():
         project = ProjectModel(
             name="Invoice Export Test Project",
             owner_id=admin_user.id,
+            company_id=company_for_projects(db.session, admin_user.id),
         )
         db.session.add(project)
         db.session.commit()

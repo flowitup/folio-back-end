@@ -228,18 +228,6 @@ class TestSumFundsReleasedSplit:
         assert company_total == Decimal("0")
         assert personal_total == Decimal("0")
 
-    def test_project_without_company_returns_all_company(self, session):
-        """Project with no company has no personal-flagged methods — everything is company."""
-        user_id = _make_user(session)
-        project_id = _make_project(session, user_id, None)
-        _make_invoice(session, project_id, "released_funds", 100.0)
-
-        repo = SQLAlchemyInvoiceRepository(session)
-        company_total, personal_total, _cash_advanced = repo.sum_funds_released_split(project_id)
-
-        assert company_total == pytest.approx(Decimal("100.00"), abs=Decimal("0.01"))
-        assert personal_total == Decimal("0")
-
 
 class TestSumFundsReleasedSplitCashAdvance:
     """Cash-advance releases (company money handed to a person) are internal transfers:

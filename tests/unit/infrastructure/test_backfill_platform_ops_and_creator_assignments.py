@@ -7,6 +7,8 @@ its tables no longer exist in the models, so SQLite cannot host it.
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -14,11 +16,21 @@ from sqlalchemy import text
 
 from app.domain.authz.resolver import has_permission
 from app.infrastructure.database.backfills.platform_ops_and_creator_assignments import run_backfill
+from tests.company_tenancy_helper import relax_projects_company_id, restore_projects_company_id
 from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from app.infrastructure.database.repositories.sqlalchemy_authz_reader import SqlAlchemyAuthzReader
+
+
+@pytest.fixture(scope="module", autouse=True)
+def projects_before_the_not_null(engine, tables):
+    """These steps run while `projects.company_id` is still nullable."""
+    relax_projects_company_id(engine)
+    yield
+    restore_projects_company_id(engine)
+
 
 NOW = datetime.now(timezone.utc)
 

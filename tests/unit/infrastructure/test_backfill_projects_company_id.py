@@ -6,6 +6,8 @@ session fixture — see app.infrastructure.database.backfills.projects_company_i
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -15,11 +17,20 @@ from app.infrastructure.database.backfills.projects_company_id import (
     count_null_company_id,
     run_backfill,
 )
+from tests.company_tenancy_helper import relax_projects_company_id, restore_projects_company_id
 from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
 PASSWORD_HASH = "x" * 60
+
+
+@pytest.fixture(scope="module", autouse=True)
+def projects_before_the_not_null(engine, tables):
+    """These steps run while `projects.company_id` is still nullable."""
+    relax_projects_company_id(engine)
+    yield
+    restore_projects_company_id(engine)
 
 
 def _make_user(session, email: str) -> UserModel:

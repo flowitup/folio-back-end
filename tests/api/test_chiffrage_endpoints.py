@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 def _auth(token: str) -> dict:
@@ -44,9 +44,13 @@ def chiffrage_world(invitation_app):
         db.session.add_all([writer, reader])
         db.session.flush()
 
-        project = ProjectModel(name="Chiffrage Test Project", owner_id=writer.id)
+        project = ProjectModel(
+            name="Chiffrage Test Project", owner_id=writer.id, company_id=company_for_projects(db.session, writer.id)
+        )
         project.users.append(reader)  # ORM append -> project.user_ids is populated
-        other = ProjectModel(name="Chiffrage Other Project", owner_id=writer.id)
+        other = ProjectModel(
+            name="Chiffrage Other Project", owner_id=writer.id, company_id=company_for_projects(db.session, writer.id)
+        )
         db.session.add_all([project, other])
         db.session.commit()
 

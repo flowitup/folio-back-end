@@ -27,7 +27,7 @@ import pytest
 from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
-from tests.company_tenancy_helper import seed_company_tenancy
+from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,12 @@ def project(pay_app):
     over ALL of a project's invoices, so tests must not share one project."""
     from app import db
 
-    p = ProjectModel(id=uuid4(), name=f"Pay Project {uuid4().hex[:8]}", owner_id=pay_app._test_admin_user_id)
+    p = ProjectModel(
+        id=uuid4(),
+        name=f"Pay Project {uuid4().hex[:8]}",
+        owner_id=pay_app._test_admin_user_id,
+        company_id=company_for_projects(db.session, pay_app._test_admin_user_id),
+    )
     db.session.add(p)
     db.session.commit()
     return p
