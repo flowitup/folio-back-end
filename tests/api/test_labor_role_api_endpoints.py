@@ -184,6 +184,10 @@ class TestListLaborRoles:
         names = [r["name"] for r in resp.get_json()["roles"]]
         assert "Listed A" in names
         assert "Listed B" in names
+        # Every role carries a `slug` key (null for custom roles) so clients can key i18n labels on it.
+        assert all(
+            "slug" in r and r["slug"] is None for r in resp.get_json()["roles"] if r["name"].startswith("Listed")
+        )
 
     def test_list_palette_contains_hex_colors(self, role_client, admin_token):
         import re

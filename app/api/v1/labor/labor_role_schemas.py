@@ -72,6 +72,8 @@ class LaborRoleResponse(BaseModel):
     name: str
     color: str
     created_at: str
+    # Stable i18n key for the default roles (`tho_chinh`, `tho_phu`); null for custom roles.
+    slug: Optional[str] = None
 
 
 class LaborRoleListResponse(BaseModel):
