@@ -1,303 +1,191 @@
-"""Unit tests for AuthorizationService domain service."""
+"""AuthorizationService — the resolver-backed facade every use-case asks.
+
+Legacy global roles are inert: what a user may do comes from their company role
+(+ assignment + D8 rows), and the only bypass is `users.is_platform_ops`.
+"""
+
+from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
-from unittest.mock import Mock, MagicMock
-from uuid import uuid4
 
 from app.domain.services.authorization import AuthorizationService
 
 
-class TestAuthorizationServiceGetUserPermissions:
-    """Tests for AuthorizationService.get_user_permissions() method."""
+class FakeReader:
+    """AuthzReaderPort double: `{company_id: role}` plus assignment/grant/ops switches."""
 
-    @pytest.fixture
-    def mock_user_repo(self):
-        """Create mock user repository."""
-        return Mock()
+    def __init__(self, *, roles=None, primary=None, assigned=True, grants=(), ops=False):
+        self._roles = roles or {}
+        self._primary = primary
+        self._assigned = assigned
+        self._grants = list(grants)
+        self._ops = ops
 
-    @pytest.fixture
-    def authz_service(self, mock_user_repo):
-        """Create AuthorizationService with mocked repository."""
-        return AuthorizationService(mock_user_repo)
+    def company_role_for(self, user_id, company_id):
+        return self._roles.get(company_id)
 
-    @pytest.fixture
-    def mock_user_with_roles(self):
-        """Create mock user with roles and permissions."""
-        user = MagicMock()
-        user.id = uuid4()
+    def is_assigned(self, user_id, project_id):
+        return self._assigned
 
-        # Create mock roles with permissions
-        admin_role = MagicMock()
-        admin_role.name = "admin"
-        perm1 = MagicMock()
-        perm1.name = "project:create"
-        perm2 = MagicMock()
-        perm2.name = "project:delete"
-        admin_role.permissions = [perm1, perm2]
+    def project_company_id(self, project_id):
+        return None
 
-        user_role = MagicMock()
-        user_role.name = "user"
-        perm3 = MagicMock()
-        perm3.name = "project:read"
-        user_role.permissions = [perm3]
+    def primary_company_id(self, user_id):
+        return self._primary
 
-        user.roles = [admin_role, user_role]
-        return user
+    def admin_company_ids(self, user_id):
+        return [cid for cid, role in self._roles.items() if role == "admin"]
 
-    def test_get_user_permissions_aggregates_all_roles(self, authz_service, mock_user_repo, mock_user_with_roles):
-        """Should return all permissions aggregated from all roles."""
-        mock_user_repo.find_by_id.return_value = mock_user_with_roles
+    def company_roles_for(self, user_id):
+        return list(self._roles.items())
 
-        permissions = authz_service.get_user_permissions(mock_user_with_roles.id)
+    def has_project_assignment_in_company(self, user_id, company_id):
+        return self._assigned
 
-        assert permissions == {"project:create", "project:delete", "project:read"}
+    def is_platform_ops(self, user_id):
+        return self._ops
 
-    def test_get_user_permissions_user_not_found(self, authz_service, mock_user_repo):
-        """Should return empty set when user not found."""
-        mock_user_repo.find_by_id.return_value = None
+    def grants_for(self, user_id, company_id, project_id):
+        return list(self._grants)
 
-        permissions = authz_service.get_user_permissions(uuid4())
+    def project_ids_for_company(self, company_id):
+        return []
 
-        assert permissions == set()
+    def assigned_project_ids(self, user_id, project_ids):
+        return []
 
-    def test_get_user_permissions_no_roles(self, authz_service, mock_user_repo):
-        """Should return empty set when user has no roles."""
-        user = MagicMock()
-        user.id = uuid4()
-        user.roles = []
-        mock_user_repo.find_by_id.return_value = user
-
-        permissions = authz_service.get_user_permissions(user.id)
-
-        assert permissions == set()
-
-    def test_get_user_permissions_deduplicates(self, authz_service, mock_user_repo):
-        """Should deduplicate permissions across roles."""
-        user = MagicMock()
-        user.id = uuid4()
-
-        # Two roles with overlapping permission
-        role1 = MagicMock()
-        role1.name = "role1"
-        perm1 = MagicMock()
-        perm1.name = "project:read"
-        role1.permissions = [perm1]
-
-        role2 = MagicMock()
-        role2.name = "role2"
-        perm2 = MagicMock()
-        perm2.name = "project:read"  # Same permission
-        role2.permissions = [perm2]
-
-        user.roles = [role1, role2]
-        mock_user_repo.find_by_id.return_value = user
-
-        permissions = authz_service.get_user_permissions(user.id)
-
-        assert permissions == {"project:read"}
+    def assigned_project_ids_for_users(self, company_id, user_ids):
+        return {}
 
 
-class TestAuthorizationServiceHasPermission:
-    """Tests for AuthorizationService.has_permission() method."""
-
-    @pytest.fixture
-    def mock_user_repo(self):
-        """Create mock user repository."""
-        return Mock()
-
-    @pytest.fixture
-    def authz_service(self, mock_user_repo):
-        """Create AuthorizationService."""
-        return AuthorizationService(mock_user_repo)
-
-    @pytest.fixture
-    def user_with_perms(self, mock_user_repo):
-        """Create user with project:read and project:write permissions."""
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "editor"
-        perm1 = MagicMock()
-        perm1.name = "project:read"
-        perm2 = MagicMock()
-        perm2.name = "project:write"
-        role.permissions = [perm1, perm2]
-        user.roles = [role]
-        mock_user_repo.find_by_id.return_value = user
-        return user
-
-    def test_has_permission_true(self, authz_service, user_with_perms):
-        """Should return True when user has exact permission."""
-        result = authz_service.has_permission(user_with_perms.id, "project:read")
-        assert result is True
-
-    def test_has_permission_false(self, authz_service, user_with_perms):
-        """Should return False when user lacks permission."""
-        result = authz_service.has_permission(user_with_perms.id, "user:delete")
-        assert result is False
-
-    def test_has_permission_wildcard_all(self, authz_service, mock_user_repo):
-        """Should return True for *:* (superuser) permission."""
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "superuser"
-        perm = MagicMock()
-        perm.name = "*:*"
-        role.permissions = [perm]
-        user.roles = [role]
-        mock_user_repo.find_by_id.return_value = user
-
-        result = authz_service.has_permission(user.id, "anything:here")
-        assert result is True
-
-    def test_has_permission_resource_wildcard(self, authz_service, mock_user_repo):
-        """Should return True for resource:* wildcard permission."""
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "project_admin"
-        perm = MagicMock()
-        perm.name = "project:*"
-        role.permissions = [perm]
-        user.roles = [role]
-        mock_user_repo.find_by_id.return_value = user
-
-        assert authz_service.has_permission(user.id, "project:read") is True
-        assert authz_service.has_permission(user.id, "project:delete") is True
-        assert authz_service.has_permission(user.id, "user:read") is False
+@pytest.fixture
+def user_repo():
+    return Mock()
 
 
-class TestAuthorizationServiceHasAnyPermission:
-    """Tests for AuthorizationService.has_any_permission() method."""
-
-    @pytest.fixture
-    def authz_service(self):
-        """Create AuthorizationService."""
-        mock_repo = Mock()
-        return AuthorizationService(mock_repo), mock_repo
-
-    def test_has_any_permission_true(self, authz_service):
-        """Should return True when user has at least one permission."""
-        service, mock_repo = authz_service
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "viewer"
-        perm = MagicMock()
-        perm.name = "project:read"
-        role.permissions = [perm]
-        user.roles = [role]
-        mock_repo.find_by_id.return_value = user
-
-        result = service.has_any_permission(user.id, ["project:read", "project:write", "user:delete"])
-        assert result is True
-
-    def test_has_any_permission_false(self, authz_service):
-        """Should return False when user has none of the permissions."""
-        service, mock_repo = authz_service
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "viewer"
-        perm = MagicMock()
-        perm.name = "project:read"
-        role.permissions = [perm]
-        user.roles = [role]
-        mock_repo.find_by_id.return_value = user
-
-        result = service.has_any_permission(user.id, ["user:delete", "admin:manage"])
-        assert result is False
+def _service(user_repo, reader) -> AuthorizationService:
+    service = AuthorizationService(user_repo)
+    service.set_authz_reader(reader)
+    return service
 
 
-class TestAuthorizationServiceHasAllPermissions:
-    """Tests for AuthorizationService.has_all_permissions() method."""
+class TestPlatformOps:
+    def test_flag_is_the_only_bypass(self, user_repo):
+        service = _service(user_repo, FakeReader(ops=True))
+        user_id = uuid4()
+        assert service.is_platform_admin(user_id) is True
+        assert service.has_permission(user_id, "company:manage_billing") is True
+        assert service.get_user_permissions(user_id) == {"*:*"}
 
-    @pytest.fixture
-    def authz_service(self):
-        """Create AuthorizationService."""
-        mock_repo = Mock()
-        return AuthorizationService(mock_repo), mock_repo
+    def test_without_the_flag_and_without_a_company_nothing_is_granted(self, user_repo):
+        service = _service(user_repo, FakeReader())
+        user_id = uuid4()
+        assert service.is_platform_admin(user_id) is False
+        assert service.has_permission(user_id, "project:read") is False
+        assert service.get_user_permissions(user_id) == set()
 
-    def test_has_all_permissions_true(self, authz_service):
-        """Should return True when user has all permissions."""
-        service, mock_repo = authz_service
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "editor"
-        perm1 = MagicMock()
-        perm1.name = "project:read"
-        perm2 = MagicMock()
-        perm2.name = "project:write"
-        role.permissions = [perm1, perm2]
-        user.roles = [role]
-        mock_repo.find_by_id.return_value = user
-
-        result = service.has_all_permissions(user.id, ["project:read", "project:write"])
-        assert result is True
-
-    def test_has_all_permissions_false(self, authz_service):
-        """Should return False when user lacks at least one permission."""
-        service, mock_repo = authz_service
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "editor"
-        perm = MagicMock()
-        perm.name = "project:read"
-        role.permissions = [perm]
-        user.roles = [role]
-        mock_repo.find_by_id.return_value = user
-
-        result = service.has_all_permissions(user.id, ["project:read", "project:write"])
-        assert result is False
+    def test_no_reader_fails_closed(self, user_repo):
+        service = AuthorizationService(user_repo)
+        user_id = uuid4()
+        assert service.is_platform_admin(user_id) is False
+        assert service.has_permission(user_id, "project:read") is False
+        assert service.get_user_permissions(user_id) == set()
 
 
-class TestAuthorizationServiceHasRole:
-    """Tests for AuthorizationService.has_role() method."""
+class TestCompanyRoles:
+    def test_admin_holds_the_full_matrix(self, user_repo):
+        company_id = uuid4()
+        service = _service(user_repo, FakeReader(roles={company_id: "admin"}, primary=company_id))
+        user_id = uuid4()
+        assert service.is_company_admin(user_id, company_id) is True
+        assert service.has_permission(user_id, "bibliotheque:manage") is True
+        assert service.has_permission(user_id, "company:manage_members") is True
+        assert "project:create" in service.get_user_permissions(user_id)
 
-    @pytest.fixture
-    def authz_service(self):
-        """Create AuthorizationService."""
-        mock_repo = Mock()
-        return AuthorizationService(mock_repo), mock_repo
+    def test_assigned_manager_manages_the_library_but_not_the_company(self, user_repo):
+        company_id = uuid4()
+        service = _service(user_repo, FakeReader(roles={company_id: "manager"}, primary=company_id))
+        user_id = uuid4()
+        assert service.is_company_admin(user_id, company_id) is False
+        assert service.has_permission(user_id, "bibliotheque:manage") is True
+        assert service.has_permission(user_id, "company:manage_settings") is False
 
-    @pytest.fixture
-    def user_with_admin_role(self, authz_service):
-        """Create user with admin role."""
-        _, mock_repo = authz_service
-        user = MagicMock()
-        user.id = uuid4()
-        role = MagicMock()
-        role.name = "admin"
-        role.permissions = []
-        user.roles = [role]
-        mock_repo.find_by_id.return_value = user
-        return user
+    def test_manager_assigned_to_nothing_manages_nothing(self, user_repo):
+        company_id = uuid4()
+        service = _service(user_repo, FakeReader(roles={company_id: "manager"}, primary=company_id, assigned=False))
+        assert service.has_permission(uuid4(), "bibliotheque:manage") is False
 
-    def test_has_role_true(self, authz_service, user_with_admin_role):
-        """Should return True when user has role."""
-        service, _ = authz_service
-        result = service.has_role(user_with_admin_role.id, "admin")
-        assert result is True
+    def test_member_is_read_only(self, user_repo):
+        company_id = uuid4()
+        service = _service(user_repo, FakeReader(roles={company_id: "member"}, primary=company_id))
+        user_id = uuid4()
+        assert service.has_permission(user_id, "project:read") is True
+        assert service.has_permission(user_id, "project:manage_invoices") is False
 
-    def test_has_role_false(self, authz_service, user_with_admin_role):
-        """Should return False when user lacks role."""
-        service, _ = authz_service
-        result = service.has_role(user_with_admin_role.id, "superadmin")
-        assert result is False
+    def test_a_grant_in_any_company_answers_the_context_free_question(self, user_repo):
+        company_id = uuid4()
+        service = _service(
+            user_repo,
+            FakeReader(
+                roles={company_id: "member"},
+                primary=company_id,
+                grants=[("bibliotheque:manage", "grant")],
+            ),
+        )
+        assert service.has_permission(uuid4(), "bibliotheque:manage") is True
 
-    def test_has_role_case_insensitive(self, authz_service, user_with_admin_role):
-        """Should match role names case-insensitively."""
-        service, _ = authz_service
-        result = service.has_role(user_with_admin_role.id, "ADMIN")
-        assert result is True
+    def test_a_deny_removes_it_again(self, user_repo):
+        company_id = uuid4()
+        service = _service(
+            user_repo,
+            FakeReader(
+                roles={company_id: "manager"},
+                primary=company_id,
+                grants=[("bibliotheque:manage", "deny")],
+            ),
+        )
+        assert service.has_permission(uuid4(), "bibliotheque:manage") is False
 
-    def test_has_role_user_not_found(self, authz_service):
-        """Should return False when user not found."""
-        service, mock_repo = authz_service
-        mock_repo.find_by_id.return_value = None
+    def test_permissions_follow_the_primary_company(self, user_repo):
+        primary, other = uuid4(), uuid4()
+        service = _service(user_repo, FakeReader(roles={primary: "member", other: "admin"}, primary=primary))
+        user_id = uuid4()
+        # The claim/`/auth/me` payload shows the primary company…
+        assert "project:create" not in service.get_user_permissions(user_id)
+        # …while a context-free capability question still finds the other company.
+        assert service.has_permission(user_id, "project:create") is True
 
-        result = service.has_role(uuid4(), "admin")
-        assert result is False
+    def test_permission_in_company_is_scoped_to_that_company(self, user_repo):
+        admin_company, member_company = uuid4(), uuid4()
+        service = _service(
+            user_repo,
+            FakeReader(roles={admin_company: "admin", member_company: "member"}, primary=admin_company),
+        )
+        user_id = uuid4()
+        assert service.has_permission_in_company(user_id, "company:manage_billing", admin_company) is True
+        assert service.has_permission_in_company(user_id, "company:manage_billing", member_company) is False
+
+
+class TestAnyAndAllPermissions:
+    def test_any_and_all(self, user_repo):
+        company_id = uuid4()
+        service = _service(user_repo, FakeReader(roles={company_id: "member"}, primary=company_id))
+        user_id = uuid4()
+        assert service.has_any_permission(user_id, ["project:read", "project:delete"]) is True
+        assert service.has_all_permissions(user_id, ["project:read", "project:delete"]) is False
+        assert service.has_all_permissions(user_id, ["project:read", "user:read"]) is True
+
+
+class TestHasRole:
+    def test_company_role_and_ops(self, user_repo):
+        company_id = uuid4()
+        service = _service(user_repo, FakeReader(roles={company_id: "manager"}, primary=company_id))
+        user_id = uuid4()
+        assert service.has_role(user_id, "manager") is True
+        assert service.has_role(user_id, "MANAGER") is True
+        assert service.has_role(user_id, "admin") is False
+        assert service.has_role(user_id, "ops") is False
+
+        ops_service = _service(user_repo, FakeReader(ops=True))
+        assert ops_service.has_role(user_id, "ops") is True

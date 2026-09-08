@@ -15,10 +15,11 @@ from typing import Optional, Tuple
 from uuid import UUID
 
 from flask import Response, jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import BaseModel, field_validator
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_documents_bp
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
 from app.domain.entities.invoice import RefundableStatus, RefundedBy
@@ -118,7 +119,7 @@ def list_materials_expenses():
         return _err("ValidationError", "limit and offset must be integers", 400)
 
     user_id = UUID(get_jwt_identity())
-    is_superadmin = "*:*" in get_jwt().get("permissions", [])
+    is_superadmin = is_platform_ops()
 
     try:
         result = get_container().list_materials_expenses_usecase.execute(
@@ -183,7 +184,7 @@ def set_materials_expense_refundable_status(invoice_id: str):
         return _err("ValidationError", str(exc), 400)
 
     user_id = UUID(get_jwt_identity())
-    is_superadmin = "*:*" in get_jwt().get("permissions", [])
+    is_superadmin = is_platform_ops()
 
     try:
         updated = get_container().set_refundable_status_usecase.execute(

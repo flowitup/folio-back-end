@@ -19,8 +19,6 @@ if TYPE_CHECKING:
 _TOKEN_EXPIRY_DAYS = 7
 _PREFIX_PATTERN = re.compile(r"^[A-Z0-9]{1,8}$")
 
-_ADMIN_PERMISSION = "*:*"
-
 
 def _now_utc() -> datetime:
     """Return the current UTC-aware datetime.
@@ -37,7 +35,7 @@ def _assert_admin(caller_id: UUID, company_id: UUID, is_admin: bool) -> None:
     Args:
         caller_id: The UUID of the requesting user.
         company_id: The company being acted on (included in error context).
-        is_admin: Pre-resolved from RoleCheckerPort.has_permission(caller_id, '*:*').
+        is_admin: Pre-resolved from RoleCheckerPort.is_platform_admin(caller_id).
     """
     if not is_admin:
         raise ForbiddenCompanyError(caller_id, company_id)
@@ -46,9 +44,9 @@ def _assert_admin(caller_id: UUID, company_id: UUID, is_admin: bool) -> None:
 def _assert_company_admin(role_checker: "RoleCheckerPort", caller_id: UUID, company_id: UUID) -> None:
     """Raise ForbiddenCompanyError unless caller manages this specific company.
 
-    Authorized callers are: a platform admin (legacy global '*:*'), OR a user
+    Authorized callers are: platform ops (`users.is_platform_ops`), OR a user
     whose per-company role for company_id is 'admin'. This is the company-scoped
-    replacement for the old global-'*:*'-only _assert_admin check, used by every
+    replacement for the old platform-only _assert_admin check, used by every
     company-management use-case (member roster, invite tokens, join code,
     payment methods) so a company admin no longer needs platform rights.
     """

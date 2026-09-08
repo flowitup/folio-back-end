@@ -3,58 +3,36 @@
 from typing import List
 from uuid import UUID
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import func, literal, or_
 from sqlalchemy.orm import Session
 
 from app.application.labor.ports import IPendingAttendanceQuery, PendingAttendanceItem
+from app.infrastructure.database.labor_validation_scope import may_validate_clause
 from app.infrastructure.database.models import (
     LaborEntryModel,
-    PermissionModel,
     PersonModel,
     ProjectModel,
+    UserModel,
     WorkerModel,
 )
-from app.infrastructure.database.models.associations import role_permissions, user_projects, user_roles
-
-# Permission names that let a role validate attendance on a project.
-_VALIDATOR_PERMISSIONS = ("project:manage_labor", "project:*", "*:*")
 
 
 class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
-    """Single query: pending entries → worker → project, filtered to projects the
-    user can validate (owner, or member whose membership role or global role
-    carries manage_labor). Written in Core so it runs on SQLite in tests too."""
+    """Single query: pending entries → worker → project, filtered to the projects
+    the user may validate (company admin, assigned manager, or a D8 grant of
+    `project:manage_labor` — see `labor_validation_scope`). Platform ops sees
+    every project, mirroring their support access elsewhere. Written in Core so
+    it runs on SQLite in tests too."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def list_pending_for_validator(self, user_id: UUID, limit: int = 100) -> List[PendingAttendanceItem]:
-        # Membership role on this project grants manage_labor.
-        membership_grants = exists(
-            select(1)
-            .select_from(
-                user_projects.join(role_permissions, role_permissions.c.role_id == user_projects.c.role_id).join(
-                    PermissionModel, PermissionModel.id == role_permissions.c.permission_id
-                )
-            )
-            .where(
-                user_projects.c.user_id == user_id,
-                user_projects.c.project_id == ProjectModel.id,
-                PermissionModel.name.in_(_VALIDATOR_PERMISSIONS),
-            )
-        )
-        # Member of the project (any role) AND a global role grants manage_labor.
-        is_member = exists(
-            select(1).where(user_projects.c.user_id == user_id, user_projects.c.project_id == ProjectModel.id)
-        )
-        global_grants = exists(
-            select(1)
-            .select_from(
-                user_roles.join(role_permissions, role_permissions.c.role_id == user_roles.c.role_id).join(
-                    PermissionModel, PermissionModel.id == role_permissions.c.permission_id
-                )
-            )
-            .where(user_roles.c.user_id == user_id, PermissionModel.name.in_(_VALIDATOR_PERMISSIONS))
+        is_ops = bool(self._session.query(UserModel.is_platform_ops).filter(UserModel.id == user_id).scalar())
+        may_validate = (
+            literal(True)
+            if is_ops
+            else may_validate_clause(self._session, user_id, ProjectModel.id, ProjectModel.company_id)
         )
 
         worker_name = func.coalesce(PersonModel.name, WorkerModel.name)
@@ -81,7 +59,7 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
             .outerjoin(PersonModel, PersonModel.id == WorkerModel.person_id)
             .filter(
                 or_(LaborEntryModel.status == "pending", LaborEntryModel.change_requested_at.isnot(None)),
-                or_(ProjectModel.owner_id == user_id, membership_grants, is_member & global_grants),
+                may_validate,
             )
             .order_by(LaborEntryModel.date.desc(), LaborEntryModel.created_at.desc())
             .limit(limit)

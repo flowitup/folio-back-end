@@ -27,6 +27,53 @@ from app.domain.exceptions.invitation_exceptions import RoleNotAllowedError
 # ---------------------------------------------------------------------------
 
 
+class _InviteReader:
+    """AuthzReaderPort double: `allow` decides `project:invite` on every project.
+
+    The permission itself is covered by test_can_invite_resolver.py; these tests
+    only need the gate open (or shut) so they can exercise the invite flow.
+    """
+
+    def __init__(self, allow: bool = True) -> None:
+        self._allow = allow
+
+    def company_role_for(self, user_id, company_id):
+        return "admin" if self._allow else "member"
+
+    def is_assigned(self, user_id, project_id):
+        return True
+
+    def project_company_id(self, project_id):
+        return uuid4()
+
+    def grants_for(self, user_id, company_id, project_id):
+        return []
+
+    def primary_company_id(self, user_id):
+        return None
+
+    def admin_company_ids(self, user_id):
+        return []
+
+    def company_roles_for(self, user_id):
+        return []
+
+    def is_platform_ops(self, user_id):
+        return False
+
+    def has_project_assignment_in_company(self, user_id, company_id):
+        return True
+
+    def project_ids_for_company(self, company_id):
+        return []
+
+    def assigned_project_ids(self, user_id, project_ids):
+        return []
+
+    def assigned_project_ids_for_users(self, company_id, user_ids):
+        return {}
+
+
 def _make_user(*, has_invite_perm: bool = False, is_superadmin: bool = False) -> User:
     user = User(
         id=uuid4(),
@@ -90,6 +137,7 @@ def _make_usecase(
     email_port=None,
     queue_port=None,
     db_session=None,
+    may_invite: bool = True,
 ) -> CreateInvitationUseCase:
     renderer = MagicMock()
     renderer.render.return_value = ("Subject", "Text body", "<html>body</html>")
@@ -104,6 +152,7 @@ def _make_usecase(
         queue_port=queue_port or MagicMock(),
         app_base_url="http://localhost:3000",
         db_session=db_session or _FakeSession(),
+        authz_reader=_InviteReader(may_invite),
     )
 
 
@@ -206,6 +255,7 @@ class TestNewEmailPath:
             queue_port=queue,
             app_base_url="http://localhost:3000",
             db_session=_FakeSession(),
+            authz_reader=_InviteReader(),
         )
         uc.execute(
             inviter_id=inviter.id,
@@ -342,6 +392,7 @@ class TestExistingUserPath:
             queue_port=queue,
             app_base_url="http://localhost:3000",
             db_session=_FakeSession(),
+            authz_reader=_InviteReader(),
         )
         uc.execute(
             inviter_id=inviter.id,
@@ -390,6 +441,7 @@ class TestExistingUserPath:
             queue_port=queue,
             app_base_url="http://localhost:3000",
             db_session=_FakeSession(),
+            authz_reader=_InviteReader(),
         )
         result = uc.execute(
             inviter_id=inviter.id,
@@ -464,7 +516,7 @@ class TestPermissionChecks:
         role_repo = MagicMock()
         role_repo.find_by_id.return_value = role
 
-        uc = _make_usecase(user_repo=user_repo, project_repo=project_repo, role_repo=role_repo)
+        uc = _make_usecase(user_repo=user_repo, project_repo=project_repo, role_repo=role_repo, may_invite=False)
 
         with pytest.raises(PermissionDeniedError):
             uc.execute(
@@ -474,8 +526,8 @@ class TestPermissionChecks:
                 role_id=role.id,
             )
 
-    def test_inviter_is_owner_without_perm_succeeds(self):
-        """Project owner can invite even without explicit project:invite permission."""
+    def test_inviter_is_owner_without_the_permission_is_refused(self):
+        """D6: owning the project is not a permission — the resolver decides."""
         inviter = _make_user(has_invite_perm=False)
         project = _make_project(owner_id=inviter.id)  # same owner
         role = _make_role()
@@ -495,16 +547,17 @@ class TestPermissionChecks:
             user_repo=user_repo,
             project_repo=project_repo,
             role_repo=role_repo,
+            may_invite=False,
         )
-        result = uc.execute(
-            inviter_id=inviter.id,
-            project_id=project.id,
-            email="newuser@example.com",
-            role_id=role.id,
-        )
-        assert result.kind == "invitation_sent"
+        with pytest.raises(PermissionDeniedError):
+            uc.execute(
+                inviter_id=inviter.id,
+                project_id=project.id,
+                email="newuser@example.com",
+                role_id=role.id,
+            )
 
-    def test_superadmin_can_invite(self):
+    def test_company_admin_can_invite(self):
         inviter = _make_user(is_superadmin=True)
         project = _make_project(owner_id=uuid4())
         role = _make_role()

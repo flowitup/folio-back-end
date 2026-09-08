@@ -10,12 +10,11 @@ from app.application.companies.dtos import (
 )
 from app.application.companies.ports import CompanyRepositoryPort, RoleCheckerPort
 
-_ADMIN_PERMISSION = "*:*"
 _MAX_LIMIT = 200
 
 
 class ListAllCompaniesUseCase:
-    """Return a paginated list of all companies (admin only).
+    """Return a paginated list of all companies (platform ops only).
 
     Non-admin callers should use ListMyCompaniesUseCase instead.
     Sensitive fields are returned unmasked to admins.
@@ -31,7 +30,7 @@ class ListAllCompaniesUseCase:
 
     def execute(self, inp: ListAllCompaniesInput) -> ListAllCompaniesResult:
         # 1. Admin guard
-        is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
+        is_admin = self._role_checker.is_platform_admin(inp.caller_id)
         # Use caller_id twice — no specific company being accessed
         _assert_admin(inp.caller_id, inp.caller_id, is_admin)
 

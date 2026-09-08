@@ -16,11 +16,9 @@ from app.domain.companies.exceptions import CompanyHasProjectsError, CompanyNotF
 if TYPE_CHECKING:
     from app.application.authz.ports import AuthzReaderPort
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class DeleteCompanyUseCase:
-    """Hard-delete a company (admin only).
+    """Hard-delete a company (platform ops only).
 
     The DB schema cascades deletion to user_company_access and
     company_invite_tokens via ON DELETE CASCADE.
@@ -54,7 +52,7 @@ class DeleteCompanyUseCase:
         db_session: TransactionalSessionPort,
     ) -> None:
         # 1. Admin guard
-        is_admin = self._role_checker.has_permission(caller_id, _ADMIN_PERMISSION)
+        is_admin = self._role_checker.is_platform_admin(caller_id)
         _assert_admin(caller_id, company_id, is_admin)
 
         # 2. Assert company exists before deleting

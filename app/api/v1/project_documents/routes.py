@@ -15,7 +15,6 @@ from app.api.v1.project_documents.schemas import ListQueryParams
 from app.api.v1.projects.decorators import (
     _effective_perms_for,
     _has_permission,
-    has_permission,
     require_permission,
     require_project_access,
 )
@@ -388,11 +387,9 @@ def rename_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    # Bypasses uploader/owner checks in the use case: platform admin, or the
-    # caller's effective project:update permission (legacy ∪ matrix ∪ grants − denies).
-    is_admin = has_permission("*:*") or _has_permission(
-        _effective_perms_for(UUID(project_id), requester_user_id), "project:update"
-    )
+    # Bypasses the uploader/owner check in the use case: the caller's resolved
+    # project:update permission (platform ops resolves to "*:*").
+    is_admin = _has_permission(_effective_perms_for(UUID(project_id), requester_user_id), "project:update")
 
     try:
         doc = container.rename_project_document_usecase.execute(
@@ -431,11 +428,9 @@ def delete_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    # Bypasses uploader/owner checks in the use case: platform admin, or the
-    # caller's effective project:update permission (legacy ∪ matrix ∪ grants − denies).
-    is_admin = has_permission("*:*") or _has_permission(
-        _effective_perms_for(UUID(project_id), requester_user_id), "project:update"
-    )
+    # Bypasses the uploader/owner check in the use case: the caller's resolved
+    # project:update permission (platform ops resolves to "*:*").
+    is_admin = _has_permission(_effective_perms_for(UUID(project_id), requester_user_id), "project:update")
 
     try:
         container.delete_project_document_usecase.execute(

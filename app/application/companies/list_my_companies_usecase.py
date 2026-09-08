@@ -13,13 +13,11 @@ from app.application.companies.dtos import (
 from app.application.companies.ports import CompanyRepositoryPort, RoleCheckerPort
 from app.domain.companies.masking import mask_company
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class ListMyCompaniesUseCase:
     """Return all companies the caller is attached to.
 
-    Admins see unmasked sensitive fields; regular users see masked values.
+    Platform ops sees unmasked sensitive fields; everyone else masked values.
     The join with user_company_access is performed by the repository.
     """
 
@@ -33,7 +31,7 @@ class ListMyCompaniesUseCase:
 
     def execute(self, caller_id: UUID) -> ListMyCompaniesResult:
         # Admins also see full data in their own list view
-        is_admin = self._role_checker.has_permission(caller_id, _ADMIN_PERMISSION)
+        is_admin = self._role_checker.is_platform_admin(caller_id)
 
         rows = self._company_repo.list_attached_for_user(caller_id)
         items = [

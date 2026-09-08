@@ -27,6 +27,7 @@ from app.infrastructure.database.models import (
 )
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,9 @@ def export_app():
         test_app._test_noperm_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
         test_app._test_nonascii_project_id = str(nonascii_project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 
@@ -371,6 +375,18 @@ def test_export_404_when_project_not_found(export_client, export_app, admin_toke
     data = resp.get_json()
     # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
     assert data["error"] in ("NotFound", "project_not_found")
+
+
+def test_export_403_when_project_belongs_to_another_company(export_client, export_app, admin_token):
+    """An existing project the caller may not read → 403, not 404."""
+    from tests.foreign_project_helper import create_foreign_project
+
+    resp = export_client.get(
+        _export_url(create_foreign_project(export_app)),
+        query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +680,9 @@ def worker_export_app():
         test_app._test_other_project_worker_id = str(other_project_worker.id)
         test_app._test_inactive_worker_id = str(inactive_worker.id)
 
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
+
         yield test_app
 
         db.session.remove()
@@ -831,8 +850,8 @@ class TestWorkerLaborExportEndpoint:
             query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
             headers=_auth(we_admin_token),
         )
+        # Unknown project id → 404: existence is resolved before permissions.
         assert resp.status_code == 404
-        # Decorator returns {"error": "NotFound"} — route-level handler is no longer reached.
         assert resp.get_json()["error"] in ("NotFound", "project_not_found")
 
     # --- Case 9: 404 worker not found (legitimate UUID, no row) ---
@@ -1086,6 +1105,9 @@ def cjk_worker_export_app():
         test_app._test_worker_id = str(cjk_worker.id)
         test_app._test_admin_email = "cjkadmin@test.com"
         test_app._test_admin_password = "Admin1234!"
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

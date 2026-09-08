@@ -30,6 +30,7 @@ from app.infrastructure.database.models import (
     RoleModel,
     UserModel,
 )
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,9 @@ def inv_export_app():
         test_app._test_admin_email = "invexportadmin@test.com"
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 
@@ -214,10 +218,7 @@ def test_from_after_to_returns_422(inv_export_client, inv_export_app, admin_toke
 
 
 def test_unknown_project_returns_404(inv_export_client, inv_export_app, admin_token):
-    """Non-existent project UUID → 404.
-
-    @require_project_access() intercepts before route body and returns {"error": "NotFound"}.
-    """
+    """Non-existent project UUID → 404: existence is resolved before permissions."""
     url = _export_url(str(uuid4()))
     resp = inv_export_client.get(
         url,
@@ -227,6 +228,20 @@ def test_unknown_project_returns_404(inv_export_client, inv_export_app, admin_to
     assert resp.status_code == 404
     data = resp.get_json()
     assert data["error"] in ("NotFound", "project_not_found")
+
+
+def test_project_of_another_company_returns_403(inv_export_client, inv_export_app, admin_token):
+    """An existing project the caller may not read → 403 (not 404)."""
+    from tests.foreign_project_helper import create_foreign_project
+
+    url = _export_url(create_foreign_project(inv_export_app))
+    resp = inv_export_client.get(
+        url,
+        query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 403
+    assert resp.get_json()["error"] == "Forbidden"
 
 
 def test_xlsx_smoke(inv_export_client, inv_export_app, admin_token):

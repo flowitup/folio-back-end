@@ -16,6 +16,7 @@ from app.infrastructure.database.models import PermissionModel, ProjectModel, Ro
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +149,9 @@ def rg_app():
         test_app._test_project_id = str(project.id)
         test_app._test_company_pm_id = str(company_pm.id)
         test_app._test_regular_pm_id = str(regular_pm.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

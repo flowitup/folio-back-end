@@ -15,13 +15,14 @@ from typing import Tuple
 from uuid import UUID
 
 from flask import Response, jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.companies import companies_bp, users_me_bp
 from app.api.v1.companies.decorators import require_admin, require_attached_company, require_company_role
 from app.api.v1.companies.schemas import (
@@ -74,8 +75,8 @@ def _err(error: str, message: str, status: int) -> Tuple[Response, int]:
 
 
 def _has_superadmin() -> bool:
-    jwt_claims = get_jwt()
-    return "*:*" in jwt_claims.get("permissions", [])
+    """True for platform ops (flowitup support), never for a company admin."""
+    return is_platform_ops()
 
 
 def _may_read_join_code(caller_id: UUID, company_id: UUID) -> bool:

@@ -25,6 +25,7 @@ from app.infrastructure.database.models import PermissionModel, ProjectModel, Ro
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +179,9 @@ def inv_worker_app():
         test_app._test_worker_no_person_id = str(worker_no_person.id)
         test_app._test_worker_no_person_name = "Marie Curie"
         test_app._test_foreign_worker_id = str(foreign_worker.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

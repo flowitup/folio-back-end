@@ -133,6 +133,8 @@ def mat_exp_app():
             is_active=True,
         )
         admin_user.roles.append(superadmin_role)  # superadmin so JWT has "*:*"
+        # Platform access is the ops flag now, not the legacy `*:*` role.
+        admin_user.is_platform_ops = True
 
         non_admin_user = UserModel(
             email="mat_exp_nonadmin@test.com",

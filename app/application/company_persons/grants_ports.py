@@ -101,7 +101,7 @@ class GrantsRoleCheckerPort(Protocol):
     """Minimal role-checking contract for the defense-in-depth admin re-check."""
 
     def is_platform_admin(self, user_id: UUID) -> bool:
-        """Return True if user_id holds the legacy global '*:*' wildcard permission."""
+        """Return True if user_id carries the platform-ops flag (`users.is_platform_ops`)."""
         ...
 
     def is_company_admin(self, user_id: UUID, company_id: UUID) -> bool:

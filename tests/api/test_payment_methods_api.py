@@ -66,7 +66,8 @@ def pm_app():
 
         hasher = Argon2PasswordHasher()
 
-        # Permissions — name must be "*:*" so AuthorizationService.has_permission("*:*") works
+        # Legacy roles are inert; kept so the fixture still exercises the
+        # "a legacy role grants nothing" path alongside the ops flag below.
         star_perm = PermissionModel(name="*:*", resource="*", action="*")
         read_perm = PermissionModel(name="project:read", resource="project", action="read")
 
@@ -86,6 +87,8 @@ def pm_app():
             is_active=True,
         )
         admin_user.roles.append(admin_role)
+        # Platform access is the ops flag now, not the legacy `*:*` role.
+        admin_user.is_platform_ops = True
 
         member_user = UserModel(
             email="pm_member@test.com",
@@ -114,6 +117,7 @@ def pm_app():
         member_access = UserCompanyAccessModel(
             user_id=member_user.id,
             company_id=company.id,
+            role="member",
             is_primary=True,
             attached_at=now,
         )

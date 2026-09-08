@@ -19,6 +19,7 @@ import pytest
 
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 @pytest.fixture(scope="module")
@@ -113,6 +114,9 @@ def inv_hc_app():
         test_app._test_admin_email = "inv_hc_admin@test.com"
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

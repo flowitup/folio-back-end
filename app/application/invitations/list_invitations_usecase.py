@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
+from app.application.invitations.authz import can_manage_project_invites
 from app.application.invitations.dtos import InvitationListItemDto
 from app.application.invitations.exceptions import PermissionDeniedError
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
-    ProjectMembershipRepositoryPort,
     RoleRepositoryPort,
     UserWriteRepositoryPort,
 )
@@ -22,14 +22,18 @@ class ListInvitationsUseCase:
     def __init__(
         self,
         invitation_repo: InvitationRepositoryPort,
-        project_membership_repo: ProjectMembershipRepositoryPort,
         role_repo: RoleRepositoryPort,
         user_repo: UserWriteRepositoryPort,
+        authz_reader: Any = None,  # AuthzReaderPort — resolves project:invite
     ) -> None:
         self._inv_repo = invitation_repo
-        self._membership_repo = project_membership_repo
         self._role_repo = role_repo
         self._user_repo = user_repo
+        self._authz_reader = authz_reader
+
+    def set_authz_reader(self, reader: Any) -> None:
+        """Inject the resolver read port after construction (see the revoke use-case)."""
+        self._authz_reader = reader
 
     # ------------------------------------------------------------------
 
@@ -42,16 +46,17 @@ class ListInvitationsUseCase:
         """Return invitations for *project_id*, filtered by *status_filter*.
 
         Raises:
-            PermissionDeniedError: requester is not a project member or superadmin.
+            PermissionDeniedError: requester may not manage this project's invitations.
         """
         requester = self._user_repo.find_by_id(requester_id)
         if requester is None:
             raise PermissionDeniedError(f"User {requester_id} not found.")
 
-        is_superadmin = requester.has_permission("*", "*")
-        is_member = self._membership_repo.exists(requester_id, project_id)
-        if not is_superadmin and not is_member:
-            raise PermissionDeniedError(f"User {requester_id} is not a member of project {project_id}.")
+        # Pending invitations are part of managing a project's people: the same
+        # `project:invite` that creating and revoking one requires, resolved on
+        # THIS project (never a legacy global role, never a bare membership row).
+        if not can_manage_project_invites(self._authz_reader, requester_id, project_id):
+            raise PermissionDeniedError(f"User {requester_id} cannot manage invitations of project {project_id}.")
 
         status_enum: Optional[InvitationStatus] = None
         if status_filter:

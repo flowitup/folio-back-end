@@ -907,6 +907,7 @@ def configure_container(
             queue_port=_queue,
             app_base_url=app_base_url,
             db_session=_db.session,
+            authz_reader=container.authz_reader,
         )
         container.verify_invitation_usecase = VerifyInvitationUseCase(
             invitation_repo=invitation_repo,
@@ -918,12 +919,13 @@ def configure_container(
             invitation_repo=invitation_repo,
             user_repo=user_repository,
             db_session=_db.session,
+            authz_reader=container.authz_reader,
         )
         container.list_invitations_usecase = ListInvitationsUseCase(
             invitation_repo=invitation_repo,
-            project_membership_repo=project_membership_repo,
             role_repo=role_repo,
             user_repo=user_repository,
+            authz_reader=container.authz_reader,
         )
 
         # AcceptInvitationUseCase needs a db session; lazily import db here
@@ -959,6 +961,7 @@ def configure_container(
             queue_port=_queue,
             app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:3000"),
             db_session=_db.session,
+            role_checker=container.authorization_service,
         )
 
     # Wire notes use cases (phase 03) — always wired; repos are instantiated in
@@ -1081,6 +1084,31 @@ def configure_container(
     container.create_chiffrage_store_usecase = CreateStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.update_chiffrage_store_usecase = UpdateStoreUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_store_usecase = DeleteStoreUseCase(_chiffrage_repo, _chiffrage_session)
+    # ---------------------------------------------------------------------
+    # Permission resolver read port — every authorization decision in the app
+    # goes through it, so it is wired here (not only in app/__init__.py):
+    # callers that rebuild the container after create_app() would otherwise be
+    # left without a reader, and every check fails closed.
+    # ---------------------------------------------------------------------
+    from app import db as _authz_db
+    from app.api.v1.authz_context import get_reader_cache as _get_reader_cache
+    from app.infrastructure.database.repositories.sqlalchemy_authz_reader import (
+        SqlAlchemyAuthzReader as _SqlAlchemyAuthzReader,
+    )
+
+    container.authz_reader = _SqlAlchemyAuthzReader(_authz_db.session, cache_provider=_get_reader_cache)
+    if container.authorization_service is not None:
+        container.authorization_service.set_authz_reader(container.authz_reader)
+    # Every invitation use-case resolves `project:invite` itself (create, list
+    # and revoke), and they are all built above, before the reader exists.
+    for _invitation_usecase in (
+        container.create_invitation_usecase,
+        container.list_invitations_usecase,
+        container.revoke_invitation_usecase,
+    ):
+        if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
+            _invitation_usecase.set_authz_reader(container.authz_reader)
+
     container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_unit_usecase = DeleteUnitUseCase(_chiffrage_repo, _chiffrage_session)

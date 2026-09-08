@@ -50,7 +50,7 @@ def _err(error: str, message: str, status: int):
 )
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_users")
 def assign_project_member(project_id: str, user_id: str):
     """Create or change a manager/member assignment on this project."""
     try:
@@ -98,7 +98,7 @@ def assign_project_member(project_id: str, user_id: str):
 @openapi_doc(summary="Remove a project assignment", tags=["projects"])
 @jwt_required()
 @limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_project_access(write=True)
+@require_project_access(write=True, permission="project:manage_users")
 def unassign_project_member(project_id: str, user_id: str):
     """Remove a manager/member assignment from this project."""
     try:

@@ -52,13 +52,13 @@ def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
     return spent_map.get(project_id, _NO_SPEND)
 
 
-def _money_visible(perms: list, owner_id, user_id: UUID) -> bool:
-    """Budget and spend are for the owner and holders of manage_labor or view_pay."""
-    return (
-        str(owner_id) == str(user_id)
-        or _has_permission(perms, "project:manage_labor")
-        or _has_permission(perms, "project:view_pay")
-    )
+def _money_visible(perms: list) -> bool:
+    """Budget and spend need `project:manage_labor` or `project:view_pay`.
+
+    Project ownership grants nothing on its own (D6): an owner sees money
+    exactly like any other manager, through the resolver.
+    """
+    return _has_permission(perms, "project:manage_labor") or _has_permission(perms, "project:view_pay")
 
 
 def _spend_fields(rollup: ProjectSpent) -> dict:
@@ -77,15 +77,14 @@ def _spend_fields(rollup: ProjectSpent) -> dict:
 @projects_bp.route("", methods=["GET"])
 @openapi_doc(summary="List projects for current user", tags=["projects"])
 @jwt_required()
-@require_permission("project:read")
 def list_projects():
     """List projects visible to current user.
 
-    Visible = projects of companies where the caller is company admin ∪
-    projects the caller owns or is a member of ∪ every project when the
-    caller holds the legacy global `*:*` claim. A raw `project:create` JWT
-    claim no longer implies "see every project" (the tenancy hole this
-    phase closes) — company admin-ship is resolved per company, never global.
+    Visible = every project of a company the caller administers ∪ the projects
+    they are assigned to ∪ everything for platform ops. The list is its own
+    authorization: it is scoped per caller, so it carries no
+    `require_permission` gate (there is no project to resolve one against) and
+    answers an empty list to a caller who can see nothing.
     """
     container = get_container()
     user_id = get_jwt_identity()
@@ -103,16 +102,15 @@ def list_projects():
 
     project_ids = [UUID(str(p.id)) for p in projects]
 
-    # H1: prime the per-request authz-reader cache with every project's
-    # company_id in ONE query, so the per-project _effective_perms_for() call
-    # below hits the cache instead of issuing N separate `project_company_id`
-    # SELECTs (a company admin listing many projects would otherwise pay one
-    # resolver query per project). No-op if authz_reader isn't wired or
-    # doesn't support preloading (e.g. a minimal test double).
+    # Prime the per-request authz-reader cache with everything the resolver
+    # needs for the whole list — project→company, the caller's assignments and
+    # their D8 rows — in three queries instead of three per project. No-op if
+    # authz_reader isn't wired or doesn't support preloading (a minimal test
+    # double).
     if project_ids and container.authz_reader is not None:
-        preload = getattr(container.authz_reader, "preload_project_company_ids", None)
+        preload = getattr(container.authz_reader, "preload_for_projects", None)
         if preload is not None:
-            preload(project_ids)
+            preload(UUID(user_id), project_ids)
 
     spent_map = {}
     if project_ids and container.project_spent_reader is not None:
@@ -141,7 +139,14 @@ def list_projects():
     for p in projects:
         pid = UUID(str(p.id))
         perms = sorted(_effective_perms_for(pid, user_uuid))
-        visible = _money_visible(perms, p.owner_id, user_uuid)
+        # A row the caller cannot open is not part of their list: ownership and
+        # a bare assignment row no longer imply a company role, so the query's
+        # visibility clauses can still surface a project the resolver refuses
+        # (403 on every one of its routes). Filtering here also keeps `total`
+        # honest.
+        if not _has_permission(perms, "project:read"):
+            continue
+        visible = _money_visible(perms)
         items.append(
             ProjectResponse(
                 id=p.id,
@@ -157,7 +162,7 @@ def list_projects():
                 **_spend_fields(_spent_for(spent_map, pid) if visible else _NO_SPEND),
             )
         )
-    return jsonify(ProjectListResponse(projects=items, total=len(projects)).model_dump())
+    return jsonify(ProjectListResponse(projects=items, total=len(items)).model_dump())
 
 
 @projects_bp.route("", methods=["POST"])
@@ -289,12 +294,12 @@ def create_project():
     except InvalidProjectDataError as e:
         return jsonify(ErrorResponse(error="ValidationError", message=str(e), status_code=400).model_dump()), 400
 
-    # Assign the creator as the legacy per-project "manager" role so the
-    # existing membership-role union keeps granting them full project rights
-    # (see app.api.v1.projects.decorators._membership_role_permissions).
-    # Silently skipped if the legacy roles table has no "manager" row (fresh
-    # DB before scripts/seed_auth.py has run) — no per-project role table is
-    # a hard requirement for project creation.
+    # Assign the creator to their own project: with the owner bypass gone (D6)
+    # the assignment row is what lets a company manager keep working on it, and
+    # what makes the project show up in their `GET /projects`. `role_id` only
+    # satisfies the legacy NOT NULL column (dropped in a later phase) — it no
+    # longer grants anything. Silently skipped when the legacy roles table has
+    # no "manager" row (fresh DB before scripts/seed_auth.py has run).
     creator_assigned = False
     if container.role_repository is not None and container.project_membership_repo is not None:
         manager_role = container.role_repository.find_by_name("manager")
@@ -365,7 +370,7 @@ def get_project(project_id: str):
         spent_rollup = _spent_for(spent_map, project.id)
 
     perms = sorted(_effective_perms_for(project.id, user_id))
-    visible = _money_visible(perms, project.owner_id, user_id)
+    visible = _money_visible(perms)
     return jsonify(
         ProjectResponse(
             id=str(project.id),
@@ -483,7 +488,7 @@ def delete_project(project_id: str):
             404,
         )
 
-    if not can_mutate_project(project, user_id):
+    if not can_mutate_project(project, user_id, "project:delete"):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.delete_project_usecase.execute(UUID(project_id))
@@ -570,13 +575,9 @@ def get_project_members(project_id: UUID):
             404,
         )
 
-    # Allow project owner or any member
-    if project.owner_id != user_id and user_id not in project.user_ids:
-        from flask_jwt_extended import get_jwt
-
-        claims = get_jwt()
-        if "*:*" not in set(claims.get("permissions", [])):
-            return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+    # Reading the member list needs read access to the project itself.
+    if not can_read_project(project, user_id):
+        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     # Query members with role info via raw SQL (user_projects + roles + users join)
     from app import db
@@ -628,7 +629,7 @@ def remove_user_from_project(project_id: str, user_id: str):
             404,
         )
 
-    if not can_mutate_project(project, caller_id):
+    if not can_mutate_project(project, caller_id, "project:manage_users"):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.project_repository.remove_user(UUID(project_id), UUID(user_id))
@@ -636,15 +637,17 @@ def remove_user_from_project(project_id: str, user_id: str):
 
 
 @projects_bp.route("/<project_id>/members/<user_id>", methods=["PATCH"])
-@openapi_doc(summary="Change a project member's role", tags=["projects"])
+@openapi_doc(summary="Change a project member's role (deprecated: role_id is ignored)", tags=["projects"])
 @jwt_required()
 @limiter.limit("30 per minute")
 @require_permission("project:manage_users")
 def update_member_role(project_id: str, user_id: str):
-    """Change an existing member's role on a project.
+    """Deprecated: per-project roles are gone — capability comes from the company role.
 
-    The new role's permissions take effect immediately (project-scoped checks
-    resolve the membership role per request — no token refresh needed).
+    Kept so released web/mobile builds keep working: the call still validates
+    the caller, the project and the membership, accepts `role_id` in the body
+    and ignores it. Use `PUT /projects/<id>/assignments/<user_id>` to change
+    what a member may do.
     """
     container = get_container()
     caller_id = UUID(get_jwt_identity())
@@ -665,39 +668,16 @@ def update_member_role(project_id: str, user_id: str):
             404,
         )
 
-    if not can_mutate_project(project, caller_id):
+    if not can_mutate_project(project, caller_id, "project:manage_users"):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
-    body = request.get_json(silent=True) or {}
-    role_id_raw = body.get("role_id")
-    try:
-        role_uuid = UUID(str(role_id_raw))
-    except (ValueError, TypeError):
-        return (
-            jsonify(
-                ErrorResponse(error="ValidationError", message="role_id is required", status_code=400).model_dump()
-            ),
-            400,
-        )
-
-    role = container.role_repository.find_by_id(role_uuid)
-    if role is None:
-        return jsonify(ErrorResponse(error="NotFound", message="Role not found", status_code=404).model_dump()), 404
-    if role.name == "superadmin":
-        return (
-            jsonify(
-                ErrorResponse(
-                    error="Forbidden", message="Cannot assign the superadmin role", status_code=403
-                ).model_dump()
-            ),
-            403,
-        )
-
-    if container.project_membership_repo.find_role_id(user_uuid, project_uuid) is None:
+    if container.project_membership_repo.find_role_id(user_uuid, project_uuid) is None and user_uuid not in set(
+        project.user_ids
+    ):
         return (
             jsonify(ErrorResponse(error="NotFound", message="User is not a member", status_code=404).model_dump()),
             404,
         )
 
-    container.project_membership_repo.set_role(user_uuid, project_uuid, role_uuid)
-    return jsonify({"user_id": user_id, "role_id": str(role_uuid), "role_name": role.name}), 200
+    body = request.get_json(silent=True) or {}
+    return jsonify({"user_id": user_id, "role_id": body.get("role_id"), "role_name": "", "deprecated": True}), 200

@@ -3,18 +3,17 @@
 Authorization note:
     Two tiers, and they are not the same rule.
 
-    * Read (list, get, content) and create: project membership is enough. Each
-      use-case calls ``is_member()`` and raises ``NotProjectMemberError``,
-      which the route maps to 403.
-    * Mutate (PATCH, DELETE): membership AND uploader-or-project-owner-or-admin,
-      enforced by ``authorize_analysis_mutation``. Membership alone would let
-      any project member rewrite or delete a colleague's report. This mirrors
-      ``DeleteProjectDocumentUseCase``.
-
-    Authorization is single-layer, same convention as notes/routes.py: the
-    checks live in the use-cases, not in route decorators — KISS. If a future
-    use-case forgets its check there is no second net, so the pattern must be
-    followed consistently.
+    * Read (list, get, content): ``is_member()`` — the resolver's
+      ``project:read`` — raising ``NotProjectMemberError``, which the route
+      maps to 403.
+    * Create: read access to the project, resolved at the route like
+      ``project_documents`` (its sibling resource) — uploading a report is part
+      of working on a project, and the uploader keeps control of what they
+      uploaded.
+    * Mutate (PATCH, DELETE): read access AND uploader-or-project-owner-or
+      -``project:update`` holder. Read access alone would let any project
+      member rewrite or delete a colleague's report; the uploader keeps
+      control of their own. This mirrors ``DeleteProjectDocumentUseCase``.
 """
 
 from __future__ import annotations
@@ -33,7 +32,12 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.project_analyses import project_analyses_bp
 from app.api.v1.project_analyses.schemas import AnalysisUpdateBody, ListQueryParams
-from app.api.v1.projects.decorators import _effective_perms_for, _has_permission, has_permission
+from app.api.v1.projects.decorators import (
+    _effective_perms_for,
+    _has_permission,
+    require_permission,
+    require_project_access,
+)
 from app.application.project_analyses.dtos import (
     AnalysisOutput,
     CreateAnalysisInput,
@@ -181,6 +185,8 @@ def list_analysis_tags(project_id: UUID) -> Any:
     tags=["project_analyses"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access(write=False)
 @limiter.limit("20 per minute", key_func=jwt_user_key)
 def create_analysis(project_id: UUID) -> Any:
     """Upload a self-contained HTML report. Agent-callable via the same endpoint."""
@@ -388,10 +394,9 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
                 tags=tags_arg,
             ),
             project_owner_id=project.owner_id,
-            # Platform admin, or the caller's effective project:update permission
-            # (legacy ∪ matrix ∪ grants − denies) bypasses the uploader/owner check.
-            is_admin=has_permission("*:*")
-            or _has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
+            # The caller's resolved project:update permission (platform ops
+            # resolves to "*:*") bypasses the uploader/owner check.
+            is_admin=_has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
         )
     except AnalysisNotFoundError:
         return _err(404, "NotFound", "Analysis not found")
@@ -437,10 +442,9 @@ def delete_analysis(project_id: UUID, analysis_id: UUID) -> Any:
             analysis_id=analysis_id,
             expected_project_id=project_id,
             project_owner_id=project.owner_id,
-            # Platform admin, or the caller's effective project:update permission
-            # (legacy ∪ matrix ∪ grants − denies) bypasses the uploader/owner check.
-            is_admin=has_permission("*:*")
-            or _has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
+            # The caller's resolved project:update permission (platform ops
+            # resolves to "*:*") bypasses the uploader/owner check.
+            is_admin=_has_permission(_effective_perms_for(project_id, actor_id), "project:update"),
         )
     except AnalysisNotFoundError:
         return _err(404, "NotFound", "Analysis not found")

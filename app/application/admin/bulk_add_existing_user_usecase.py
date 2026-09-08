@@ -49,6 +49,7 @@ class BulkAddExistingUserUseCase:
         queue_port: Any,  # QueuePort — enqueue(task_name, payload)
         app_base_url: str,
         db_session: TransactionalSessionPort,
+        role_checker: Any = None,  # RoleCheckerPort — is_platform_admin(user_id)
     ) -> None:
         self._user_repo = user_repo
         self._project_repo = project_repo
@@ -58,6 +59,7 @@ class BulkAddExistingUserUseCase:
         self._queue = queue_port
         self._base_url = app_base_url.rstrip("/")
         self._db = db_session
+        self._role_checker = role_checker
 
     # ------------------------------------------------------------------
 
@@ -77,7 +79,7 @@ class BulkAddExistingUserUseCase:
             role_id: UUID of the role to assign in all projects.
 
         Raises:
-            PermissionDeniedError: requester not found or lacks '*:*' permission.
+            PermissionDeniedError: requester not found or is not platform ops.
             TargetUserNotFoundError: target user not found.
             RoleNotFoundError: role not found.
             RoleNotAllowedError: attempting to assign the 'superadmin' role.
@@ -89,11 +91,11 @@ class BulkAddExistingUserUseCase:
         if requester is None:  # pragma: no cover - defense-in-depth: route's @jwt_required guarantees a valid identity
             raise PermissionDeniedError(f"Requester {requester_id} not found.")
 
-        # 2. Defense-in-depth: require superadmin-level wildcard permission
-        if not requester.has_permission(
-            "*", "*"
-        ):  # pragma: no cover - defense-in-depth: route's _require_superadmin fires first
-            raise PermissionDeniedError(f"User {requester_id} does not have '*:*' permission required for bulk-add.")
+        # 2. Defense-in-depth: bulk-add is flowitup support tooling, so it needs
+        #    the platform-ops flag — the same gate the route applies, read live
+        #    from the database (never from a role row or the token).
+        if self._role_checker is None or not self._role_checker.is_platform_admin(requester_id):
+            raise PermissionDeniedError(f"User {requester_id} is not platform ops (required for bulk-add).")
 
         # 3. Load target user
         target_user = self._user_repo.find_by_id(target_user_id)

@@ -90,6 +90,16 @@ def wg_app(invitation_app):
 
         db.session.add_all(
             [
+                # The project moves to this company, so its owner (the shared
+                # fixture's admin, who performs every upload below) has to
+                # administer it here too.
+                UserCompanyAccessModel(
+                    user_id=UUID(invitation_app._test_admin_user_id),
+                    company_id=company.id,
+                    role="admin",
+                    is_primary=False,
+                    attached_at=now,
+                ),
                 UserCompanyAccessModel(
                     user_id=manager_user.id, company_id=company.id, role="manager", is_primary=True, attached_at=now
                 ),
@@ -119,7 +129,8 @@ def wg_app(invitation_app):
             db.session.execute(
                 text(
                     "INSERT INTO user_projects (user_id, project_id, role_id, assigned_at) "
-                    "VALUES (:uid, :pid, :rid, :at)"
+                    "VALUES (:uid, :pid, :rid, :at) "
+                    "ON CONFLICT (user_id, project_id) DO NOTHING"
                 ),
                 {
                     "uid": str(uid),

@@ -131,6 +131,26 @@ class SqlAlchemyAuthzReader:
             cache[key] = result
         return result
 
+    def project_exists(self, project_id: UUID) -> bool:
+        """Return True when `project_id` names an existing `projects` row.
+
+        A project whose `company_id` is NULL exists but resolves to no
+        permission, so existence cannot be inferred from `project_company_id`.
+        Cached per request like every other read here.
+        """
+        cache = self._cache()
+        key = ("project_exists", project_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        row = self._session.execute(
+            text(f"SELECT 1 FROM projects WHERE {self._eq('id', 'pid')} LIMIT 1"),
+            {"pid": self._bind_uuid(project_id)},
+        ).fetchone()
+        result = row is not None
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def preload_project_company_ids(self, project_ids: "list[UUID]") -> None:
         """Batch-fetch `company_id` for many projects in ONE query and prime the per-request cache.
 
@@ -164,6 +184,60 @@ class SqlAlchemyAuthzReader:
         for pid in unique_ids:
             cache[("project_company_id", pid)] = resolved.get(pid)
 
+    def preload_for_projects(self, user_id: UUID, project_ids: "list[UUID]") -> None:
+        """Prime the per-request cache with everything the resolver needs for N projects.
+
+        Three queries total — project→company, the caller's assignments, the
+        caller's D8 rows — instead of the three-per-project the resolver would
+        otherwise issue while building `my_permissions` for a project list.
+        No-op without a `cache_provider` (nothing to prime into).
+        """
+        cache = self._cache()
+        if cache is None or not project_ids:
+            return
+        unique_ids = list(dict.fromkeys(project_ids))
+        self.preload_project_company_ids(unique_ids)
+
+        assigned = set(self.assigned_project_ids(user_id, unique_ids))
+        for pid in unique_ids:
+            cache[("is_assigned", user_id, pid)] = pid in assigned
+
+        company_ids = [cid for cid in {cache.get(("project_company_id", pid)) for pid in unique_ids} if cid is not None]
+        if not company_ids:
+            return
+        rows = self._grant_rows_for_scope(user_id, company_ids, unique_ids)
+        for company_id in company_ids:
+            company_wide = [(perm, effect) for cid, pid, perm, effect in rows if cid == company_id and pid is None]
+            cache[("grants_for", user_id, company_id, None)] = company_wide
+            for project_id in unique_ids:
+                scoped = [(perm, effect) for cid, pid, perm, effect in rows if cid == company_id and pid == project_id]
+                cache[("grants_for", user_id, company_id, project_id)] = company_wide + scoped
+
+    def _grant_rows_for_scope(
+        self, user_id: UUID, company_ids: "list[UUID]", project_ids: "list[UUID]"
+    ) -> "list[tuple[UUID | None, UUID | None, str, str]]":
+        """One query returning every D8 row of `user_id` in scope for these companies/projects."""
+        params: dict = {"uid": self._bind_uuid(user_id)}
+        params.update({f"cid{i}": self._bind_uuid(cid) for i, cid in enumerate(company_ids)})
+        params.update({f"pid{i}": self._bind_uuid(pid) for i, pid in enumerate(project_ids)})
+        if self._is_sqlite():
+            company_col, project_col = _norm("company_id"), _norm("project_id")
+            company_in = ", ".join(_norm(f":cid{i}") for i in range(len(company_ids)))
+            project_in = ", ".join(_norm(f":pid{i}") for i in range(len(project_ids)))
+        else:
+            company_col, project_col = "company_id", "project_id"
+            company_in = ", ".join(f":cid{i}" for i in range(len(company_ids)))
+            project_in = ", ".join(f":pid{i}" for i in range(len(project_ids)))
+        rows = self._session.execute(
+            text(
+                "SELECT company_id, project_id, permission, effect FROM company_member_grants "
+                f"WHERE {self._eq('user_id', 'uid')} AND {company_col} IN ({company_in}) "
+                f"AND (project_id IS NULL OR {project_col} IN ({project_in}))"
+            ),
+            params,
+        ).fetchall()
+        return [(self._as_uuid_or_none(r[0]), self._as_uuid_or_none(r[1]), r[2], r[3]) for r in rows]
+
     def primary_company_id(self, user_id: UUID) -> "UUID | None":
         """Return the company_id of the user's `is_primary=True` access row, or None."""
         cache = self._cache()
@@ -195,6 +269,37 @@ class SqlAlchemyAuthzReader:
             {"uid": self._bind_uuid(user_id)},
         ).fetchall()
         result = [self._as_uuid_or_none(r[0]) for r in rows]
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def company_roles_for(self, user_id: UUID) -> "list[tuple[UUID, str]]":
+        """Return every `(company_id, role)` pair the user is attached to."""
+        cache = self._cache()
+        key = ("company_roles_for", user_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        rows = self._session.execute(
+            text(f"SELECT company_id, role FROM user_company_access WHERE {self._eq('user_id', 'uid')}"),
+            {"uid": self._bind_uuid(user_id)},
+        ).fetchall()
+        result = [(self._as_uuid_or_none(r[0]), r[1]) for r in rows]
+        result = [(cid, role) for cid, role in result if cid is not None]
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        """Return `users.is_platform_ops` for this user (False when the user is gone)."""
+        cache = self._cache()
+        key = ("is_platform_ops", user_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        row = self._session.execute(
+            text(f"SELECT is_platform_ops FROM users WHERE {self._eq('id', 'uid')} LIMIT 1"),
+            {"uid": self._bind_uuid(user_id)},
+        ).fetchone()
+        result = bool(row[0]) if row is not None else False
         if cache is not None:
             cache[key] = result
         return result

@@ -25,12 +25,13 @@ from urllib.parse import quote
 from uuid import UUID
 
 from flask import Response, jsonify, request, send_file
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_documents_bp
 from app.api.v1.billing.decorators import require_billing_document_owner
 from app.api.v1.billing.schemas import (
@@ -149,7 +150,7 @@ def list_billing_documents():
         return _err("ValidationError", "limit and offset must be integers", 400)
 
     user_id = UUID(get_jwt_identity())
-    is_superadmin = "*:*" in get_jwt().get("permissions", [])
+    is_superadmin = is_platform_ops()
     result = get_container().list_billing_documents_usecase.execute(
         user_id=user_id,
         kind=kind,

@@ -27,6 +27,7 @@ import pytest
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,9 @@ def pay_app():
         test_app._test_outsider_email = "pay_outsider@test.com"
         test_app._test_outsider_password = "Outsider1234!"
         test_app._test_admin_user_id = admin_user.id
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

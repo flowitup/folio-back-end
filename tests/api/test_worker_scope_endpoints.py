@@ -17,6 +17,7 @@ import pytest
 
 from app.infrastructure.database.models import PermissionModel, ProjectModel, RoleModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
+from tests.company_tenancy_helper import seed_company_tenancy
 
 PASSWORD = "Pass1234!"
 
@@ -82,6 +83,11 @@ def ws_app():
             "own": str(own.id),
             "other": str(other.id),
         }
+
+        # Capability comes from the company role + assignment: the owner becomes
+        # a company manager, linked/unlinked plain members (see the helper).
+        seed_company_tenancy(test_app, legal_name="Worker Scope Co")
+
         yield test_app
         db.session.remove()
         db.drop_all()

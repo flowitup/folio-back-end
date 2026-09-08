@@ -91,8 +91,10 @@ class UploadProductImageUseCase:
 
         if not self._membership.is_member(requester_id, product.company_id):
             raise CompanyAccessDeniedError(f"User {requester_id} is not a member of company {product.company_id}.")
-        if not self._permission_checker.has_permission(requester_id, _MANAGE_PERMISSION):
-            raise InsufficientPermissionError(f"User {requester_id} lacks '{_MANAGE_PERMISSION}' permission.")
+        if not self._permission_checker.has_permission_in_company(requester_id, _MANAGE_PERMISSION, product.company_id):
+            raise InsufficientPermissionError(
+                f"User {requester_id} lacks '{_MANAGE_PERMISSION}' in company " f"{product.company_id}."
+            )
 
         # Always use a fixed object name derived from the sanitized basename — never
         # interpolate the raw client filename which can contain path-traversal sequences

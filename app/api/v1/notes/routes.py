@@ -1,11 +1,16 @@
 """Notes API routes — 4 project-scoped CRUD endpoints.
 
 Authorization note:
-    Authorization is single-layer: use-cases are the authoritative gate.
-    Each use-case calls ``is_member()`` and raises ``NotProjectMemberError``
-    which the route maps to 403. There is no redundant route-layer membership
-    pre-check — KISS. If a future use-case forgets ``is_member``, there is no
-    second net, so the pattern must be followed consistently.
+    Two layers, both resolved by the permission resolver (company role +
+    assignment + D8 rows; never the token):
+
+    * the route gate — ``project:read`` on the project in the URL, the same
+      level ``project_documents``/``project_photos`` use for the site journal a
+      member is expected to fill. It also answers 404 for a project id that
+      does not exist, before any permission is evaluated.
+    * the use-case — ``is_member()`` on the note's OWN project, which is what
+      stops a member of project A from editing a note of project B through an
+      A-shaped URL.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from app.api._helpers.validation_error import safe_validation_fields
 from app.api.openapi import openapi_doc
 from app.api.v1.notes import notes_bp
 from app.api.v1.notes.schemas import NoteCreateBody, NoteUpdateBody
+from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.application.notes.dtos import NoteDto
 from app.application.notes.exceptions import (
     InvalidCategoryError,
@@ -67,6 +73,8 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
     tags=["notes"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access(write=False)
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def create_note(project_id: UUID) -> Any:
     """Create a journal note for a project. Actor must be a project member."""
@@ -143,6 +151,8 @@ def list_notes(project_id: UUID) -> Any:
     tags=["notes"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access(write=False)
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_note(project_id: UUID, note_id: UUID) -> Any:
     """Update a journal note's title, description, or category."""
@@ -190,6 +200,8 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
 @notes_bp.delete("/projects/<uuid:project_id>/notes/<uuid:note_id>")
 @openapi_doc(summary="Delete a journal note", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access(write=False)
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def delete_note(project_id: UUID, note_id: UUID) -> Any:
     """Delete a journal note. Actor must be a project member."""

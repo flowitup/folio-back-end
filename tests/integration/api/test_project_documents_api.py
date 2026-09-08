@@ -26,6 +26,7 @@ import io
 from uuid import uuid4
 
 import pytest
+from tests.company_tenancy_helper import seed_company_tenancy
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -246,6 +247,9 @@ def doc_app():
         test_app._doc_superadmin_email = "doc_superadmin@test.com"
         test_app._doc_superadmin_password = "Superadmin1234!"
         test_app._doc_project_id = str(project.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 
@@ -598,6 +602,9 @@ class TestUploadRateLimit:
             db.session.flush()
             db.session.commit()
 
+            # Capability comes from the company role + assignment.
+            seed_company_tenancy(rl_app, legal_name="Rate Limit Co")
+
             doc_storage = InMemoryDocumentStorage()
             doc_repo = SqlAlchemyProjectDocumentRepository(db.session)
 
@@ -726,8 +733,20 @@ class TestDownloadDocumentErrors:
             _download_url(fake_project_id, doc_id),
             headers=_auth(owner_token),
         )
-        # The route may return 404 (project not found) or 404 (cross-project guard)
+        # Unknown project id → 404 (the cross-project guard behind it would
+        # answer the same): existence is resolved before permissions.
         assert resp.status_code == 404
+
+    def test_403_download_from_a_project_of_another_company(self, doc_client, owner_token, doc_app):
+        """An existing project the caller may not read → 403, not 404."""
+        from tests.foreign_project_helper import create_foreign_project
+
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
+        resp = doc_client.get(
+            _download_url(create_foreign_project(doc_app), doc_id),
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 403
 
     def test_200_download_returns_file_content(self, doc_client, owner_token, doc_app):
         content = b"exact document content bytes"
@@ -1010,6 +1029,9 @@ class TestCrossProjectDownloadAdversarial:
             test_app._xp_project_a_id = str(project_a.id)
             test_app._xp_project_b_id = str(project_b.id)
             test_app._xp_doc_storage = doc_storage
+
+            # Permissions come from the company role + project assignment (see the helper).
+            seed_company_tenancy(test_app)
 
             yield test_app
 

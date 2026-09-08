@@ -1,7 +1,7 @@
 """RBAC decorators for companies routes.
 
 require_admin:
-  - Checks caller has *:* wildcard permission.
+  - Checks the caller holds the platform-ops flag (users.is_platform_ops).
   - 403 if not.
 
 require_attached_company(company_id_kwarg):
@@ -31,13 +31,14 @@ from functools import wraps
 from uuid import UUID
 
 from flask import jsonify
-from flask_jwt_extended import get_jwt, get_jwt_identity
+from flask_jwt_extended import get_jwt_identity
+
+from app.api.v1.ops_context import is_platform_ops
 
 
 def _has_superadmin() -> bool:
-    """Return True if the JWT carries the *:* wildcard permission."""
-    jwt_claims = get_jwt()
-    return "*:*" in jwt_claims.get("permissions", [])
+    """Return True if the caller holds the platform-ops flag."""
+    return is_platform_ops()
 
 
 def _forbidden(message: str):

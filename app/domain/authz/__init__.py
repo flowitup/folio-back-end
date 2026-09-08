@@ -12,9 +12,12 @@ from app.domain.authz.matrix import (
     permissions_for,
 )
 from app.domain.authz.resolver import (
-    denied_permissions,
     effective_permissions,
     has_permission,
+    has_permission_anywhere,
+    permissions_anywhere,
+    permissions_for_user,
+    permissions_in_company,
     requires_company,
 )
 
@@ -22,8 +25,11 @@ __all__ = [
     "CUSTOMISABLE_PERMISSIONS",
     "NON_DENIABLE",
     "permissions_for",
-    "denied_permissions",
     "effective_permissions",
     "has_permission",
+    "has_permission_anywhere",
+    "permissions_anywhere",
+    "permissions_for_user",
+    "permissions_in_company",
     "requires_company",
 ]

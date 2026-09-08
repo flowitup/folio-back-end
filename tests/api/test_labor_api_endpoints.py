@@ -22,6 +22,7 @@ from app.infrastructure.database.models import (
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
+from tests.company_tenancy_helper import seed_company_tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,9 @@ def labor_app():
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
         test_app._test_admin_user_id = str(admin_user.id)
+
+        # Permissions come from the company role + project assignment (see the helper).
+        seed_company_tenancy(test_app)
 
         yield test_app
 

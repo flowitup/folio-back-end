@@ -155,4 +155,5 @@ class SQLAlchemyUserRepository:
             roles=roles,
             display_name=model.display_name,
             phone=model.phone,
+            is_platform_ops=bool(model.is_platform_ops),
         )

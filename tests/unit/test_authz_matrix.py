@@ -9,12 +9,22 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+
 from app.domain.authz.matrix import (
     CUSTOMISABLE_PERMISSIONS,
     NON_DENIABLE,
     permissions_for,
 )
-from app.domain.authz.resolver import denied_permissions, effective_permissions
+from app.domain.authz.resolver import (
+    effective_permissions,
+    has_permission,
+    has_permission_anywhere,
+    permissions_anywhere,
+    permissions_for_user,
+    permissions_in_company,
+    requires_company,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -169,10 +179,17 @@ class TestCustomisableWhitelist:
 class _FakeReader:
     """Minimal AuthzReaderPort fake: one company, one project, configurable grants."""
 
-    def __init__(self, role: "str | None", assigned: bool, grants: "list[tuple[str, str]]"):
+    def __init__(
+        self,
+        role: "str | None",
+        assigned: bool,
+        grants: "list[tuple[str, str]] | None" = None,
+        primary: bool = True,
+    ):
         self.role = role
         self.assigned = assigned
-        self.grants = grants
+        self.grants = grants or []
+        self.primary = primary
         self.company_id = uuid4()
         self.project_id = uuid4()
 
@@ -186,7 +203,16 @@ class _FakeReader:
         return self.company_id
 
     def primary_company_id(self, user_id):
-        return self.company_id
+        return self.company_id if self.primary else None
+
+    def company_roles_for(self, user_id):
+        return [(self.company_id, self.role)] if self.role is not None else []
+
+    def has_project_assignment_in_company(self, user_id, company_id):
+        return self.assigned
+
+    def is_platform_ops(self, user_id):
+        return False
 
     def admin_company_ids(self, user_id):
         return [self.company_id] if self.role == "admin" else []
@@ -227,37 +253,95 @@ def test_deny_wins_over_a_grant_for_the_same_permission():
 
 
 # ---------------------------------------------------------------------------
-# denied_permissions() — H3: the isolated deny set a caller with its own
-# permission union (app.api.v1.projects.decorators) subtracts to make an
-# admin-managed deny override even a legacy global role.
+# Company-level and context-free resolution (`bibliotheque:manage`, the token
+# claim, `/auth/me`): no project in hand, so the answer comes from the role
+# plus "is this caller assigned to anything in that company?".
 # ---------------------------------------------------------------------------
 
 
-def test_denied_permissions_returns_the_deny_set():
-    reader = _FakeReader(role="manager", assigned=True, grants=[("project:manage_labor", "deny")])
-    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id)
-    assert denied == frozenset({"project:manage_labor"})
+def test_permissions_in_company_gives_an_assigned_manager_their_project_set():
+    reader = _FakeReader(role="manager", assigned=True)
+    perms = permissions_in_company(reader, uuid4(), reader.company_id)
+    assert "bibliotheque:manage" in perms
+    assert "project:create" not in perms
 
 
-def test_denied_permissions_excludes_project_read():
-    reader = _FakeReader(role="manager", assigned=True, grants=[("project:read", "deny")])
-    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id)
-    assert denied == frozenset()
+def test_permissions_in_company_is_empty_for_a_manager_assigned_to_nothing():
+    reader = _FakeReader(role="manager", assigned=False)
+    perms = permissions_in_company(reader, uuid4(), reader.company_id)
+    assert perms == frozenset({"user:read"})
 
 
-def test_denied_permissions_empty_for_platform_admin():
-    reader = _FakeReader(role="manager", assigned=True, grants=[("project:manage_labor", "deny")])
-    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id, is_platform_admin=True)
-    assert denied == frozenset()
+def test_permissions_in_company_is_empty_without_a_role_there():
+    reader = _FakeReader(role=None, assigned=False)
+    assert permissions_in_company(reader, uuid4(), reader.company_id) == frozenset()
 
 
-def test_denied_permissions_empty_without_a_resolvable_company():
-    reader = _FakeReader(role="manager", assigned=True, grants=[("project:manage_labor", "deny")])
-    denied = denied_permissions(reader, uuid4())
-    assert denied == frozenset()
+def test_permissions_in_company_applies_company_wide_grants_and_denies():
+    granted = _FakeReader(role="member", assigned=True, grants=[("project:manage_invoices", "grant")])
+    assert "project:manage_invoices" in permissions_in_company(granted, uuid4(), granted.company_id)
+
+    denied = _FakeReader(role="manager", assigned=True, grants=[("bibliotheque:manage", "deny")])
+    assert "bibliotheque:manage" not in permissions_in_company(denied, uuid4(), denied.company_id)
 
 
-def test_denied_permissions_empty_when_caller_has_no_role_there():
-    reader = _FakeReader(role=None, assigned=False, grants=[("project:manage_labor", "deny")])
-    denied = denied_permissions(reader, uuid4(), project_id=reader.project_id)
-    assert denied == frozenset()
+def test_permissions_anywhere_unions_every_company_and_short_circuits_for_ops():
+    reader = _FakeReader(role="admin", assigned=True)
+    assert "company:manage_billing" in permissions_anywhere(reader, uuid4())
+    assert permissions_anywhere(reader, uuid4(), is_platform_admin=True) == frozenset({"*:*"})
+
+
+def test_permissions_for_user_prefers_the_primary_company():
+    reader = _FakeReader(role="member", assigned=True, primary=True)
+    perms = permissions_for_user(reader, uuid4())
+    assert "project:read" in perms
+    assert "project:create" not in perms
+    assert permissions_for_user(reader, uuid4(), is_platform_admin=True) == frozenset({"*:*"})
+
+
+def test_permissions_for_user_falls_back_to_every_company():
+    reader = _FakeReader(role="admin", assigned=True, primary=False)
+    assert "project:create" in permissions_for_user(reader, uuid4())
+
+
+def test_has_permission_anywhere_honours_wildcards_and_ops():
+    reader = _FakeReader(role="manager", assigned=True)
+    user_id = uuid4()
+    assert has_permission_anywhere(reader, user_id, "bibliotheque:manage") is True
+    assert has_permission_anywhere(reader, user_id, "company:manage_billing") is False
+    assert has_permission_anywhere(reader, user_id, "company:manage_billing", is_platform_admin=True) is True
+
+
+def test_requires_company_flags_company_scoped_permissions():
+    assert requires_company("company:manage_members") is True
+    assert requires_company("project:read") is False
+
+
+# ---------------------------------------------------------------------------
+# has_permission(): wildcards, the ops short-circuit and the company guard.
+# ---------------------------------------------------------------------------
+
+
+def test_has_permission_matches_exact_and_wildcards():
+    reader = _FakeReader(role="manager", assigned=True)
+    user_id = uuid4()
+    assert has_permission(reader, user_id, "project:manage_labor", project_id=reader.project_id) is True
+    assert has_permission(reader, user_id, "project:delete", project_id=reader.project_id) is False
+    # Platform ops short-circuits before anything is read.
+    assert has_permission(reader, user_id, "project:delete", is_platform_admin=True) is True
+
+
+def test_has_permission_honours_a_resource_wildcard_grant():
+    reader = _FakeReader(role="member", assigned=True, grants=[("project:*", "grant")])
+    assert has_permission(reader, uuid4(), "project:manage_invoices", project_id=reader.project_id) is True
+
+
+def test_has_permission_rejects_a_company_permission_without_a_company():
+    reader = _FakeReader(role="admin", assigned=True)
+    with pytest.raises(ValueError):
+        has_permission(reader, uuid4(), "company:manage_billing")
+
+
+def test_has_permission_evaluates_a_company_permission_against_its_company():
+    reader = _FakeReader(role="admin", assigned=True)
+    assert has_permission(reader, uuid4(), "company:manage_billing", company_id=reader.company_id) is True

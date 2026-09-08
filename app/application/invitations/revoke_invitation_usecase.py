@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
+from app.application.invitations.authz import can_manage_project_invites
 from app.application.invitations.exceptions import PermissionDeniedError
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
@@ -22,10 +24,20 @@ class RevokeInvitationUseCase:
         invitation_repo: InvitationRepositoryPort,
         user_repo: UserWriteRepositoryPort,
         db_session: TransactionalSessionPort,
+        authz_reader: Any = None,  # AuthzReaderPort — resolves project:invite
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
         self._db = db_session
+        self._authz_reader = authz_reader
+
+    def set_authz_reader(self, reader: Any) -> None:
+        """Inject the resolver read port after construction.
+
+        `wiring.configure_container()` builds this use-case before the
+        SQLAlchemy-backed reader exists; the app factory calls this once it does.
+        """
+        self._authz_reader = reader
 
     # ------------------------------------------------------------------
 
@@ -44,7 +56,7 @@ class RevokeInvitationUseCase:
         if inviter is None:
             raise PermissionDeniedError(f"User {inviter_id} not found.")
 
-        if not self._can_revoke(inviter, inv.project_id, inv.invited_by):
+        if not self._can_revoke(inviter_id, inv.project_id, inv.invited_by):
             raise PermissionDeniedError(f"User {inviter_id} cannot revoke invitation {invitation_id}.")
 
         # Idempotent: nothing to do if already non-pending
@@ -60,13 +72,14 @@ class RevokeInvitationUseCase:
 
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _can_revoke(user, project_id: UUID, original_inviter_id: UUID) -> bool:  # type: ignore[override]
-        """True if user has superadmin/project:invite permission or is the original inviter."""
-        if user.has_permission("*", "*"):
+    def _can_revoke(self, user_id: UUID, project_id: UUID, original_inviter_id: UUID) -> bool:
+        """True when the resolver grants `project:invite` on THIS invitation's project.
+
+        Scoped per project, so a manager of one company can no longer revoke an
+        invitation belonging to another (the legacy global role that allowed it
+        is not consulted any more). The person who sent the invitation may
+        always take it back.
+        """
+        if user_id == original_inviter_id:
             return True
-        if user.has_permission("project", "invite"):
-            return True
-        if user.id == original_inviter_id:
-            return True
-        return False
+        return can_manage_project_invites(self._authz_reader, user_id, project_id)

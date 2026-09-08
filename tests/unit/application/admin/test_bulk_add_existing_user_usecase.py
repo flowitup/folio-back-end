@@ -18,7 +18,6 @@ from app.application.admin.exceptions import (
     TargetUserNotFoundError,
     TooManyProjectsError,
 )
-from app.domain.entities.permission import Permission
 from app.domain.entities.project import Project
 from app.domain.entities.role import Role
 from app.domain.entities.user import User
@@ -29,7 +28,8 @@ from app.domain.entities.user import User
 
 
 def _make_superadmin(id=None) -> User:
-    user = User(
+    """A platform-ops account: the flag lives on the user row, not on a role."""
+    return User(
         id=id or uuid4(),
         email="superadmin@example.com",
         password_hash="hashed",
@@ -38,11 +38,16 @@ def _make_superadmin(id=None) -> User:
         roles=[],
         display_name="Super Admin",
     )
-    role = Role(id=uuid4(), name="superadmin")
-    perm = Permission(id=uuid4(), name="*:*", resource="*", action="*")
-    role.permissions.append(perm)
-    user.roles.append(role)
-    return user
+
+
+class _OpsRoleChecker:
+    """RoleCheckerPort double: platform ops for a fixed set of user ids."""
+
+    def __init__(self, ops_user_ids=None) -> None:
+        self._ops = set(ops_user_ids) if ops_user_ids is not None else None
+
+    def is_platform_admin(self, user_id) -> bool:
+        return True if self._ops is None else user_id in self._ops
 
 
 def _make_user(id=None, email="target@example.com") -> User:
@@ -102,6 +107,7 @@ def _make_usecase(
     renderer=None,
     queue=None,
     db_session=None,
+    role_checker=None,
 ) -> BulkAddExistingUserUseCase:
     if renderer is None:
         renderer = MagicMock()
@@ -115,6 +121,7 @@ def _make_usecase(
         queue_port=queue or MagicMock(),
         app_base_url="http://localhost:3000",
         db_session=db_session or _FakeSession(),
+        role_checker=role_checker if role_checker is not None else _OpsRoleChecker(),
     )
 
 
@@ -596,18 +603,31 @@ class TestPermissionGuard:
                 role_id=uuid4(),
             )
 
-    def test_requester_without_star_perm_raises_permission_denied(self):
-        # User with only project:read, not *:*
+    def test_requester_without_the_ops_flag_raises_permission_denied(self):
+        """Bulk-add is support tooling: a company role never unlocks it."""
         requester = _make_user(email="limited@example.com")
-        role = Role(id=uuid4(), name="member")
-        perm = Permission(id=uuid4(), name="project:read", resource="project", action="read")
-        role.permissions.append(perm)
-        requester.roles.append(role)
 
         user_repo = MagicMock()
         user_repo.find_by_id.return_value = requester
 
-        uc = _make_usecase(user_repo=user_repo)
+        uc = _make_usecase(user_repo=user_repo, role_checker=_OpsRoleChecker(ops_user_ids=set()))
+        with pytest.raises(PermissionDeniedError):
+            uc.execute(
+                requester_id=requester.id,
+                target_user_id=uuid4(),
+                project_ids=[uuid4()],
+                role_id=uuid4(),
+            )
+
+    def test_missing_role_checker_fails_closed(self):
+        """A wiring gap denies rather than falling back to something weaker."""
+        requester = _make_superadmin()
+
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = requester
+
+        uc = _make_usecase(user_repo=user_repo, role_checker=None)
+        uc._role_checker = None
         with pytest.raises(PermissionDeniedError):
             uc.execute(
                 requester_id=requester.id,

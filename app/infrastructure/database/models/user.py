@@ -22,6 +22,9 @@ class UserModel(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     display_name = Column(Text, nullable=True)  # added in phase-01 migration
     phone = Column(String(20), unique=True, nullable=True)  # E.164, SMS-code sign-in
+    # flowitup support bypass — not a role, never carried in the token, so
+    # revoking it applies on the next request (see app.api.v1.ops_context).
+    is_platform_ops = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,

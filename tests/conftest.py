@@ -190,11 +190,15 @@ def invitation_app():
             is_active=True,
         )
 
-        # Seed superadmin user (needed for admin bulk-add + search endpoint tests)
+        # Seed the platform-ops user (needed for admin bulk-add + search endpoint
+        # tests). Ops is the `users.is_platform_ops` flag, not a role — the legacy
+        # superadmin role is kept only so `user_roles` rows still exist for the
+        # tests that assert the deprecated /auth/me `roles` field.
         superadmin_user = UserModel(
             email="superadmin@invite-test.com",
             password_hash=hasher.hash("Superadmin1234!"),
             is_active=True,
+            is_platform_ops=True,
         )
         superadmin_user.roles.append(superadmin_role)
 
@@ -209,19 +213,74 @@ def invitation_app():
         db.session.add_all([admin_user, member_user, outsider_user, superadmin_user, target_user])
         db.session.flush()  # assign user IDs before project references admin_user.id
 
+        # ------------------------------------------------------------------
+        # Company tenancy: permissions come from the company role + project
+        # assignment, so every fixture user needs a `user_company_access` row
+        # and every project needs a `company_id`.
+        #   admin_user      → company admin (implicit on every company project)
+        #   member_user     → company member, assigned to P1
+        #   target_user     → company member, assigned to P1
+        #   superadmin_user → platform ops, attached to no company
+        #   outsider_user   → attached to nothing
+        # ------------------------------------------------------------------
+        from datetime import datetime, timezone
+
+        from app.infrastructure.database.models.company import CompanyModel
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        _now = datetime.now(timezone.utc)
+        company = CompanyModel(
+            legal_name="Invite Test Company",
+            address="1 rue de Test",
+            created_by=admin_user.id,
+            created_at=_now,
+            updated_at=_now,
+        )
+        db.session.add(company)
+        db.session.flush()
+
+        db.session.add_all(
+            [
+                UserCompanyAccessModel(
+                    user_id=admin_user.id,
+                    company_id=company.id,
+                    role="admin",
+                    is_primary=True,
+                    attached_at=_now,
+                ),
+                UserCompanyAccessModel(
+                    user_id=member_user.id,
+                    company_id=company.id,
+                    role="member",
+                    is_primary=True,
+                    attached_at=_now,
+                ),
+                UserCompanyAccessModel(
+                    user_id=target_user.id,
+                    company_id=company.id,
+                    role="member",
+                    is_primary=True,
+                    attached_at=_now,
+                ),
+            ]
+        )
+
         # Seed a project owned by admin
         project = ProjectModel(
             name="Invite Test Project",
             owner_id=admin_user.id,
+            company_id=company.id,
         )
         # Two extra projects for bulk-add multi-project tests
         project2 = ProjectModel(
             name="Bulk Add Test Project 2",
             owner_id=admin_user.id,
+            company_id=company.id,
         )
         project3 = ProjectModel(
             name="Bulk Add Test Project 3",
             owner_id=admin_user.id,
+            company_id=company.id,
         )
         db.session.add_all([project, project2, project3])
         db.session.commit()
@@ -245,6 +304,7 @@ def invitation_app():
         test_app._test_member_user_id = str(member_user.id)
         test_app._test_superadmin_user_id = str(superadmin_user.id)
         test_app._test_target_user_id = str(target_user.id)
+        test_app._test_company_id = str(company.id)
 
         # Add member_user as a project member so they can list invitations
         # (user_projects is an association table — no ORM model; use raw SQL)
@@ -282,6 +342,23 @@ def invitation_app():
                 "at": datetime.now(timezone.utc),
             },
         )
+
+        # The owner bypass is gone (D6): the creator is an ordinary assignee.
+        for _pid in (project.id, project2.id, project3.id):
+            db.session.execute(
+                text(
+                    "INSERT INTO user_projects "
+                    "(user_id, project_id, role_id, invited_by_user_id, assigned_at) "
+                    "VALUES (:uid, :pid, :rid, NULL, :at) "
+                    "ON CONFLICT (user_id, project_id) DO NOTHING"
+                ),
+                {
+                    "uid": str(admin_user.id),
+                    "pid": str(_pid),
+                    "rid": str(admin_role.id),
+                    "at": datetime.now(timezone.utc),
+                },
+            )
         db.session.commit()
 
         # ------------------------------------------------------------------
@@ -424,6 +501,25 @@ def invitation_app():
 
         _c.authz_reader = _SqlAlchemyAuthzReader(db.session, cache_provider=_get_reader_cache)
 
+        # Mirrors app/__init__.py: the RoleCheckerPort implementation and the
+        # invitation use-cases resolve through the same reader as the decorators.
+        if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
+            _role_checker.set_authz_reader(_c.authz_reader)
+        for _invitation_usecase in (
+            _c.create_invitation_usecase,
+            _c.list_invitations_usecase,
+            _c.revoke_invitation_usecase,
+        ):
+            if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
+                _invitation_usecase.set_authz_reader(_c.authz_reader)
+        if _role_checker is not None and hasattr(_role_checker, "set_company_role_lookup"):
+
+            def _company_role_for(user_id, company_id):
+                access = _access_repo.find(user_id, company_id)
+                return access.role if access is not None else None
+
+            _role_checker.set_company_role_lookup(_company_role_for)
+
         from app.application.companies.join_code_usecases import (
             JoinCompanyByCodeUseCase as _JoinByCodeUC,
             SetJoinCodeUseCase as _SetJoinCodeUC,
@@ -482,11 +578,56 @@ def invitation_app():
             access_repo=_access_repo,
             role_checker=_role_checker,
         )
+        # Directory repos: "attached ⇒ listed in the company directory".
+        from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+            SqlAlchemyCompanyPersonRepository as _CompanyPersonRepo,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_person_repository import (
+            SqlAlchemyPersonRepository as _PersonRepo,
+        )
+
+        _c.person_repo = _PersonRepo(db.session)
+        _c.company_person_repo = _CompanyPersonRepo(db.session)
+
+        # Re-wire AcceptInvitationUseCase exactly like app/__init__.py: accepting
+        # an invitation attaches the acceptor to the project's company AND lists
+        # them in its directory. Wiring it without the directory repos here is
+        # what let that invariant go untested.
+        if _c.accept_invitation_usecase is not None:
+            from app.application.company_persons.link_person_on_signup_usecase import (
+                LinkPersonOnSignupUseCase as _LinkPersonOnSignupUseCase,
+            )
+            from app.application.invitations.accept_invitation_usecase import (
+                AcceptInvitationUseCase as _AcceptInvitationUseCase,
+            )
+
+            _c.accept_invitation_usecase = _AcceptInvitationUseCase(
+                invitation_repo=_c.invitation_repo,
+                user_repo=_c.user_repository,
+                project_membership_repo=_c.project_membership_repo,
+                password_hasher=_c.password_hasher,
+                token_issuer=_c.token_issuer,
+                db_session=db.session,
+                role_repo=_c.role_repository,
+                authz_reader=_c.authz_reader,
+                access_repo=_access_repo,
+                link_person_on_signup=_LinkPersonOnSignupUseCase(
+                    person_repo=_c.person_repo,
+                    company_person_repo=_c.company_person_repo,
+                    access_repo=_access_repo,
+                ),
+                person_repo=_c.person_repo,
+                company_person_repo=_c.company_person_repo,
+            )
+
         _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
             token_repo=_token_repo,
             access_repo=_access_repo,
             hasher=_argon2_hasher,
             clock=_clock,
+            person_repo=_c.person_repo,
+            company_person_repo=_c.company_person_repo,
+            user_repo=user_repo,
         )
         _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(access_repo=_access_repo)
         _c.detach_company_usecase = _DetachCompanyUseCase(access_repo=_access_repo)
@@ -722,6 +863,14 @@ def invitation_app():
             _inv_repo = _InvRepo(db.session)
             _c.invoice_repository = _inv_repo
 
+        # Read-side invoice use-cases (configure_container() only wires them when
+        # it is handed an invoice repository, which this fixture builds later).
+        from app.application.invoice.get_invoice import GetInvoiceUseCase as _GetInvoiceUC
+        from app.application.invoice.list_invoices import ListInvoicesUseCase as _ListInvoicesUC
+
+        _c.get_invoice_usecase = _GetInvoiceUC(_c.invoice_repository)
+        _c.list_invoices_usecase = _ListInvoicesUC(_c.invoice_repository)
+
         # Wire labor-payments-summary use-case (Labor Payments Hub).
         # CRITICAL: any use-case added to _configure_di_container() MUST also
         # appear here or the invitation_app test fixture will drift from prod.
@@ -740,6 +889,9 @@ def invitation_app():
             company_repo=_company_repo,
             access_repo=_access_repo,
             seed_payment_methods=_c.seed_payment_methods_usecase,
+            person_repo=_c.person_repo,
+            company_person_repo=_c.company_person_repo,
+            user_repo=user_repo,
         )
 
         # ------------------------------------------------------------------

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import Any, TYPE_CHECKING, Optional
 
 from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
@@ -15,6 +15,7 @@ from app.application.invitations.ports import (
 )
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
+from app.application.company_persons.ensure_company_person import ensure_company_person
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.project_membership import ProjectMembership
@@ -66,6 +67,8 @@ class AcceptInvitationUseCase:
         authz_reader: "Optional[AuthzReaderPort]" = None,
         access_repo: "Optional[UserCompanyAccessRepositoryPort]" = None,
         link_person_on_signup: "Optional[LinkPersonOnSignupUseCase]" = None,
+        person_repo: "Optional[Any]" = None,
+        company_person_repo: "Optional[Any]" = None,
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
@@ -77,6 +80,10 @@ class AcceptInvitationUseCase:
         self._authz_reader = authz_reader
         self._access_repo = access_repo
         self._link_person_on_signup = link_person_on_signup
+        # Directory repositories: the acceptor must be listed among the
+        # company's people, or an admin cannot assign them to a project.
+        self._persons = person_repo
+        self._company_persons = company_person_repo
 
     # ------------------------------------------------------------------
 
@@ -155,6 +162,15 @@ class AcceptInvitationUseCase:
                             attached_at=datetime.now(timezone.utc),
                             role=CompanyRole.MEMBER.value,
                         )
+                    )
+                if company_id is not None:
+                    ensure_company_person(
+                        persons=self._persons,
+                        company_persons=self._company_persons,
+                        users=self._user_repo,
+                        user_id=user.id,
+                        company_id=company_id,
+                        now=datetime.now(timezone.utc),
                     )
 
             self._inv_repo.save(accepted_inv)

@@ -580,6 +580,21 @@ def _configure_di_container() -> None:
 
     _c.authz_reader = SqlAlchemyAuthzReader(db.session, cache_provider=get_reader_cache)
 
+    # The RoleCheckerPort / ICompanyPermissionChecker implementation resolves
+    # permissions through the same reader as the route decorators — one
+    # authority for use-cases and routes alike.
+    if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
+        _role_checker.set_authz_reader(_c.authz_reader)
+
+    # Same reason: the invitation use-cases resolve `project:invite` themselves.
+    for _invitation_usecase in (
+        _c.create_invitation_usecase,
+        _c.list_invitations_usecase,
+        _c.revoke_invitation_usecase,
+    ):
+        if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
+            _invitation_usecase.set_authz_reader(_c.authz_reader)
+
     # D3 day roster use case — needs worker_repository + labor_entry_repository
     # (wired earlier in configure_container) plus the authz reader just above.
     if _c.worker_repository is not None and _c.labor_entry_repository is not None:
@@ -647,6 +662,7 @@ def _configure_di_container() -> None:
         access_repo=_access_repo,
         hasher=_argon2_hasher,
         clock=_clock,
+        # Directory repos are wired further down; injected after construction.
     )
     _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
         access_repo=_access_repo,
@@ -693,6 +709,19 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+
+    # Attach-by-token is built above, before the directory repos exist; give it
+    # those repos now so a redeemed invite also produces the profile that makes
+    # the new member assignable ("attached ⇒ listed in the directory").
+    _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
+        token_repo=_token_repo,
+        access_repo=_access_repo,
+        hasher=_argon2_hasher,
+        clock=_clock,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+        user_repo=_c.user_repository,
+    )
 
     # Onboarding use cases (Phase 2 slice B): add member by phone, import
     # from another company, company directory, and the derived "new members"
@@ -848,6 +877,8 @@ def _configure_di_container() -> None:
             authz_reader=_c.authz_reader,
             access_repo=_access_repo,
             link_person_on_signup=_link_person_on_signup,
+            person_repo=_person_repo,
+            company_person_repo=_c.company_person_repo,
         )
 
     # Re-wire CreateWorkerUseCase with person_repo now that the latter
@@ -1120,6 +1151,9 @@ def _configure_di_container() -> None:
         access_repo=_access_repo,
         seed_payment_methods=_c.seed_payment_methods_usecase,
         seed_default_labor_roles=_c.seed_default_labor_roles_usecase,
+        person_repo=_c.person_repo,
+        company_person_repo=_c.company_person_repo,
+        user_repo=_c.user_repository,
     )
 
     # -----------------------------------------------------------------------

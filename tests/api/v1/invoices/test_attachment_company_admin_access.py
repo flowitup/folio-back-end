@@ -10,7 +10,8 @@ Covers:
 Scenarios:
   - Company admin (no project membership, non-superadmin global role) → 200 on list and download
   - Company admin of a DIFFERENT company → 403 on list and download (cross-company leak guard)
-  - Company admin → 403 on upload, delete, rename (write paths not widened)
+  - Company admin → allowed on upload, delete, rename (admin is implicit on
+    every project of their own company)
   - Project member without project:manage_labor → 404 on list and download: a restricted
     member only reaches attachments of their own labor payments (worker scope)
   - Non-member non-company-admin → still 403 on list and download (regression)
@@ -116,6 +117,8 @@ def att_app():
             is_active=True,
         )
         setup_user.roles.append(superadmin_role)
+        # Platform access is the ops flag now, not the legacy `*:*` role.
+        setup_user.is_platform_ops = True
 
         # A member of project_x; has project:read globally and via membership
         member_user = UserModel(
@@ -203,7 +206,16 @@ def att_app():
             is_primary=True,
             attached_at=now,
         )
-        db.session.add_all([access_x, access_y])
+        # The project member belongs to company X too: capability comes from
+        # the company role + assignment, so without this row they hold nothing.
+        member_access = UserCompanyAccessModel(
+            user_id=member_user.id,
+            company_id=company_x.id,
+            role="member",
+            is_primary=True,
+            attached_at=now,
+        )
+        db.session.add_all([access_x, access_y, member_access])
         db.session.commit()
 
         # --- Repos ---
@@ -399,10 +411,10 @@ class TestCompanyAdminCrossCompanyDenied:
 # ---------------------------------------------------------------------------
 
 
-class TestCompanyAdminWritePathsDenied:
-    """Company admin should NOT be able to upload, delete or rename attachments."""
+class TestCompanyAdminWritePaths:
+    """A company admin is implicit on every project of their company, writes included."""
 
-    def test_company_admin_cannot_upload_attachment(self, att_client, company_x_admin_tok, att_app):
+    def test_company_admin_may_upload_attachment(self, att_client, company_x_admin_tok, att_app):
         inv_id = str(att_app._invoice_id)
         proj_id = str(att_app._project_x_id)
         data = {"file": (BytesIO(b"%PDF-fake"), "fake.pdf", "application/pdf")}
@@ -412,24 +424,34 @@ class TestCompanyAdminWritePathsDenied:
             content_type="multipart/form-data",
             headers=_auth_header(company_x_admin_tok),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 201
 
-    def test_company_admin_cannot_delete_attachment(self, att_client, company_x_admin_tok, att_app):
-        att_id = str(att_app._attachment_id)
-        resp = att_client.delete(
-            f"/api/v1/attachments/{att_id}",
+    def test_company_admin_may_delete_attachment(self, att_client, company_x_admin_tok, att_app):
+        # Delete an attachment of its own so the module's shared fixture row
+        # survives for the read tests below.
+        inv_id = str(att_app._invoice_id)
+        proj_id = str(att_app._project_x_id)
+        created = att_client.post(
+            f"/api/v1/projects/{proj_id}/invoices/{inv_id}/attachments",
+            data={"file": (BytesIO(b"%PDF-doomed"), "doomed.pdf", "application/pdf")},
+            content_type="multipart/form-data",
             headers=_auth_header(company_x_admin_tok),
         )
-        assert resp.status_code == 403
+        assert created.status_code == 201
+        resp = att_client.delete(
+            f"/api/v1/attachments/{created.get_json()['id']}",
+            headers=_auth_header(company_x_admin_tok),
+        )
+        assert resp.status_code == 204
 
-    def test_company_admin_cannot_rename_attachment(self, att_client, company_x_admin_tok, att_app):
+    def test_company_admin_may_rename_attachment(self, att_client, company_x_admin_tok, att_app):
         att_id = str(att_app._attachment_id)
         resp = att_client.patch(
             f"/api/v1/attachments/{att_id}/rename",
             json={"filename": "renamed.pdf"},
             headers=_auth_header(company_x_admin_tok),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

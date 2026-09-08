@@ -36,6 +36,15 @@ class TestCreateInvitation:
         data = resp.get_json()
         assert data["kind"] in ("invitation_sent", "direct_added")
 
+    def test_role_id_is_optional_and_defaults_to_member(self, inv_client, admin_token, invitation_app):
+        resp = inv_client.post(
+            "/api/v1/invitations",
+            json={"project_id": invitation_app._test_project_id, "email": "norole@example.com"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["kind"] == "invitation_sent"
+
     def test_non_admin_without_perm_returns_403(self, inv_client, outsider_token, invitation_app):
         resp = inv_client.post(
             "/api/v1/invitations",
@@ -127,15 +136,27 @@ class TestCreateInvitation:
 
 
 class TestListProjectInvitations:
-    def test_member_can_list(self, inv_client, member_token, invitation_app):
+    def test_company_admin_can_list(self, inv_client, admin_token, invitation_app):
         resp = inv_client.get(
             f"/api/v1/invitations/projects/{invitation_app._test_project_id}/invitations",
-            headers=_auth(member_token),
+            headers=_auth(admin_token),
         )
         assert resp.status_code == 200
         data = resp.get_json()
         assert "items" in data
         assert isinstance(data["items"], list)
+
+    def test_plain_member_returns_403(self, inv_client, member_token, invitation_app):
+        """Listing pending invitations is part of managing people: `project:invite`.
+
+        A bare `user_projects` row is no longer enough — and a legacy global
+        role no longer reaches another company's invitations either.
+        """
+        resp = inv_client.get(
+            f"/api/v1/invitations/projects/{invitation_app._test_project_id}/invitations",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 403
 
     def test_outsider_returns_403(self, inv_client, outsider_token, invitation_app):
         resp = inv_client.get(
@@ -150,10 +171,10 @@ class TestListProjectInvitations:
         )
         assert resp.status_code == 401
 
-    def test_status_filter_accepted(self, inv_client, member_token, invitation_app):
+    def test_status_filter_accepted(self, inv_client, admin_token, invitation_app):
         resp = inv_client.get(
             f"/api/v1/invitations/projects/{invitation_app._test_project_id}/invitations?status=accepted",
-            headers=_auth(member_token),
+            headers=_auth(admin_token),
         )
         assert resp.status_code == 200
 

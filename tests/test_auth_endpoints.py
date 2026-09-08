@@ -168,21 +168,24 @@ class TestLoginEndpoint:
         assert "user" in data
         assert data["user"]["email"] == "active@example.com"
         assert "permissions" in data["user"]
-        assert "roles" in data["user"]
-        assert "user" in data["user"]["roles"]
+        # `roles` is deprecated and always empty for a non-ops account; what the
+        # user may do comes from their company role, and this account has none.
+        assert data["user"]["roles"] == []
+        assert data["user"]["permissions"] == []
+        assert data["user"]["is_platform_ops"] is False
         # Same shape as /auth/me: companies[] present even with no company_repo wired.
         assert data["user"]["companies"] == []
 
-    def test_login_with_admin_user(self, client):
-        """Test login as admin gets admin permissions."""
+    def test_login_with_legacy_admin_role_grants_nothing(self, client):
+        """A legacy global "admin" role is inert: permissions come from company roles."""
         response = client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "admin123"})
 
         assert response.status_code == 200
         data = response.get_json()
 
         assert data["user"]["email"] == "admin@example.com"
-        assert "admin" in data["user"]["roles"]
-        assert len(data["user"]["permissions"]) >= 2  # read + write
+        assert data["user"]["roles"] == []
+        assert data["user"]["permissions"] == []
 
     def test_login_with_invalid_email(self, client):
         """Test login with non-existent email."""

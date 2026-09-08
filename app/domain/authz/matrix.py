@@ -120,8 +120,10 @@ def permissions_for(role: str, assigned: bool) -> frozenset[str]:
     """
     if role == "admin":
         return ADMIN_PERMISSIONS
+    # UNASSIGNED_PERMISSIONS are always-on: they are what a role holds *without*
+    # a project, so an assignment adds to them rather than replacing them.
     if role == "manager":
-        return MANAGER_PROJECT_PERMISSIONS if assigned else UNASSIGNED_PERMISSIONS
+        return (MANAGER_PROJECT_PERMISSIONS | UNASSIGNED_PERMISSIONS) if assigned else UNASSIGNED_PERMISSIONS
     if role == "member":
-        return MEMBER_PROJECT_PERMISSIONS if assigned else UNASSIGNED_PERMISSIONS
+        return (MEMBER_PROJECT_PERMISSIONS | UNASSIGNED_PERMISSIONS) if assigned else UNASSIGNED_PERMISSIONS
     return frozenset()

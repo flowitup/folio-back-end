@@ -11,14 +11,12 @@ from app.application.companies.ports import (
 from app.domain.companies.exceptions import CompanyNotFoundError
 from app.domain.companies.masking import mask_company
 
-_ADMIN_PERMISSION = "*:*"
-
 
 class GetCompanyUseCase:
     """Return a single company, masking sensitive fields for non-admins.
 
     Access rules:
-      - Admin (*:*): always sees the full entity.
+      - Platform ops: always sees the full entity.
       - Non-admin: must have a user_company_access row for this company;
         otherwise 404 (not 403) to avoid company enumeration.
     """
@@ -36,7 +34,7 @@ class GetCompanyUseCase:
     def execute(self, inp: GetCompanyInput) -> CompanyResponse:
         # 1. Resolve admin status (pre-resolved by caller is acceptable;
         #    we re-verify here for defence-in-depth)
-        is_admin = self._role_checker.has_permission(inp.caller_id, _ADMIN_PERMISSION)
+        is_admin = self._role_checker.is_platform_admin(inp.caller_id)
 
         # 2. Load company
         company = self._company_repo.find_by_id(inp.company_id)

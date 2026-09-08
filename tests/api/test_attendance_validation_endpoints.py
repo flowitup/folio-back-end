@@ -26,6 +26,7 @@ from app.infrastructure.database.models import (
     WorkerModel,
 )
 from app.infrastructure.database.models.associations import user_projects
+from tests.company_tenancy_helper import seed_company_tenancy
 
 # Membership-role permission lookups use raw SQL with dashed UUID strings → Postgres only.
 _needs_pg = pytest.mark.skipif(
@@ -111,6 +112,10 @@ def av_app():
         free_worker = WorkerModel(project_id=project.id, name="Free Worker", daily_rate=80)
         db.session.add_all([worker, free_worker])
         db.session.commit()
+
+        # Permissions come from the company role + assignment: owner and chef
+        # become company managers, linked/unlinked members (see the helper).
+        seed_company_tenancy(test_app, legal_name="AV Test Co")
 
         worker_repo = SQLAlchemyWorkerRepository(db.session)
         entry_repo = SQLAlchemyLaborEntryRepository(db.session)

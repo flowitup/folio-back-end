@@ -12,7 +12,9 @@ class CreateInviteRequest(BaseModel):
 
     project_id: UUID
     email: EmailStr
-    role_id: UUID
+    # Legacy roles-table id. Optional: the member role is used when omitted
+    # (clients no longer read GET /roles, a deprecated stub since Phase 3).
+    role_id: Optional[UUID] = None
 
 
 class CreateInviteResponse(BaseModel):

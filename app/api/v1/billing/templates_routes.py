@@ -17,12 +17,13 @@ from typing import Tuple
 from uuid import UUID
 
 from flask import Response, jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_templates_bp
 from app.api.v1.billing.decorators import require_billing_template_owner
 from app.api.v1.billing.schemas import CreateTemplateRequest, UpdateTemplateRequest
@@ -41,7 +42,8 @@ from wiring import get_container
 
 
 def _has_superadmin() -> bool:
-    return "*:*" in set(get_jwt().get("permissions", []))
+    """True for platform ops (flowitup support), never for a company admin."""
+    return is_platform_ops()
 
 
 def _resolve_template_company_scope(caller_id: UUID, requested_raw: "str | None"):

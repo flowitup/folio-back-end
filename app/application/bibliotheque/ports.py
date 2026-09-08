@@ -125,10 +125,20 @@ class ICompanyMembershipReader(Protocol):
 
 
 class ICompanyPermissionChecker(Protocol):
-    """Check named permissions against a user's global roles."""
+    """Check named permissions inside one company."""
 
     def has_permission(self, user_id: UUID, permission_name: str) -> bool:
-        """Return True if the user holds the given permission via any assigned role."""
+        """Return True if ANY of the user's companies grants the permission.
+
+        Context-free question ("may this user manage a library at all?"). Never
+        use it to gate a write on a specific company — being a manager of
+        company A would answer True for company B. Use
+        `has_permission_in_company` there.
+        """
+        ...
+
+    def has_permission_in_company(self, user_id: UUID, permission_name: str, company_id: UUID) -> bool:
+        """Return True if `company_id` grants the permission to this user."""
         ...
 
 
