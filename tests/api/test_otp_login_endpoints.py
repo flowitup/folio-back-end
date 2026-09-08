@@ -112,6 +112,8 @@ class TestOtpLogin:
         assert body["user"]["phone"] == MEMBER_PHONE
         me = inv_client.get("/api/v1/auth/me", headers=_auth(body["access_token"]))
         assert me.status_code == 200 and me.get_json()["id"] == member_with_phone
+        # Same companies[] shape as /auth/me (shared _login_response helper).
+        assert body["user"]["companies"] == me.get_json()["companies"]
 
         # A code is single-use.
         again = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": code})

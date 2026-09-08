@@ -12,7 +12,13 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app.api.openapi import openapi_doc
 from app.api.v1.project_documents import project_documents_bp
 from app.api.v1.project_documents.schemas import ListQueryParams
-from app.api.v1.projects.decorators import has_permission, require_permission, require_project_access
+from app.api.v1.projects.decorators import (
+    _effective_perms_for,
+    _has_permission,
+    has_permission,
+    require_permission,
+    require_project_access,
+)
 from app.api.v1.projects.schemas import ErrorResponse
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.application.project_documents import (
@@ -382,7 +388,11 @@ def rename_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    is_admin = has_permission("*:*")
+    # Bypasses uploader/owner checks in the use case: platform admin, or the
+    # caller's effective project:update permission (legacy ∪ matrix ∪ grants − denies).
+    is_admin = has_permission("*:*") or _has_permission(
+        _effective_perms_for(UUID(project_id), requester_user_id), "project:update"
+    )
 
     try:
         doc = container.rename_project_document_usecase.execute(
@@ -421,7 +431,11 @@ def delete_project_document(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", f"Project {project_id} not found", 404)
 
     requester_user_id = UUID(get_jwt_identity())
-    is_admin = has_permission("*:*")
+    # Bypasses uploader/owner checks in the use case: platform admin, or the
+    # caller's effective project:update permission (legacy ∪ matrix ∪ grants − denies).
+    is_admin = has_permission("*:*") or _has_permission(
+        _effective_perms_for(UUID(project_id), requester_user_id), "project:update"
+    )
 
     try:
         container.delete_project_document_usecase.execute(

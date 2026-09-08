@@ -170,6 +170,8 @@ class TestLoginEndpoint:
         assert "permissions" in data["user"]
         assert "roles" in data["user"]
         assert "user" in data["user"]["roles"]
+        # Same shape as /auth/me: companies[] present even with no company_repo wired.
+        assert data["user"]["companies"] == []
 
     def test_login_with_admin_user(self, client):
         """Test login as admin gets admin permissions."""
