@@ -22,6 +22,11 @@ Labor cost uses the effective_cost expression shared with the labor summary endp
   - else               → daily_rate * 1.0
   - amount_override coalesced over the computed value
 
+``daily_rate`` there is the rate in force on the entry's own date — the worker's latest
+rate change effective on or before that date, falling back to the worker's base rate.
+A back-dated rate change therefore moves this total exactly as it moves attendance and
+salary figures, instead of leaving spend on the base rate.
+
 Invoice totals go through the shared ``items_total`` (TTC) and ``is_company_paid`` rules so
 this breakdown always agrees with the Expense-page KPIs — same helpers, same numbers.
 Computed in Python because JSONB item arithmetic varies by dialect.
@@ -34,7 +39,7 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import case as sa_case, func
+from sqlalchemy import case as sa_case, func, select
 from sqlalchemy.orm import Session
 
 from app.application.projects.ports import ProjectSpent, ProjectSpentReaderPort
@@ -47,6 +52,7 @@ from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.labor_entry import LaborEntryModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.worker import WorkerModel
+from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 
 
 class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
@@ -79,9 +85,24 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             (LaborEntryModel.shift_type == "overtime", Decimal("1.5")),
             else_=Decimal("1.0"),
         )
+        # The rate in force on the entry's own date: the rate-change row with the greatest
+        # effective_date <= that date, else the worker's base rate. Correlated scalar
+        # subqueries are excluded from GROUP BY, so grouping stays on project_id.
+        # Mirrors get_summary in sqlalchemy_labor_entry.py — the two must agree or a
+        # back-dated raise moves salaries without moving project spend.
+        eff_rate = func.coalesce(
+            select(WorkerRateChangeModel.daily_rate)
+            .where(WorkerRateChangeModel.worker_id == LaborEntryModel.worker_id)
+            .where(WorkerRateChangeModel.effective_date <= LaborEntryModel.date)
+            .order_by(WorkerRateChangeModel.effective_date.desc())
+            .limit(1)
+            .correlate(LaborEntryModel, WorkerModel)
+            .scalar_subquery(),
+            WorkerModel.daily_rate,
+        )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            WorkerModel.daily_rate * shift_multiplier,
+            eff_rate * shift_multiplier,
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),
