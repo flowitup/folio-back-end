@@ -20,6 +20,7 @@ from app.infrastructure.database.models.labor_entry import LaborEntryModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.worker import WorkerModel
+from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 
 
 def _reader(session):
@@ -272,6 +273,87 @@ def test_labor_never_counts_as_credit(invitation_app, credit_project):
         result = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert result.total == pytest.approx(Decimal("200"))
         assert result.by_credits == Decimal("0")
+
+
+def _worker_with_days(session, project_id, *, rate, days, name):
+    """A worker at `rate` with one full shift on each date in `days`."""
+    worker = WorkerModel(
+        id=uuid4(),
+        project_id=project_id,
+        name=name,
+        daily_rate=Decimal(rate),
+        is_active=True,
+    )
+    session.add(worker)
+    session.flush()
+    for day in days:
+        session.add(LaborEntryModel(id=uuid4(), worker_id=worker.id, date=day, shift_type="full"))
+    session.commit()
+    return worker
+
+
+def test_back_dated_rate_change_reprices_project_spend(invitation_app, credit_project):
+    """Each day costs the rate in force on that day, not the worker's base rate.
+
+    A raise effective mid-month moves attendance and salary figures because both resolve
+    the rate per entry date. Spend has to move with them, or the project silently
+    under-reports what the work cost.
+    """
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        worker = _worker_with_days(
+            db.session,
+            pid,
+            rate="100.00",
+            days=[date(2025, 7, 1), date(2025, 7, 10), date(2025, 7, 11)],
+            name="Raise Worker",
+        )
+
+        assert _reader(db.session).sum_spent_by_projects([pid])[pid].total == pytest.approx(Decimal("300"))
+
+        db.session.add(
+            WorkerRateChangeModel(
+                id=uuid4(),
+                worker_id=worker.id,
+                effective_date=date(2025, 7, 10),
+                daily_rate=Decimal("150.00"),
+            )
+        )
+        db.session.commit()
+
+        # 07-01 keeps the old 100; the day the raise lands and the day after cost 150.
+        result = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert result.total == pytest.approx(Decimal("400"))
+
+
+def test_amount_override_still_wins_over_the_resolved_rate(invitation_app, credit_project):
+    """A hand-entered amount is what the day cost; no rate change may overwrite it."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        worker = _worker_with_days(
+            db.session,
+            pid,
+            rate="100.00",
+            days=[date(2025, 8, 5)],
+            name="Override Worker",
+        )
+        entry = db.session.query(LaborEntryModel).filter_by(worker_id=worker.id).one()
+        entry.amount_override = Decimal("80.00")
+        db.session.add(
+            WorkerRateChangeModel(
+                id=uuid4(),
+                worker_id=worker.id,
+                effective_date=date(2025, 8, 1),
+                daily_rate=Decimal("150.00"),
+            )
+        )
+        db.session.commit()
+
+        assert _reader(db.session).sum_spent_by_projects([pid])[pid].total == pytest.approx(Decimal("80"))
 
 
 def test_company_methods_do_not_leak_across_companies(invitation_app, credit_project):
