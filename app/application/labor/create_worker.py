@@ -36,7 +36,8 @@ class CreateWorkerRequest:
     Phase 2 onboarding ("workers from person"): when `person_id` refers to
     a person with a `company_persons` row in this project's company, `name`
     /`phone` fall back to the Person's identity, `daily_rate` falls back to
-    `company_persons.default_daily_rate`, and `user_id` falls back to
+    `company_persons.default_daily_rate`, `role_id` falls back to
+    `company_persons.labor_role_id`, and `user_id` falls back to
     `persons.user_id` — each only when the request omits it. `name` becomes
     optional at this layer for that reason; still required overall (raises
     if it cannot be resolved from either source).
@@ -113,6 +114,7 @@ class CreateWorkerUseCase:
         name = request.name.strip() if request.name else ""
         phone = request.phone
         daily_rate = request.daily_rate
+        role_id = request.role_id
         user_id = request.user_id
         person_id: Optional[UUID] = request.person_id
 
@@ -133,6 +135,12 @@ class CreateWorkerUseCase:
                     user_id = linked_person.user_id
             if daily_rate is None and company_person.default_daily_rate is not None:
                 daily_rate = company_person.default_daily_rate
+            # Same rule as the rate: the company profile answers only what the
+            # request left out. The role stored there is already company-scoped
+            # (the profile belongs to this project's company), so it needs no
+            # further ownership check here.
+            if role_id is None and company_person.labor_role_id is not None:
+                role_id = company_person.labor_role_id
 
         if not name:
             raise InvalidWorkerDataError("Worker name is required")
@@ -179,7 +187,7 @@ class CreateWorkerUseCase:
             phone=phone.strip() if phone else None,
             created_at=datetime.now(timezone.utc),
             person_id=person_id,
-            role_id=request.role_id,
+            role_id=role_id,
             user_id=user_id,
         )
 
