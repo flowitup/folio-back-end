@@ -56,8 +56,12 @@ class TestPhoneSignup:
         assert body["user"]["phone"] == "+33600001122"
         # Same companies[] shape as /auth/me (shared _login_response helper) — empty for a fresh signup.
         assert body["user"]["companies"] == []
+        # The name chosen at sign-up is what clients show: the e-mail here is a synthetic
+        # phone-<number>@no-email address that must never reach the UI.
+        assert body["user"]["display_name"] == "Nguyen Van A"
         me = inv_client.get("/api/v1/auth/me", headers=_auth(body["access_token"])).get_json()
         assert me["phone"] == "+33600001122"
+        assert me["display_name"] == "Nguyen Van A"
         assert me["email"].endswith("@no-email.folio.flowitup.com")
         # A fresh account belongs to no company yet: the app shows the join screen.
         mine = inv_client.get("/api/v1/companies", headers=_auth(body["access_token"])).get_json()
@@ -76,6 +80,7 @@ class TestPhoneSignup:
             "/api/v1/auth/otp/verify", json={"phone": phone, "code": _code_from_sms(invitation_app)}
         )
         assert login.status_code == 200
+        assert login.get_json()["user"]["display_name"] == "Nguyen Van A"
 
     def test_signed_up_users_appear_in_admin_search(self, inv_client, invitation_app, superadmin_token):
         # The placeholder email must survive the strict EmailStr of the admin search response.

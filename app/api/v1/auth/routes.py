@@ -197,6 +197,7 @@ def _login_response(container, result: LoginResult):
         user=UserResponse(
             id=user.id,
             email=user.email,
+            display_name=user.display_name,
             permissions=result.permissions,
             phone=user.phone,
             companies=_user_companies(container, result.user_id),
@@ -375,6 +376,7 @@ def get_current_user():
         UserResponse(
             id=user.id,
             email=user.email,
+            display_name=user.display_name,
             permissions=permissions,
             phone=user.phone,
             companies=_user_companies(container, UUID(user_id)),
