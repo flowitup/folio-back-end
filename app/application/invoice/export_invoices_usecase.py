@@ -34,6 +34,10 @@ class ExportInvoicesRequest:
     format: ExportFormat  # "xlsx" | "pdf"
     acting_user_email: str
     type_filter: Optional[InvoiceType] = field(default=None)
+    # Types the caller is not allowed to read at all (currently released_funds
+    # without `project:view_budget`). Applied after the range query, so the
+    # subtotals and grand total below are computed on what the caller can see.
+    exclude_types: frozenset = field(default_factory=frozenset)
 
 
 @dataclass
@@ -99,6 +103,8 @@ class ExportInvoicesUseCase:
             date_to=to_d,
             type_filter=req.type_filter,
         )
+        if req.exclude_types:
+            invoices = [i for i in invoices if i.type not in req.exclude_types]
 
         # 4. Sort deterministically: (issue_date, type.value, invoice_number)
         invoices.sort(key=lambda inv: (inv.issue_date, inv.type.value, inv.invoice_number))

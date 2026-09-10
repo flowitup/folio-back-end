@@ -191,8 +191,10 @@ def other_admin_token(inv_client, personas):
 
 
 def _invoice_body():
+    # An everyday expense: these tests are about who may write *an* invoice.
+    # released_funds would drag in project:view_budget, which is a different gate.
     return {
-        "type": "released_funds",
+        "type": "materials_services",
         "issue_date": date.today().isoformat(),
         "recipient_name": "ACME Corp",
         "items": [{"description": "Work", "quantity": 1, "unit_price": 100}],

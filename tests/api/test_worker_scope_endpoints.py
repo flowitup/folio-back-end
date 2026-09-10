@@ -321,8 +321,11 @@ def test_view_pay_grant_widens_read_but_not_write(ws_app, client, monkeypatch):
 
 def test_project_money_fields_hidden_from_restricted_members(client, ids, seeded, owner_h, linked_h):
     detail = f"/api/v1/projects/{ids['project']}"
+    # The project owner is a company manager (see the fixture): they read the
+    # spend side of the project, but the budget is its financing side and rides
+    # on project:view_budget, which the matrix gives to admins only.
     full = client.get(detail, headers=owner_h).get_json()
-    assert full["budget"] == 50000 and full["labor_accrued"] > 0
+    assert full["budget"] is None and full["labor_accrued"] > 0
     own = client.get(detail, headers=linked_h).get_json()
     assert own["budget"] is None and own["spent"] == 0 and own["labor_accrued"] == 0
     assert "project:manage_labor" not in own["my_permissions"]
