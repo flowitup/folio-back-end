@@ -193,57 +193,20 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Record the version on master
+      - name: Resolve the commit to release
         id: record
         if: steps.bump-type.outputs.type != 'none'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          export PATH="$HOME/.local/bin:$PATH"
-          VERSION="${{ steps.get-version.outputs.version }}"
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet pyproject.toml; then
-            echo "pyproject.toml already reads $VERSION"
-            echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # master is protected — "changes must be made through a pull request" — and the
-          # Actions identity cannot be added to the bypass list (that list only accepts
-          # installed GitHub Apps), so pushing straight to master fails with GH006 and
-          # the tag, the release and the parent dispatch are all skipped behind it.
-          # The version commit therefore travels on a short-lived branch through a pull
-          # request this job merges itself: master needs no approvals and declares no
-          # required checks, so the merge succeeds with the built-in token.
-          BRANCH="release/v$VERSION"
-          git checkout -b "$BRANCH"
-          git add pyproject.toml
-          # [skip ci] rides on the squash subject as well: re-running the pipeline on
-          # the merged commit would try to release the same version twice.
-          git commit -m "chore(release): v$VERSION [skip ci]"
-          git push origin "$BRANCH"
-
-          # Driven through the API rather than `gh pr merge`, which also mutates the
-          # local checkout (it switches branches) and can fail on a busy runner.
-          PR=$(gh api -X POST "repos/${{ github.repository }}/pulls" \
-                 -f title="chore(release): v$VERSION [skip ci]" \
-                 -f head="$BRANCH" -f base=master \
-                 -f body="Records v$VERSION in \`pyproject.toml\` so the release tag points at a commit that reads it. Opened and merged by the release job." \
-                 --jq .number)
-          gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/merge" \
-                 -f merge_method=squash \
-                 -f commit_title="chore(release): v$VERSION [skip ci]" \
-                 -f commit_message="" >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$BRANCH" || true
-
-          # The tag, and the image the parent builds, must point at the commit on master
-          # whose pyproject.toml actually reads $VERSION — the squashed one, not the
-          # branch commit that fed it.
-          git fetch origin master
-          echo "sha=$(git rev-parse origin/master)" >> $GITHUB_OUTPUT
+          # The version is deliberately NOT written back to pyproject.toml on master.
+          # master is protected ("changes must be made through a pull request"), the
+          # Actions identity cannot be added to the bypass list, and the flowitup
+          # organisation forbids GitHub Actions from opening or approving pull
+          # requests (HTTP 403 on 2026-09-11) — so no bot-driven commit can ever land
+          # there and every merge stayed untagged and undeployed. The tag list is the
+          # source of truth for what shipped (see "Compute the next version"), and the
+          # image the parent builds is the merge commit itself. pyproject.toml only
+          # feeds the OpenAPI `version` field and may lag behind the tag.
+          echo "sha=$GITHUB_SHA" >> $GITHUB_OUTPUT
 
       - name: Create tag
         if: steps.bump-type.outputs.type != 'none'
@@ -251,8 +214,6 @@ jobs:
           TAG="${{ steps.get-version.outputs.tag }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Explicit sha: HEAD is the release branch commit, while the version now
-          # lives on master's squashed commit.
           git tag -a "$TAG" -m "Release $TAG" "${{ steps.record.outputs.sha }}"
           git push origin "$TAG"
 
