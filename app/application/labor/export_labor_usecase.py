@@ -15,7 +15,7 @@ from app.application.labor.labor_day_description_usecases import (
     ListLaborDayDescriptionsRequest,
 )
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
-from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
+from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
@@ -96,6 +96,10 @@ class ExportLaborUseCase:
         # attaches to MonthBucket.day_descriptions for the PDF Day log section.
         # Default None → no descriptions fetched → empty list; keeps backward compat.
         list_day_descriptions_usecase: Optional[ListLaborDayDescriptionsUseCase] = None,
+        # Optional: resolves the header rate from the worker's effective-dated
+        # timeline. Default None → falls back to the base rate, keeping older
+        # wiring and tests working unchanged.
+        rate_change_repo: Optional[IWorkerRateChangeRepository] = None,
     ) -> None:
         self._worker_repo = worker_repo
         self._entry_repo = entry_repo
@@ -104,6 +108,25 @@ class ExportLaborUseCase:
         self._project_repo = project_repo
         self._list_activities_usecase = list_activities_usecase
         self._list_day_descriptions_usecase = list_day_descriptions_usecase
+        self._rate_change_repo = rate_change_repo
+
+    def _header_rate(self, worker, to_d: date):
+        """Rate to print in the export header: the one in force at the end of the range.
+
+        The day costs in the body are priced from the effective-dated timeline, so
+        printing the worker's base rate here would contradict them after a raise.
+        Falls back to the base rate when no change applies or no repo is wired.
+        """
+        if worker is None:
+            return None
+        if self._rate_change_repo is None:
+            return worker.daily_rate
+        range_end = _month_bounds(to_d)[1]
+        # Repository contract: rows come back ordered effective_date DESC.
+        for rc in self._rate_change_repo.list_by_worker(worker.id):
+            if rc.effective_date <= range_end:
+                return rc.daily_rate
+        return worker.daily_rate
 
     def execute(self, req: ExportLaborRequest) -> ExportLaborResult:
         """Generate export file.
@@ -211,7 +234,7 @@ class ExportLaborUseCase:
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
             worker_name=worker.name if worker is not None else None,
-            worker_daily_rate=worker.daily_rate if worker is not None else None,
+            worker_daily_rate=self._header_rate(worker, to_d),
         )
 
         # 6. Dispatch to builder

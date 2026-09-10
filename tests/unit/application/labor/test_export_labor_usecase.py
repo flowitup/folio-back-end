@@ -1134,3 +1134,82 @@ class TestActivitiesUseCase:
         sorted_activities = captured[0].activities
         assert sorted_activities[0].title == "EarlierCreated"
         assert sorted_activities[1].title == "LaterCreated"
+
+
+# ---------------------------------------------------------------------------
+# Header rate — the rate printed next to the worker's name
+# ---------------------------------------------------------------------------
+
+
+def _rate_change(worker_id: UUID, effective: date, rate: str):
+    """A rate-change row as the repository returns it."""
+    from decimal import Decimal
+
+    from app.domain.entities.worker_rate_change import WorkerRateChange
+
+    return WorkerRateChange(
+        id=uuid4(),
+        worker_id=worker_id,
+        effective_date=effective,
+        daily_rate=Decimal(rate),
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def _usecase_with_rates(worker, changes):
+    """Use case whose rate repo returns `changes` (newest first, per the port contract)."""
+    rate_repo = MagicMock()
+    rate_repo.list_by_worker.return_value = sorted(changes, key=lambda c: c.effective_date, reverse=True)
+    return ExportLaborUseCase(
+        worker_repo=MagicMock(),
+        entry_repo=MagicMock(),
+        summary_usecase=MagicMock(spec=GetLaborSummaryUseCase),
+        list_entries_usecase=MagicMock(spec=ListLaborEntriesUseCase),
+        project_repo=MagicMock(),
+        rate_change_repo=rate_repo,
+    )
+
+
+class TestExportHeaderRate:
+    """The header must agree with the day costs below it, which follow the rate timeline."""
+
+    def test_falls_back_to_base_rate_without_a_rate_repo(self):
+        from decimal import Decimal
+
+        worker = _make_worker(daily_rate="200.00")
+        uc = _build_usecase(_make_project())
+        assert uc._header_rate(worker, date(2026, 3, 1)) == Decimal("200.00")
+
+    def test_uses_the_rate_in_force_at_the_end_of_the_range(self):
+        from decimal import Decimal
+
+        worker = _make_worker(daily_rate="200.00")
+        uc = _usecase_with_rates(worker, [_rate_change(worker.id, date(2026, 3, 15), "250.00")])
+        # Range ends 31 March, after the raise lands on the 15th.
+        assert uc._header_rate(worker, date(2026, 3, 1)) == Decimal("250.00")
+
+    def test_ignores_a_change_that_takes_effect_after_the_range(self):
+        from decimal import Decimal
+
+        worker = _make_worker(daily_rate="200.00")
+        uc = _usecase_with_rates(worker, [_rate_change(worker.id, date(2026, 4, 1), "250.00")])
+        # Exporting March must not advertise April's raise.
+        assert uc._header_rate(worker, date(2026, 3, 1)) == Decimal("200.00")
+
+    def test_picks_the_latest_change_when_several_apply(self):
+        from decimal import Decimal
+
+        worker = _make_worker(daily_rate="200.00")
+        uc = _usecase_with_rates(
+            worker,
+            [
+                _rate_change(worker.id, date(2026, 1, 1), "220.00"),
+                _rate_change(worker.id, date(2026, 3, 10), "260.00"),
+                _rate_change(worker.id, date(2026, 5, 1), "300.00"),
+            ],
+        )
+        assert uc._header_rate(worker, date(2026, 3, 1)) == Decimal("260.00")
+
+    def test_project_wide_export_has_no_header_rate(self):
+        uc = _build_usecase(_make_project())
+        assert uc._header_rate(None, date(2026, 3, 1)) is None
