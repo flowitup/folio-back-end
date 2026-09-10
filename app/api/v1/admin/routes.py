@@ -25,8 +25,8 @@ from app.application.admin.exceptions import (
     TargetUserNotFoundError,
     TooManyProjectsError,
 )
+from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -233,23 +233,9 @@ def update_user(user_id: str):
             return _err(409, "Conflict", "Email already in use")
         user.email = new_email
 
-    if "display_name" in provided:
-        dn = provided["display_name"]
-        user.display_name = dn.strip() if isinstance(dn, str) and dn.strip() else None
-
-    if "phone" in provided:
-        raw_phone = provided["phone"]
-        if isinstance(raw_phone, str) and raw_phone.strip():
-            try:
-                phone = normalize_phone(raw_phone)
-            except InvalidPhoneNumberError:
-                return _err(400, "BadRequest", "Invalid phone number")
-            owner = container.user_repository.find_by_phone(phone)
-            if owner is not None and owner.id != uid:
-                return _err(409, "Conflict", "Phone already in use")
-            user.phone = phone
-        else:
-            user.phone = None
+    profile_error = apply_profile_fields(user, provided, container.user_repository)
+    if profile_error is not None:
+        return _err(*profile_error)
 
     container.user_repository.save(user)
     from app import db
