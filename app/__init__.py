@@ -968,6 +968,19 @@ def _configure_di_container() -> None:
 
     _c.seed_default_labor_roles_usecase = _SeedDefaultLRUC(repo=_labor_role_repo, db_session=db.session)
 
+    # Company member pay defaults — wired here, after the labor-role repo exists,
+    # because it validates that an assigned role belongs to the caller's company.
+    from app.application.company_persons import (
+        UpdateMemberPayDefaultsUseCase as _UpdateMemberPayDefaultsUseCase,
+    )
+
+    _c.update_member_pay_defaults_usecase = _UpdateMemberPayDefaultsUseCase(
+        company_person_repo=_c.company_person_repo,
+        labor_role_repo=_labor_role_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+    )
+
     # -----------------------------------------------------------------------
     # Billing DI wiring (phase 04)
     # -----------------------------------------------------------------------

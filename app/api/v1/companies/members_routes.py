@@ -1,9 +1,10 @@
 """Company member onboarding routes — add by phone, import, directory.
 
 Endpoints (3):
-  POST /companies/<id>/members          → add_member_by_phone (admin)
-  POST /companies/<id>/members/import   → import_members (admin)
-  GET  /companies/<id>/persons          → list_directory (admin or manager)
+  POST  /companies/<id>/members              → add_member_by_phone (admin)
+  POST  /companies/<id>/members/import       → import_members (admin)
+  GET   /companies/<id>/persons              → list_directory (admin or manager)
+  PATCH /companies/<id>/members/<person_id>  → update_member_pay_defaults (admin or manager)
 
 D8 grant/deny management routes live in a separate module
 (`app.api.v1.companies.grants_routes`, a parallel slice) — not here.
@@ -23,16 +24,23 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.companies import companies_bp
 from app.api.v1.companies.decorators import require_company_role, require_company_role_any
-from app.api.v1.companies.schemas import AddMemberByPhoneRequest, ImportMembersRequest
+from app.api.v1.companies.schemas import (
+    AddMemberByPhoneRequest,
+    ImportMembersRequest,
+    UpdateMemberPayDefaultsRequest,
+)
 from app.application.companies import CompanyNotFoundError, ForbiddenCompanyError
 from app.application.company_persons import (
     AddMemberByPhoneInput,
     AdminRoleNotAssignableError,
+    CompanyPersonNotFoundError,
     ImportMembersInput,
     InvalidCandidatePersonError,
+    LaborRoleNotInCompanyError,
     MemberAlreadyAttachedError,
     MultipleCandidatesError,
     SourceCompanyNotAccessibleError,
+    UpdateMemberPayDefaultsInput,
 )
 from app.application.company_persons.exceptions import PhoneAlreadyInCompanyError
 from app.infrastructure.rate_limiter import limiter
@@ -261,5 +269,69 @@ def list_directory(company_id: str):
                 }
                 for entry in result.items
             ]
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /companies/<company_id>/members/<person_id> — pay defaults (admin or manager)
+# ---------------------------------------------------------------------------
+
+
+@companies_bp.route("/companies/<company_id>/members/<person_id>", methods=["PATCH"])
+@openapi_doc(
+    summary="Set a company member's default daily rate and labor role (admin or manager)",
+    request=UpdateMemberPayDefaultsRequest,
+    tags=["companies"],
+)
+@jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+@require_company_role_any("admin", "manager")
+def update_member_pay_defaults(company_id: str, person_id: str):
+    """Update the pay defaults a new project Worker inherits from this company.
+
+    PATCH, not PUT: an omitted field keeps its stored value, an explicit `null`
+    clears it. Nothing here touches the Person's identity or their company role.
+    """
+    company_uuid, err = _company_uuid_or_404(company_id)
+    if err is not None:
+        return err
+    try:
+        person_uuid = UUID(person_id)
+    except ValueError:
+        return _err("NotFound", f"Person {person_id} not found", 404)
+
+    try:
+        body = UpdateMemberPayDefaultsRequest.model_validate(request.get_json(force=True) or {})
+    except ValidationError as exc:
+        return format_validation_error(exc)
+
+    inp = UpdateMemberPayDefaultsInput(
+        caller_id=UUID(get_jwt_identity()),
+        company_id=company_uuid,
+        person_id=person_uuid,
+        default_daily_rate=body.default_daily_rate,
+        labor_role_id=body.labor_role_id,
+        # Absent vs explicit null — see UpdateMemberPayDefaultsRequest.
+        set_default_daily_rate="default_daily_rate" in body.model_fields_set,
+        set_labor_role_id="labor_role_id" in body.model_fields_set,
+    )
+
+    from app import db
+
+    try:
+        result = get_container().update_member_pay_defaults_usecase.execute(inp, db.session)
+    except ForbiddenCompanyError:
+        return _err("Forbidden", "Admin or manager permission required", 403)
+    except CompanyPersonNotFoundError:
+        return _err("NotFound", f"Person {person_id} is not a member of company {company_id}", 404)
+    except LaborRoleNotInCompanyError:
+        return _err("InvalidInput", "labor_role_id does not belong to this company", 400)
+
+    return jsonify(
+        {
+            "person_id": str(result.person_id),
+            "default_daily_rate": (float(result.default_daily_rate) if result.default_daily_rate is not None else None),
+            "labor_role_id": str(result.labor_role_id) if result.labor_role_id else None,
         }
     )

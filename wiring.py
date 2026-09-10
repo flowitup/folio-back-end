@@ -460,6 +460,7 @@ class Container:
     add_member_by_phone_usecase: Optional[Any] = None  # AddMemberByPhoneUseCase
     import_members_usecase: Optional[Any] = None  # ImportMembersUseCase
     list_directory_usecase: Optional[Any] = None  # ListDirectoryUseCase
+    update_member_pay_defaults_usecase: Optional[Any] = None  # UpdateMemberPayDefaultsUseCase
     list_new_members_usecase: Optional[Any] = None  # ListNewMembersUseCase
     assign_project_member_usecase: Optional[Any] = None  # AssignProjectMemberUseCase
     unassign_project_member_usecase: Optional[Any] = None  # UnassignProjectMemberUseCase

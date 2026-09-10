@@ -90,7 +90,7 @@ def _make_company_and_project(app, admin_id):
         return company.id, project.id
 
 
-def _make_company_person(app, company_id, *, name, phone, default_daily_rate=None, user_id=None):
+def _make_company_person(app, company_id, *, name, phone, default_daily_rate=None, user_id=None, labor_role_id=None):
     from app import db
 
     now = datetime.now(timezone.utc)
@@ -114,6 +114,7 @@ def _make_company_person(app, company_id, *, name, phone, default_daily_rate=Non
                 is_active=True,
                 created_at=now,
                 default_daily_rate=Decimal(str(default_daily_rate)) if default_daily_rate is not None else None,
+                labor_role_id=labor_role_id,
             )
         )
         db.session.commit()
@@ -202,3 +203,124 @@ class TestWorkerFromPerson:
             headers=_auth(token),
         )
         assert resp.status_code == 400
+
+
+class TestRateSetThroughTheApiIsInherited:
+    """Closes the loop the pay-defaults endpoint exists for: a rate typed once
+    at company level is what the next project's worker costs, with no rate in
+    the create-worker body at all."""
+
+    def test_patched_company_rate_becomes_the_new_workers_rate(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_inherit1@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        # No rate on the profile: exactly the state every person onboarded
+        # through POST /companies/<id>/members starts in.
+        person_id = _make_company_person(
+            wfp_app, company_id, name="Inherit Person", phone="+33611119101", default_daily_rate=None
+        )
+        token = _login(wfp_client, "wfp_inherit1@test.com")
+
+        without_rate = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id)},
+            headers=_auth(token),
+        )
+        assert without_rate.status_code == 400, "a profile with no rate cannot price a worker on its own"
+
+        patched = wfp_client.patch(
+            f"/api/v1/companies/{company_id}/members/{person_id}",
+            json={"default_daily_rate": 175.5},
+            headers=_auth(token),
+        )
+        assert patched.status_code == 200, patched.get_data(as_text=True)
+
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id)},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["daily_rate"] == 175.5
+
+
+def _make_labor_role(app, company_id, *, name):
+    from app import db
+    from app.infrastructure.database.models.labor_role import LaborRoleModel
+
+    with app.app_context():
+        role = LaborRoleModel(
+            id=uuid4(),
+            company_id=company_id,
+            name=name,
+            color="#654321",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.session.add(role)
+        db.session.commit()
+        return role.id
+
+
+class TestLaborRoleFromProfile:
+    """The company profile answers `role_id` the same way it answers the rate:
+    only when the request left it out."""
+
+    def test_worker_inherits_the_company_labor_role(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_role1@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        role_id = _make_labor_role(wfp_app, company_id, name="Thợ chính")
+        person_id = _make_company_person(
+            wfp_app,
+            company_id,
+            name="Role Person",
+            phone="+33611119201",
+            default_daily_rate="140.00",
+            labor_role_id=role_id,
+        )
+        token = _login(wfp_client, "wfp_role1@test.com")
+
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id)},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["role_id"] == str(role_id)
+
+    def test_an_explicit_role_in_the_body_wins(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_role2@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        profile_role = _make_labor_role(wfp_app, company_id, name="Profile Role")
+        chosen_role = _make_labor_role(wfp_app, company_id, name="Chosen Role")
+        person_id = _make_company_person(
+            wfp_app,
+            company_id,
+            name="Role Person 2",
+            phone="+33611119202",
+            default_daily_rate="140.00",
+            labor_role_id=profile_role,
+        )
+        token = _login(wfp_client, "wfp_role2@test.com")
+
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id), "role_id": str(chosen_role)},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["role_id"] == str(chosen_role)
+
+    def test_no_role_on_the_profile_leaves_the_worker_without_one(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_role3@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        person_id = _make_company_person(
+            wfp_app, company_id, name="Role Person 3", phone="+33611119203", default_daily_rate="140.00"
+        )
+        token = _login(wfp_client, "wfp_role3@test.com")
+
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id)},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["role_id"] is None
