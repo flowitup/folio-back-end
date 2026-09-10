@@ -90,6 +90,8 @@ The most useful settings, configured through environment variables:
 | `SECRET_KEY` / `JWT_SECRET_KEY` | Sign-in tokens. Set unique values in production. |
 | `REDIS_URL` | Used for background jobs and rate-limiting. |
 | `EMAIL_PROVIDER`, `SMTP_*` | Outgoing email — invitations, password resets, reminders. |
+| `LOGIN_MODE` | Sign-in offered: `email` (password), `phone` (SMS code) or `both`. |
+| `SMS_PROVIDER` | How sign-in codes go out: `log` (API log, dev), `twilio` (`TWILIO_*`) or `gateway` — an "SMS Gateway for Android" endpoint (`SMS_GATEWAY_URL`, `SMS_GATEWAY_USERNAME`, `SMS_GATEWAY_PASSWORD`). |
 
 A full template lives in `.env.example`.
 
