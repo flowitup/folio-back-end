@@ -2,7 +2,11 @@
 
 import pytest
 
-from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
+from app.domain.value_objects.phone_number import (
+    InvalidPhoneNumberError,
+    normalize_french_phone,
+    normalize_phone,
+)
 
 
 @pytest.mark.parametrize(
@@ -30,3 +34,23 @@ def test_national_prefix_follows_the_region_argument() -> None:
 def test_rejects_garbage(raw: str) -> None:
     with pytest.raises(InvalidPhoneNumberError):
         normalize_phone(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("0612345678", "+33612345678"),
+        ("06 12 34 56 78", "+33612345678"),
+        ("+33 6 12 34 56 78", "+33612345678"),
+        ("0033612345678", "+33612345678"),
+        ("01 42 34 56 78", "+33142345678"),
+    ],
+)
+def test_sign_in_accepts_french_numbers(raw: str, expected: str) -> None:
+    assert normalize_french_phone(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["+84 912 345 678", "0084912345678", "+44 20 7946 0958", "+1 202 555 0173"])
+def test_sign_in_refuses_numbers_from_other_countries(raw: str) -> None:
+    with pytest.raises(InvalidPhoneNumberError):
+        normalize_french_phone(raw)

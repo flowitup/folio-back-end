@@ -44,3 +44,20 @@ def normalize_phone(raw: str, default_region: str = "FR") -> str:
     if not _E164.match(candidate):
         raise InvalidPhoneNumberError("Phone number is not valid")
     return candidate
+
+
+# Sign-in codes leave through a French SMS gateway, so phone authentication takes French numbers
+# only. Everywhere else — persons, workers, company members — numbers stay international.
+_FRENCH_E164 = re.compile(r"^\+33[1-9]\d{8}$")
+
+
+def normalize_french_phone(raw: str) -> str:
+    """Return the E.164 form of a French ``raw`` number or raise ``InvalidPhoneNumberError``.
+
+    * ``06 12 34 56 78`` / ``+33 6 12 34 56 78`` / ``0033612345678`` → ``+33612345678``
+    * ``+84 912 345 678`` and any other country are refused.
+    """
+    candidate = normalize_phone(raw)
+    if not _FRENCH_E164.match(candidate):
+        raise InvalidPhoneNumberError("Phone sign-in accepts French numbers only")
+    return candidate

@@ -3,6 +3,10 @@
 Offered when the deployment's LOGIN_MODE is "phone" or "both". The refresh token lifetime
 follows REFRESH_TOKEN_POLICY like password login (``persistent`` argument).
 
+Codes leave through a French SMS gateway, so every phone step below accepts French numbers only
+(``normalize_french_phone``): a number from another country is refused before anything is stored
+or sent, on sign-in and on sign-up alike.
+
 ``RequestOtpUseCase`` never reveals whether a phone belongs to an account: unknown or inactive
 numbers are silently ignored. Codes are hashed at rest, expire after ``ttl_seconds``, allow
 ``max_attempts`` guesses and are throttled per phone (``resend_after_seconds``, ``hourly_max``).
@@ -34,7 +38,7 @@ from app.domain.exceptions.auth_exceptions import (
     UserInactiveError,
 )
 from app.domain.services.authorization import AuthorizationService
-from app.domain.value_objects.phone_number import normalize_phone
+from app.domain.value_objects.phone_number import normalize_french_phone
 
 if TYPE_CHECKING:
     from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
@@ -133,7 +137,7 @@ class RequestOtpUseCase:
         self._clock = clock
 
     def execute(self, raw_phone: str) -> RequestOtpResult:
-        phone = normalize_phone(raw_phone)
+        phone = normalize_french_phone(raw_phone)
         now = self._clock()
         user = self._users.find_by_phone(phone)
         if user is None or not user.is_active:
@@ -173,7 +177,7 @@ class VerifyOtpUseCase:
         self._clock = clock
 
     def execute(self, raw_phone: str, code: str, persistent: bool = False) -> LoginResult:
-        phone = normalize_phone(raw_phone)
+        phone = normalize_french_phone(raw_phone)
         now = self._clock()
         otp = _consume_code(self._otps, phone=phone, code=code, now=now, max_attempts=self._max_attempts)
         if otp.user_id is None:
@@ -217,7 +221,7 @@ class RequestSignupOtpUseCase:
         self._clock = clock
 
     def execute(self, raw_phone: str) -> RequestOtpResult:
-        phone = normalize_phone(raw_phone)
+        phone = normalize_french_phone(raw_phone)
         if self._users.find_by_phone(phone) is not None:
             raise PhoneAlreadyRegisteredError("This phone number already has an account")
         _issue_code(
@@ -264,7 +268,7 @@ class VerifySignupOtpUseCase:
         self._link_person_on_signup = link_person_on_signup
 
     def execute(self, raw_phone: str, code: str, display_name: str, persistent: bool = False) -> LoginResult:
-        phone = normalize_phone(raw_phone)
+        phone = normalize_french_phone(raw_phone)
         name = display_name.strip()
         if not name:
             raise ValueError("display_name is required")

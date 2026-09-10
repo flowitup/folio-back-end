@@ -108,6 +108,18 @@ class TestPhoneSignup:
         )
         assert no_name.status_code == 400
 
+    def test_signup_refuses_numbers_outside_france(self, inv_client, invitation_app):
+        """Sign-up follows sign-in: an account can only be created on a French number."""
+        sent_before = len(invitation_app._sms.sent)
+        resp = inv_client.post("/api/v1/auth/signup/request", json={"phone": "+84912345678"})
+        assert resp.status_code == 400, resp.get_json()
+        verify = inv_client.post(
+            "/api/v1/auth/signup/verify",
+            json={"phone": "+84912345678", "code": "123456", "display_name": "Minh"},
+        )
+        assert verify.status_code == 400, verify.get_json()
+        assert len(invitation_app._sms.sent) == sent_before
+
     def test_signup_disabled_in_email_mode_and_config_flag(self, inv_client, invitation_app):
         invitation_app.config["LOGIN_MODE"] = "email"
         try:
