@@ -109,11 +109,17 @@ class Config:
     FEATURE_CHAT: bool = get_env("FEATURE_CHAT", default="0") == "1"
 
     # Sign in with a phone number + SMS code. "log" writes the code to the API log (dev/test);
-    # "twilio" sends it through Twilio Programmable Messaging with the credentials below.
+    # "twilio" sends it through Twilio Programmable Messaging; "gateway" posts it to an
+    # "SMS Gateway for Android" endpoint (sms-gate.app API, HTTP Basic auth) so it leaves from a real SIM.
     SMS_PROVIDER: str = get_env("SMS_PROVIDER", default="log")
     TWILIO_ACCOUNT_SID: str = get_env("TWILIO_ACCOUNT_SID", default="")
     TWILIO_AUTH_TOKEN: str = get_env("TWILIO_AUTH_TOKEN", default="")
     TWILIO_FROM: str = get_env("TWILIO_FROM", default="Folio")  # alphanumeric sender ID or a Twilio number
+    # Full message endpoint: http://<phone-ip>:8080/message (local server) or
+    # https://api.sms-gate.app/3rdparty/v1/messages (cloud relay). Credentials come from the app.
+    SMS_GATEWAY_URL: str = get_env("SMS_GATEWAY_URL", default="")
+    SMS_GATEWAY_USERNAME: str = get_env("SMS_GATEWAY_USERNAME", default="")
+    SMS_GATEWAY_PASSWORD: str = get_env("SMS_GATEWAY_PASSWORD", default="")
     OTP_TTL_SECONDS: int = int(get_env("OTP_TTL_SECONDS", default="300"))
     OTP_RESEND_SECONDS: int = int(get_env("OTP_RESEND_SECONDS", default="60"))
     OTP_HOURLY_MAX: int = int(get_env("OTP_HOURLY_MAX", default="5"))
@@ -141,6 +147,8 @@ class Config:
             raise ValueError("REFRESH_TOKEN_POLICY must be 'expiring' or 'persistent'")
         if self.PUSH_PROVIDER not in ("log", "expo"):
             raise ValueError("PUSH_PROVIDER must be 'log' or 'expo'")
+        if self.SMS_PROVIDER not in ("log", "twilio", "gateway"):
+            raise ValueError("SMS_PROVIDER must be 'log', 'twilio' or 'gateway'")
 
 
 class DevelopmentConfig(Config):
