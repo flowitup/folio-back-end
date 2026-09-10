@@ -143,6 +143,81 @@ def test_filters_by_type_filter():
     assert result.content[:4] == b"PK\x03\x04"
 
 
+def test_exclude_types_drops_rows_and_their_subtotals(monkeypatch):
+    """A manager's export leaves released_funds out — rows, subtotal and grand total.
+
+    `exclude_types` is applied after the range query, so the caller never sees
+    the excluded amount, not even folded into a total.
+    """
+    project = _make_project("Excluded Types Project")
+    pid = project.id
+    invoices = [
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("900.00"), invoice_number="R1"
+        ),
+        _make_invoice(
+            project_id=pid,
+            invoice_type=InvoiceType.MATERIALS_SERVICES,
+            amount=Decimal("100.00"),
+            invoice_number="M1",
+        ),
+    ]
+
+    captured = {}
+
+    def _spy(context, bundle):
+        captured["bundle"] = bundle
+        return b"PK\x03\x04stub"
+
+    import app.domain.invoice.export.xlsx_builder as xlsx_builder
+
+    monkeypatch.setattr(xlsx_builder, "build_xlsx", _spy)
+
+    uc = _build_usecase(project, invoices)
+    req = _base_request(pid)
+    req.exclude_types = frozenset({InvoiceType.RELEASED_FUNDS})
+    uc.execute(req)
+
+    bundle = captured["bundle"]
+    assert [i.invoice_number for i in bundle.invoices] == ["M1"]
+    assert bundle.invoice_count == 1
+    assert {s.type for s in bundle.subtotals_by_type} == {InvoiceType.MATERIALS_SERVICES}
+    assert bundle.grand_total == Decimal("100.00")
+
+
+def test_exclude_types_defaults_to_nothing_excluded(monkeypatch):
+    """An admin's export (no exclusions) still carries every type."""
+    project = _make_project("No Exclusion Project")
+    pid = project.id
+    invoices = [
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("900.00"), invoice_number="R1"
+        ),
+        _make_invoice(
+            project_id=pid,
+            invoice_type=InvoiceType.MATERIALS_SERVICES,
+            amount=Decimal("100.00"),
+            invoice_number="M1",
+        ),
+    ]
+
+    captured = {}
+
+    def _spy(context, bundle):
+        captured["bundle"] = bundle
+        return b"PK\x03\x04stub"
+
+    import app.domain.invoice.export.xlsx_builder as xlsx_builder
+
+    monkeypatch.setattr(xlsx_builder, "build_xlsx", _spy)
+
+    uc = _build_usecase(project, invoices)
+    uc.execute(_base_request(pid))
+
+    assert captured["bundle"].invoice_count == 2
+    assert captured["bundle"].grand_total == Decimal("1000.00")
+
+
 def test_subtotal_computation_per_type():
     """Subtotals are computed correctly per type in the bundle."""
     project = _make_project("Subtotal Project")

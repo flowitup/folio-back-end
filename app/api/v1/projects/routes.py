@@ -52,13 +52,24 @@ def _spent_for(spent_map: dict, project_id: UUID) -> ProjectSpent:
     return spent_map.get(project_id, _NO_SPEND)
 
 
-def _money_visible(perms: list) -> bool:
-    """Budget and spend need `project:manage_labor` or `project:view_pay`.
+def _spend_visible(perms: list) -> bool:
+    """Spend rollups need `project:manage_labor` or `project:view_pay`.
 
     Project ownership grants nothing on its own (D6): an owner sees money
     exactly like any other manager, through the resolver.
     """
     return _has_permission(perms, "project:manage_labor") or _has_permission(perms, "project:view_pay")
+
+
+def _budget_visible(perms: list) -> bool:
+    """The budget is the financing side, gated on its own `project:view_budget`.
+
+    Split from `_spend_visible` on purpose: a manager runs what the project
+    spends but not what funds it, so they read every spend figure and none of
+    the budget. Admins hold the permission company-wide; anyone else needs a D8
+    grant.
+    """
+    return _has_permission(perms, "project:view_budget")
 
 
 def _spend_fields(rollup: ProjectSpent) -> dict:
@@ -146,7 +157,8 @@ def list_projects():
         # honest.
         if not _has_permission(perms, "project:read"):
             continue
-        visible = _money_visible(perms)
+        spend_visible = _spend_visible(perms)
+        budget_visible = _budget_visible(perms)
         items.append(
             ProjectResponse(
                 id=p.id,
@@ -157,9 +169,13 @@ def list_projects():
                 created_at="",
                 company_id=company_id_map.get(pid),
                 my_permissions=perms,
-                budget=(float(budget_map[pid][0]) if visible and budget_map.get(pid, (None,))[0] is not None else None),
-                budget_source=budget_map.get(pid, (None, None))[1] if visible else None,
-                **_spend_fields(_spent_for(spent_map, pid) if visible else _NO_SPEND),
+                budget=(
+                    float(budget_map[pid][0])
+                    if budget_visible and budget_map.get(pid, (None,))[0] is not None
+                    else None
+                ),
+                budget_source=budget_map.get(pid, (None, None))[1] if budget_visible else None,
+                **_spend_fields(_spent_for(spent_map, pid) if spend_visible else _NO_SPEND),
             )
         )
     return jsonify(ProjectListResponse(projects=items, total=len(items)).model_dump())
@@ -359,7 +375,8 @@ def get_project(project_id: str):
         spent_rollup = _spent_for(spent_map, project.id)
 
     perms = sorted(_effective_perms_for(project.id, user_id))
-    visible = _money_visible(perms)
+    spend_visible = _spend_visible(perms)
+    budget_visible = _budget_visible(perms)
     return jsonify(
         ProjectResponse(
             id=str(project.id),
@@ -371,9 +388,9 @@ def get_project(project_id: str):
             company_id=company_id_str,
             invoice_prefix=project.invoice_prefix,
             my_permissions=perms,
-            budget=float(project.budget) if visible and project.budget is not None else None,
-            budget_source=project.budget_source if visible else None,
-            **_spend_fields(spent_rollup if visible else _NO_SPEND),
+            budget=float(project.budget) if budget_visible and project.budget is not None else None,
+            budget_source=project.budget_source if budget_visible else None,
+            **_spend_fields(spent_rollup if spend_visible else _NO_SPEND),
         ).model_dump()
     )
 
@@ -422,6 +439,23 @@ def update_project(project_id: str):
     if not can_mutate_project(existing, user_id):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
+    perms = sorted(_effective_perms_for(UUID(project_id), user_id))
+    budget_visible = _budget_visible(perms)
+    spend_visible = _spend_visible(perms)
+    # Writing a figure you are not allowed to read would let a manager overwrite
+    # the owner's budget blind, so the write follows the read.
+    if not budget_visible and ({"budget", "budget_source"} & data.model_fields_set):
+        return (
+            jsonify(
+                ErrorResponse(
+                    error="Forbidden",
+                    message="Changing the budget requires project:view_budget",
+                    status_code=403,
+                ).model_dump()
+            ),
+            403,
+        )
+
     try:
         result = container.update_project_usecase.execute(
             UUID(project_id),
@@ -450,9 +484,9 @@ def update_project(project_id: str):
             user_count=len(result.user_ids),
             created_at=result.created_at.isoformat(),
             invoice_prefix=result.invoice_prefix,
-            budget=float(result.budget) if result.budget is not None else None,
-            budget_source=result.budget_source,
-            **_spend_fields(spent_rollup),
+            budget=float(result.budget) if budget_visible and result.budget is not None else None,
+            budget_source=result.budget_source if budget_visible else None,
+            **_spend_fields(spent_rollup if spend_visible else _NO_SPEND),
         ).model_dump()
     )
 

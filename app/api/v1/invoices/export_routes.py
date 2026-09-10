@@ -14,6 +14,7 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.requester_identity import get_requester_email
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices.schemas import ExportInvoicesQuery
+from app.api.v1.projects.budget_scope import caller_sees_budget
 from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.api.v1.projects.labor_scope import require_full_project_view
 from app.application.invoice.export_invoices_usecase import ExportInvoicesRequest
@@ -70,6 +71,11 @@ def export_invoices(project_id: str):
                 format=query.format,
                 acting_user_email=requester_email,
                 type_filter=InvoiceType(query.type) if query.type else None,
+                # Financing side stays out of a manager's export, whether they
+                # asked for every type or for released_funds specifically.
+                exclude_types=(
+                    frozenset() if caller_sees_budget(project_id) else frozenset({InvoiceType.RELEASED_FUNDS})
+                ),
             )
         )
     except ProjectNotFoundError:

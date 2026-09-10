@@ -38,6 +38,7 @@ ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         "bibliotheque:manage",
         "project:log_own_attendance",
         "project:view_pay",
+        "project:view_budget",
         "project:view_roster",
         "user:read",
     }
@@ -46,6 +47,12 @@ ADMIN_PERMISSIONS: frozenset[str] = frozenset(
 # `manager` holds these on a project they are assigned to (full read/write
 # labor + invoices + documents, but never create/delete a project or touch
 # company:* settings).
+#
+# Deliberately absent: `project:view_budget`. A manager runs the spend side of a
+# project — expenses, labor payments, the spent rollups — but not its financing:
+# the budget, what is left of it, and the funds released to the company are the
+# owner's business. An admin who wants a particular manager to see them grants
+# `project:view_budget` through a D8 row (it is in CUSTOMISABLE_PERMISSIONS).
 MANAGER_PROJECT_PERMISSIONS: frozenset[str] = frozenset(
     {
         "project:read",
@@ -93,6 +100,7 @@ CUSTOMISABLE_PERMISSIONS: frozenset[str] = frozenset(
         "project:log_own_attendance",
         "bibliotheque:manage",
         "project:view_pay",
+        "project:view_budget",
     }
 )
 

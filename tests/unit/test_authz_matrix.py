@@ -53,6 +53,7 @@ class TestAdminMatrix:
             "bibliotheque:manage",
             "project:log_own_attendance",
             "project:view_pay",
+            "project:view_budget",
         ):
             assert perm in perms, perm
 
@@ -95,6 +96,11 @@ class TestManagerMatrix:
         ):
             assert perm in perms, perm
 
+    def test_manager_never_sees_the_budget_by_default(self):
+        """Manager runs the spend side; the budget and released funds are the owner's."""
+        assert "project:view_budget" not in permissions_for("manager", assigned=True)
+        assert "project:view_budget" not in permissions_for("manager", assigned=False)
+
     def test_manager_unassigned_loses_project_scope(self):
         """Not assigned to the project in question → only the always-on perms."""
         perms = permissions_for("manager", assigned=False)
@@ -121,6 +127,10 @@ class TestMemberMatrix:
     def test_member_never_sees_pay(self):
         assert "project:view_pay" not in permissions_for("member", assigned=True)
         assert "project:view_pay" not in permissions_for("member", assigned=False)
+
+    def test_member_never_sees_the_budget(self):
+        assert "project:view_budget" not in permissions_for("member", assigned=True)
+        assert "project:view_budget" not in permissions_for("member", assigned=False)
 
     def test_member_unassigned_loses_project_scope(self):
         perms = permissions_for("member", assigned=False)
@@ -166,6 +176,7 @@ class TestCustomisableWhitelist:
                 "project:log_own_attendance",
                 "bibliotheque:manage",
                 "project:view_pay",
+                "project:view_budget",
             }
         )
 

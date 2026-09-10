@@ -154,8 +154,12 @@ def ps_app():
         test_app._test_company_pm_id = str(company_pm.id)
         test_app._test_regular_pm_id = str(regular_pm.id)
 
-        # Permissions come from the company role + project assignment (see the helper).
-        seed_company_tenancy(test_app)
+        # Permissions come from the company role + project assignment (see the
+        # helper). This suite books released_funds rows, which need
+        # project:view_budget — a company admin capability — so the fixture's
+        # admin is seeded as one rather than taking the helper's default
+        # "project owner becomes manager".
+        seed_company_tenancy(test_app, roles={admin_user.id: "admin"})
 
         yield test_app
 

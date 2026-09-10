@@ -25,6 +25,7 @@ from app.api.v1.projects.decorators import (
     require_project_access,
     require_invoice_access,
 )
+from app.api.v1.projects.budget_scope import budget_forbidden, caller_sees_budget
 from app.api.v1.projects.labor_scope import labor_scope_for
 from app.api.v1.projects.schemas import ErrorResponse
 from app.application.invoice import (
@@ -341,6 +342,15 @@ def list_invoices(project_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
+    # The financing side is a separate permission: strip the releases from the
+    # page and zero their aggregates below. An explicit `?type=released_funds`
+    # therefore answers an empty list rather than a 403 — same shape as the
+    # restricted-member path, so a client that still offers the filter degrades
+    # to "nothing here" instead of an error.
+    sees_budget = caller_sees_budget(project_id)
+    if not sees_budget:
+        results = [r for r in results if r.type != InvoiceType.RELEASED_FUNDS.value]
+
     project_uuid = UUID(project_id)
 
     # One scan for the released-funds split, one scan for the spent split — down from
@@ -348,18 +358,26 @@ def list_invoices(project_id: str):
     # sum_company_spent + sum_personal_spent) to two. funds_released_total is derived
     # from the RAW (pre-quantization) split components so it exactly reconciles with
     # their sum, per the port's documented invariant.
-    (
-        funds_released_company_raw,
-        funds_released_personal_raw,
-        company_cash_advanced_raw,
-    ) = container.invoice_repository.sum_funds_released_split(project_uuid)
-    funds_released_total = money(funds_released_company_raw + funds_released_personal_raw)
-    funds_released_company_total = money(funds_released_company_raw)
-    funds_released_personal_total = money(funds_released_personal_raw)
-    # Company money handed to a person (cash-advance releases). Kept OUT of the
-    # released totals above and of company_spent_total; the FE adds it to the company
-    # purse's spend and labels it "incl. X cash advance".
-    company_cash_advanced_total = money(company_cash_advanced_raw)
+    if sees_budget:
+        (
+            funds_released_company_raw,
+            funds_released_personal_raw,
+            company_cash_advanced_raw,
+        ) = container.invoice_repository.sum_funds_released_split(project_uuid)
+        funds_released_total = money(funds_released_company_raw + funds_released_personal_raw)
+        funds_released_company_total = money(funds_released_company_raw)
+        funds_released_personal_total = money(funds_released_personal_raw)
+        # Company money handed to a person (cash-advance releases). Kept OUT of the
+        # released totals above and of company_spent_total; the FE adds it to the company
+        # purse's spend and labels it "incl. X cash advance".
+        company_cash_advanced_total = money(company_cash_advanced_raw)
+    else:
+        # Without project:view_budget the scan is skipped entirely — the caller
+        # gets zeros, not a narrowed figure they could difference against spend.
+        funds_released_total = 0.0
+        funds_released_company_total = 0.0
+        funds_released_personal_total = 0.0
+        company_cash_advanced_total = 0.0
 
     company_spent_raw, personal_spent_raw = container.invoice_repository.sum_spent_split(project_uuid)
     company_spent_total = money(company_spent_raw)
@@ -469,6 +487,7 @@ def _empty_invoice_list() -> dict:
         "funds_released_company_total": 0.0,
         "funds_released_personal_total": 0.0,
         "personal_spent_total": 0.0,
+        "company_cash_advanced_total": 0.0,
         "company_name": None,
     }
 
@@ -527,6 +546,11 @@ def create_invoice(project_id: str):
         data = CreateInvoiceSchema(**request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
+
+    # project:manage_invoices covers the spend side; recording money released to
+    # the company is the financing side and needs project:view_budget too.
+    if data.type == InvoiceType.RELEASED_FUNDS.value and not caller_sees_budget(project_id):
+        return budget_forbidden()
 
     jwt_claims = get_jwt()
     # JWT subject holds the authenticated user's UUID
@@ -618,6 +642,10 @@ def get_invoice(project_id: str, invoice_id: str):
     # Restricted members may only open their own labor payments.
     if not _invoice_visible_to_caller(project_id, result.worker_id):
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
+    # A release is invisible without project:view_budget — 404 rather than 403 so
+    # the response says nothing about whether the id exists.
+    if result.type == InvoiceType.RELEASED_FUNDS.value and not caller_sees_budget(project_id):
+        return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
 
     project_uuid = UUID(project_id)
     company_pm_id_strs = {str(uid) for uid in _get_company_payment_method_ids(project_uuid)}
@@ -679,6 +707,15 @@ def update_invoice(project_id: str, invoice_id: str):
 
     if existing.project_id != project_id:
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
+
+    # Guards both directions: editing an existing release, and retyping any other
+    # invoice into one. Without project:view_budget the caller cannot read either
+    # side of that edit.
+    touches_release = existing.type == InvoiceType.RELEASED_FUNDS.value or (
+        update_kwargs.get("type") == InvoiceType.RELEASED_FUNDS
+    )
+    if touches_release and not caller_sees_budget(project_id):
+        return budget_forbidden()
 
     invoice_uuid = UUID(invoice_id)
     project_uuid = UUID(project_id)
@@ -772,6 +809,9 @@ def delete_invoice(project_id: str, invoice_id: str):
 
     if existing.project_id != project_id:
         return _error_response("NotFound", f"Invoice {invoice_id} not found", 404)
+
+    if existing.type == InvoiceType.RELEASED_FUNDS.value and not caller_sees_budget(project_id):
+        return budget_forbidden()
 
     try:
         get_container().delete_invoice_usecase.execute(UUID(invoice_id))
