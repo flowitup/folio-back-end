@@ -78,6 +78,9 @@ class UserResponse(BaseModel):
 
     id: UUID
     email: str
+    # Name the user chose at sign-up; clients show it instead of the e-mail, which for
+    # phone sign-ups is a synthetic `phone-<number>@no-email...` address.
+    display_name: Optional[str] = None
     permissions: List[str]
     phone: Optional[str] = None
     companies: List[UserCompanySummary] = []

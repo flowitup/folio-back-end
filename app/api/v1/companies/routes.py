@@ -746,7 +746,9 @@ def join_company_by_code():
     try:
         body = JoinCompanyRequest(**(request.get_json(silent=True) or {}))
     except ValidationError as exc:
-        return _err("ValidationError", format_validation_error(exc), 400)
+        # format_validation_error already returns a (response, status) pair — wrapping it in
+        # _err() would embed a Response inside a dict and make jsonify raise (500 instead of 422).
+        return format_validation_error(exc)
     caller_id = UUID(get_jwt_identity())
     from app import db
 

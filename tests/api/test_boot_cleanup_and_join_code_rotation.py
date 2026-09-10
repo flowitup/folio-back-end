@@ -212,3 +212,31 @@ class TestJoinCodeCreatesCompanyPerson:
             assert person is not None
             cp_row = db.session.query(CompanyPersonModel).filter_by(company_id=company_id, person_id=person.id).first()
             assert cp_row is not None and cp_row.is_active is True
+
+
+class TestJoinCodeRejectsMalformedBody:
+    """A bad body must come back as a 422 validation error, never a 500.
+
+    `format_validation_error` returns a ready `(response, status)` pair; feeding it to a
+    helper that expects a message string embeds a Flask Response in the JSON payload and
+    makes `jsonify` raise, turning every client mistake into a server error.
+    """
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"join_code": "JOINME4"},  # wrong field name — the schema forbids extras
+            {},  # missing `code`
+            {"code": "x"},  # shorter than min_length
+        ],
+    )
+    def test_malformed_body_returns_422(self, boot_client, boot_app, body):
+        _make_user(boot_app, f"boot_bad_{abs(hash(str(body)))}@test.com")
+        token = _login(boot_client, f"boot_bad_{abs(hash(str(body)))}@test.com")
+
+        resp = boot_client.post("/api/v1/companies/join", json=body, headers=_auth(token))
+
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        payload = resp.get_json()
+        assert payload["error"] == "validation_error"
+        assert isinstance(payload["message"], str) and payload["message"]
