@@ -131,6 +131,16 @@ class TestOtpLogin:
         assert inv_client.post("/api/v1/auth/otp/request", json={"phone": "abc"}).status_code == 400
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": "0900000123", "code": "12"}).status_code == 400
 
+    def test_sign_in_refuses_numbers_outside_france(self, inv_client, invitation_app):
+        """Codes leave through a French gateway, so a foreign number is turned away with no SMS."""
+        sent_before = len(invitation_app._sms.sent)
+        for foreign in ("+84912345678", "0084912345678", "+442079460958"):
+            resp = inv_client.post("/api/v1/auth/otp/request", json={"phone": foreign})
+            assert resp.status_code == 400, (foreign, resp.get_json())
+            verify = inv_client.post("/api/v1/auth/otp/verify", json={"phone": foreign, "code": "123456"})
+            assert verify.status_code == 400, (foreign, verify.get_json())
+        assert len(invitation_app._sms.sent) == sent_before
+
     def test_resend_is_throttled(self, inv_client, invitation_app, member_with_phone):
         first = inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE})
         assert first.status_code == 202
