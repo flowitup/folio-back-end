@@ -369,3 +369,205 @@ class TestDirectoryScoping:
 
         resp_member = members_client.get(f"/api/v1/companies/{company_a}/persons", headers=_auth(member_token))
         assert resp_member.status_code == 403
+
+
+def _make_labor_role(app, *, company_id: str | None, name: str) -> str:
+    """A labor role owned by `company_id` (None = the legacy unscoped kind)."""
+    from app import db
+    from app.infrastructure.database.models.labor_role import LaborRoleModel
+
+    with app.app_context():
+        role = LaborRoleModel(
+            id=uuid4(),
+            company_id=company_id,
+            name=name,
+            color="#123456",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.session.add(role)
+        db.session.commit()
+        return role.id
+
+
+def _read_profile(app, company_id: str, person_id: str):
+    from app import db
+
+    with app.app_context():
+        return db.session.query(CompanyPersonModel).filter_by(company_id=company_id, person_id=person_id).one_or_none()
+
+
+class TestUpdateMemberPayDefaults:
+    """PATCH /companies/<id>/members/<person_id> — the only writer of the pay
+    defaults a new project Worker inherits (`default_daily_rate`,
+    `labor_role_id`). Before it, only the one-off backfill ever set them."""
+
+    def test_admin_sets_rate_and_role_and_the_directory_shows_them(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin1@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 1")
+        person_id = _make_person(members_app, name="Pay One", phone_normalized="+33622220001")
+        _link_person_to_company(members_app, company_id, person_id, pending=False)
+        role_id = _make_labor_role(members_app, company_id=company_id, name="Thợ chính")
+        token = _login(members_client, "pay_admin1@test.com")
+
+        resp = members_client.patch(
+            f"/api/v1/companies/{company_id}/members/{person_id}",
+            json={"default_daily_rate": 145.5, "labor_role_id": str(role_id)},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["default_daily_rate"] == 145.5
+        assert body["labor_role_id"] == str(role_id)
+
+        profile = _read_profile(members_app, company_id, person_id)
+        assert float(profile.default_daily_rate) == 145.5
+        assert str(profile.labor_role_id) == str(role_id)
+
+        # The directory is where every client reads these back.
+        listed = members_client.get(f"/api/v1/companies/{company_id}/persons", headers=_auth(token))
+        entry = next(i for i in listed.get_json()["items"] if i["person_id"] == str(person_id))
+        assert entry["default_daily_rate"] == 145.5
+        assert entry["labor_role_id"] == str(role_id)
+
+    def test_omitted_field_is_kept_while_explicit_null_clears_it(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin2@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 2")
+        person_id = _make_person(members_app, name="Pay Two", phone_normalized="+33622220002")
+        _link_person_to_company(members_app, company_id, person_id, pending=False)
+        role_id = _make_labor_role(members_app, company_id=company_id, name="Thợ phụ")
+        token = _login(members_client, "pay_admin2@test.com")
+        url = f"/api/v1/companies/{company_id}/members/{person_id}"
+
+        members_client.patch(url, json={"default_daily_rate": 120, "labor_role_id": str(role_id)}, headers=_auth(token))
+
+        # Only the rate is in the body: the role must survive untouched.
+        resp = members_client.patch(url, json={"default_daily_rate": 130}, headers=_auth(token))
+        assert resp.status_code == 200
+        assert resp.get_json()["labor_role_id"] == str(role_id)
+
+        # An explicit null is a different request: it clears.
+        resp = members_client.patch(url, json={"labor_role_id": None}, headers=_auth(token))
+        assert resp.status_code == 200
+        assert resp.get_json()["labor_role_id"] is None
+        assert resp.get_json()["default_daily_rate"] == 130.0
+
+        resp = members_client.patch(url, json={"default_daily_rate": None}, headers=_auth(token))
+        assert resp.status_code == 200
+        assert resp.get_json()["default_daily_rate"] is None
+
+        # An empty body touches nothing rather than wiping the row.
+        profile_before = _read_profile(members_app, company_id, person_id)
+        assert members_client.patch(url, json={}, headers=_auth(token)).status_code == 200
+        profile_after = _read_profile(members_app, company_id, person_id)
+        assert profile_after.default_daily_rate == profile_before.default_daily_rate
+        assert profile_after.labor_role_id == profile_before.labor_role_id
+
+    def test_manager_may_write_member_may_not(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin3@test.com")
+        manager_id = _make_user(members_app, "pay_manager3@test.com")
+        plain_id = _make_user(members_app, "pay_member3@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 3")
+        person_id = _make_person(members_app, name="Pay Three", phone_normalized="+33622220003")
+        _link_person_to_company(members_app, company_id, person_id, pending=False)
+
+        from app import db
+
+        now = datetime.now(timezone.utc)
+        with members_app.app_context():
+            db.session.add_all(
+                [
+                    UserCompanyAccessModel(
+                        user_id=manager_id, company_id=company_id, role="manager", is_primary=True, attached_at=now
+                    ),
+                    UserCompanyAccessModel(
+                        user_id=plain_id, company_id=company_id, role="member", is_primary=True, attached_at=now
+                    ),
+                ]
+            )
+            db.session.commit()
+
+        url = f"/api/v1/companies/{company_id}/members/{person_id}"
+
+        manager = members_client.patch(
+            url, json={"default_daily_rate": 99}, headers=_auth(_login(members_client, "pay_manager3@test.com"))
+        )
+        assert manager.status_code == 200, manager.get_data(as_text=True)
+
+        member = members_client.patch(
+            url, json={"default_daily_rate": 1}, headers=_auth(_login(members_client, "pay_member3@test.com"))
+        )
+        assert member.status_code == 403
+        # The refused write left the manager's value alone.
+        assert float(_read_profile(members_app, company_id, person_id).default_daily_rate) == 99.0
+
+    def test_rejects_a_labor_role_owned_by_another_company(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin4@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 4")
+        other_company_id = _make_company(members_app, admin_id, name="Pay Co 4 Other")
+        person_id = _make_person(members_app, name="Pay Four", phone_normalized="+33622220004")
+        _link_person_to_company(members_app, company_id, person_id, pending=False)
+        foreign_role = _make_labor_role(members_app, company_id=other_company_id, name="Foreign Role")
+        legacy_role = _make_labor_role(members_app, company_id=None, name="Legacy Role")
+        token = _login(members_client, "pay_admin4@test.com")
+        url = f"/api/v1/companies/{company_id}/members/{person_id}"
+
+        foreign = members_client.patch(url, json={"labor_role_id": str(foreign_role)}, headers=_auth(token))
+        assert foreign.status_code == 400
+        assert foreign.get_json()["error"] == "InvalidInput"
+
+        # A legacy unscoped role belongs to no company's list either.
+        legacy = members_client.patch(url, json={"labor_role_id": str(legacy_role)}, headers=_auth(token))
+        assert legacy.status_code == 400
+
+        unknown = members_client.patch(url, json={"labor_role_id": str(uuid4())}, headers=_auth(token))
+        assert unknown.status_code == 400
+
+        assert _read_profile(members_app, company_id, person_id).labor_role_id is None
+
+    def test_404_for_a_person_who_is_not_a_member_or_was_booted(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin5@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 5")
+        stranger_id = _make_person(members_app, name="Pay Stranger", phone_normalized="+33622220005")
+        booted_id = _make_person(members_app, name="Pay Booted", phone_normalized="+33622220006")
+        _link_person_to_company(members_app, company_id, booted_id, pending=False)
+        token = _login(members_client, "pay_admin5@test.com")
+
+        from app import db
+
+        with members_app.app_context():
+            row = db.session.query(CompanyPersonModel).filter_by(company_id=company_id, person_id=booted_id).one()
+            row.is_active = False
+            db.session.commit()
+
+        stranger = members_client.patch(
+            f"/api/v1/companies/{company_id}/members/{stranger_id}",
+            json={"default_daily_rate": 100},
+            headers=_auth(token),
+        )
+        assert stranger.status_code == 404
+
+        booted = members_client.patch(
+            f"/api/v1/companies/{company_id}/members/{booted_id}",
+            json={"default_daily_rate": 100},
+            headers=_auth(token),
+        )
+        assert booted.status_code == 404
+        assert _read_profile(members_app, company_id, booted_id).default_daily_rate is None
+
+    def test_rejects_a_non_positive_or_oversized_rate(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin6@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 6")
+        person_id = _make_person(members_app, name="Pay Six", phone_normalized="+33622220007")
+        _link_person_to_company(members_app, company_id, person_id, pending=False)
+        token = _login(members_client, "pay_admin6@test.com")
+        url = f"/api/v1/companies/{company_id}/members/{person_id}"
+
+        for bad in (0, -5, 100000000):
+            resp = members_client.patch(url, json={"default_daily_rate": bad}, headers=_auth(token))
+            assert resp.status_code == 422, f"rate {bad} should be refused: {resp.get_data(as_text=True)}"
+
+        # Unknown keys are refused too (strict schema), so a typo cannot silently no-op.
+        typo = members_client.patch(url, json={"daily_rate": 120}, headers=_auth(token))
+        assert typo.status_code == 422
+
+        assert _read_profile(members_app, company_id, person_id).default_daily_rate is None

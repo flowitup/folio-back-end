@@ -202,3 +202,41 @@ class TestWorkerFromPerson:
             headers=_auth(token),
         )
         assert resp.status_code == 400
+
+
+class TestRateSetThroughTheApiIsInherited:
+    """Closes the loop the pay-defaults endpoint exists for: a rate typed once
+    at company level is what the next project's worker costs, with no rate in
+    the create-worker body at all."""
+
+    def test_patched_company_rate_becomes_the_new_workers_rate(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_inherit1@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        # No rate on the profile: exactly the state every person onboarded
+        # through POST /companies/<id>/members starts in.
+        person_id = _make_company_person(
+            wfp_app, company_id, name="Inherit Person", phone="+33611119101", default_daily_rate=None
+        )
+        token = _login(wfp_client, "wfp_inherit1@test.com")
+
+        without_rate = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id)},
+            headers=_auth(token),
+        )
+        assert without_rate.status_code == 400, "a profile with no rate cannot price a worker on its own"
+
+        patched = wfp_client.patch(
+            f"/api/v1/companies/{company_id}/members/{person_id}",
+            json={"default_daily_rate": 175.5},
+            headers=_auth(token),
+        )
+        assert patched.status_code == 200, patched.get_data(as_text=True)
+
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"person_id": str(person_id)},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["daily_rate"] == 175.5

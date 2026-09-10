@@ -72,3 +72,30 @@ class SourceCompanyNotAccessibleError(CompanyPersonsError):
     def __init__(self, company_id: UUID) -> None:
         self.company_id = company_id
         super().__init__(f"Caller is not admin of source company {company_id}")
+
+
+class CompanyPersonNotFoundError(CompanyPersonsError):
+    """Raised when (company_id, person_id) has no active directory profile.
+
+    A deactivated (booted) profile is reported the same way: it is no longer a
+    member of this company, so its pay defaults are not editable either.
+    """
+
+    def __init__(self, company_id: UUID, person_id: UUID) -> None:
+        self.company_id = company_id
+        self.person_id = person_id
+        super().__init__(f"Person {person_id} is not a member of company {company_id}")
+
+
+class LaborRoleNotInCompanyError(CompanyPersonsError):
+    """Raised when a caller assigns a `labor_role_id` this company does not own.
+
+    Labor roles are company-scoped (`labor_roles.company_id`), so one company
+    must never be able to pin its people to another company's role. Unknown ids
+    and legacy unscoped rows (company_id NULL) are rejected the same way.
+    """
+
+    def __init__(self, company_id: UUID, labor_role_id: UUID) -> None:
+        self.company_id = company_id
+        self.labor_role_id = labor_role_id
+        super().__init__(f"Labor role {labor_role_id} does not belong to company {company_id}")

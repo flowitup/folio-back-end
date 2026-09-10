@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from decimal import Decimal
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -181,6 +182,22 @@ class AddMemberByPhoneRequest(_StrictBase):
     # (AdminRoleNotAssignableError), not a 422 schema error.
     role: str = Field(default="member", min_length=1, max_length=20)
     person_id: Optional[UUID] = None
+
+
+class UpdateMemberPayDefaultsRequest(_StrictBase):
+    """Request body for PATCH /companies/<id>/members/<person_id>.
+
+    Both fields are optional and nullable, and the two cases are NOT the same:
+    an absent key leaves the stored value untouched, while an explicit ``null``
+    clears it. The route reads ``model_fields_set`` to tell them apart, so the
+    default here is only what an absent key deserializes to.
+    """
+
+    # Numeric(10, 2) on the column: 8 integer digits, 2 decimals. A rate of 0
+    # is rejected rather than stored — "free" is not a default worth inheriting,
+    # and CreateWorkerUseCase would refuse it anyway.
+    default_daily_rate: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999999.99"))
+    labor_role_id: Optional[UUID] = None
 
 
 class ImportMembersRequest(_StrictBase):

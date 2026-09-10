@@ -81,3 +81,31 @@ class DirectoryEntry:
 @dataclass(frozen=True)
 class ListDirectoryResult:
     items: List[DirectoryEntry]
+
+
+@dataclass(frozen=True)
+class UpdateMemberPayDefaultsInput:
+    """Input for UpdateMemberPayDefaultsUseCase (PATCH /companies/<id>/members/<person_id>).
+
+    PATCH semantics: a field is written only when its `set_*` flag is True, so
+    an absent key leaves the stored value alone while an explicit ``null``
+    clears it. Without the flags the two cases would be indistinguishable here
+    and clearing a rate would be impossible.
+    """
+
+    caller_id: UUID
+    company_id: UUID
+    person_id: UUID
+    default_daily_rate: Optional[Decimal] = None
+    labor_role_id: Optional[UUID] = None
+    set_default_daily_rate: bool = False
+    set_labor_role_id: bool = False
+
+
+@dataclass(frozen=True)
+class MemberPayDefaults:
+    """The stored pay defaults after an update."""
+
+    person_id: UUID
+    default_daily_rate: Optional[Decimal]
+    labor_role_id: Optional[UUID]

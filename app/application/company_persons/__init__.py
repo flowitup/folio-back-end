@@ -12,6 +12,7 @@ from app.application.company_persons.ports import CompanyPersonRepositoryPort
 from app.application.company_persons.add_member_by_phone_usecase import AddMemberByPhoneUseCase
 from app.application.company_persons.import_members_usecase import ImportMembersUseCase
 from app.application.company_persons.list_directory_usecase import ListDirectoryUseCase
+from app.application.company_persons.update_member_pay_defaults_usecase import UpdateMemberPayDefaultsUseCase
 from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
 from app.application.company_persons.dtos import (
     AddMemberByPhoneInput,
@@ -21,6 +22,8 @@ from app.application.company_persons.dtos import (
     ImportedMember,
     ListDirectoryResult,
     DirectoryEntry,
+    UpdateMemberPayDefaultsInput,
+    MemberPayDefaults,
 )
 from app.application.company_persons.exceptions import (
     CompanyPersonsError,
@@ -29,6 +32,8 @@ from app.application.company_persons.exceptions import (
     MemberAlreadyAttachedError,
     InvalidCandidatePersonError,
     SourceCompanyNotAccessibleError,
+    CompanyPersonNotFoundError,
+    LaborRoleNotInCompanyError,
 )
 
 __all__ = [
@@ -36,6 +41,7 @@ __all__ = [
     "AddMemberByPhoneUseCase",
     "ImportMembersUseCase",
     "ListDirectoryUseCase",
+    "UpdateMemberPayDefaultsUseCase",
     "LinkPersonOnSignupUseCase",
     "AddMemberByPhoneInput",
     "AddMemberByPhoneResult",
@@ -44,10 +50,14 @@ __all__ = [
     "ImportedMember",
     "ListDirectoryResult",
     "DirectoryEntry",
+    "UpdateMemberPayDefaultsInput",
+    "MemberPayDefaults",
     "CompanyPersonsError",
     "AdminRoleNotAssignableError",
     "MultipleCandidatesError",
     "MemberAlreadyAttachedError",
     "InvalidCandidatePersonError",
     "SourceCompanyNotAccessibleError",
+    "CompanyPersonNotFoundError",
+    "LaborRoleNotInCompanyError",
 ]
