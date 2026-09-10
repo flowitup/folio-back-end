@@ -1515,6 +1515,15 @@ def _configure_di_container() -> None:
             rate_change_repo=_rate_change_repo,
         )
 
+    # The export holds its OWN entry lister, built in configure_container() before the
+    # rate repo existed, so re-wiring the container's copy above does not reach it.
+    # Without this the exported day costs stay on each worker's base rate while every
+    # other view honors the timeline. The rate repo also feeds the export header rate.
+    if _c.export_labor_usecase is not None:
+        if _c.list_labor_entries_usecase is not None:
+            _c.export_labor_usecase._list_entries_usecase = _c.list_labor_entries_usecase
+        _c.export_labor_usecase._rate_change_repo = _rate_change_repo
+
     # Re-wire list_workers_usecase with the rate-change repo so the worker list
     # returns current_daily_rate resolved from the effective-dated timeline.
     if _c.worker_repository is not None:
