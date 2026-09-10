@@ -337,13 +337,35 @@ jobs:
         id: check-tag
         run: |
           TAG="${{ steps.get-version.outputs.tag }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag $TAG already exists, skipping release"
-          else
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Tag $TAG does not exist, will create release"
+            exit 0
           fi
+
+          # The tag exists, and two very different situations hide behind that:
+          #
+          #   * it points at THIS commit — a re-run, or a re-push of an already
+          #     released commit. Doing nothing is exactly right.
+          #   * it points at a DIFFERENT commit — two pull requests bumped to the
+          #     same version before either merged (version-bump runs per PR, off
+          #     whatever master read at the time), so whichever landed second is
+          #     now on master carrying a version that is already spoken for.
+          #     Skipping quietly there strands it: no tag, no release, no
+          #     dispatch to the parent, and a green run reporting all is well.
+          #     That is how #163 reached master and never reached production.
+          #
+          # Only the first is a skip. The second fails, because the alternative
+          # is a change that sits on master and silently never ships.
+          TAGGED_SHA=$(git rev-list -n 1 "$TAG")
+          if [ "$TAGGED_SHA" = "$GITHUB_SHA" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already points at this commit — released already, nothing to do"
+            exit 0
+          fi
+
+          echo "::error title=Version already released::$TAG exists on ${TAGGED_SHA:0:7} but master is at ${GITHUB_SHA:0:7}. This commit will never be released. Bump version in pyproject.toml on master to ship it."
+          exit 1
 
       - name: Create tag
         if: steps.check-tag.outputs.exists == 'false'
