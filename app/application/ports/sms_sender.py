@@ -1,4 +1,4 @@
-"""Outbound SMS port. Adapters: logging (dev/test) and Twilio (production)."""
+"""Outbound SMS port. Adapters: logging (dev/test), Twilio and the Android SMS gateway (production)."""
 
 from __future__ import annotations
 

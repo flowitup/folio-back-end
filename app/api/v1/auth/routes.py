@@ -16,6 +16,8 @@ from flask_jwt_extended import (
 )
 from pydantic import ValidationError
 
+from app.api._helpers.profile_fields import apply_profile_fields
+from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
@@ -29,6 +31,7 @@ from app.api.v1.auth.schemas import (
     RefreshResponse,
     SignupRequestBody,
     SignupVerifyBody,
+    UpdateMeRequest,
     UserResponse,
     UserCompanySummary,
     ErrorResponse,
@@ -364,25 +367,64 @@ def get_current_user():
     if not user:
         return jsonify(ErrorResponse(error="NotFound", message="User not found", status_code=404).model_dump()), 404
 
-    # Resolved fresh on every call (never read from the token) so a role, grant
-    # or ops change applies without re-login — clients refresh this on focus.
-    # Scope: the caller's PRIMARY company (union when they have none). It is a
-    # UI hint — a manager assigned to one project advertises the manager set
-    # company-wide, and a second company is not represented — so clients gate
-    # project screens on `project.my_permissions`, never on this list.
-    permissions = sorted(container.authorization_service.get_user_permissions(UUID(user_id)))
+    return jsonify(_me_payload(container, user).model_dump())
 
-    return jsonify(
-        UserResponse(
-            id=user.id,
-            email=user.email,
-            display_name=user.display_name,
-            permissions=permissions,
-            phone=user.phone,
-            companies=_user_companies(container, UUID(user_id)),
-            is_platform_ops=bool(user.is_platform_ops),
-        ).model_dump()
+
+def _me_payload(container: Any, user: Any) -> UserResponse:
+    """The /auth/me representation, shared by GET and PATCH.
+
+    Permissions are resolved fresh on every call (never read from the token) so a role, grant
+    or ops change applies without re-login — clients refresh this on focus.
+    Scope: the caller's PRIMARY company (union when they have none). It is a
+    UI hint — a manager assigned to one project advertises the manager set
+    company-wide, and a second company is not represented — so clients gate
+    project screens on `project.my_permissions`, never on this list.
+    """
+    permissions = sorted(container.authorization_service.get_user_permissions(user.id))
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        permissions=permissions,
+        phone=user.phone,
+        companies=_user_companies(container, user.id),
+        is_platform_ops=bool(user.is_platform_ops),
     )
+
+
+@auth_bp.route("/me", methods=["PATCH"])
+@openapi_doc(
+    summary="Update the current user's display name and/or phone",
+    request=UpdateMeRequest,
+    responses={200: UserResponse},
+    tags=["auth"],
+)
+@jwt_required()
+@limiter.limit("20 per hour", key_func=jwt_user_key)
+def update_current_user():
+    """Self-service profile edit (Settings › Profile). The phone becomes the sign-in identity."""
+    try:
+        data = UpdateMeRequest(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: display_name, phone")
+    provided = data.model_dump(exclude_unset=True)
+    if not provided:
+        return _error(400, "BadRequest", "No fields to update")
+
+    container = get_container()
+    user = container.user_repository.find_by_id(UUID(get_jwt_identity()))
+    if not user:
+        return _error(404, "NotFound", "User not found")
+
+    profile_error = apply_profile_fields(user, provided, container.user_repository)
+    if profile_error is not None:
+        return _error(*profile_error)
+
+    container.user_repository.save(user)
+    from app import db
+
+    db.session.commit()
+    return jsonify(_me_payload(container, user).model_dump())
 
 
 @auth_bp.route("/signup/request", methods=["POST"])

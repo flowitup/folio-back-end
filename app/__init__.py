@@ -420,7 +420,7 @@ def _configure_di_container() -> None:
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
 
-    # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio).
+    # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio | gateway).
     from app.application.usecases.otp_login import (
         RequestOtpUseCase,
         RequestSignupOtpUseCase,
@@ -428,6 +428,7 @@ def _configure_di_container() -> None:
         VerifySignupOtpUseCase,
     )
     from app.infrastructure.adapters.logging_sms_sender import LoggingSmsSender
+    from app.infrastructure.adapters.sms_gateway_sender import SmsGatewaySender
     from app.infrastructure.adapters.sqlalchemy_login_otp import SQLAlchemyLoginOtpRepository
     from app.infrastructure.adapters.twilio_sms_sender import TwilioSmsSender
 
@@ -435,6 +436,10 @@ def _configure_di_container() -> None:
     if _cfg.get("SMS_PROVIDER") == "twilio":
         _sms: Any = TwilioSmsSender(
             _cfg.get("TWILIO_ACCOUNT_SID", ""), _cfg.get("TWILIO_AUTH_TOKEN", ""), _cfg.get("TWILIO_FROM", "Folio")
+        )
+    elif _cfg.get("SMS_PROVIDER") == "gateway":
+        _sms = SmsGatewaySender(
+            _cfg.get("SMS_GATEWAY_URL", ""), _cfg.get("SMS_GATEWAY_USERNAME", ""), _cfg.get("SMS_GATEWAY_PASSWORD", "")
         )
     else:
         _sms = LoggingSmsSender()
