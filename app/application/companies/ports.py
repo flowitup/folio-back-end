@@ -14,7 +14,6 @@ from typing import Any, Optional, Protocol
 from uuid import UUID
 
 from app.domain.companies.company import Company
-from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.user_company_access import UserCompanyAccess
 
 
@@ -89,78 +88,6 @@ class UserCompanyAccessRepositoryPort(Protocol):
         Used inside a transaction by SetPrimaryCompanyUseCase to guarantee
         at most one primary per user atomically.
         """
-        ...
-
-
-class CompanyInviteTokenRepositoryPort(Protocol):
-    """Persistence contract for CompanyInviteToken records."""
-
-    def find_active_for_company(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the single unredeemed token for a company, or None.
-
-        Does not filter by expiry here — expiry check is the use-case responsibility.
-        """
-        ...
-
-    def find_active_for_company_for_update(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the single unredeemed token for a company with SELECT FOR UPDATE, or None.
-
-        M1: used by GenerateInviteTokenUseCase (regenerate=True path) to serialise
-        concurrent admin calls and prevent the partial-unique IntegrityError 500.
-        Does not filter by expiry.
-        """
-        ...
-
-    def find_by_id_for_update(self, token_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the token with SELECT FOR UPDATE lock, or None."""
-        ...
-
-    def list_active(self) -> list[CompanyInviteToken]:
-        """Return all active (unredeemed + non-expired) tokens.
-
-        Used by RedeemInviteTokenUseCase to verify plaintext against stored
-        argon2 hashes. Bounded by a DOS guard (N ≤ 1000) in the use-case.
-        """
-        ...
-
-    def save(self, token: CompanyInviteToken) -> CompanyInviteToken:
-        """Insert or update a token row. Returns the persisted instance."""
-        ...
-
-    def delete(self, token_id: UUID) -> None:
-        """Hard-delete a token row by UUID."""
-        ...
-
-
-class Argon2HasherPort(Protocol):
-    """Port for argon2 hashing and constant-time verification.
-
-    User sign-in has no password any more (phone + SMS code only), so this is
-    now the only hashing protocol in the codebase — it exists here, scoped to
-    the companies layer, for hashing company invite tokens.
-    """
-
-    def hash(self, plaintext: str) -> str:
-        """Hash a plaintext string. Returns an argon2 encoded hash string."""
-        ...
-
-    def verify(self, plaintext: str, hashed: str) -> bool:
-        """Verify plaintext against an argon2 hash in constant time.
-
-        Returns True on match, False otherwise. Never raises on mismatch.
-        """
-        ...
-
-
-class SecureTokenGeneratorPort(Protocol):
-    """Port for cryptographically-secure opaque token generation.
-
-    The production adapter wraps secrets.token_urlsafe(byte_length).
-    Test adapters can return deterministic strings.
-    """
-
-    def generate(self, byte_length: int = 32) -> str:
-        """Return a base64url-encoded string of *byte_length* random bytes."""
         ...
 
 

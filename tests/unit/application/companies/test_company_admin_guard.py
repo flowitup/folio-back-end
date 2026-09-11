@@ -23,13 +23,11 @@ import pytest
 from app.domain.companies.exceptions import ForbiddenCompanyError
 from tests.unit.application.companies.conftest import (
     FakeRoleService,
-    InMemoryCompanyInviteTokenRepository,
     InMemoryCompanyRepository,
     InMemoryUserCompanyAccessRepository,
     _FakeSession,
     make_access,
     make_company,
-    make_token,
 )
 from tests.unit.application.payment_methods.conftest import (
     InMemoryPaymentMethodRepository,
@@ -66,7 +64,6 @@ def ctx():
         company_b=company_b,
         company_repo=company_repo,
         access_repo=access_repo,
-        token_repo=InMemoryCompanyInviteTokenRepository(),
         pm_repo=InMemoryPaymentMethodRepository(),
         role_service=role_service,
         session=_FakeSession(),
@@ -121,34 +118,6 @@ def _run_boot_attached_user(ctx, caller_id):
         BootAttachedUserInput(caller_id=caller_id, company_id=ctx.company_b.id, target_user_id=ctx.member_b_id),
         ctx.session,
     )
-
-
-def _run_generate_invite_token(ctx, caller_id):
-    from app.application.companies.dtos import GenerateInviteTokenInput
-    from app.application.companies.generate_invite_token_usecase import GenerateInviteTokenUseCase
-    from tests.unit.application.companies.conftest import FakeArgon2Hasher, FakeClock, FakeSecureTokenGenerator
-
-    usecase = GenerateInviteTokenUseCase(
-        company_repo=ctx.company_repo,
-        token_repo=ctx.token_repo,
-        hasher=FakeArgon2Hasher(),
-        token_generator=FakeSecureTokenGenerator(),
-        clock=FakeClock(),
-        role_checker=ctx.role_service,
-    )
-    usecase.execute(GenerateInviteTokenInput(company_id=ctx.company_b.id, caller_id=caller_id), ctx.session)
-
-
-def _run_revoke_invite_token(ctx, caller_id):
-    from app.application.companies.revoke_invite_token_usecase import RevokeInviteTokenUseCase
-
-    # Seed an active token so the same-company (success) path has something
-    # to revoke — the guard runs before this lookup either way.
-    ctx.token_repo.save(make_token(ctx.company_b.id, created_by=ctx.admin_b_id))
-    usecase = RevokeInviteTokenUseCase(
-        company_repo=ctx.company_repo, token_repo=ctx.token_repo, role_checker=ctx.role_service
-    )
-    usecase.execute(caller_id, ctx.company_b.id, ctx.session)
 
 
 def _run_set_join_code(ctx, caller_id):
@@ -209,8 +178,6 @@ _SCENARIOS = [
     pytest.param(_run_list_attached_users, id="list_attached_users"),
     pytest.param(_run_set_member_role, id="set_member_role"),
     pytest.param(_run_boot_attached_user, id="boot_attached_user"),
-    pytest.param(_run_generate_invite_token, id="generate_invite_token"),
-    pytest.param(_run_revoke_invite_token, id="revoke_invite_token"),
     pytest.param(_run_set_join_code, id="set_join_code"),
     pytest.param(_run_revoke_join_code, id="revoke_join_code"),
     pytest.param(_run_create_payment_method, id="create_payment_method"),

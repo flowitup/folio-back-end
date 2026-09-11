@@ -1,10 +1,8 @@
-"""Companies API routes — 12 endpoints.
+"""Companies API routes — 13 endpoints.
 
 Decorator order (MANDATORY): @jwt_required() BEFORE @limiter.limit(...) BEFORE role checks.
 
 Security notes:
-  - Token redeem (attach-by-token) returns uniform 410 with reason discriminator
-    regardless of failure mode; does NOT differentiate wrong/expired/redeemed.
   - GET /companies/<id> returns 404 (not 403) for non-attached callers.
 """
 
@@ -30,7 +28,6 @@ from app.api.v1.companies.schemas import (
     JoinCompanyRequest,
     JoinCodeResponse,
     CreateCompanyRequest,
-    RedeemInviteTokenRequest,
     SetPrimaryCompanyRequest,
     UpdateCompanyRequest,
 )
@@ -39,23 +36,16 @@ from app.application.companies import (
     CompanyResponse,
     CreateCompanyInput,
     DetachCompanyInput,
-    GenerateInviteTokenInput,
     GetCompanyInput,
     ListAllCompaniesInput,
     ListAttachedUsersInput,
-    RedeemInviteTokenInput,
     SetMemberRoleInput,
     SetPrimaryCompanyInput,
     UpdateCompanyInput,
-    ActiveInviteTokenAlreadyExistsError,
     CompanyAlreadyAttachedError,
     CompanyHasProjectsError,
     CompanyNotFoundError,
     ForbiddenCompanyError,
-    InviteTokenAlreadyRedeemedError,
-    InviteTokenExpiredError,
-    InviteTokenNotFoundError,
-    InviteTokenSystemOverloadError,
     LastCompanyAdminError,
     MissingPrimaryCompanyError,
     UserCompanyAccessNotFoundError,
@@ -324,200 +314,6 @@ def delete_company(company_id: str):
         )
 
     return "", 204
-
-
-# ---------------------------------------------------------------------------
-# POST /companies/<company_id>/invite-tokens — generate invite token (admin)
-# ---------------------------------------------------------------------------
-
-
-@companies_bp.route("/companies/<company_id>/invite-tokens", methods=["POST"])
-@openapi_doc(summary="Generate an invite token for a company (admin only)", tags=["companies"])
-@jwt_required()
-@limiter.limit("10 per minute", key_func=jwt_user_key)
-@require_company_role("admin")
-def generate_invite_token(company_id: str):
-    """Generate an invite token for a company (company admin or platform admin).
-
-    ?regenerate=true atomically deletes the existing active token and creates a new one.
-    Without the flag, returns 409 if an active token already exists.
-    """
-    try:
-        company_uuid = UUID(company_id)
-    except ValueError:
-        return _err("NotFound", f"Company {company_id} not found", 404)
-
-    regenerate_str = request.args.get("regenerate", "false").lower()
-    regenerate = regenerate_str in ("1", "true", "yes")
-
-    # Optional per-company role to grant on redemption (admin | member; default member).
-    body = request.get_json(force=True, silent=True) or {}
-    role = body.get("role", "member")
-
-    caller_id = UUID(get_jwt_identity())
-    inp = GenerateInviteTokenInput(
-        company_id=company_uuid,
-        caller_id=caller_id,
-        regenerate=regenerate,
-        role=role,
-    )
-
-    from app import db
-
-    try:
-        result = get_container().generate_invite_token_usecase.execute(inp, db.session)
-    except ValueError as exc:
-        return _err("ValidationError", str(exc), 400)
-    except CompanyNotFoundError:
-        return _err("NotFound", f"Company {company_id} not found", 404)
-    except ForbiddenCompanyError:
-        return _err("Forbidden", "Admin permission required", 403)
-    except ActiveInviteTokenAlreadyExistsError:
-        return (
-            jsonify(
-                {
-                    "error": "Conflict",
-                    "message": "An active invite token already exists. Use ?regenerate=true to replace it.",
-                    "reason": "active_token_exists",
-                }
-            ),
-            409,
-        )
-    except IntegrityError:
-        # H1: concurrent regenerate race — partial-unique index fired; safe to retry
-        return (
-            jsonify(
-                {
-                    "error": "Conflict",
-                    "message": "Concurrent token regeneration detected. Please retry.",
-                    "reason": "concurrent_regenerate",
-                }
-            ),
-            409,
-        )
-
-    return (
-        jsonify(
-            {
-                "token": result.plaintext_token,
-                "token_id": str(result.token_id),
-                "expires_at": result.expires_at.isoformat(),
-            }
-        ),
-        201,
-    )
-
-
-# ---------------------------------------------------------------------------
-# DELETE /companies/<company_id>/invite-tokens/active — revoke invite token (admin)
-# ---------------------------------------------------------------------------
-
-
-@companies_bp.route("/companies/<company_id>/invite-tokens/active", methods=["DELETE"])
-@openapi_doc(summary="Revoke the active invite token for a company (admin only)", tags=["companies"])
-@jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
-@require_company_role("admin")
-def revoke_invite_token(company_id: str):
-    """Revoke the active invite token for a company (company admin or platform admin)."""
-    try:
-        company_uuid = UUID(company_id)
-    except ValueError:
-        return _err("NotFound", f"Company {company_id} not found", 404)
-
-    caller_id = UUID(get_jwt_identity())
-
-    from app import db
-
-    try:
-        get_container().revoke_invite_token_usecase.execute(caller_id, company_uuid, db.session)
-    except CompanyNotFoundError:
-        return _err("NotFound", f"Company {company_id} not found", 404)
-    except InviteTokenNotFoundError:
-        return _err("NotFound", "No active invite token found for this company", 404)
-    except ForbiddenCompanyError:
-        return _err("Forbidden", "Admin permission required", 403)
-
-    return "", 204
-
-
-# ---------------------------------------------------------------------------
-# POST /companies/attach-by-token — redeem invite token (jwt)
-# ---------------------------------------------------------------------------
-
-
-@companies_bp.route("/companies/attach-by-token", methods=["POST"])
-@openapi_doc(
-    summary="Attach the caller to a company by redeeming an invite token",
-    request=RedeemInviteTokenRequest,
-    tags=["companies"],
-)
-@jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
-def redeem_invite_token():
-    """Attach the caller to a company by redeeming an invite token.
-
-    Security: uniform 410 with reason discriminator to avoid leaking whether a
-    token exists, is wrong, expired, or already redeemed. Wrong tokens (not found
-    after hashing) → 410 reason=invalid. Expired/already-redeemed → 410 with
-    specific reason. This prevents oracle attacks on token enumeration.
-    """
-    try:
-        body = RedeemInviteTokenRequest.model_validate(request.get_json(force=True) or {})
-    except ValidationError as exc:
-        return format_validation_error(exc)
-
-    caller_id = UUID(get_jwt_identity())
-    inp = RedeemInviteTokenInput(user_id=caller_id, plaintext_token=body.token)
-
-    from app import db
-
-    try:
-        get_container().redeem_invite_token_usecase.execute(inp, db.session)
-    except InviteTokenSystemOverloadError:
-        # H3: DOS guard fired — admin must clean up stale tokens first
-        return (
-            jsonify(
-                {
-                    "error": "ServiceUnavailable",
-                    "message": "Token redemption is temporarily unavailable. Contact your administrator.",
-                    "reason": "redeem_overloaded",
-                }
-            ),
-            503,
-        )
-    except InviteTokenNotFoundError:
-        # Token not found after argon2 match attempt — uniform 410
-        return jsonify({"error": "Gone", "reason": "invalid"}), 410
-    except InviteTokenExpiredError:
-        return jsonify({"error": "Gone", "reason": "expired"}), 410
-    except InviteTokenAlreadyRedeemedError:
-        return jsonify({"error": "Gone", "reason": "already_redeemed"}), 410
-    except CompanyAlreadyAttachedError:
-        return (
-            jsonify(
-                {
-                    "error": "Conflict",
-                    "message": "You are already attached to this company.",
-                    "reason": "already_attached",
-                }
-            ),
-            409,
-        )
-    except IntegrityError:
-        # H1: PK violation — concurrent attach via two tokens for same (user, company)
-        return (
-            jsonify(
-                {
-                    "error": "Conflict",
-                    "message": "You are already attached to this company.",
-                    "reason": "already_attached",
-                }
-            ),
-            409,
-        )
-
-    return jsonify({"status": "attached"}), 200
 
 
 # ---------------------------------------------------------------------------

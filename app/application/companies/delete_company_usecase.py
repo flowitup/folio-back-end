@@ -20,8 +20,7 @@ if TYPE_CHECKING:
 class DeleteCompanyUseCase:
     """Hard-delete a company (platform ops only).
 
-    The DB schema cascades deletion to user_company_access and
-    company_invite_tokens via ON DELETE CASCADE.
+    The DB schema cascades deletion to user_company_access via ON DELETE CASCADE.
 
     Billing documents with company_id FK use ON DELETE SET NULL so
     historical issuer snapshot data is never lost (the issuer_* columns

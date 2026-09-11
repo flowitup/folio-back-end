@@ -1,8 +1,8 @@
 """Serialization helpers for companies infrastructure layer.
 
-Converts between domain entities (Company, UserCompanyAccess, CompanyInviteToken)
-and their ORM model counterparts. Kept in one module so all three repositories
-share a single source of truth for field mapping.
+Converts between domain entities (Company, UserCompanyAccess) and their ORM
+model counterparts. Kept in one module so both repositories share a single
+source of truth for field mapping.
 """
 
 from __future__ import annotations
@@ -10,10 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.domain.companies.company import Company
-from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.infrastructure.database.models.company import CompanyModel
-from app.infrastructure.database.models.company_invite_token import CompanyInviteTokenModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
 
@@ -99,36 +97,3 @@ def serialize_access_to_orm(access: UserCompanyAccess, row: UserCompanyAccessMod
     row.is_primary = access.is_primary
     row.attached_at = access.attached_at
     row.role = access.role
-
-
-# ---------------------------------------------------------------------------
-# CompanyInviteToken
-# ---------------------------------------------------------------------------
-
-
-def deserialize_token_orm(row: CompanyInviteTokenModel) -> CompanyInviteToken:
-    """Map CompanyInviteTokenModel → CompanyInviteToken domain entity."""
-    return CompanyInviteToken(
-        id=row.id,
-        company_id=row.company_id,
-        token_hash=row.token_hash,
-        created_by=row.created_by,
-        created_at=_ensure_utc(row.created_at),
-        expires_at=_ensure_utc(row.expires_at),
-        redeemed_at=_ensure_utc(row.redeemed_at),
-        redeemed_by=row.redeemed_by,
-        role=row.role,
-    )
-
-
-def serialize_token_to_orm(token: CompanyInviteToken, row: CompanyInviteTokenModel) -> None:
-    """Write all mutable CompanyInviteToken fields onto an existing ORM row (in-place)."""
-    row.id = token.id
-    row.company_id = token.company_id
-    row.token_hash = token.token_hash
-    row.created_by = token.created_by
-    row.created_at = token.created_at
-    row.expires_at = token.expires_at
-    row.redeemed_at = token.redeemed_at
-    row.redeemed_by = token.redeemed_by
-    row.role = token.role

@@ -14,7 +14,6 @@ dependencies = [
     "gunicorn>=21.0.0",
     "sqlalchemy>=2.0.45",
     "flask-migrate>=4.1.0",
-    "argon2-cffi>=25.1.0",
     "psycopg2-binary>=2.9.11",
     "alembic>=1.18.1",
     "flask-jwt-extended>=4.7.1",

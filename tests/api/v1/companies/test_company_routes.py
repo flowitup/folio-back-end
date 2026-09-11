@@ -1,6 +1,6 @@
 """API integration tests for /api/v1/companies endpoints.
 
-Tests: CRUD, invite-token lifecycle, attach-by-token, masking, ownership isolation.
+Tests: CRUD, join code, masking, ownership isolation.
 Uses the invitation_app (module-scoped) + superadmin / member credentials.
 """
 
@@ -152,108 +152,6 @@ class TestUpdateCompany:
 
 
 # ---------------------------------------------------------------------------
-# Invite token lifecycle: generate → redeem → revoke
-# ---------------------------------------------------------------------------
-
-
-class TestInviteTokenLifecycle:
-    def test_generate_token_returns_201_with_token(self, inv_client, admin_token):
-        company = _make_company(inv_client, admin_token)
-        resp = inv_client.post(
-            f"/api/v1/companies/{company['id']}/invite-tokens",
-            json={},
-            headers=_auth(admin_token),
-        )
-        assert resp.status_code == 201
-        data = resp.get_json()
-        assert "token" in data
-        assert len(data["token"]) > 10
-
-    def test_redeem_valid_token_returns_200(self, inv_client, admin_token, member_token_co):
-        """Redeem a valid token → 200.
-
-        Redeemed by a DIFFERENT user than the creator: self-service company
-        creation (D6) auto-attaches the creator as admin, so the creator
-        redeeming their own invite token would correctly conflict
-        (CompanyAlreadyAttachedError) rather than exercise the happy path.
-        """
-        company = _make_company(inv_client, admin_token)
-        token_resp = inv_client.post(
-            f"/api/v1/companies/{company['id']}/invite-tokens",
-            json={},
-            headers=_auth(admin_token),
-        )
-        assert token_resp.status_code == 201
-        plaintext = token_resp.get_json()["token"]
-
-        resp = inv_client.post(
-            "/api/v1/companies/attach-by-token",
-            json={"token": plaintext},
-            headers=_auth(member_token_co),
-        )
-        assert resp.status_code == 200
-
-    def test_token_redeem_wrong_token_returns_410(self, inv_client, admin_token):
-        """Spec #11: invalid/wrong token → 410 (Gone) — uniform response."""
-        resp = inv_client.post(
-            "/api/v1/companies/attach-by-token",
-            json={"token": "completely-wrong-token-value"},
-            headers=_auth(admin_token),
-        )
-        assert resp.status_code == 410
-
-    def test_redeem_already_redeemed_token_returns_410(self, inv_client, admin_token, member_token_co):
-        """Spec #11: reusing a redeemed token returns 410 Gone.
-
-        First redeem by a DIFFERENT user than the creator (D6 self-service
-        auto-attaches the creator as admin — see test_redeem_valid_token_returns_200).
-        """
-        company = _make_company(inv_client, admin_token)
-        token_resp = inv_client.post(
-            f"/api/v1/companies/{company['id']}/invite-tokens",
-            json={},
-            headers=_auth(admin_token),
-        )
-        plaintext = token_resp.get_json()["token"]
-
-        # First redeem
-        first = inv_client.post(
-            "/api/v1/companies/attach-by-token",
-            json={"token": plaintext},
-            headers=_auth(member_token_co),
-        )
-        assert first.status_code == 200, first.get_data(as_text=True)
-
-        # Second redeem of same token → 410
-        resp = inv_client.post(
-            "/api/v1/companies/attach-by-token",
-            json={"token": plaintext},
-            headers=_auth(member_token_co),
-        )
-        assert resp.status_code == 410
-
-    def test_revoke_token_returns_204(self, inv_client, admin_token):
-        company = _make_company(inv_client, admin_token)
-        inv_client.post(
-            f"/api/v1/companies/{company['id']}/invite-tokens",
-            json={},
-            headers=_auth(admin_token),
-        )
-        resp = inv_client.delete(
-            f"/api/v1/companies/{company['id']}/invite-tokens/active",
-            headers=_auth(admin_token),
-        )
-        assert resp.status_code == 204
-
-    def test_generate_token_unauthenticated_returns_401(self, inv_client):
-        resp = inv_client.post(
-            f"/api/v1/companies/{uuid.uuid4()}/invite-tokens",
-            json={},
-        )
-        assert resp.status_code == 401
-
-
-# ---------------------------------------------------------------------------
 # GET /companies/me — list my companies
 # ---------------------------------------------------------------------------
 
@@ -298,20 +196,20 @@ class TestSensitiveFieldMasking:
         company = _make_company(inv_client, admin_token)
         company_id = company["id"]
 
-        # Generate + redeem invite token with member user
-        token_resp = inv_client.post(
-            f"/api/v1/companies/{company_id}/invite-tokens",
-            json={},
+        # Admin mints a join code, member attaches with it
+        code_resp = inv_client.post(
+            f"/api/v1/companies/{company_id}/join-code",
             headers=_auth(admin_token),
         )
-        assert token_resp.status_code == 201
-        plaintext = token_resp.get_json()["token"]
+        assert code_resp.status_code == 200
+        join_code = code_resp.get_json()["join_code"]
 
-        inv_client.post(
-            "/api/v1/companies/attach-by-token",
-            json={"token": plaintext},
+        join_resp = inv_client.post(
+            "/api/v1/companies/join",
+            json={"code": join_code},
             headers=_auth(member_token_co),
         )
+        assert join_resp.status_code == 200, join_resp.get_data(as_text=True)
 
         # Member fetches company — sensitive fields should be masked (not full value)
         resp = inv_client.get(

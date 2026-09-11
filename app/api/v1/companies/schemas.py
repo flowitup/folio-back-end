@@ -108,7 +108,7 @@ class UpdateCompanyRequest(_StrictBase):
 
 
 # ---------------------------------------------------------------------------
-# Invite token request schemas
+# Company membership request schemas (join code)
 # ---------------------------------------------------------------------------
 
 
@@ -144,12 +144,6 @@ class JoinCodeResponse(_StrictBase):
     """Response of POST /companies/<id>/join-code."""
 
     join_code: str
-
-
-class RedeemInviteTokenRequest(_StrictBase):
-    """Request body for POST /companies/attach-by-token."""
-
-    token: str = Field(..., min_length=1, max_length=512)
 
 
 # ---------------------------------------------------------------------------

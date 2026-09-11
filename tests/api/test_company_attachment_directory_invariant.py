@@ -2,7 +2,8 @@
 
 The assign-member pickers read `company_persons`, so a user with a
 `user_company_access` row but no profile is attached and yet unassignable. Every
-attach path must produce one: company creation, join code, attach-by-token —
+attach path must produce one: company creation, join code (see
+tests/api/test_boot_cleanup_and_join_code_rotation.py::TestJoinCodeCreatesCompanyPerson) —
 and the platform-ops migration backfills the rows that predate the rule.
 """
 
@@ -66,37 +67,3 @@ def creator(inv_client, invitation_app):
 def test_company_creator_is_listed_in_the_directory(inv_client, invitation_app, creator):
     company = _create_company(inv_client, creator["token"], "Directory Creator Co")
     assert creator["id"] in _profiles(invitation_app, company["id"])
-
-
-def test_attach_by_token_lists_the_newcomer(inv_client, invitation_app, creator):
-    company = _create_company(inv_client, creator["token"], "Directory Token Co")
-
-    issued = inv_client.post(
-        f"/api/v1/companies/{company['id']}/invite-tokens",
-        json={"role": "member"},
-        headers=_auth(creator["token"]),
-    )
-    assert issued.status_code in (200, 201), issued.get_data(as_text=True)
-    token_value = issued.get_json()["token"]
-
-    from uuid import uuid4
-
-    from app import db
-    from app.infrastructure.database.models import UserModel
-
-    email = f"newcomer_{uuid4().hex[:8]}@test.com"
-    with invitation_app.app_context():
-        newcomer = UserModel(id=uuid4(), email=email, is_active=True)
-        db.session.add(newcomer)
-        db.session.commit()
-        newcomer_id = str(newcomer.id).replace("-", "").lower()
-
-    newcomer_token = mint_access_token(inv_client, email)
-    attached = inv_client.post(
-        "/api/v1/companies/attach-by-token",
-        json={"token": token_value},
-        headers=_auth(newcomer_token),
-    )
-    assert attached.status_code in (200, 204), attached.get_data(as_text=True)
-
-    assert newcomer_id in _profiles(invitation_app, company["id"])
