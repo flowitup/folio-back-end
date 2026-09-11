@@ -320,13 +320,12 @@ class VerifySignupOtpUseCase:
         if self._users.find_by_phone(phone) is not None:
             raise PhoneAlreadyRegisteredError("This phone number already has an account")
 
-        # No password: the account signs in by SMS code only. The hash is of a secret nobody knows.
+        # No password: the account signs in by SMS code only.
         user = User.create(
             email=f"phone-{phone.lstrip('+')}@{SIGNUP_EMAIL_DOMAIN}",
-            password_hash=self._hasher.hash(secrets.token_urlsafe(32)),
             display_name=name,
+            phone=phone,
         )
-        user.phone = phone
         self._users.save(user)
 
         # Phase 2 onboarding: attach any pending company profiles an admin

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING, Optional
 
@@ -179,12 +178,6 @@ class AcceptInvitationUseCase:
             # A sign-in code proves an existing account, not a new one.
             raise OtpInvalidError("Invalid or expired code")
 
-        # NOTE: password_hash is still a NOT NULL column on `users`. Invitation acceptance no
-        # longer collects a password — this hashes a random secret nobody knows, exactly like
-        # phone sign-up in otp_login.py. Drop this once the column itself is removed from the
-        # model, entity and database.
-        password_hash = self._hasher.hash(secrets.token_urlsafe(32))
-
         # --- Transactional block (SAVEPOINT — works inside Flask-SQLAlchemy's request transaction).
         #
         # M1 (from code-review): the lookup uses a row-level lock so two concurrent
@@ -208,10 +201,9 @@ class AcceptInvitationUseCase:
                     raise PhoneAlreadyRegisteredError("This phone number already has an account.")
                 user = User.create(
                     email=inv.email,
-                    password_hash=password_hash,
                     display_name=name,
+                    phone=normalized_phone,
                 )
-                user.phone = normalized_phone
                 user = self._user_repo.save(user)
 
             if not self._membership_repo.exists(user.id, inv.project_id):
