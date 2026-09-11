@@ -91,38 +91,6 @@ class UserCompanyAccessRepositoryPort(Protocol):
         ...
 
 
-class Argon2HasherPort(Protocol):
-    """Port for argon2 hashing and constant-time verification.
-
-    User sign-in has no password any more (phone + SMS code only), so this is
-    now the only hashing protocol in the codebase — it exists here, scoped to
-    the companies layer, for hashing company invite tokens.
-    """
-
-    def hash(self, plaintext: str) -> str:
-        """Hash a plaintext string. Returns an argon2 encoded hash string."""
-        ...
-
-    def verify(self, plaintext: str, hashed: str) -> bool:
-        """Verify plaintext against an argon2 hash in constant time.
-
-        Returns True on match, False otherwise. Never raises on mismatch.
-        """
-        ...
-
-
-class SecureTokenGeneratorPort(Protocol):
-    """Port for cryptographically-secure opaque token generation.
-
-    The production adapter wraps secrets.token_urlsafe(byte_length).
-    Test adapters can return deterministic strings.
-    """
-
-    def generate(self, byte_length: int = 32) -> str:
-        """Return a base64url-encoded string of *byte_length* random bytes."""
-        ...
-
-
 class ClockPort(Protocol):
     """Port for obtaining the current UTC datetime.
 

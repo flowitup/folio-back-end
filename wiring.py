@@ -909,10 +909,8 @@ def configure_container(
         )
 
         # AcceptInvitationUseCase needs a db session; lazily import db here.
-        # password_hasher used to gate this too; dropped with the port itself —
-        # token_issuer was always the real precondition (Argon2PasswordHasher()
-        # was constructed unconditionally in app/__init__.py, so this gate never
-        # actually depended on it).
+        # token_issuer is the only real precondition: accepting an invitation
+        # signs the invitee in, so without an issuer the use case cannot run.
         if token_issuer is not None:
             from app import db as _db
 

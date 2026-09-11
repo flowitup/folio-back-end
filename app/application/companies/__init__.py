@@ -46,8 +46,6 @@ from app.application.companies.dtos import (
 from app.application.companies.ports import (
     CompanyRepositoryPort,
     UserCompanyAccessRepositoryPort,
-    Argon2HasherPort,
-    SecureTokenGeneratorPort,
     ClockPort,
     RoleCheckerPort,
     TransactionalSessionPort,
@@ -100,8 +98,6 @@ __all__ = [
     # ports
     "CompanyRepositoryPort",
     "UserCompanyAccessRepositoryPort",
-    "Argon2HasherPort",
-    "SecureTokenGeneratorPort",
     "ClockPort",
     "RoleCheckerPort",
     "TransactionalSessionPort",
