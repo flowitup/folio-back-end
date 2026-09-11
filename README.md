@@ -89,6 +89,7 @@ The most useful settings, configured through environment variables:
 | `DATABASE_URL` | Where Folio stores its data. PostgreSQL recommended for production. |
 | `SECRET_KEY` / `JWT_SECRET_KEY` | Sign-in tokens. Set unique values in production. |
 | `REDIS_URL` | Used for background jobs and rate-limiting. |
+| `TRUSTED_PROXY_HOPS` | How many reverse proxies may name the caller through `X-Forwarded-For`. Rate limits are keyed on the caller's address, so a deployment behind a proxy needs this set (production: `1`, for cloudflared) or everyone shares one bucket. Default `0` trusts nothing. |
 | `EMAIL_PROVIDER`, `SMTP_*` | Outgoing email — invitations and reminders. Email is a contact field only; it is never a sign-in credential. |
 | `SMS_PROVIDER` | How sign-in codes go out: `log` (API log, dev), `twilio` (`TWILIO_*`) or `gateway` — an "SMS Gateway for Android" endpoint (`SMS_GATEWAY_URL`, `SMS_GATEWAY_USERNAME`, `SMS_GATEWAY_PASSWORD`). Phone + SMS code is the only way to sign in. |
 | `OTP_TEST_CODE` | **Must stay unset in production.** A fixed sign-in code accepted in place of the real SMS one, so automated tests can complete a phone sign-in without reading a message. It is refused unless `FLASK_ENV` is explicitly `development` or `testing` — an unset, empty or unrecognised value counts as production — and it still requires a code to have been requested for that number. |
