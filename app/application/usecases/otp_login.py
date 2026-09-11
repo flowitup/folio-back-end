@@ -1,7 +1,7 @@
 """Sign in with a phone number and a 6-digit code sent by SMS.
 
-Offered when the deployment's LOGIN_MODE is "phone" or "both". The refresh token lifetime
-follows REFRESH_TOKEN_POLICY like password login (``persistent`` argument).
+Phone + SMS code is the only way to sign in. The refresh token lifetime follows
+REFRESH_TOKEN_POLICY (``persistent`` argument).
 
 Codes leave through a French SMS gateway, so every phone step below accepts French numbers only
 (``normalize_french_phone``): a number from another country is refused before anything is stored
@@ -27,7 +27,6 @@ from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
 from app.application.ports.sms_sender import SmsSenderPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
-from app.application.usecases.login import LoginResult
 from app.domain.entities.login_otp import LoginOtp
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.domain.entities.user import User
@@ -60,6 +59,18 @@ def _hash_code(phone: str, code: str) -> str:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@dataclass
+class LoginResult:
+    """Result of a successful sign-in. Shared by OTP login, OTP signup and (from
+    phase 02 onward) invitation acceptance — every path issues tokens the same way.
+    """
+
+    user_id: UUID
+    access_token: str
+    refresh_token: str
+    permissions: List[str]
 
 
 @dataclass(frozen=True)

@@ -21,11 +21,10 @@ from app.application.ports.session_manager import SessionManagerPort
 from app.application.ports.user_repository import UserRepositoryPort
 
 # Import domain services
-from app.domain.services.auth import AuthService
 from app.domain.services.authorization import AuthorizationService
 
 # Import use cases
-from app.application.usecases import LoginUseCase, LogoutUseCase
+from app.application.usecases import LogoutUseCase
 from app.application.projects import (
     CreateProjectUseCase,
     ListProjectsUseCase,
@@ -320,11 +319,9 @@ class Container:
     delete_task_usecase: Optional[DeleteTaskUseCase] = None
 
     # Domain services (configured after ports)
-    auth_service: Optional[AuthService] = None
     authorization_service: Optional[AuthorizationService] = None
 
     # Use cases (configured after domain services)
-    login_usecase: Optional[LoginUseCase] = None
     logout_usecase: Optional[LogoutUseCase] = None
     # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
     sms_sender: Optional[Any] = None
@@ -748,18 +745,9 @@ def configure_container(
     )
 
     # Wire up domain services if repositories are provided
-    if user_repository and password_hasher:
-        container.auth_service = AuthService(user_repository, password_hasher)
     if user_repository:
         container.authorization_service = AuthorizationService(user_repository)
 
-    # Wire up use cases if dependencies are available
-    if container.auth_service and container.authorization_service and token_issuer:
-        container.login_usecase = LoginUseCase(
-            container.auth_service,
-            container.authorization_service,
-            token_issuer,
-        )
     if token_issuer:
         container.logout_usecase = LogoutUseCase(token_issuer)
 

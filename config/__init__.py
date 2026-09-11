@@ -131,9 +131,6 @@ class Config:
     EXPO_ACCESS_TOKEN: str = get_env("EXPO_ACCESS_TOKEN", default="")
     PUSH_LOCALE: str = get_env("PUSH_LOCALE", default="vi")  # vi | fr | en
 
-    # Which sign-in the deployment offers: "email" (password), "phone" (SMS code) or "both".
-    # The other endpoints answer 404; GET /auth/config tells the apps which screen to show.
-    LOGIN_MODE: str = get_env("LOGIN_MODE", default="both")
     # Refresh-token lifetime for every sign-in on this deployment: "expiring" (7 days) or
     # "persistent" (never expires; the session lasts until the user signs out).
     REFRESH_TOKEN_POLICY: str = get_env("REFRESH_TOKEN_POLICY", default="expiring")
@@ -141,8 +138,6 @@ class Config:
     def __post_init__(self):
         if self.JWT_TOKEN_LOCATION is None:
             self.JWT_TOKEN_LOCATION = ["headers", "cookies"]
-        if self.LOGIN_MODE not in ("email", "phone", "both"):
-            raise ValueError("LOGIN_MODE must be 'email', 'phone' or 'both'")
         if self.REFRESH_TOKEN_POLICY not in ("expiring", "persistent"):
             raise ValueError("REFRESH_TOKEN_POLICY must be 'expiring' or 'persistent'")
         if self.PUSH_PROVIDER not in ("log", "expo"):
