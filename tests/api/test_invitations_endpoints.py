@@ -410,6 +410,30 @@ class TestAcceptInvitation:
         cookie_names = [c.split("=")[0] for c in cookies]
         assert any("access_token" in name for name in cookie_names)
 
+    def test_valid_accept_returns_tokens_in_the_body(self, inv_client, admin_token, invitation_app):
+        """The bearer-only mobile app reads its session from the body, not the cookies.
+
+        Acceptance signs the invitee in, so it must answer like every other
+        token-issuing flow. Returning only cookies would leave a mobile invitee
+        accepted but not signed in, with no way to finish without a second code.
+        """
+        token = self._setup_invitation(inv_client, admin_token, invitation_app)
+        if not token:
+            pytest.skip("Token extraction failed")
+
+        phone = "+33611220002"
+        code = self._code_for(inv_client, invitation_app, token, phone)
+
+        resp = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "Bearer User", "phone": phone, "code": code},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        body = resp.get_json()
+        assert body["access_token"], "acceptance must return an access token in the body"
+        assert body["refresh_token"], "acceptance must return a refresh token in the body"
+        assert body["user"]["id"]
+
     def test_expired_returns_410(self, inv_client, admin_token, invitation_app):
         """Test that an expired invitation returns 410."""
         from datetime import datetime, timedelta, timezone

@@ -87,3 +87,17 @@ class AcceptedUserResponse(BaseModel):
     id: UUID
     email: str
     display_name: Optional[str] = None
+
+
+class AcceptInviteResponse(BaseModel):
+    """POST /invitations/accept — the accepted account plus its session tokens.
+
+    Tokens are in the body as well as in cookies, matching every other flow that
+    signs a user in (see ``_login_response`` on the auth blueprint). The web app
+    forwards the cookies; the mobile app is bearer-only and reads these fields,
+    so omitting them would leave an invitee accepted but not signed in.
+    """
+
+    access_token: str
+    refresh_token: str
+    user: AcceptedUserResponse

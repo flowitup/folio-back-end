@@ -11,6 +11,7 @@ from app.api.v1.invitations import invitations_bp
 from app.api.v1.invitations.schemas import (
     AcceptInviteRequest,
     AcceptedUserResponse,
+    AcceptInviteResponse,
     CreateInviteRequest,
     CreateInviteResponse,
     InvitationListItem,
@@ -318,14 +319,15 @@ def request_invite_code():
 
 @invitations_bp.route("/accept", methods=["POST"])
 @openapi_doc(
-    summary="Accept an invitation: create account + membership, return JWT cookies",
+    summary="Accept an invitation: create the account and membership, then sign the invitee in",
     request=AcceptInviteRequest,
+    responses={200: AcceptInviteResponse},
     tags=["invitations"],
     auth=False,
 )
 @limiter.limit("5 per minute")
 def accept_invitation():
-    """Accept an invitation: create account + membership, return JWT cookies."""
+    """Accept an invitation: create the account and membership, then sign the invitee in."""
     try:
         data = AcceptInviteRequest(**request.get_json(silent=True) or {})
     except ValidationError as e:
@@ -377,12 +379,16 @@ def accept_invitation():
             entity_id=result.project_id,
         )
 
-    user_data = AcceptedUserResponse(
-        id=result.user.id,
-        email=result.user.email,
-        display_name=result.user.display_name,
+    body = AcceptInviteResponse(
+        access_token=result.access_token,
+        refresh_token=result.refresh_token,
+        user=AcceptedUserResponse(
+            id=result.user.id,
+            email=result.user.email,
+            display_name=result.user.display_name,
+        ),
     )
-    response = make_response(jsonify({"user": user_data.model_dump()}), 200)
+    response = make_response(jsonify(body.model_dump(mode="json")), 200)
     set_access_cookies(response, result.access_token)
     set_refresh_cookies(response, result.refresh_token)
     return response
