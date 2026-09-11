@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class SendMessageBody(BaseModel):
     """JSON body of POST /chat/channels/<key>/messages (text-only messages).
 
-    Messages with an image use multipart/form-data instead: ``body`` text part + ``file``.
+    Messages with an image or a voice note use multipart/form-data instead: ``body`` text
+    part + ``file``.
     """
 
     model_config = ConfigDict(extra="forbid")

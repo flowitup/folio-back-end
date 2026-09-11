@@ -227,6 +227,37 @@ class TestAttachments:
         assert resp.status_code == 201
         assert resp.get_json()["body"] is None
 
+    def test_voice_note_roundtrip(self, inv_client, member_token, admin_token, invitation_app):
+        key = _project_key(invitation_app)
+        m4a = b"\x00\x00\x00\x20ftypM4A " + b"0" * 64
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data={"file": (io.BytesIO(m4a), "voice-1757630000.m4a", "audio/m4a")},
+            content_type="multipart/form-data",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        attachment = resp.get_json()["attachment"]
+        assert attachment["content_type"] == "audio/m4a"
+        assert resp.get_json()["body"] is None
+
+        download = inv_client.get(attachment["url"], headers=_auth(admin_token))
+        assert download.status_code == 200
+        assert download.data == m4a
+        assert download.mimetype == "audio/m4a"
+
+    @pytest.mark.parametrize("content_type", ["audio/aac", "audio/x-m4a", "audio/mp4", "audio/mp4a-latm", "audio/mpeg"])
+    def test_every_recorder_spelling_accepted(self, inv_client, member_token, invitation_app, content_type):
+        """iOS and Android label the same AAC recording differently; all of them must pass."""
+        key = _project_key(invitation_app)
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data={"file": (io.BytesIO(b"\x00\x00\x00\x20ftypM4A " + b"1" * 32), "voice.m4a", content_type)},
+            content_type="multipart/form-data",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+
     def test_unsupported_type_rejected(self, inv_client, member_token, invitation_app):
         key = _project_key(invitation_app)
         resp = inv_client.post(

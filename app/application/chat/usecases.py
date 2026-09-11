@@ -35,7 +35,13 @@ from app.application.chat.ports import (
 )
 from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
 
-ALLOWED_ATTACHMENT_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
+ALLOWED_IMAGE_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
+# Voice notes: an AAC/m4a recording reaches us under whichever spelling the recording device
+# picked, so accept every name iOS and Android give the same container.
+ALLOWED_AUDIO_TYPES: frozenset[str] = frozenset(
+    {"audio/aac", "audio/m4a", "audio/x-m4a", "audio/mp4", "audio/mp4a-latm", "audio/mpeg"}
+)
+ALLOWED_ATTACHMENT_TYPES: frozenset[str] = ALLOWED_IMAGE_TYPES | ALLOWED_AUDIO_TYPES
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
@@ -167,7 +173,7 @@ class SendMessageUseCase:
                 raise AttachmentTooLargeError(f"Attachment must be 1..{MAX_ATTACHMENT_BYTES} bytes.")
             stored = ChatAttachment(
                 storage_key="",  # set once the message id is known
-                filename=filename[:255] or "image",
+                filename=filename[:255] or "attachment",
                 content_type=content_type,
                 size_bytes=len(data),
             )
@@ -259,6 +265,8 @@ class GetAttachmentUseCase:
 
 __all__ = [
     "ALLOWED_ATTACHMENT_TYPES",
+    "ALLOWED_AUDIO_TYPES",
+    "ALLOWED_IMAGE_TYPES",
     "MAX_ATTACHMENT_BYTES",
     "GetAttachmentUseCase",
     "ListChannelsUseCase",

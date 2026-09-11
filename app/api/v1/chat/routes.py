@@ -206,7 +206,7 @@ def list_messages(channel_key: str) -> Any:
 
 @chat_bp.post("/chat/channels/<string:channel_key>/messages")
 @openapi_doc(
-    summary="Send a message (JSON text, or multipart/form-data with an image `file`)",
+    summary="Send a message (JSON text, or multipart/form-data with an image or voice note `file`)",
     request=SendMessageBody,
     responses={201: MessageResponse},
     tags=["chat"],
@@ -219,7 +219,7 @@ def send_message(channel_key: str) -> Any:
     if request.files:
         upload = request.files.get("file")
         if upload is None or not upload.filename:
-            return _err(400, "BadRequest", "Expected an image in the 'file' part")
+            return _err(400, "BadRequest", "Expected an image or voice note in the 'file' part")
         upload.stream.seek(0, 2)
         size = upload.stream.tell()
         upload.stream.seek(0)
