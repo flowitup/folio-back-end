@@ -22,7 +22,7 @@ PASSWORD_HASH = "x" * 60
 
 
 def _make_user(session, email: str) -> UserModel:
-    u = UserModel(id=uuid4(), email=email, password_hash=PASSWORD_HASH, is_active=True)
+    u = UserModel(id=uuid4(), email=email, is_active=True)
     session.add(u)
     return u
 

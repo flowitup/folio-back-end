@@ -30,6 +30,7 @@ from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,6 @@ def att_app():
       - outsider_user: no company admin, no project membership
     """
     from app import create_app
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
@@ -87,8 +87,6 @@ def att_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         # --- Permissions ---
         # Names must match exactly what @require_permission() checks — they are embedded
         # verbatim in the JWT by AuthorizationService.get_user_permissions().
@@ -100,41 +98,21 @@ def att_app():
         db.session.flush()
 
         # --- Users ---
-        setup_user = UserModel(
-            email="att_setup@test.com",
-            password_hash=hasher.hash("Setup1234!"),
-            is_active=True,
-        )
+        setup_user = UserModel(email="att_setup@test.com", is_active=True)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         setup_user.is_platform_ops = True
 
         # A member of project_x; has project:read globally and via membership
-        member_user = UserModel(
-            email="att_member@test.com",
-            password_hash=hasher.hash("Member1234!"),
-            is_active=True,
-        )
+        member_user = UserModel(email="att_member@test.com", is_active=True)
 
         # Company-X admin; NOT a project member anywhere
-        company_x_admin_user = UserModel(
-            email="att_company_x_admin@test.com",
-            password_hash=hasher.hash("CompX1234!"),
-            is_active=True,
-        )
+        company_x_admin_user = UserModel(email="att_company_x_admin@test.com", is_active=True)
 
         # Company-Y admin; should be denied access to company-X projects
-        company_y_admin_user = UserModel(
-            email="att_company_y_admin@test.com",
-            password_hash=hasher.hash("CompY1234!"),
-            is_active=True,
-        )
+        company_y_admin_user = UserModel(email="att_company_y_admin@test.com", is_active=True)
 
         # Pure outsider: no company admin, no project membership
-        outsider_user = UserModel(
-            email="att_outsider@test.com",
-            password_hash=hasher.hash("Outsider1234!"),
-            is_active=True,
-        )
+        outsider_user = UserModel(email="att_outsider@test.com", is_active=True)
 
         db.session.add_all([setup_user, member_user, company_x_admin_user, company_y_admin_user, outsider_user])
         db.session.flush()
@@ -215,7 +193,6 @@ def att_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invoice_repository=invoice_repo,
@@ -299,9 +276,7 @@ def att_client(att_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 def _auth_header(token: str) -> dict:

@@ -1,28 +1,25 @@
 """Command line for the QA personas (see scripts/qa_personas.py).
 
-    QA_PASSWORD='…' uv run python -m scripts.qa_personas_cli --create --suffix smoke \\
-        --admin-email qa.admin@example.com \\
-        --manager-email qa.manager@example.com \\
-        --member-email qa.member@example.com
+    uv run python -m scripts.qa_personas_cli --create --suffix smoke \
+        --admin-email qa.admin@example.com --admin-phone +33600000101 \
+        --manager-email qa.manager@example.com --manager-phone +33600000102 \
+        --member-email qa.member@example.com --member-phone +33600000103
 
-    uv run python -m scripts.qa_personas_cli --delete --suffix smoke --dry-run \\
+    uv run python -m scripts.qa_personas_cli --delete --suffix smoke --dry-run \
         --admin-email ... --manager-email ... --member-email ...
 
-The password is read from the ``QA_PASSWORD`` environment variable, never from
-argv: this runs on production hosts, where argv is visible in `ps` and lands in
-shell history.
+Phone numbers are CLI args, not an environment variable: unlike the password
+this replaced, a phone number is not a secret — it is the SMS code, sent to
+that number, that proves anything.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from scripts.qa_personas import DEFAULT_ADDRESS, company_name, create_personas
 from scripts.qa_personas_purge import purge_company
-
-_PASSWORD_ENV = "QA_PASSWORD"
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -34,6 +31,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--admin-email", required=True)
     parser.add_argument("--manager-email", required=True)
     parser.add_argument("--member-email", required=True)
+    parser.add_argument("--admin-phone", help="required with --create; French E.164, e.g. +33600000101")
+    parser.add_argument("--manager-phone", help="required with --create")
+    parser.add_argument("--member-phone", help="required with --create")
     parser.add_argument("--address", default=DEFAULT_ADDRESS, help="company address")
     parser.add_argument(
         "--dry-run",
@@ -43,13 +43,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _create(args, emails: dict[str, str], password: str) -> int:
-    ids = create_personas(args.suffix, emails, password, args.address)
+def _create(args, emails: dict[str, str], phones: dict[str, str]) -> int:
+    ids = create_personas(args.suffix, emails, phones, args.address)
     print(f"QA personas ready for '{company_name(args.suffix)}':")
     for key, value in ids.items():
         print(f"  {key} = {value}")
     for role, email in emails.items():
-        print(f"  {role}: {email}")
+        print(f"  {role}: {email} ({phones[role]})")
     return 0
 
 
@@ -71,9 +71,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.suffix.strip():
         print("--suffix must not be blank", file=sys.stderr)
         return 2
-    password = os.environ.get(_PASSWORD_ENV, "")
-    if args.create and not password:
-        print(f"--create requires the {_PASSWORD_ENV} environment variable", file=sys.stderr)
+    phones = {"admin": args.admin_phone, "manager": args.manager_phone, "member": args.member_phone}
+    if args.create and not all(phones.values()):
+        print("--create requires --admin-phone, --manager-phone and --member-phone", file=sys.stderr)
         return 2
     if args.dry_run and not args.delete:
         print("--dry-run only applies to --delete", file=sys.stderr)
@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app()
     with app.app_context():
         try:
-            return _create(args, emails, password) if args.create else _delete(args, emails)
+            return _create(args, emails, phones) if args.create else _delete(args, emails)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1

@@ -94,7 +94,6 @@ class SQLAlchemyUserRepository:
         existing = self._session.query(UserModel).filter_by(id=user.id).first()
         if existing:
             existing.email = user.email
-            existing.password_hash = user.password_hash
             existing.is_active = user.is_active
             existing.display_name = user.display_name
             existing.phone = user.phone
@@ -102,7 +101,6 @@ class SQLAlchemyUserRepository:
             user_model = UserModel(
                 id=user.id,
                 email=user.email,
-                password_hash=user.password_hash,
                 is_active=user.is_active,
                 display_name=user.display_name,
                 phone=user.phone,
@@ -116,7 +114,6 @@ class SQLAlchemyUserRepository:
         return User(
             id=model.id,
             email=model.email,
-            password_hash=model.password_hash,
             is_active=model.is_active,
             created_at=model.created_at,
             updated_at=model.updated_at,

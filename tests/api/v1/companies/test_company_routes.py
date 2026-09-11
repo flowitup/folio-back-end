@@ -10,6 +10,8 @@ import uuid
 
 import pytest
 
+from tests.auth_login_helper import mint_access_token
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -27,28 +29,12 @@ def _co_client(invitation_app):
 
 @pytest.fixture(scope="module")
 def admin_token(_co_client, invitation_app):
-    resp = _co_client.post(
-        "/api/v1/auth/login",
-        json={
-            "email": invitation_app._test_superadmin_email,
-            "password": invitation_app._test_superadmin_password,
-        },
-    )
-    assert resp.status_code == 200
-    return resp.get_json()["access_token"]
+    return mint_access_token(_co_client, invitation_app._test_superadmin_email)
 
 
 @pytest.fixture(scope="module")
 def member_token_co(_co_client, invitation_app):
-    resp = _co_client.post(
-        "/api/v1/auth/login",
-        json={
-            "email": invitation_app._test_member_email,
-            "password": invitation_app._test_member_password,
-        },
-    )
-    assert resp.status_code == 200
-    return resp.get_json()["access_token"]
+    return mint_access_token(_co_client, invitation_app._test_member_email)
 
 
 # ---------------------------------------------------------------------------

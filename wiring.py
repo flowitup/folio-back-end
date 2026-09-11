@@ -15,17 +15,15 @@ from uuid import UUID
 
 # Import port interfaces from application layer
 from app.application.ports.email_port import EmailPort
-from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.session_manager import SessionManagerPort
 from app.application.ports.user_repository import UserRepositoryPort
 
 # Import domain services
-from app.domain.services.auth import AuthService
 from app.domain.services.authorization import AuthorizationService
 
 # Import use cases
-from app.application.usecases import LoginUseCase, LogoutUseCase
+from app.application.usecases import LogoutUseCase
 from app.application.projects import (
     CreateProjectUseCase,
     ListProjectsUseCase,
@@ -279,7 +277,6 @@ class Container:
 
     # Auth ports
     user_repository: Optional[UserRepositoryPort] = None
-    password_hasher: Optional[PasswordHasherPort] = None
     token_issuer: Optional[TokenIssuerPort] = None
     session_manager: Optional[SessionManagerPort] = None
 
@@ -320,11 +317,9 @@ class Container:
     delete_task_usecase: Optional[DeleteTaskUseCase] = None
 
     # Domain services (configured after ports)
-    auth_service: Optional[AuthService] = None
     authorization_service: Optional[AuthorizationService] = None
 
     # Use cases (configured after domain services)
-    login_usecase: Optional[LoginUseCase] = None
     logout_usecase: Optional[LogoutUseCase] = None
     # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
     sms_sender: Optional[Any] = None
@@ -343,6 +338,9 @@ class Container:
     verify_otp_usecase: Optional[Any] = None
     request_signup_otp_usecase: Optional[Any] = None
     verify_signup_otp_usecase: Optional[Any] = None
+    # Texts a sign-up code to the phone an invitation acceptor is claiming — gated by the
+    # invitation token instead of being open to anyone (see AcceptInvitationUseCase).
+    request_invite_otp_usecase: Optional[Any] = None
     set_join_code_usecase: Optional[Any] = None
     join_company_by_code_usecase: Optional[Any] = None
 
@@ -710,7 +708,6 @@ def configure_container(
     queue_service: Optional[QueuePort] = None,
     project_repository: Optional[ProjectRepository] = None,
     user_repository: Optional[UserRepositoryPort] = None,
-    password_hasher: Optional[PasswordHasherPort] = None,
     token_issuer: Optional[TokenIssuerPort] = None,
     session_manager: Optional[SessionManagerPort] = None,
     worker_repository: Optional[IWorkerRepository] = None,
@@ -734,7 +731,6 @@ def configure_container(
         queue_service=queue_service,
         project_repository=project_repository,
         user_repository=user_repository,
-        password_hasher=password_hasher,
         token_issuer=token_issuer,
         session_manager=session_manager,
         worker_repository=worker_repository,
@@ -748,18 +744,9 @@ def configure_container(
     )
 
     # Wire up domain services if repositories are provided
-    if user_repository and password_hasher:
-        container.auth_service = AuthService(user_repository, password_hasher)
     if user_repository:
         container.authorization_service = AuthorizationService(user_repository)
 
-    # Wire up use cases if dependencies are available
-    if container.auth_service and container.authorization_service and token_issuer:
-        container.login_usecase = LoginUseCase(
-            container.auth_service,
-            container.authorization_service,
-            token_issuer,
-        )
     if token_issuer:
         container.logout_usecase = LogoutUseCase(token_issuer)
 
@@ -928,15 +915,18 @@ def configure_container(
             authz_reader=container.authz_reader,
         )
 
-        # AcceptInvitationUseCase needs a db session; lazily import db here
-        if password_hasher is not None and token_issuer is not None:
+        # AcceptInvitationUseCase needs a db session; lazily import db here.
+        # password_hasher used to gate this too; dropped with the port itself —
+        # token_issuer was always the real precondition (Argon2PasswordHasher()
+        # was constructed unconditionally in app/__init__.py, so this gate never
+        # actually depended on it).
+        if token_issuer is not None:
             from app import db as _db
 
             container.accept_invitation_usecase = AcceptInvitationUseCase(
                 invitation_repo=invitation_repo,
                 user_repo=user_repository,
                 project_membership_repo=project_membership_repo,
-                password_hasher=password_hasher,
                 token_issuer=token_issuer,
                 db_session=_db.session,
             )

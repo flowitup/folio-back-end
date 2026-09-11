@@ -27,7 +27,6 @@ class User:
 
     id: UUID
     email: str
-    password_hash: str
     is_active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -56,16 +55,18 @@ class User:
     def create(
         cls,
         email: str,
-        password_hash: str,
         display_name: Optional[str] = None,
+        phone: Optional[str] = None,
     ) -> "User":
         """
         Factory method to create a new User.
 
+        No password is collected: every account authenticates by phone + SMS code.
+
         Args:
             email: User's email address (validated for format)
-            password_hash: Pre-hashed password
             display_name: Optional human-readable name shown in the UI
+            phone: Optional E.164 number for SMS-code sign-in
 
         Returns:
             New User instance
@@ -81,9 +82,9 @@ class User:
         return cls(
             id=uuid4(),
             email=email,
-            password_hash=password_hash,
             is_active=True,
             created_at=now,
             updated_at=now,
             display_name=display_name,
+            phone=phone,
         )

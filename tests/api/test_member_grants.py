@@ -26,6 +26,7 @@ from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from app.infrastructure.database.models.worker import WorkerModel
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Passw0rd!"
 
@@ -34,7 +35,6 @@ PASSWORD = "Passw0rd!"
 def mg_app():
     """Two companies, admin/manager/member/stranger users, projects P/Q (company A) + R (company B)."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class MgTestConfig(TestingConfig):
@@ -47,14 +47,13 @@ def mg_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
         # Neutral legacy role: zero permissions, exists only so `user_projects`
         db.session.flush()
 
         def _user(email: str) -> UserModel:
-            u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            u = UserModel(email=email, is_active=True)
             db.session.add(u)
             return u
 
@@ -152,9 +151,7 @@ def client(mg_app):
 
 
 def _login(client, email: str) -> dict:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture

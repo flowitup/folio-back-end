@@ -159,17 +159,6 @@ class TestOtpLogin:
         # Even the right code is refused once the attempts are used up.
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": code}).status_code == 401
 
-    def test_email_mode_disables_phone_login(self, inv_client, invitation_app, member_with_phone):
-        invitation_app.config["LOGIN_MODE"] = "email"
-        try:
-            assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 404
-            assert (
-                inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": "123456"}).status_code
-                == 404
-            )
-        finally:
-            invitation_app.config["LOGIN_MODE"] = "both"
-
     def test_persistent_policy_applies_to_otp_login_and_logout_revokes(
         self, inv_client, invitation_app, member_with_phone
     ):
@@ -192,3 +181,31 @@ class TestOtpLogin:
         )
         assert out.status_code == 200
         assert inv_client.post("/api/v1/auth/refresh", headers=_auth(body["refresh_token"])).status_code == 401
+
+
+class TestOtpTestCodeBypassProduction:
+    """Endpoint-level companion to tests/unit/application/test_otp_test_code_bypass.py:
+    the non-production OTP_TEST_CODE bypass must be refused through the real HTTP
+    verify path under FLASK_ENV=production, not just in the isolated unit test —
+    this is the one piece of phone-only auth that makes the system weaker, so its
+    production-refusal is proven end to end, not just at the function level.
+    """
+
+    def test_production_refuses_the_bypass_code_even_when_configured(
+        self, inv_client, invitation_app, member_with_phone, monkeypatch
+    ):
+        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
+        real_code = _code_from_sms(invitation_app)
+
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("OTP_TEST_CODE", "424242")
+        try:
+            bypass_attempt = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": "424242"})
+            assert bypass_attempt.status_code == 401, bypass_attempt.get_json()
+        finally:
+            monkeypatch.undo()
+
+        # The real code from the request above still works normally once
+        # FLASK_ENV/OTP_TEST_CODE are back to this test session's defaults.
+        ok = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": real_code})
+        assert ok.status_code == 200, ok.get_json()

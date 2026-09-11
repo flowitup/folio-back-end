@@ -27,8 +27,7 @@ from sqlalchemy import event
 from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
-
-PASSWORD = "Pass1234!"
+from tests.auth_login_helper import mint_access_token
 
 # Literal substrings unique to SqlAlchemyAuthzReader's raw-text queries (both
 # the SQLite-normalized and plain forms share these SELECT-clause fragments —
@@ -63,7 +62,6 @@ def budget_app():
     role, mirroring the read-only role every real sign-up gets), and a
     helper to add more projects mid-test."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class BudgetTestConfig(TestingConfig):
@@ -75,12 +73,11 @@ def budget_app():
 
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
         db.session.flush()
 
-        admin_user = UserModel(email="qb_admin@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        admin_user = UserModel(email="qb_admin@test.com", is_active=True)
         db.session.add(admin_user)
         db.session.flush()
 
@@ -124,9 +121,7 @@ def client(budget_app):
 
 @pytest.fixture
 def admin_h(client):
-    resp = client.post("/api/v1/auth/login", json={"email": "qb_admin@test.com", "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_json()
-    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, 'qb_admin@test.com')}"}
 
 
 def test_get_single_project_stays_within_a_small_absolute_budget(client, admin_h, budget_app):

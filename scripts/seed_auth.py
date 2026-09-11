@@ -1,84 +1,91 @@
 """Seed script for authentication data (users).
 
-Permissions are derived in code (`app.domain.authz.matrix`) from the company
-role, so there is nothing to seed for them: a user becomes an admin by being
-attached to a company as `admin` (see scripts/seed_companies.py).
+Phone + SMS code is the only way to sign in — there is no password to seed
+any more. Permissions are derived in code (`app.domain.authz.matrix`) from
+the company role, so there is nothing to seed for them either: a user becomes
+an admin by being attached to a company as `admin` (see
+scripts/seed_companies.py).
 """
 
 import os
 import sys
-from argon2 import PasswordHasher
 from uuid import uuid4
 
 from app import db
 from app.infrastructure.database.models import UserModel
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_french_phone
 
 
-def create_admin_user(email: str, password: str) -> UserModel | None:
-    """Create the seed account with a hashed password.
+def create_admin_user(email: str, phone: str) -> UserModel | None:
+    """Create the seed account with a real, sign-in-capable phone number.
 
-    If the user already exists, reset their password and reactivate them.
+    If the user already exists, update their phone and reactivate them.
     Company `admin` rights come from the attachment made in seed_companies.
     """
-    ph = PasswordHasher()
-    password_hash = ph.hash(password)
+    normalized_phone = normalize_french_phone(phone)
 
     existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
     if existing:
-        existing.password_hash = password_hash
+        existing.phone = normalized_phone
         existing.is_active = True
         db.session.commit()
-        print(f"  User '{email}' already existed — password reset.")
+        print(f"  User '{email}' already existed — phone set to {normalized_phone}.")
         return existing
 
     user = UserModel(
         id=uuid4(),
         email=email.lower(),
-        password_hash=password_hash,
+        phone=normalized_phone,
         is_active=True,
     )
 
     db.session.add(user)
     db.session.commit()
-    print(f"  Created admin user: {email}")
+    print(f"  Created admin user: {email} ({normalized_phone})")
     return user
 
 
-def create_client_user(email: str, password: str) -> UserModel | None:
+def create_client_user(email: str, phone: str) -> UserModel | None:
     """Create the legacy demo account; it joins the company as a `member`."""
     existing = db.session.query(UserModel).filter_by(email=email.lower()).first()
     if existing:
         print(f"  User '{email}' already exists, skipping.")
         return existing
 
-    ph = PasswordHasher()
-    password_hash = ph.hash(password)
+    normalized_phone = normalize_french_phone(phone)
 
     user = UserModel(
         id=uuid4(),
         email=email.lower(),
-        password_hash=password_hash,
+        phone=normalized_phone,
         is_active=True,
     )
 
     db.session.add(user)
     db.session.commit()
-    print(f"  Created client user: {email}")
+    print(f"  Created client user: {email} ({normalized_phone})")
     return user
 
 
 def get_admin_credentials() -> tuple[str | None, str | None]:
-    """Get admin credentials from env vars or CLI args."""
+    """Get the admin's email + French phone number from env vars or CLI args."""
     email = os.environ.get("ADMIN_EMAIL")
-    password = os.environ.get("ADMIN_PASSWORD")
+    phone = os.environ.get("ADMIN_PHONE")
 
-    if not email or not password:
+    if not email or not phone:
         if "--with-admin" in sys.argv:
             idx = sys.argv.index("--with-admin")
             if idx + 2 < len(sys.argv):
                 email = sys.argv[idx + 1]
-                password = sys.argv[idx + 2]
+                phone = sys.argv[idx + 2]
                 print("\n  Warning: Using CLI args for credentials (visible in shell history)")
-                print("  Consider using ADMIN_EMAIL and ADMIN_PASSWORD env vars instead.")
+                print("  Consider using ADMIN_EMAIL and ADMIN_PHONE env vars instead.")
 
-    return email, password
+    if email and phone:
+        try:
+            normalize_french_phone(phone)
+        except InvalidPhoneNumberError as exc:
+            print(f"\n  Error: ADMIN_PHONE {phone!r} is not usable — {exc}")
+            return email, None
+
+    return email, phone

@@ -14,6 +14,7 @@ import pytest
 from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 OWNER_TOKEN = "ExponentPushToken[owner-device-000000]"
@@ -31,7 +32,6 @@ class RecordingPushSender:
 @pytest.fixture(scope="module")
 def push_app():
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
     from wiring import get_container
 
@@ -47,10 +47,9 @@ def push_app():
         c = get_container()
         c.push_sender = recorder
         c.attendance_push_notifier.sender = recorder  # notifier was built with the log sender
-        hasher = Argon2PasswordHasher()
 
         def user(email):
-            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            return UserModel(email=email, is_active=True)
 
         owner = user("owner@push-test.com")
         chef = user("chef@push-test.com")  # company manager (set by the tenancy helper)
@@ -100,9 +99,7 @@ def recorder(push_app):
 
 
 def _login(client, email):
-    r = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert r.status_code == 200, r.get_json()
-    return {"Authorization": f"Bearer {r.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture

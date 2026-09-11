@@ -41,6 +41,7 @@ from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 
@@ -50,9 +51,7 @@ def _auth(token: str) -> dict:
 
 
 def _login(client, email: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 def _make_jpeg_bytes() -> bytes:
@@ -72,21 +71,14 @@ def wg_app(invitation_app):
     """Attach a fresh company + matrix manager/member users to `_test_project_id`."""
     from app import db
 
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
-
     with invitation_app.app_context():
         now = datetime.now(timezone.utc)
-        hasher = Argon2PasswordHasher()
 
-        manager_user = UserModel(
-            email="wg_manager@invite-test.com", password_hash=hasher.hash(PASSWORD), is_active=True
-        )
-        member_user = UserModel(email="wg_member@invite-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        manager_user = UserModel(email="wg_manager@invite-test.com", is_active=True)
+        member_user = UserModel(email="wg_member@invite-test.com", is_active=True)
         # Same company role as member_user; the D8 grant row below is the only
         # difference, so any 200 it earns is attributable to that row alone.
-        grantee_user = UserModel(
-            email="wg_grantee@invite-test.com", password_hash=hasher.hash(PASSWORD), is_active=True
-        )
+        grantee_user = UserModel(email="wg_grantee@invite-test.com", is_active=True)
         db.session.add_all([manager_user, member_user, grantee_user])
         db.session.flush()
 

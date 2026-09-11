@@ -27,6 +27,7 @@ from app.infrastructure.database.models import (
     UserModel,
 )
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +39,6 @@ from tests.company_tenancy_helper import company_for_projects, seed_company_tena
 def rate_app():
     """Flask app with in-memory DB + full labor + rate-change container."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
@@ -63,7 +63,6 @@ def rate_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
         token_issuer = JWTTokenIssuer()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
@@ -72,9 +71,9 @@ def rate_app():
 
         db.session.flush()
 
-        admin_user = UserModel(email="rc_admin@test.com", password_hash=hasher.hash("Admin1234!"), is_active=True)
+        admin_user = UserModel(email="rc_admin@test.com", is_active=True)
 
-        reader_user = UserModel(email="rc_reader@test.com", password_hash=hasher.hash("Reader1234!"), is_active=True)
+        reader_user = UserModel(email="rc_reader@test.com", is_active=True)
 
         db.session.add_all([admin_user, reader_user])
         db.session.flush()
@@ -90,7 +89,6 @@ def rate_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=token_issuer,
             session_manager=FlaskSessionManager(),
             worker_repository=worker_repo,
@@ -161,9 +159,7 @@ def rc_client(rate_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

@@ -27,12 +27,7 @@ def _now():
 
 def _make_user(session) -> UUID:
     user = UserModel(
-        id=uuid4(),
-        email=f"u{uuid4().hex[:8]}@test.com",
-        password_hash="x",
-        is_active=True,
-        created_at=_now(),
-        updated_at=_now(),
+        id=uuid4(), email=f"u{uuid4().hex[:8]}@test.com", is_active=True, created_at=_now(), updated_at=_now()
     )
     session.add(user)
     session.flush()

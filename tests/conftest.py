@@ -90,7 +90,6 @@ def inmemory_email_adapter():
 def invitation_app():
     """Flask app wired with in-memory DB + InMemoryEmailAdapter for invitation tests."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -120,7 +119,6 @@ def invitation_app():
         if _wiring._inmemory_email_adapter is None:
             _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
 
-        hasher = Argon2PasswordHasher()
         token_issuer = JWTTokenIssuer()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
@@ -130,7 +128,6 @@ def invitation_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=token_issuer,
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
@@ -140,19 +137,16 @@ def invitation_app():
         # Seed users
         admin_user = UserModel(
             email="admin@invite-test.com",
-            password_hash=hasher.hash("Admin1234!"),
             is_active=True,
         )
 
         member_user = UserModel(
             email="member@invite-test.com",
-            password_hash=hasher.hash("Member1234!"),
             is_active=True,
         )
 
         outsider_user = UserModel(
             email="outsider@invite-test.com",
-            password_hash=hasher.hash("Outsider1234!"),
             is_active=True,
         )
 
@@ -160,7 +154,6 @@ def invitation_app():
         # tests). Ops is the `users.is_platform_ops` flag, not a role.
         superadmin_user = UserModel(
             email="superadmin@invite-test.com",
-            password_hash=hasher.hash("Superadmin1234!"),
             is_active=True,
             is_platform_ops=True,
         )
@@ -168,7 +161,6 @@ def invitation_app():
         # Seed target user — the user being bulk-added in admin tests
         target_user = UserModel(
             email="target@invite-test.com",
-            password_hash=hasher.hash("Target1234!"),
             is_active=True,
             display_name="Target User",
         )
@@ -557,12 +549,18 @@ def invitation_app():
             from app.application.invitations.accept_invitation_usecase import (
                 AcceptInvitationUseCase as _AcceptInvitationUseCase,
             )
+            from app.infrastructure.adapters.sqlalchemy_login_otp import (
+                SQLAlchemyLoginOtpRepository as _LoginOtpRepoForAccept,
+            )
 
+            # otp_repo verifies the phone code an invitation acceptor submits (phase 02).
+            # A fresh instance is fine here even though the module's OTP block below
+            # builds its own: both just wrap the same db.session, and the repository
+            # itself holds no state beyond that session (see sqlalchemy_login_otp.py).
             _c.accept_invitation_usecase = _AcceptInvitationUseCase(
                 invitation_repo=_c.invitation_repo,
                 user_repo=_c.user_repository,
                 project_membership_repo=_c.project_membership_repo,
-                password_hasher=_c.password_hasher,
                 token_issuer=_c.token_issuer,
                 db_session=db.session,
                 authz_reader=_c.authz_reader,
@@ -574,6 +572,8 @@ def invitation_app():
                 ),
                 person_repo=_c.person_repo,
                 company_person_repo=_c.company_person_repo,
+                otp_repo=_LoginOtpRepoForAccept(db.session),
+                otp_max_attempts=int(test_app.config.get("OTP_MAX_ATTEMPTS", 5)),
             )
 
         _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
@@ -1178,9 +1178,17 @@ def invitation_app():
         from app.application.usecases.otp_login import VerifySignupOtpUseCase as _VerifySignupUC
 
         _c.request_signup_otp_usecase = _RequestSignupUC(user_repo, _otp_repo, _sms)
-        _c.verify_signup_otp_usecase = _VerifySignupUC(
-            user_repo, _otp_repo, hasher, _c.authorization_service, token_issuer
-        )
+        _c.verify_signup_otp_usecase = _VerifySignupUC(user_repo, _otp_repo, _c.authorization_service, token_issuer)
+
+        # Invitation acceptance proves a phone by the same sign-up code flow (phase 02) —
+        # mirrors app/__init__.py's wiring, which this fixture had drifted from (the
+        # request-code endpoint 503'd with no coverage until phase 05 caught it).
+        if _c.invitation_repo is not None:
+            from app.application.invitations.accept_invitation_usecase import (
+                RequestInviteOtpUseCase as _RequestInviteOtpUC,
+            )
+
+            _c.request_invite_otp_usecase = _RequestInviteOtpUC(_c.invitation_repo, _c.request_signup_otp_usecase)
         test_app._sms = _sms
 
         yield test_app
@@ -1196,10 +1204,17 @@ def inv_client(invitation_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    """Helper: login and return access token."""
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
-    return resp.get_json()["access_token"]
+    """Mint an access token for the user with this email.
+
+    Phone + SMS code is the only real sign-in now (POST /auth/login is gone);
+    `password` is accepted only so the ~190 existing call sites across this
+    suite keep their shape unchanged, and is not checked. See
+    tests/auth_login_helper.py for the real (non-HTTP) minting logic, which
+    tests that specifically exercise the OTP sign-in HTTP path do not use.
+    """
+    from tests.auth_login_helper import mint_access_token
+
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

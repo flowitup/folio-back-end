@@ -1,16 +1,17 @@
-"""API integration tests: `companies` field on /auth/me and POST /auth/login.
+"""API integration tests: `companies` field on /auth/me and POST /auth/otp/verify.
 
 Phase 1 (roles & permissions redesign): `/auth/me` gains a `companies` array
 built from `CompanyRepositoryPort.list_attached_for_user` — `{id, legal_name,
 role, is_primary}` per attached company. Existing fields (`permissions`,
-`roles`, `phone`) are untouched. `POST /auth/login` (and the OTP login/sign-up
-responses, sharing `_login_response`) return the exact same `companies` shape
-so clients don't need a follow-up `/auth/me` call to know which companies the
-user belongs to.
+`roles`, `phone`) are untouched. `POST /auth/otp/verify` (and the sign-up/
+invitation-accept responses, sharing `_login_response`) return the exact same
+`companies` shape so clients don't need a follow-up `/auth/me` call to know
+which companies the user belongs to.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -19,15 +20,23 @@ import pytest
 from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
-PASSWORD = "Pass1234!"
+MULTI_PHONE = "+33600000201"
+NONE_PHONE = "+33600000202"
+
+
+def _code_from_sms(app) -> str:
+    to, text = app._sms.sent[-1]
+    match = re.search(r"\b(\d{6})\b", text)
+    assert match, text
+    return match.group(1)
 
 
 @pytest.fixture(scope="module")
 def me_app():
     """Flask app wired with in-memory SQLite: one user in two companies, one user in none."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
@@ -51,11 +60,10 @@ def me_app():
 
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
-        multi = UserModel(email="me_multi@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
-        none_user = UserModel(email="me_none@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        multi = UserModel(email="me_multi@test.com", is_active=True, phone=MULTI_PHONE)
+        none_user = UserModel(email="me_none@test.com", is_active=True, phone=NONE_PHONE)
         db.session.add_all([multi, none_user])
         db.session.flush()
 
@@ -88,7 +96,6 @@ def me_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
         )
@@ -97,6 +104,26 @@ def me_app():
         _c.company_repo = company_repo
         _c.user_company_access_repo = access_repo
         _c.authz_reader = SqlAlchemyAuthzReader(db.session)
+
+        # Phone sign-in so the two POST /auth/otp/verify tests below can prove the
+        # companies[] shape without a real SMS provider.
+        from app.application.usecases.otp_login import RequestOtpUseCase, VerifyOtpUseCase
+        from app.infrastructure.adapters.sqlalchemy_login_otp import SQLAlchemyLoginOtpRepository
+
+        class _RecordingSmsSender:
+            def __init__(self) -> None:
+                self.sent: list[tuple[str, str]] = []
+
+            def send(self, to: str, text: str) -> None:
+                self.sent.append((to, text))
+
+        otp_repo = SQLAlchemyLoginOtpRepository(db.session)
+        sms = _RecordingSmsSender()
+        _c.sms_sender = sms
+        _c.login_otp_repository = otp_repo
+        _c.request_otp_usecase = RequestOtpUseCase(user_repo, otp_repo, sms)
+        _c.verify_otp_usecase = VerifyOtpUseCase(user_repo, otp_repo, _c.authorization_service, _c.token_issuer)
+        test_app._sms = sms
 
         test_app._company_a_id = company_a.id
         test_app._company_b_id = company_b.id
@@ -115,9 +142,7 @@ def client(me_app):
 
 
 def _login(client, email: str) -> dict:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_json()
-    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 def test_me_lists_all_attached_companies_with_role_and_primary_flag(client, me_app):
@@ -149,9 +174,10 @@ def test_me_existing_fields_unchanged(client):
     assert "roles" not in body  # a user carries no roles of their own
 
 
-def test_login_response_includes_companies_matching_me(client, me_app):
-    """POST /auth/login returns the same companies[] shape as GET /auth/me, no extra call needed."""
-    resp = client.post("/api/v1/auth/login", json={"email": "me_multi@test.com", "password": PASSWORD})
+def test_otp_verify_response_includes_companies_matching_me(client, me_app):
+    """POST /auth/otp/verify returns the same companies[] shape as GET /auth/me, no extra call needed."""
+    assert client.post("/api/v1/auth/otp/request", json={"phone": MULTI_PHONE}).status_code == 202
+    resp = client.post("/api/v1/auth/otp/verify", json={"phone": MULTI_PHONE, "code": _code_from_sms(me_app)})
     assert resp.status_code == 200
     body = resp.get_json()["user"]
     by_id = {c["id"]: c for c in body["companies"]}
@@ -162,7 +188,8 @@ def test_login_response_includes_companies_matching_me(client, me_app):
     assert by_id[str(me_app._company_b_id)]["is_primary"] is False
 
 
-def test_login_response_companies_empty_for_user_with_no_company(client):
-    resp = client.post("/api/v1/auth/login", json={"email": "me_none@test.com", "password": PASSWORD})
+def test_otp_verify_response_companies_empty_for_user_with_no_company(client, me_app):
+    assert client.post("/api/v1/auth/otp/request", json={"phone": NONE_PHONE}).status_code == 202
+    resp = client.post("/api/v1/auth/otp/verify", json={"phone": NONE_PHONE, "code": _code_from_sms(me_app)})
     assert resp.status_code == 200
     assert resp.get_json()["user"]["companies"] == []

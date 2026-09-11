@@ -89,9 +89,8 @@ The most useful settings, configured through environment variables:
 | `DATABASE_URL` | Where Folio stores its data. PostgreSQL recommended for production. |
 | `SECRET_KEY` / `JWT_SECRET_KEY` | Sign-in tokens. Set unique values in production. |
 | `REDIS_URL` | Used for background jobs and rate-limiting. |
-| `EMAIL_PROVIDER`, `SMTP_*` | Outgoing email — invitations, password resets, reminders. |
-| `LOGIN_MODE` | Sign-in offered: `email` (password), `phone` (SMS code) or `both`. |
-| `SMS_PROVIDER` | How sign-in codes go out: `log` (API log, dev), `twilio` (`TWILIO_*`) or `gateway` — an "SMS Gateway for Android" endpoint (`SMS_GATEWAY_URL`, `SMS_GATEWAY_USERNAME`, `SMS_GATEWAY_PASSWORD`). |
+| `EMAIL_PROVIDER`, `SMTP_*` | Outgoing email — invitations and reminders. Email is a contact field only; it is never a sign-in credential. |
+| `SMS_PROVIDER` | How sign-in codes go out: `log` (API log, dev), `twilio` (`TWILIO_*`) or `gateway` — an "SMS Gateway for Android" endpoint (`SMS_GATEWAY_URL`, `SMS_GATEWAY_USERNAME`, `SMS_GATEWAY_PASSWORD`). Phone + SMS code is the only way to sign in. |
 
 A full template lives in `.env.example`.
 

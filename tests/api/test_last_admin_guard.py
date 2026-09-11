@@ -19,13 +19,13 @@ import pytest
 from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 
 @pytest.fixture(scope="module")
 def lag_app():
     """Flask app with a platform-admin login and a helper to seed companies."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class LagTestConfig(TestingConfig):
@@ -37,8 +37,6 @@ def lag_app():
 
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
-        test_app._password_hash = hasher.hash("Passw0rd!")
         db.session.commit()
         yield test_app
         db.session.remove()
@@ -51,9 +49,7 @@ def lag_client(lag_app):
 
 
 def _login(client, email: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": "Passw0rd!"})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 def _auth(token: str) -> dict:
@@ -87,7 +83,7 @@ def _make_company_with_admins(lag_app, *, admin_count: int):
         admin_ids: list[str] = []
         for i in range(admin_count):
             email = f"lag_admin_{uuid4().hex[:10]}@test.com"
-            user = UserModel(email=email, password_hash=lag_app._password_hash, is_active=True)
+            user = UserModel(email=email, is_active=True)
             db.session.add(user)
             db.session.flush()
             db.session.add(

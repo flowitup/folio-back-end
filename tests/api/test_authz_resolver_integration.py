@@ -43,7 +43,7 @@ def two_company_world(session):
     now = datetime.now(timezone.utc)
 
     def make_user(email: str) -> UserModel:
-        u = UserModel(id=uuid4(), email=email, password_hash=PASSWORD_HASH, is_active=True)
+        u = UserModel(id=uuid4(), email=email, is_active=True)
         session.add(u)
         return u
 

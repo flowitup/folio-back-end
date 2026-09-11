@@ -30,7 +30,7 @@ def _items(*, quantity=1, unit_price=100, vat_rate=0):
 
 @pytest.fixture
 def owner_user(session):
-    user = UserModel(id=uuid4(), email="payments_owner@test.com", password_hash="hashed", is_active=True)
+    user = UserModel(id=uuid4(), email="payments_owner@test.com", is_active=True)
     session.add(user)
     session.commit()
     return user

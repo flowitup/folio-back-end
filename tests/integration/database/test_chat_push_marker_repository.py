@@ -18,7 +18,7 @@ WINDOW = 60
 
 
 def _user(session, email: str):
-    user = UserModel(email=email, password_hash="x", is_active=True)
+    user = UserModel(email=email, is_active=True)
     session.add(user)
     session.flush()
     return user

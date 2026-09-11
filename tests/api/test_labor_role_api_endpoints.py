@@ -24,6 +24,7 @@ from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEn
 from app.infrastructure.adapters.sqlalchemy_labor_role import SQLAlchemyLaborRoleRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,6 @@ from tests.company_tenancy_helper import company_for_projects, seed_company_tena
 def role_app():
     """Flask app wired with in-memory DB + full labor + labor-role container."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -53,7 +53,6 @@ def role_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
         worker_repo = SQLAlchemyWorkerRepository(db.session)
@@ -63,7 +62,6 @@ def role_app():
 
         admin_user = UserModel(
             email="lradmin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
             is_active=True,
             # The legacy `*:*` role this fixture used to seed mapped to platform ops.
             is_platform_ops=True,
@@ -82,7 +80,6 @@ def role_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             worker_repository=worker_repo,
@@ -124,9 +121,7 @@ def role_client(role_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

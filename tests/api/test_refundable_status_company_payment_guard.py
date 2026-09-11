@@ -16,6 +16,7 @@ from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+from tests.auth_login_helper import mint_access_token
 from tests.company_tenancy_helper import seed_company_tenancy
 
 
@@ -28,7 +29,6 @@ from tests.company_tenancy_helper import seed_company_tenancy
 def rg_app():
     """Flask app wired for refundable-status company-payment guard tests."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
@@ -50,13 +50,10 @@ def rg_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         db.session.flush()
 
         admin_user = UserModel(
             email="rg_admin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
             is_active=True,
             # The legacy `*:*` role this fixture used to seed mapped to platform ops.
             is_platform_ops=True,
@@ -119,7 +116,6 @@ def rg_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invoice_repository=invoice_repo,
@@ -157,12 +153,7 @@ def rg_client(rg_app):
 
 @pytest.fixture
 def admin_token(rg_client, rg_app):
-    resp = rg_client.post(
-        "/api/v1/auth/login",
-        json={"email": rg_app._test_admin_email, "password": rg_app._test_admin_password},
-    )
-    assert resp.status_code == 200
-    return resp.get_json()["access_token"]
+    return mint_access_token(rg_client, rg_app._test_admin_email)
 
 
 def _auth(token):

@@ -38,13 +38,7 @@ def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=No
 
 
 def _make_user(email="admin@example.com") -> User:
-    return User(
-        id=uuid4(),
-        email=email,
-        password_hash="h",
-        is_active=True,
-        created_at=datetime.now(timezone.utc),
-    )
+    return User(id=uuid4(), email=email, is_active=True, created_at=datetime.now(timezone.utc))
 
 
 # The legacy helper names read better as intent: both build a plain user now —

@@ -1,7 +1,7 @@
 """Sign in with a phone number and a 6-digit code sent by SMS.
 
-Offered when the deployment's LOGIN_MODE is "phone" or "both". The refresh token lifetime
-follows REFRESH_TOKEN_POLICY like password login (``persistent`` argument).
+Phone + SMS code is the only way to sign in. The refresh token lifetime follows
+REFRESH_TOKEN_POLICY (``persistent`` argument).
 
 Codes leave through a French SMS gateway, so every phone step below accepts French numbers only
 (``normalize_french_phone``): a number from another country is refused before anything is stored
@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -27,9 +28,7 @@ from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
 from app.application.ports.sms_sender import SmsSenderPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
-from app.application.usecases.login import LoginResult
 from app.domain.entities.login_otp import LoginOtp
-from app.application.ports.password_hasher import PasswordHasherPort
 from app.domain.entities.user import User
 from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
@@ -62,9 +61,43 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+@dataclass
+class LoginResult:
+    """Result of a successful sign-in. Shared by OTP login, OTP signup and (from
+    phase 02 onward) invitation acceptance — every path issues tokens the same way.
+    """
+
+    user_id: UUID
+    access_token: str
+    refresh_token: str
+    permissions: List[str]
+
+
 @dataclass(frozen=True)
 class RequestOtpResult:
     expires_in: int
+
+
+# Environment names this deployment recognises as "not production". An unset or
+# unrecognised FLASK_ENV (a typo, or a staging value nobody declared here) counts
+# as production, so the test bypass below fails closed rather than open.
+_NON_PRODUCTION_ENVIRONMENTS = frozenset({"development", "testing"})
+
+
+def _test_code_accepted(submitted: str) -> bool:
+    """Whether `submitted` is the test-only OTP bypass code (see OTP_TEST_CODE).
+
+    This is an authentication bypass, so BOTH conditions are required:
+      1. FLASK_ENV is an explicit non-production value — unset/unrecognised is
+         treated as production, never as an accident-prone default.
+      2. OTP_TEST_CODE is configured (non-empty) — it is absent from production
+         configuration and must stay absent.
+    Only the exact configured code is accepted; every other wrong code still fails.
+    """
+    if os.environ.get("FLASK_ENV") not in _NON_PRODUCTION_ENVIRONMENTS:
+        return False
+    test_code = os.environ.get("OTP_TEST_CODE", "")
+    return bool(test_code) and submitted == test_code
 
 
 def _issue_code(
@@ -101,11 +134,17 @@ def _issue_code(
 
 
 def _consume_code(otps: LoginOtpRepositoryPort, *, phone: str, code: str, now: datetime, max_attempts: int) -> LoginOtp:
-    """Return the matching active code (marked consumed) or raise ``OtpInvalidError``; wrong guesses count."""
+    """Return the matching active code (marked consumed) or raise ``OtpInvalidError``; wrong guesses count.
+
+    Login, signup and (from phase 02) invite acceptance all funnel through this one
+    comparison — the single point where the non-production ``OTP_TEST_CODE`` bypass
+    is honoured (see ``_test_code_accepted``).
+    """
     otp = otps.latest_for_phone(phone)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
         raise OtpInvalidError("Invalid or expired code")
-    if not hmac.compare_digest(otp.code_hash, _hash_code(phone, code.strip())):
+    submitted = code.strip()
+    if not (hmac.compare_digest(otp.code_hash, _hash_code(phone, submitted)) or _test_code_accepted(submitted)):
         otp.attempts += 1
         otps.save(otp)
         raise OtpInvalidError("Invalid or expired code")
@@ -245,7 +284,6 @@ class VerifySignupOtpUseCase:
         self,
         user_repo: UserRepositoryPort,
         otp_repo: LoginOtpRepositoryPort,
-        password_hasher: PasswordHasherPort,
         authorization_service: AuthorizationService,
         token_issuer: TokenIssuerPort,
         *,
@@ -255,7 +293,6 @@ class VerifySignupOtpUseCase:
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
-        self._hasher = password_hasher
         self._authz = authorization_service
         self._tokens = token_issuer
         self._max_attempts = max_attempts
@@ -280,13 +317,12 @@ class VerifySignupOtpUseCase:
         if self._users.find_by_phone(phone) is not None:
             raise PhoneAlreadyRegisteredError("This phone number already has an account")
 
-        # No password: the account signs in by SMS code only. The hash is of a secret nobody knows.
+        # No password: the account signs in by SMS code only.
         user = User.create(
             email=f"phone-{phone.lstrip('+')}@{SIGNUP_EMAIL_DOMAIN}",
-            password_hash=self._hasher.hash(secrets.token_urlsafe(32)),
             display_name=name,
+            phone=phone,
         )
-        user.phone = phone
         self._users.save(user)
 
         # Phase 2 onboarding: attach any pending company profiles an admin

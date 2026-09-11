@@ -16,12 +16,7 @@ from app.infrastructure.database.repositories.sqlalchemy_billing_template_reposi
 
 
 def _seed_user(session) -> UUID:
-    user = UserModel(
-        id=uuid4(),
-        email=f"tpl-{uuid4().hex[:8]}@test.com",
-        password_hash="x",
-        is_active=True,
-    )
+    user = UserModel(id=uuid4(), email=f"tpl-{uuid4().hex[:8]}@test.com", is_active=True)
     session.add(user)
     session.flush()
     return UUID(str(user.id))

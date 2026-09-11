@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 
+from tests.auth_login_helper import mint_access_token
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 
 
@@ -33,14 +34,12 @@ def chiffrage_world(invitation_app):
     keeps the suite testing the authorization rules rather than that artefact.
     """
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models import ProjectModel, UserModel
 
-    hasher = Argon2PasswordHasher()
     with invitation_app.app_context():
 
-        writer = UserModel(email="chiffrage-writer@test.com", password_hash=hasher.hash("Writer1234!"), is_active=True)
-        reader = UserModel(email="chiffrage-reader@test.com", password_hash=hasher.hash("Reader1234!"), is_active=True)
+        writer = UserModel(email="chiffrage-writer@test.com", is_active=True)
+        reader = UserModel(email="chiffrage-reader@test.com", is_active=True)
         db.session.add_all([writer, reader])
         db.session.flush()
 
@@ -68,10 +67,8 @@ def chiffrage_world(invitation_app):
 
 
 def _token(client, credentials) -> str:
-    email, password = credentials
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    email, _password = credentials
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

@@ -25,6 +25,7 @@ from app.infrastructure.database.models import UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +44,6 @@ from app.infrastructure.database.models.user_company_access import UserCompanyAc
 def cadm_app():
     """Flask app with two companies, each admin/member combination pre-seeded."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class CadmTestConfig(TestingConfig):
@@ -56,12 +56,10 @@ def cadm_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         db.session.flush()
 
         def _user(email: str) -> UserModel:
-            u = UserModel(email=email, password_hash=hasher.hash("Passw0rd!"), is_active=True)
+            u = UserModel(email=email, is_active=True)
             db.session.add(u)
             return u
 
@@ -128,9 +126,7 @@ def cadm_client(cadm_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture
@@ -246,7 +242,7 @@ class TestSetMemberRole:
 
         with cadm_app.app_context():
             now = datetime.now(timezone.utc)
-            target = UserModel(email=f"cadm_target_{uuid4().hex[:8]}@test.com", password_hash="x", is_active=True)
+            target = UserModel(email=f"cadm_target_{uuid4().hex[:8]}@test.com", is_active=True)
             db.session.add(target)
             db.session.flush()
             db.session.add(

@@ -1,8 +1,7 @@
 """Auth API routes."""
 
 import logging
-from functools import wraps
-from typing import Any, Callable, TypeVar, cast
+from typing import Any
 from uuid import UUID
 
 from flask import current_app, jsonify, request, make_response
@@ -22,7 +21,6 @@ from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
     AuthConfigResponse,
-    LoginRequest,
     LoginResponse,
     LogoutBody,
     OtpRequestBody,
@@ -38,14 +36,12 @@ from app.api.v1.auth.schemas import (
     LogoutResponse,
 )
 from app.application.ports.sms_sender import SmsSendError
-from app.application.usecases.login import LoginResult
+from app.application.usecases.otp_login import LoginResult
 from app.domain.exceptions.auth_exceptions import (
-    InvalidCredentialsError,
     OtpInvalidError,
     OtpThrottledError,
     PhoneAlreadyRegisteredError,
     UserInactiveError,
-    UserNotFoundError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.infrastructure.rate_limiter import limiter
@@ -53,36 +49,9 @@ from wiring import get_container
 
 logger = logging.getLogger(__name__)
 
-F = TypeVar("F", bound=Callable[..., Any])
-
 
 def _persistent_sessions() -> bool:
     return bool(current_app.config.get("REFRESH_TOKEN_POLICY", "expiring") == "persistent")
-
-
-def require_login_mode(mode: str) -> Callable[[F], F]:
-    """404 unless LOGIN_MODE allows this sign-in method ("both" allows everything)."""
-
-    def decorator(func: F) -> F:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            allowed = current_app.config.get("LOGIN_MODE", "both")
-            if allowed not in (mode, "both"):
-                return (
-                    jsonify(
-                        ErrorResponse(
-                            error="NotFound",
-                            message=f"{mode.capitalize()} sign-in is not enabled on this server",
-                            status_code=404,
-                        ).model_dump()
-                    ),
-                    404,
-                )
-            return func(*args, **kwargs)
-
-        return cast(F, wrapper)
-
-    return decorator
 
 
 @auth_bp.route("/config", methods=["GET"])
@@ -93,82 +62,10 @@ def auth_config():
     """Public: which sign-in the apps should offer and whether sessions persist until sign-out."""
     return jsonify(
         AuthConfigResponse(
-            login_mode=str(current_app.config.get("LOGIN_MODE", "both")),
             session="persistent" if _persistent_sessions() else "expiring",
-            signup=current_app.config.get("LOGIN_MODE", "both") in ("phone", "both"),
+            signup=True,
         ).model_dump()
     )
-
-
-@auth_bp.route("/login", methods=["POST"])
-@openapi_doc(
-    summary="Authenticate user and return tokens",
-    request=LoginRequest,
-    responses={200: LoginResponse},
-    tags=["auth"],
-    auth=False,
-)
-@limiter.limit("5 per minute")
-@require_login_mode("email")
-def login():
-    """
-    Authenticate user and return tokens.
-
-    Request: { "email": "user@example.com", "password": "********" }
-    Response: { "access_token": "...", "refresh_token": "...", "user": {...} }
-    """
-    try:
-        data = LoginRequest(**request.get_json())
-    except ValidationError as e:
-        # Sanitize Pydantic errors - don't expose internals
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
-        return (
-            jsonify(
-                ErrorResponse(
-                    error="ValidationError",
-                    message=f"Invalid input: {', '.join(str(f) for f in error_fields)}",
-                    status_code=400,
-                ).model_dump()
-            ),
-            400,
-        )
-
-    container = get_container()
-
-    # Use container's LoginUseCase
-    if not container.login_usecase:
-        return (
-            jsonify(
-                ErrorResponse(error="ServerError", message="Auth services not configured", status_code=500).model_dump()
-            ),
-            500,
-        )
-
-    # Normalize all login-failure paths to a single 401 response so attackers cannot
-    # distinguish "user does not exist" / "wrong password" / "account deactivated"
-    # via status code or body. Deactivated-account UX (a friendlier message) is
-    # surfaced post-authentication via the dedicated user-status flow, never on
-    # the unauthenticated /login endpoint.
-    try:
-        result = container.login_usecase.execute(data.email, data.password, persistent=_persistent_sessions())
-    except (InvalidCredentialsError, UserNotFoundError):
-        return (
-            jsonify(
-                ErrorResponse(error="Unauthorized", message="Invalid email or password", status_code=401).model_dump()
-            ),
-            401,
-        )
-    except UserInactiveError:
-        # Emit a separate ops-side signal for visibility without leaking via HTTP.
-        logger.info("auth.login.deactivated_attempt email=%s", data.email)
-        return (
-            jsonify(
-                ErrorResponse(error="Unauthorized", message="Invalid email or password", status_code=401).model_dump()
-            ),
-            401,
-        )
-
-    return _login_response(container, result)
 
 
 def _error(status: int, error: str, message: str):
@@ -192,7 +89,7 @@ def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
 
 
 def _login_response(container, result: LoginResult):
-    """200 body + auth cookies shared by password and SMS-code sign-in."""
+    """200 body + auth cookies shared by every flow that issues tokens (SMS login and sign-up)."""
     user = container.user_repository.find_by_id(result.user_id)
     response_data = LoginResponse(
         access_token=result.access_token,
@@ -223,7 +120,6 @@ def _login_response(container, result: LoginResult):
     auth=False,
 )
 @limiter.limit("5 per minute")
-@require_login_mode("phone")
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
@@ -256,7 +152,6 @@ def request_otp():
     auth=False,
 )
 @limiter.limit("5 per minute")
-@require_login_mode("phone")
 def verify_otp():
     try:
         data = OtpVerifyBody(**(request.get_json(silent=True) or {}))
@@ -436,7 +331,6 @@ def update_current_user():
     auth=False,
 )
 @limiter.limit("5 per minute")
-@require_login_mode("phone")
 def request_signup_otp():
     try:
         data = SignupRequestBody(**(request.get_json(silent=True) or {}))
@@ -470,7 +364,6 @@ def request_signup_otp():
     auth=False,
 )
 @limiter.limit("5 per minute")
-@require_login_mode("phone")
 def verify_signup_otp():
     try:
         data = SignupVerifyBody(**(request.get_json(silent=True) or {}))

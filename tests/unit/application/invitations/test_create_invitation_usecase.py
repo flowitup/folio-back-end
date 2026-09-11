@@ -73,13 +73,7 @@ class _InviteReader:
 
 def _make_user(*, has_invite_perm: bool = False, is_superadmin: bool = False) -> User:
     """Identity only — what the inviter may do comes from the reader, not the user row."""
-    return User(
-        id=uuid4(),
-        email="inviter@example.com",
-        password_hash="hashed",
-        is_active=True,
-        created_at=datetime.now(timezone.utc),
-    )
+    return User(id=uuid4(), email="inviter@example.com", is_active=True, created_at=datetime.now(timezone.utc))
 
 
 def _make_project(owner_id=None) -> Project:
@@ -249,11 +243,7 @@ class TestExistingUserPath:
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         existing_user = User(
-            id=uuid4(),
-            email="existing@example.com",
-            password_hash="hashed",
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
+            id=uuid4(), email="existing@example.com", is_active=True, created_at=datetime.now(timezone.utc)
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
@@ -280,11 +270,7 @@ class TestExistingUserPath:
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         existing_user = User(
-            id=uuid4(),
-            email="existing@example.com",
-            password_hash="hashed",
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
+            id=uuid4(), email="existing@example.com", is_active=True, created_at=datetime.now(timezone.utc)
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
@@ -310,11 +296,7 @@ class TestExistingUserPath:
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         existing_user = User(
-            id=uuid4(),
-            email="existing@example.com",
-            password_hash="hashed",
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
+            id=uuid4(), email="existing@example.com", is_active=True, created_at=datetime.now(timezone.utc)
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
@@ -353,11 +335,7 @@ class TestExistingUserPath:
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         existing_user = User(
-            id=uuid4(),
-            email="member@example.com",
-            password_hash="hashed",
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
+            id=uuid4(), email="member@example.com", is_active=True, created_at=datetime.now(timezone.utc)
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = True
@@ -567,11 +545,7 @@ class TestDirectAddAttachesToTheProjectCompany:
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         existing_user = User(
-            id=uuid4(),
-            email="existing@example.com",
-            password_hash="hashed",
-            is_active=True,
-            created_at=datetime.now(timezone.utc),
+            id=uuid4(), email="existing@example.com", is_active=True, created_at=datetime.now(timezone.utc)
         )
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False

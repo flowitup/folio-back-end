@@ -50,7 +50,7 @@ def _sql_id(value: UUID) -> str:
 
 
 def _user(session, email: str) -> UserModel:
-    user = UserModel(id=uuid4(), email=email, password_hash="x" * 60, is_active=True)
+    user = UserModel(id=uuid4(), email=email, is_active=True)
     session.add(user)
     return user
 

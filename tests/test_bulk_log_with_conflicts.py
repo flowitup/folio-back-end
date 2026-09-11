@@ -38,12 +38,7 @@ from app.infrastructure.database.models import (
 
 @pytest.fixture
 def owner(session):
-    u = UserModel(
-        id=uuid4(),
-        email="bulk_conflict@test.com",
-        password_hash="x",
-        is_active=True,
-    )
+    u = UserModel(id=uuid4(), email="bulk_conflict@test.com", is_active=True)
     session.add(u)
     session.commit()
     return u

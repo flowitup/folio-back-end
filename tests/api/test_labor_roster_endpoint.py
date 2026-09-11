@@ -28,6 +28,7 @@ from app.infrastructure.database.models import ProjectModel, UserModel, WorkerMo
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.labor_entry import LaborEntryModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 ROSTER_DATE = "2026-04-06"
@@ -36,7 +37,6 @@ ROSTER_DATE = "2026-04-06"
 @pytest.fixture(scope="module")
 def roster_app():
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class RosterTestConfig(TestingConfig):
@@ -48,11 +48,10 @@ def roster_app():
 
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
         def user(email: str) -> UserModel:
-            u = UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            u = UserModel(email=email, is_active=True)
             db.session.add(u)
             return u
 
@@ -174,7 +173,6 @@ def roster_app():
         configure_container(
             user_repository=SQLAlchemyUserRepository(db.session),
             project_repository=SQLAlchemyProjectRepository(db.session),
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             worker_repository=SQLAlchemyWorkerRepository(db.session),
@@ -212,9 +210,7 @@ def client(roster_app):
 
 
 def _login(client, email: str) -> dict:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_json()
-    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture

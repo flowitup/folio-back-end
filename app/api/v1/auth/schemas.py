@@ -3,14 +3,7 @@
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
-
-
-class LoginRequest(BaseModel):
-    """Login request payload."""
-
-    email: EmailStr
-    password: str = Field(..., min_length=8, max_length=128)
+from pydantic import BaseModel, Field
 
 
 class OtpRequestBody(BaseModel):
@@ -35,9 +28,8 @@ class OtpVerifyBody(BaseModel):
 class AuthConfigResponse(BaseModel):
     """GET /auth/config — what this deployment offers, read by the apps before sign-in."""
 
-    login_mode: str  # "email" | "phone" | "both"
     session: str  # "expiring" (7-day refresh token) | "persistent" (until sign-out)
-    signup: bool  # phone self-registration offered (LOGIN_MODE phone/both)
+    signup: bool  # phone self-registration — always true; phone is the only sign-in method
 
 
 class SignupRequestBody(BaseModel):

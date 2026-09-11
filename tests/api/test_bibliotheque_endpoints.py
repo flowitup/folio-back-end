@@ -16,6 +16,7 @@ from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.associations import user_projects
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 # ---------------------------------------------------------------------------
 # App fixture — isolated Flask test app with bibliotheque use-cases wired
@@ -26,7 +27,6 @@ from app.infrastructure.database.models.user_company_access import UserCompanyAc
 def bibliotheque_app():
     """Flask app wired with bibliotheque use-cases for endpoint tests."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
@@ -72,35 +72,17 @@ def bibliotheque_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         # Permissions
 
         db.session.flush()
 
-        admin_user = UserModel(
-            email="bib_admin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="bib_admin@test.com", is_active=True)
 
-        member_user = UserModel(
-            email="bib_member@test.com",
-            password_hash=hasher.hash("Member1234!"),
-            is_active=True,
-        )
+        member_user = UserModel(email="bib_member@test.com", is_active=True)
 
-        manager_user = UserModel(
-            email="bib_manager@test.com",
-            password_hash=hasher.hash("Manager1234!"),
-            is_active=True,
-        )
+        manager_user = UserModel(email="bib_manager@test.com", is_active=True)
 
-        outsider_user = UserModel(
-            email="bib_outsider@test.com",
-            password_hash=hasher.hash("Outsider1234!"),
-            is_active=True,
-        )
+        outsider_user = UserModel(email="bib_outsider@test.com", is_active=True)
 
         db.session.add_all([admin_user, member_user, manager_user, outsider_user])
         db.session.flush()
@@ -146,7 +128,6 @@ def bibliotheque_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
         )
@@ -259,10 +240,7 @@ def bib_client(bibliotheque_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    """Helper: login and return access token."""
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

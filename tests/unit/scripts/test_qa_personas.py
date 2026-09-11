@@ -10,11 +10,15 @@ import pytest
 from sqlalchemy import text
 
 SUFFIX = "unit"
-PASSWORD = "Passw0rd!"
 EMAILS = {
     "admin": "qa.admin@example.com",
     "manager": "qa.manager@example.com",
     "member": "qa.member@example.com",
+}
+PHONES = {
+    "admin": "+33600000101",
+    "manager": "+33600000102",
+    "member": "+33600000103",
 }
 
 
@@ -45,7 +49,7 @@ def _create(app):
     from scripts.qa_personas import create_personas
 
     with app.app_context():
-        return create_personas(SUFFIX, EMAILS, PASSWORD, "1 rue de la Recette")
+        return create_personas(SUFFIX, EMAILS, PHONES, "1 rue de la Recette")
 
 
 def _delete(app):
@@ -136,7 +140,7 @@ def test_delete_refuses_a_user_attached_elsewhere(qa_app):
     try:
         with qa_app.app_context():
             now = datetime.now(timezone.utc)
-            outsider = UserModel(email="real.user@example.com", password_hash="x" * 60, is_active=True)
+            outsider = UserModel(email="real.user@example.com", is_active=True)
             db.session.add(outsider)
             db.session.flush()
             db.session.add(
@@ -175,7 +179,7 @@ def _seed_outside_world(app) -> dict:
 
     with app.app_context():
         now = datetime.now(timezone.utc)
-        user = UserModel(id=uuid4(), email="real.user@example.com", password_hash="x" * 60, is_active=True)
+        user = UserModel(id=uuid4(), email="real.user@example.com", is_active=True)
         db.session.add(user)
         company = CompanyModel(
             id=uuid4(), legal_name="Real Co", address="1 rue", created_by=user.id, created_at=now, updated_at=now
@@ -213,11 +217,11 @@ def test_create_refuses_an_email_owned_by_someone_else(qa_app):
     try:
         with qa_app.app_context():
             with pytest.raises(QaPersonaRefused, match="real.user@example.com"):
-                create_personas(SUFFIX, {**EMAILS, "member": "real.user@example.com"}, PASSWORD, "1 rue")
+                create_personas(SUFFIX, {**EMAILS, "member": "real.user@example.com"}, PHONES, "1 rue")
 
-            # Nothing was written, and the real account is byte-for-byte intact.
+            # Nothing was written, and the real account is untouched.
             real = db.session.query(UserModel).filter_by(email="real.user@example.com").one()
-            assert real.password_hash == "x" * 60
+            assert real.phone is None
             assert real.is_active is True
             assert _count("SELECT COUNT(*) FROM users WHERE email LIKE 'qa.%'") == 0
             assert _count("SELECT COUNT(*) FROM companies WHERE legal_name = :n", n=company_name(SUFFIX)) == 0

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Biblio1234!"
 
@@ -25,9 +26,7 @@ def _auth(token: str) -> dict:
 
 
 def _login(client, email: str, password: str = PASSWORD) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +36,6 @@ def biblio_app(invitation_app):
     from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
     from app.application.bibliotheque.delete_product_usecase import DeleteProductUseCase
     from app.application.bibliotheque.list_products_usecase import ListProductsUseCase
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.company_membership_reader import CompanyMembershipReader
     from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
     from app.infrastructure.database.models import UserModel
@@ -83,13 +81,8 @@ def biblio_app(invitation_app):
         now = datetime.now(timezone.utc)
         company_uuid = UUID(invitation_app._test_company_id)
         project_uuid = UUID(invitation_app._test_project_id)
-        hasher = Argon2PasswordHasher()
-        manager = UserModel(
-            id=uuid4(), email="biblio_manager@test.com", password_hash=hasher.hash(PASSWORD), is_active=True
-        )
-        unassigned = UserModel(
-            id=uuid4(), email="biblio_unassigned@test.com", password_hash=hasher.hash(PASSWORD), is_active=True
-        )
+        manager = UserModel(id=uuid4(), email="biblio_manager@test.com", is_active=True)
+        unassigned = UserModel(id=uuid4(), email="biblio_unassigned@test.com", is_active=True)
         db.session.add_all([manager, unassigned])
         db.session.flush()
         db.session.add_all(

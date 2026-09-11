@@ -18,6 +18,7 @@ import pytest
 from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 
@@ -26,7 +27,6 @@ PASSWORD = "Pass1234!"
 def ws_app():
     """Fully wired app (create_app configures the DI container) with seeded roles, users, workers."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class WsTestConfig(TestingConfig):
@@ -37,10 +37,9 @@ def ws_app():
     test_app = create_app(WsTestConfig)
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
 
         def user(email):
-            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            return UserModel(email=email, is_active=True)
 
         owner = user("owner@ws-test.com")
         linked = user("linked@ws-test.com")
@@ -86,9 +85,7 @@ def ids(ws_app):
 
 
 def _login(client, email):
-    r = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert r.status_code == 200, r.get_json()
-    return {"Authorization": f"Bearer {r.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture
@@ -245,20 +242,18 @@ def test_view_pay_grant_widens_read_but_not_write(ws_app, client, monkeypatch):
     from uuid import uuid4
 
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models.company import CompanyModel
     from app.infrastructure.database.models.labor_entry import LaborEntryModel
     from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
     from wiring import get_container
 
     with ws_app.app_context():
-        hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
         # A separate owner logs the entry — vp_user must NOT be the project
         # owner or manage_labor holder, else caller_manages_labor already
         # widens the scope and the grant path under test is never exercised.
-        owner_user = UserModel(email="viewpay_owner@ws-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
-        vp_user = UserModel(email="viewpay@ws-test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        owner_user = UserModel(email="viewpay_owner@ws-test.com", is_active=True)
+        vp_user = UserModel(email="viewpay@ws-test.com", is_active=True)
         db.session.add_all([owner_user, vp_user])
         db.session.flush()
 

@@ -20,17 +20,3 @@ class Email:
 
     def __str__(self) -> str:
         return self.value
-
-
-@dataclass(frozen=True, slots=True)
-class Password:
-    """Immutable password value object with validation."""
-
-    value: str
-
-    def __post_init__(self) -> None:
-        if len(self.value) < 8:
-            raise ValueError("Password must be at least 8 characters")
-
-    def __str__(self) -> str:
-        return "********"  # Never expose password

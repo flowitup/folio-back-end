@@ -53,7 +53,7 @@ def fk_enforced_session():
 def test_deleting_worker_sets_invoice_worker_id_null(fk_enforced_session):
     session = fk_enforced_session
 
-    user = UserModel(id=uuid4(), email="fk_test@test.com", password_hash="x", is_active=True)
+    user = UserModel(id=uuid4(), email="fk_test@test.com", is_active=True)
     session.add(user)
     session.flush()
 

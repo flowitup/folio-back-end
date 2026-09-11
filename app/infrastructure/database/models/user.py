@@ -18,7 +18,6 @@ class UserModel(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     email = Column(String(255), unique=True, nullable=False)
-    password_hash = Column(String(128), nullable=False)  # Argon2 hashes are ~97 chars
     is_active = Column(Boolean, default=True, nullable=False)
     display_name = Column(Text, nullable=True)  # added in phase-01 migration
     phone = Column(String(20), unique=True, nullable=True)  # E.164, SMS-code sign-in

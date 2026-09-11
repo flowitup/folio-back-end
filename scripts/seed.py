@@ -2,35 +2,37 @@
 
 Usage:
     # Seed with admin user (CLI args - dev only)
-    uv run python scripts/seed.py --with-admin admin@example.com password
+    uv run python scripts/seed.py --with-admin admin@example.com +33612345678
 
     # Seed with admin user (env vars - recommended)
-    ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=secret \
+    ADMIN_EMAIL=admin@example.com ADMIN_PHONE=+33612345678 \
         uv run python scripts/seed.py --with-admin
 
     # Seed admin + sample projects
-    uv run python scripts/seed.py --with-admin admin@example.com password --with-projects
+    uv run python scripts/seed.py --with-admin admin@example.com +33612345678 --with-projects
 
     # Seed full suite for FE/manual QA + e2e tests
-    ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=password123 \
+    ADMIN_EMAIL=admin@example.com ADMIN_PHONE=+33612345678 \
         uv run python scripts/seed.py --all
 
     # Granular flags (combine as needed)
-    uv run python scripts/seed.py --with-admin admin@example.com password \
+    uv run python scripts/seed.py --with-admin admin@example.com +33612345678 \
         --with-projects --with-users --with-memberships --with-invitations \
         --with-labor --with-invoices --with-notes
 
     # Reset invoices and reseed (use --reset-invoices alongside --with-invoices)
-    uv run python scripts/seed.py --with-admin admin@example.com password \
+    uv run python scripts/seed.py --with-admin admin@example.com +33612345678 \
         --with-projects --with-invoices --reset-invoices
 
-Test password convention:
-    All users seeded by --with-users (and the legacy `client@example.com`)
-    use the hardcoded password `password123`. DEV/TEST ONLY — never use this
-    convention in staging or production.
+Test phone convention:
+    Phone + SMS code is the only way to sign in — there is no password. Every
+    user seeded by --with-users has a hardcoded French number (see
+    scripts/seed_users.TEST_PHONES); the legacy `client@example.com` gets
+    +33700000001. SMS_PROVIDER=log prints the code in the API log. DEV/TEST
+    ONLY — never use this convention in staging or production.
 
 Security Note:
-    Prefer environment variables over CLI args for the admin password to avoid
+    Prefer environment variables over CLI args for the admin phone to avoid
     exposing it in shell history. CLI args are acceptable for local development.
 
 Flag dependency graph:
@@ -86,24 +88,24 @@ def main() -> None:
         admin_user = None
         company = None
         if all_flag or _flag("--with-admin"):
-            email, password = get_admin_credentials()
+            email, phone = get_admin_credentials()
 
-            if email and password:
+            if email and phone:
                 print(f"\n1. Creating admin user: {email}...")
-                admin_user = create_admin_user(email, password)
+                admin_user = create_admin_user(email, phone)
 
                 # Also create the legacy client user for backwards-compat
                 print("\n2. Creating client user: client@example.com...")
-                create_client_user("client@example.com", "password123")
+                create_client_user("client@example.com", "+33700000001")
 
                 # The company is the tenant: it exists before any project.
                 print("\n3. Creating the demo company...")
                 company = ensure_company(admin_user)
             else:
-                print("\nError: --with-admin requires credentials")
+                print("\nError: --with-admin requires an email and a French phone number")
                 print("Options:")
-                print("  1. Environment vars: ADMIN_EMAIL=x ADMIN_PASSWORD=y " "python scripts/seed.py --with-admin")
-                print("  2. CLI args (dev only): python scripts/seed.py --with-admin email password")
+                print("  1. Environment vars: ADMIN_EMAIL=x ADMIN_PHONE=+33... " "python scripts/seed.py --with-admin")
+                print("  2. CLI args (dev only): python scripts/seed.py --with-admin email +33...")
                 sys.exit(1)
 
         # Test user roster (admins, managers, regular users, inactive)

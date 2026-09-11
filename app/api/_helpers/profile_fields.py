@@ -1,9 +1,10 @@
 """Apply ``display_name`` / ``phone`` edits to a user the same way everywhere.
 
 Shared by the platform-ops route (``PATCH /admin/users/<id>``) and the self-service route
-(``PATCH /auth/me``): the phone is the sign-in identity when ``LOGIN_MODE`` allows phone, so it is
-normalised to E.164 and must stay unique across users; the display name is trimmed and cleared
-when empty. Returns ``None`` on success or ``(status, error, message)`` for the route to answer.
+(``PATCH /auth/me``): the phone is the sign-in identity (phone + SMS code is the only way in),
+so it is normalised to E.164 and must stay unique across users; the display name is trimmed and
+cleared when empty. Returns ``None`` on success or ``(status, error, message)`` for the route to
+answer.
 """
 
 from __future__ import annotations
