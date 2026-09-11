@@ -17,6 +17,7 @@ from flask_sqlalchemy import SQLAlchemy
 from config import Config
 from app.infrastructure.database.models import Base
 from app.infrastructure.rate_limiter import limiter
+from app.infrastructure.trusted_proxy import apply_trusted_proxy
 
 # Create SQLAlchemy with our custom Base's metadata
 db = SQLAlchemy(model_class=Base)
@@ -100,6 +101,11 @@ def create_app(config_class: type = Config) -> Flask:
     db.init_app(app)
     jwt.init_app(app)
     limiter.init_app(app)
+    # flask-limiter keys every limit on the client address, which behind cloudflared or the
+    # Next.js server actions is the proxy rather than the visitor unless the forwarded one is
+    # read (app/infrastructure/trusted_proxy.py). This is the only place app.wsgi_app is
+    # wrapped, so nothing can re-wrap it afterwards and invert the order.
+    apply_trusted_proxy(app)
     migrate.init_app(app, db, render_as_batch=True)
 
     # Configure JWT handlers

@@ -89,6 +89,12 @@ class Config:
     RATELIMIT_STORAGE_URI: str = get_env("REDIS_URL", default="redis://localhost:6379/1")
     RATELIMIT_DEFAULT: str = "100 per minute"
     RATELIMIT_LOGIN: str = "5 per minute"
+    # How many reverse proxies sit in front of the API and may name the caller through
+    # X-Forwarded-For (app/infrastructure/trusted_proxy.py). Every limit above is keyed on
+    # the caller's address, so behind a proxy with 0 hops the whole deployment shares one
+    # bucket. 0 = trust nothing, keep the socket peer; production sits behind cloudflared
+    # alone and sets 1.
+    TRUSTED_PROXY_HOPS: int = int(get_env("TRUSTED_PROXY_HOPS", default="0"))
 
     # S3 / MinIO storage for invoice attachments
     S3_ENDPOINT_URL: str = get_env("S3_ENDPOINT_URL", default="http://localhost:9000")
