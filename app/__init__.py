@@ -537,6 +537,14 @@ def _configure_di_container() -> None:
                 _c.token_issuer,
                 max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
             )
+        # Invitation acceptance proves a phone by the same sign-up code flow (see
+        # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
+        # use case instance, gated by the invitation token instead of being open to
+        # anyone. invitation_repo is wired earlier, in configure_container().
+        if _c.invitation_repo is not None:
+            from app.application.invitations.accept_invitation_usecase import RequestInviteOtpUseCase
+
+            _c.request_invite_otp_usecase = RequestInviteOtpUseCase(_c.invitation_repo, _c.request_signup_otp_usecase)
 
     # -----------------------------------------------------------------------
     # Companies DI wiring (phase 03)
@@ -931,6 +939,8 @@ def _configure_di_container() -> None:
             link_person_on_signup=_link_person_on_signup,
             person_repo=_person_repo,
             company_person_repo=_c.company_person_repo,
+            otp_repo=_c.login_otp_repository,
+            otp_max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
         )
 
     # Re-wire CreateWorkerUseCase with person_repo now that the latter

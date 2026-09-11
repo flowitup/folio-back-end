@@ -340,6 +340,9 @@ class Container:
     verify_otp_usecase: Optional[Any] = None
     request_signup_otp_usecase: Optional[Any] = None
     verify_signup_otp_usecase: Optional[Any] = None
+    # Texts a sign-up code to the phone an invitation acceptor is claiming — gated by the
+    # invitation token instead of being open to anyone (see AcceptInvitationUseCase).
+    request_invite_otp_usecase: Optional[Any] = None
     set_join_code_usecase: Optional[Any] = None
     join_company_by_code_usecase: Optional[Any] = None
 

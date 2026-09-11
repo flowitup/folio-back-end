@@ -42,12 +42,24 @@ class VerifyInviteResponse(BaseModel):
     expires_at: datetime
 
 
+class RequestInviteCodeRequest(BaseModel):
+    """POST /invitations/accept/request-code request body.
+
+    Public: the invitation token (not a session) is the authorisation for texting a
+    code to the phone the invitee is claiming.
+    """
+
+    token: str = Field(min_length=10, max_length=200)
+    phone: str = Field(..., min_length=6, max_length=32)
+
+
 class AcceptInviteRequest(BaseModel):
     """POST /invitations/accept request body."""
 
     token: str = Field(min_length=10, max_length=200)
     name: str = Field(min_length=1, max_length=100)
-    password: str = Field(min_length=8, max_length=128)
+    phone: str = Field(..., min_length=6, max_length=32)
+    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
 
 
 class InvitationListItem(BaseModel):

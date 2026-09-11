@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING, Optional
 
@@ -10,26 +11,65 @@ from app.application.invitations.ports import (
     InvitationRepositoryPort,
     ProjectMembershipRepositoryPort,
     TransactionalSessionPort,
-    UserWriteRepositoryPort,
 )
+from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
 from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
+from app.application.ports.user_repository import UserRepositoryPort
+from app.application.usecases.otp_login import RequestOtpResult, RequestSignupOtpUseCase, _consume_code
 from app.application.company_persons.ensure_company_person import ensure_company_person
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.project_membership import ProjectMembership
 from app.domain.entities.user import User
+from app.domain.exceptions.auth_exceptions import OtpInvalidError, PhoneAlreadyRegisteredError
 from app.domain.exceptions.invitation_exceptions import InvalidInvitationTokenError
 from app.domain.value_objects.invite_token import hash_token
+from app.domain.value_objects.phone_number import normalize_french_phone
 
 if TYPE_CHECKING:
     from app.application.authz.ports import AuthzReaderPort
     from app.application.companies.ports import UserCompanyAccessRepositoryPort
     from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
 
-_MIN_PASSWORD_LEN = 8
-_MAX_PASSWORD_LEN = 128
 _MAX_NAME_LEN = 100
+
+
+class RequestInviteOtpUseCase:
+    """Text a sign-up code to the phone number an invitation acceptor is claiming.
+
+    Public endpoint — the invitation token is the authorisation, so a code is only sent for a
+    currently-usable (pending, unexpired, unrevoked) invitation. Once the token checks out, this
+    delegates straight to ``RequestSignupOtpUseCase``: same phone normalisation,
+    already-registered check, per-phone throttling and code storage as phone sign-up
+    (``_issue_code`` in otp_login.py). No OTP logic is reimplemented here.
+    """
+
+    def __init__(
+        self,
+        invitation_repo: InvitationRepositoryPort,
+        request_signup_otp: RequestSignupOtpUseCase,
+    ) -> None:
+        self._inv_repo = invitation_repo
+        self._request_signup_otp = request_signup_otp
+
+    def execute(self, raw_token: str, raw_phone: str) -> RequestOtpResult:
+        """Send a sign-up code to ``raw_phone`` once ``raw_token`` proves a live invitation.
+
+        Raises:
+            InvalidInvitationTokenError: token does not match any invitation.
+            InvitationExpiredError / InvitationRevokedError / InvitationAlreadyAcceptedError:
+                the invitation exists but cannot be used right now (via ``Invitation.accept()``;
+                the returned copy is discarded here — nothing is persisted by this check).
+            InvalidPhoneNumberError / PhoneAlreadyRegisteredError / OtpThrottledError / SmsSendError:
+                propagated from ``RequestSignupOtpUseCase.execute()``.
+        """
+        inv = self._inv_repo.find_by_token_hash(hash_token(raw_token))
+        if inv is None:
+            raise InvalidInvitationTokenError("No invitation found for the supplied token.")
+        inv.accept()  # validate-only: raises on expired/revoked/accepted; result discarded
+
+        return self._request_signup_otp.execute(raw_phone)
 
 
 class AcceptInvitationUseCase:
@@ -44,18 +84,20 @@ class AcceptInvitationUseCase:
     callers/tests that construct this use case without the companies BC
     keep working unchanged (company attachment is then simply skipped).
 
-    M3: `execute` takes no `phone` parameter — an invitation acceptor typing
-    an arbitrary phone number is never a verified identity, so it must never
-    be written to `users.phone` nor fed to `LinkPersonOnSignupUseCase` (which
-    would otherwise silently merge an unrelated pending onboarding profile
-    onto this account). `link_person_on_signup` stays injectable for parity
-    with the OTP sign-up wiring but is currently unused here for that reason.
+    `execute` takes a `phone` proven by a 6-digit SMS code (see
+    `otp_login._consume_code`) rather than a chosen password: a newly created
+    account gets that verified number written to `users.phone` so it can sign
+    in the same way as phone sign-up. `link_person_on_signup` stays injectable
+    for parity with the OTP sign-up wiring but is not invoked here — linking a
+    fresh account to pending company-directory profiles is a separate concern
+    from proving phone ownership for invitation acceptance, and is out of this
+    change's scope.
     """
 
     def __init__(
         self,
         invitation_repo: InvitationRepositoryPort,
-        user_repo: UserWriteRepositoryPort,
+        user_repo: UserRepositoryPort,
         project_membership_repo: ProjectMembershipRepositoryPort,
         password_hasher: PasswordHasherPort,
         token_issuer: TokenIssuerPort,
@@ -65,6 +107,8 @@ class AcceptInvitationUseCase:
         link_person_on_signup: "Optional[LinkPersonOnSignupUseCase]" = None,
         person_repo: "Optional[Any]" = None,
         company_person_repo: "Optional[Any]" = None,
+        otp_repo: Optional[LoginOtpRepositoryPort] = None,
+        otp_max_attempts: int = 5,
     ) -> None:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
@@ -79,6 +123,9 @@ class AcceptInvitationUseCase:
         # company's people, or an admin cannot assign them to a project.
         self._persons = person_repo
         self._company_persons = company_person_repo
+        # Verifies the phone code proving this acceptance (see execute()).
+        self._otp_repo = otp_repo
+        self._otp_max_attempts = otp_max_attempts
 
     # ------------------------------------------------------------------
 
@@ -86,7 +133,8 @@ class AcceptInvitationUseCase:
         self,
         raw_token: str,
         name: str,
-        password: str,
+        phone: str,
+        code: str,
     ) -> AcceptInvitationResultDto:
         """Process acceptance of an invitation.
 
@@ -94,14 +142,48 @@ class AcceptInvitationUseCase:
             InvalidInvitationTokenError: token unknown.
             InvitationExpiredError / InvitationRevokedError / InvitationAlreadyAcceptedError:
                 via inv.accept().
-            ValueError: password or name validation failure.
+            InvalidPhoneNumberError: phone is not a valid French E.164 number.
+            OtpInvalidError: code is wrong, expired, attempts exhausted, or was issued to sign an
+                existing account in rather than to prove a new one.
+            PhoneAlreadyRegisteredError: phone already belongs to another account.
+            ValueError: name validation failure.
         """
+        if self._otp_repo is None:
+            raise RuntimeError("AcceptInvitationUseCase requires otp_repo to verify a phone code.")
+
         # Validate inputs before hitting the DB
         self._validate_name(name)
-        self._validate_password(password)
-
+        normalized_phone = normalize_french_phone(phone)
         token_hash = hash_token(raw_token)
-        password_hash = self._hasher.hash(password)
+
+        # The invitation token is this endpoint's authorisation too: reject a bad, expired,
+        # revoked or already-accepted token BEFORE spending an attempt against the phone code
+        # (Invitation.accept() raises the right typed error; the returned copy is discarded —
+        # the real, row-locked acceptance happens below).
+        early_inv = self._inv_repo.find_by_token_hash(token_hash)
+        if early_inv is None:
+            raise InvalidInvitationTokenError("No invitation found for the supplied token.")
+        early_inv.accept()
+
+        # Reuses the exact same comparison, hashing, expiry and attempt-counting as sign-in and
+        # phone sign-up (_consume_code in otp_login.py) — including the non-production
+        # OTP_TEST_CODE bypass, which invitation acceptance inherits for free.
+        otp = _consume_code(
+            self._otp_repo,
+            phone=normalized_phone,
+            code=code,
+            now=datetime.now(timezone.utc),
+            max_attempts=self._otp_max_attempts,
+        )
+        if otp.user_id is not None:
+            # A sign-in code proves an existing account, not a new one.
+            raise OtpInvalidError("Invalid or expired code")
+
+        # NOTE: password_hash is still a NOT NULL column on `users`. Invitation acceptance no
+        # longer collects a password — this hashes a random secret nobody knows, exactly like
+        # phone sign-up in otp_login.py. Drop this once the column itself is removed from the
+        # model, entity and database.
+        password_hash = self._hasher.hash(secrets.token_urlsafe(32))
 
         # --- Transactional block (SAVEPOINT — works inside Flask-SQLAlchemy's request transaction).
         #
@@ -122,11 +204,14 @@ class AcceptInvitationUseCase:
             user = self._user_repo.find_by_email(inv.email)
             is_new_user = user is None
             if is_new_user:
+                if self._user_repo.find_by_phone(normalized_phone) is not None:
+                    raise PhoneAlreadyRegisteredError("This phone number already has an account.")
                 user = User.create(
                     email=inv.email,
                     password_hash=password_hash,
                     display_name=name,
                 )
+                user.phone = normalized_phone
                 user = self._user_repo.save(user)
 
             if not self._membership_repo.exists(user.id, inv.project_id):
@@ -185,12 +270,6 @@ class AcceptInvitationUseCase:
     # ------------------------------------------------------------------
     # Private validators
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _validate_password(password: str) -> None:
-        length = len(password)
-        if length < _MIN_PASSWORD_LEN or length > _MAX_PASSWORD_LEN:
-            raise ValueError(f"Password must be between {_MIN_PASSWORD_LEN} and " f"{_MAX_PASSWORD_LEN} characters.")
 
     @staticmethod
     def _validate_name(name: str) -> None:

@@ -15,13 +15,20 @@ from app.api.v1.invitations.schemas import (
     CreateInviteResponse,
     InvitationListItem,
     InvitationListResponse,
+    RequestInviteCodeRequest,
     VerifyInviteResponse,
 )
-from app.api.v1.auth.schemas import ErrorResponse
+from app.api.v1.auth.schemas import ErrorResponse, OtpRequestResponse
 from app.application.invitations.exceptions import (
     PermissionDeniedError,
     RateLimitedError,
     ProjectNotFoundError,
+)
+from app.application.ports.sms_sender import SmsSendError
+from app.domain.exceptions.auth_exceptions import (
+    OtpInvalidError,
+    OtpThrottledError,
+    PhoneAlreadyRegisteredError,
 )
 from app.domain.exceptions.invitation_exceptions import (
     InvitationAlreadyAcceptedError,
@@ -30,6 +37,7 @@ from app.domain.exceptions.invitation_exceptions import (
     InvitationRevokedError,
     InvalidInvitationTokenError,
 )
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -47,6 +55,16 @@ def _gone(reason: str, message: str):
     body = ErrorResponse(error="Gone", message=message, status_code=410).model_dump()
     body["reason"] = reason
     return jsonify(body), 410
+
+
+def _conflict(reason: str, message: str):
+    """409 Conflict with a `reason` discriminator the frontend uses to pick the error UI.
+
+    reason ∈ {'phone_registered'}.
+    """
+    body = ErrorResponse(error="Conflict", message=message, status_code=409).model_dump()
+    body["reason"] = reason
+    return jsonify(body), 409
 
 
 def _validation_err(e: ValidationError):
@@ -242,6 +260,58 @@ def verify_invitation(token: str):
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/invitations/accept/request-code  — public
+# ---------------------------------------------------------------------------
+
+
+@invitations_bp.route("/accept/request-code", methods=["POST"])
+@openapi_doc(
+    summary="Text a 6-digit code to the phone number an invitation acceptor is claiming",
+    request=RequestInviteCodeRequest,
+    responses={202: OtpRequestResponse},
+    tags=["invitations"],
+    auth=False,
+)
+@limiter.limit("5 per minute")
+def request_invite_code():
+    """Text a sign-up code to the phone being claimed. Public: the invitation token is the authorisation."""
+    try:
+        data = RequestInviteCodeRequest(**request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return _validation_err(e)
+
+    container = get_container()
+    if container.request_invite_otp_usecase is None:
+        return _err(503, "ServiceUnavailable", "Invitation service not configured.")
+
+    try:
+        result = container.request_invite_otp_usecase.execute(data.token, data.phone)
+    except InvalidInvitationTokenError:
+        return _err(404, "NotFound", "Invitation not found.")
+    except InvitationExpiredError as e:
+        return _gone("expired", str(e))
+    except InvitationRevokedError as e:
+        return _gone("revoked", str(e))
+    except InvitationAlreadyAcceptedError as e:
+        return _gone("accepted", str(e))
+    except InvalidPhoneNumberError as e:
+        return _err(400, "ValidationError", str(e))
+    except PhoneAlreadyRegisteredError:
+        return _conflict("phone_registered", "This phone number already has an account.")
+    except OtpThrottledError as e:
+        return _err(429, "TooManyRequests", str(e))
+    except SmsSendError:
+        return _err(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
+    except Exception:
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    from app import db
+
+    db.session.commit()
+    return jsonify(OtpRequestResponse(expires_in=result.expires_in).model_dump()), 202
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/invitations/accept  — public
 # ---------------------------------------------------------------------------
 
@@ -265,11 +335,14 @@ def accept_invitation():
     if container.accept_invitation_usecase is None:
         return _err(503, "ServiceUnavailable", "Invitation service not configured.")
 
+    from app import db
+
     try:
         result = container.accept_invitation_usecase.execute(
             raw_token=data.token,
             name=data.name,
-            password=data.password,
+            phone=data.phone,
+            code=data.code,
         )
     except InvalidInvitationTokenError:
         return _err(404, "NotFound", "Invitation not found.")
@@ -279,6 +352,15 @@ def accept_invitation():
         return _gone("revoked", str(e))
     except InvitationAlreadyAcceptedError as e:
         return _gone("accepted", str(e))
+    except InvalidPhoneNumberError as e:
+        return _err(400, "ValidationError", str(e))
+    except OtpInvalidError:
+        # The attempt counter moved; persist it so guesses really are limited.
+        db.session.commit()
+        return _err(401, "Unauthorized", "Invalid or expired code")
+    except PhoneAlreadyRegisteredError:
+        db.session.commit()
+        return _conflict("phone_registered", "This phone number already has an account.")
     except ValueError as e:
         return _err(422, "ValidationError", str(e))
     except Exception:
