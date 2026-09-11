@@ -33,12 +33,7 @@ requires_postgres = pytest.mark.skipif(
 def _seed_user_pg(session) -> UUID:
     from app.infrastructure.database.models import UserModel
 
-    user = UserModel(
-        id=uuid4(),
-        email=f"cnt-{uuid4().hex[:8]}@test.com",
-        password_hash="x",
-        is_active=True,
-    )
+    user = UserModel(id=uuid4(), email=f"cnt-{uuid4().hex[:8]}@test.com", is_active=True)
     session.add(user)
     session.flush()
     session.commit()
@@ -58,12 +53,7 @@ class TestAtomicCounterSingleThread:
         )
         from app.infrastructure.database.models import UserModel
 
-        user = UserModel(
-            id=uuid4(),
-            email=f"cnt-st-{uuid4().hex[:8]}@test.com",
-            password_hash="x",
-            is_active=True,
-        )
+        user = UserModel(id=uuid4(), email=f"cnt-st-{uuid4().hex[:8]}@test.com", is_active=True)
         session.add(user)
         session.flush()
         user_id = UUID(str(user.id))
@@ -80,12 +70,7 @@ class TestAtomicCounterSingleThread:
         )
         from app.infrastructure.database.models import UserModel
 
-        user = UserModel(
-            id=uuid4(),
-            email=f"cnt-yr-{uuid4().hex[:8]}@test.com",
-            password_hash="x",
-            is_active=True,
-        )
+        user = UserModel(id=uuid4(), email=f"cnt-yr-{uuid4().hex[:8]}@test.com", is_active=True)
         session.add(user)
         session.flush()
         user_id = UUID(str(user.id))
@@ -103,12 +88,7 @@ class TestAtomicCounterSingleThread:
         )
         from app.infrastructure.database.models import UserModel
 
-        user = UserModel(
-            id=uuid4(),
-            email=f"cnt-kd-{uuid4().hex[:8]}@test.com",
-            password_hash="x",
-            is_active=True,
-        )
+        user = UserModel(id=uuid4(), email=f"cnt-kd-{uuid4().hex[:8]}@test.com", is_active=True)
         session.add(user)
         session.flush()
         user_id = UUID(str(user.id))
@@ -153,12 +133,7 @@ def test_atomic_numbering_concurrent_postgres():
 
     # Seed a user in a dedicated session so FK constraint is satisfied
     setup_session = SessionFactory()
-    user = UserModel(
-        id=uuid4(),
-        email=f"concurrent-{uuid4().hex[:8]}@test.com",
-        password_hash="x",
-        is_active=True,
-    )
+    user = UserModel(id=uuid4(), email=f"concurrent-{uuid4().hex[:8]}@test.com", is_active=True)
     setup_session.add(user)
     setup_session.commit()
     user_id = UUID(str(user.id))

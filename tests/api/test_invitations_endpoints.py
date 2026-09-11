@@ -378,16 +378,34 @@ class TestAcceptInvitation:
         match = re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", body_text)
         return match.group(1) if match else ""
 
+    def _code_for(self, client, app, token: str, phone: str) -> str:
+        """Text a sign-up code to `phone` against a live invitation token, return the 6-digit code."""
+        import re
+
+        resp = client.post(
+            "/api/v1/invitations/accept/request-code",
+            json={"token": token, "phone": phone},
+        )
+        assert resp.status_code == 202, resp.get_json()
+        to, text = app._sms.sent[-1]
+        assert to == phone
+        match = re.search(r"\b(\d{6})\b", text)
+        assert match, text
+        return match.group(1)
+
     def test_valid_accept_returns_200_with_cookies(self, inv_client, admin_token, invitation_app):
         token = self._setup_invitation(inv_client, admin_token, invitation_app)
         if not token:
             pytest.skip("Token extraction failed")
 
+        phone = "+33611220001"
+        code = self._code_for(inv_client, invitation_app, token, phone)
+
         resp = inv_client.post(
             "/api/v1/invitations/accept",
-            json={"token": token, "name": "New User", "password": "SecurePass123!"},
+            json={"token": token, "name": "New User", "phone": phone, "code": code},
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.get_json()
         cookies = resp.headers.getlist("Set-Cookie")
         cookie_names = [c.split("=")[0] for c in cookies]
         assert any("access_token" in name for name in cookie_names)
@@ -434,15 +452,102 @@ class TestAcceptInvitation:
                 model.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
                 db.session.commit()
 
+        # A well-formed (but never requested) phone + code: the expired-token check
+        # happens before the code is ever consumed (AcceptInvitationUseCase.execute()),
+        # so no real OTP round-trip is needed to prove this returns 410.
         resp = inv_client.post(
             "/api/v1/invitations/accept",
-            json={"token": token, "name": "User", "password": "SecurePass123!"},
+            json={"token": token, "name": "User", "phone": "+33611220099", "code": "424242"},
         )
         assert resp.status_code == 410
 
     def test_invalid_token_returns_404(self, inv_client):
         resp = inv_client.post(
             "/api/v1/invitations/accept",
-            json={"token": "completely-unknown-token-xyz", "name": "User", "password": "SecurePass123!"},
+            json={"token": "completely-unknown-token-xyz", "name": "User", "phone": "+33611220098", "code": "424242"},
         )
         assert resp.status_code == 404
+
+    def test_wrong_code_returns_401(self, inv_client, admin_token, invitation_app):
+        token = self._setup_invitation(inv_client, admin_token, invitation_app)
+        if not token:
+            pytest.skip("Token extraction failed")
+
+        phone = "+33611220010"
+        self._code_for(inv_client, invitation_app, token, phone)  # a real code is sent; deliberately not used
+
+        resp = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "User", "phone": phone, "code": "000000"},
+        )
+        assert resp.status_code == 401, resp.get_json()
+
+    def test_exhausted_attempts_rejects_even_the_correct_code(self, inv_client, admin_token, invitation_app):
+        token = self._setup_invitation(inv_client, admin_token, invitation_app)
+        if not token:
+            pytest.skip("Token extraction failed")
+
+        phone = "+33611220011"
+        code = self._code_for(inv_client, invitation_app, token, phone)
+
+        max_attempts = int(invitation_app.config.get("OTP_MAX_ATTEMPTS", 5))
+        for _ in range(max_attempts):
+            wrong = inv_client.post(
+                "/api/v1/invitations/accept",
+                json={"token": token, "name": "User", "phone": phone, "code": "000000"},
+            )
+            assert wrong.status_code == 401, wrong.get_json()
+
+        # Attempts are now exhausted: even the real code is refused.
+        resp = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "User", "phone": phone, "code": code},
+        )
+        assert resp.status_code == 401, resp.get_json()
+
+    def test_already_used_token_returns_410(self, inv_client, admin_token, invitation_app):
+        token = self._setup_invitation(inv_client, admin_token, invitation_app)
+        if not token:
+            pytest.skip("Token extraction failed")
+
+        phone = "+33611220012"
+        code = self._code_for(inv_client, invitation_app, token, phone)
+        first = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "User", "phone": phone, "code": code},
+        )
+        assert first.status_code == 200, first.get_json()
+
+        # Re-accepting an already-accepted token is refused before any code is consumed
+        # (early_inv.accept() runs first), so this phone/code pair is never actually sent.
+        again = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "User", "phone": "+33611220013", "code": "424242"},
+        )
+        assert again.status_code == 410
+        assert again.get_json().get("reason") == "accepted"
+
+    def test_duplicate_phone_returns_409(self, inv_client, admin_token, invitation_app):
+        """A phone that becomes registered between request-code and accept (e.g. a
+        concurrent sign-up) is refused at accept time too, not just at request-code time."""
+        token = self._setup_invitation(inv_client, admin_token, invitation_app)
+        if not token:
+            pytest.skip("Token extraction failed")
+
+        phone = "+33611220014"
+        code = self._code_for(inv_client, invitation_app, token, phone)
+
+        # Simulate the phone being claimed by someone else after the code was sent.
+        from app import db
+        from app.infrastructure.database.models import UserModel
+
+        with invitation_app.app_context():
+            db.session.add(UserModel(email=f"raced-{phone.lstrip('+')}@example.com", phone=phone, is_active=True))
+            db.session.commit()
+
+        resp = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "User", "phone": phone, "code": code},
+        )
+        assert resp.status_code == 409
+        assert resp.get_json().get("reason") == "phone_registered"

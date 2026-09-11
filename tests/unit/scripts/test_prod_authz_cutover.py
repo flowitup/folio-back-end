@@ -17,7 +17,7 @@ NOW = datetime.now(timezone.utc)
 
 
 def _user(session, email: str, ops: bool = False) -> UserModel:
-    user = UserModel(id=uuid4(), email=email, password_hash="x" * 60, is_active=True, is_platform_ops=ops)
+    user = UserModel(id=uuid4(), email=email, is_active=True, is_platform_ops=ops)
     session.add(user)
     return user
 

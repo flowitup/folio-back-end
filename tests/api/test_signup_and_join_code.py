@@ -120,14 +120,12 @@ class TestPhoneSignup:
         assert verify.status_code == 400, verify.get_json()
         assert len(invitation_app._sms.sent) == sent_before
 
-    def test_signup_disabled_in_email_mode_and_config_flag(self, inv_client, invitation_app):
-        invitation_app.config["LOGIN_MODE"] = "email"
-        try:
-            assert inv_client.get("/api/v1/auth/config").get_json()["signup"] is False
-            assert inv_client.post("/api/v1/auth/signup/request", json={"phone": "0600007788"}).status_code == 404
-        finally:
-            invitation_app.config["LOGIN_MODE"] = "both"
+    def test_signup_is_unconditionally_enabled(self, inv_client):
+        """Phone self-registration has no on/off switch any more (LOGIN_MODE is gone —
+        see TestSessionPolicy.test_config_endpoint_is_public_and_reflects_settings for
+        the /auth/config assertion); confirm the request endpoint itself is always live."""
         assert inv_client.get("/api/v1/auth/config").get_json()["signup"] is True
+        assert inv_client.post("/api/v1/auth/signup/request", json={"phone": "+33600007788"}).status_code == 202
 
 
 class TestJoinCode:

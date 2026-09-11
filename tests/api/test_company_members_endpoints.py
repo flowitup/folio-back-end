@@ -21,6 +21,7 @@ from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 
@@ -53,24 +54,14 @@ def _auth(token: str) -> dict:
 
 
 def _login(client, email: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 def _make_user(app, email: str, *, phone: str | None = None, display_name: str | None = None) -> str:
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
 
     with app.app_context():
-        user = UserModel(
-            id=uuid4(),
-            email=email,
-            password_hash=Argon2PasswordHasher().hash(PASSWORD),
-            is_active=True,
-            phone=phone,
-            display_name=display_name,
-        )
+        user = UserModel(id=uuid4(), email=email, is_active=True, phone=phone, display_name=display_name)
         db.session.add(user)
         db.session.commit()
         return user.id

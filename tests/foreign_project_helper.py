@@ -14,18 +14,12 @@ from uuid import uuid4
 def create_foreign_project(app, *, legal_name: str = "Foreign Tenant Co") -> str:
     """Insert `<company, owner, project>` nobody in the fixture belongs to. Returns the project id."""
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models import ProjectModel, UserModel
     from app.infrastructure.database.models.company import CompanyModel
 
     now = datetime.now(timezone.utc)
     with app.app_context():
-        owner = UserModel(
-            id=uuid4(),
-            email=f"foreign_{uuid4().hex[:8]}@test.com",
-            password_hash=Argon2PasswordHasher().hash("Foreign1234!"),
-            is_active=True,
-        )
+        owner = UserModel(id=uuid4(), email=f"foreign_{uuid4().hex[:8]}@test.com", is_active=True)
         db.session.add(owner)
         db.session.flush()
 

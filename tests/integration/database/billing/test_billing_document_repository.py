@@ -27,12 +27,7 @@ from app.infrastructure.database.models.company import CompanyModel
 
 def _seed_user(session) -> UUID:
     """Insert a minimal UserModel row and return its UUID."""
-    user = UserModel(
-        id=uuid4(),
-        email=f"billing-{uuid4().hex[:8]}@test.com",
-        password_hash="x",
-        is_active=True,
-    )
+    user = UserModel(id=uuid4(), email=f"billing-{uuid4().hex[:8]}@test.com", is_active=True)
     session.add(user)
     session.flush()
     return UUID(str(user.id))

@@ -15,7 +15,6 @@ from uuid import UUID
 
 # Import port interfaces from application layer
 from app.application.ports.email_port import EmailPort
-from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.session_manager import SessionManagerPort
 from app.application.ports.user_repository import UserRepositoryPort
@@ -278,7 +277,6 @@ class Container:
 
     # Auth ports
     user_repository: Optional[UserRepositoryPort] = None
-    password_hasher: Optional[PasswordHasherPort] = None
     token_issuer: Optional[TokenIssuerPort] = None
     session_manager: Optional[SessionManagerPort] = None
 
@@ -710,7 +708,6 @@ def configure_container(
     queue_service: Optional[QueuePort] = None,
     project_repository: Optional[ProjectRepository] = None,
     user_repository: Optional[UserRepositoryPort] = None,
-    password_hasher: Optional[PasswordHasherPort] = None,
     token_issuer: Optional[TokenIssuerPort] = None,
     session_manager: Optional[SessionManagerPort] = None,
     worker_repository: Optional[IWorkerRepository] = None,
@@ -734,7 +731,6 @@ def configure_container(
         queue_service=queue_service,
         project_repository=project_repository,
         user_repository=user_repository,
-        password_hasher=password_hasher,
         token_issuer=token_issuer,
         session_manager=session_manager,
         worker_repository=worker_repository,
@@ -919,15 +915,18 @@ def configure_container(
             authz_reader=container.authz_reader,
         )
 
-        # AcceptInvitationUseCase needs a db session; lazily import db here
-        if password_hasher is not None and token_issuer is not None:
+        # AcceptInvitationUseCase needs a db session; lazily import db here.
+        # password_hasher used to gate this too; dropped with the port itself —
+        # token_issuer was always the real precondition (Argon2PasswordHasher()
+        # was constructed unconditionally in app/__init__.py, so this gate never
+        # actually depended on it).
+        if token_issuer is not None:
             from app import db as _db
 
             container.accept_invitation_usecase = AcceptInvitationUseCase(
                 invitation_repo=invitation_repo,
                 user_repo=user_repository,
                 project_membership_repo=project_membership_repo,
-                password_hasher=password_hasher,
                 token_issuer=token_issuer,
                 db_session=_db.session,
             )

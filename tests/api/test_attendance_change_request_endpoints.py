@@ -17,6 +17,7 @@ import pytest
 from app.infrastructure.database.models import ProjectModel, UserModel, WorkerModel
 from app.infrastructure.database.models.associations import user_projects
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 
@@ -24,7 +25,6 @@ PASSWORD = "Pass1234!"
 @pytest.fixture(scope="module")
 def cr_app():
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class CrTestConfig(TestingConfig):
@@ -45,10 +45,9 @@ def cr_app():
                 return []
 
         get_container().list_due_notifications_usecase = ListDueNotificationsUseCase(note_query=_NoNotes())
-        hasher = Argon2PasswordHasher()
 
         def user(email):
-            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            return UserModel(email=email, is_active=True)
 
         owner = user("owner@cr-test.com")
         linked = user("linked@cr-test.com")
@@ -86,9 +85,7 @@ def ids(cr_app):
 
 
 def _login(client, email):
-    r = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert r.status_code == 200, r.get_json()
-    return {"Authorization": f"Bearer {r.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture

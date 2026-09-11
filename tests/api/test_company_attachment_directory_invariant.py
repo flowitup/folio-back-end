@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.auth_login_helper import mint_access_token
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -48,20 +50,17 @@ def creator(inv_client, invitation_app):
     from uuid import uuid4
 
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models import UserModel
 
     email = f"attach_{uuid4().hex[:8]}@test.com"
-    password = "Attach1234!"
     with invitation_app.app_context():
-        user = UserModel(id=uuid4(), email=email, password_hash=Argon2PasswordHasher().hash(password), is_active=True)
+        user = UserModel(id=uuid4(), email=email, is_active=True)
         db.session.add(user)
         db.session.commit()
         user_id = str(user.id)
 
-    resp = inv_client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return {"id": user_id.replace("-", "").lower(), "token": resp.get_json()["access_token"]}
+    token = mint_access_token(inv_client, email)
+    return {"id": user_id.replace("-", "").lower(), "token": token}
 
 
 def test_company_creator_is_listed_in_the_directory(inv_client, invitation_app, creator):
@@ -83,24 +82,20 @@ def test_attach_by_token_lists_the_newcomer(inv_client, invitation_app, creator)
     from uuid import uuid4
 
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models import UserModel
 
     email = f"newcomer_{uuid4().hex[:8]}@test.com"
     with invitation_app.app_context():
-        newcomer = UserModel(
-            id=uuid4(), email=email, password_hash=Argon2PasswordHasher().hash("Attach1234!"), is_active=True
-        )
+        newcomer = UserModel(id=uuid4(), email=email, is_active=True)
         db.session.add(newcomer)
         db.session.commit()
         newcomer_id = str(newcomer.id).replace("-", "").lower()
 
-    login = inv_client.post("/api/v1/auth/login", json={"email": email, "password": "Attach1234!"})
-    assert login.status_code == 200
+    newcomer_token = mint_access_token(inv_client, email)
     attached = inv_client.post(
         "/api/v1/companies/attach-by-token",
         json={"token": token_value},
-        headers=_auth(login.get_json()["access_token"]),
+        headers=_auth(newcomer_token),
     )
     assert attached.status_code in (200, 204), attached.get_data(as_text=True)
 

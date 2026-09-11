@@ -32,6 +32,7 @@ from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,6 @@ def _make_invoice(
 def mat_exp_app():
     """Flask app with in-memory SQLite wired for materials-expenses tests."""
     from app import create_app
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
@@ -109,33 +109,19 @@ def mat_exp_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         # Permissions
 
         db.session.flush()
 
         # Users
-        admin_user = UserModel(
-            email="mat_exp_admin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="mat_exp_admin@test.com", is_active=True)
         admin_user.is_platform_ops = True
 
-        non_admin_user = UserModel(
-            email="mat_exp_nonadmin@test.com",
-            password_hash=hasher.hash("Member1234!"),
-            is_active=True,
-        )
+        non_admin_user = UserModel(email="mat_exp_nonadmin@test.com", is_active=True)
 
         # Plain company-A admin: has member_role (no *:*), will get company-admin
         # access row for company_a only — used to exercise non-superadmin code path.
-        plain_company_a_admin_user = UserModel(
-            email="mat_exp_company_a_admin@test.com",
-            password_hash=hasher.hash("CompanyA1234!"),
-            is_active=True,
-        )
+        plain_company_a_admin_user = UserModel(email="mat_exp_company_a_admin@test.com", is_active=True)
 
         db.session.add_all([admin_user, non_admin_user, plain_company_a_admin_user])
         db.session.flush()
@@ -202,7 +188,6 @@ def mat_exp_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invoice_repository=invoice_repo,
@@ -243,9 +228,7 @@ def mat_client(mat_exp_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture(scope="module")

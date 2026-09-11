@@ -212,7 +212,6 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.sqlalchemy_invoice_attachment import SQLAlchemyInvoiceAttachmentRepository
     from app.infrastructure.adapters.sqlalchemy_task import SQLAlchemyTaskRepository
     from app.infrastructure.adapters.s3_attachment_storage import S3AttachmentStorage
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.database.repositories.sqlalchemy_invitation import SqlAlchemyInvitationRepository
@@ -272,7 +271,6 @@ def _configure_di_container() -> None:
         attachment_storage=storage,
         invoice_attachment_repository=SQLAlchemyInvoiceAttachmentRepository(db.session),
         task_repository=SQLAlchemyTaskRepository(db.session),
-        password_hasher=Argon2PasswordHasher(),
         token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
         session_manager=FlaskSessionManager(),
         invitation_repo=invitation_repo,
@@ -519,7 +517,7 @@ def _configure_di_container() -> None:
             _c.token_issuer,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
         )
-        # Phone self-registration (LOGIN_MODE phone/both): same code store, no user until verified.
+        # Phone self-registration: same code store as sign-in, no user until verified.
         _c.request_signup_otp_usecase = RequestSignupOtpUseCase(
             _c.user_repository,
             _otp_repo,
@@ -528,15 +526,13 @@ def _configure_di_container() -> None:
             resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
             hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
         )
-        if _c.password_hasher is not None:
-            _c.verify_signup_otp_usecase = VerifySignupOtpUseCase(
-                _c.user_repository,
-                _otp_repo,
-                _c.password_hasher,
-                _c.authorization_service,
-                _c.token_issuer,
-                max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
-            )
+        _c.verify_signup_otp_usecase = VerifySignupOtpUseCase(
+            _c.user_repository,
+            _otp_repo,
+            _c.authorization_service,
+            _c.token_issuer,
+            max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+        )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
         # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
         # use case instance, gated by the invitation token instead of being open to
@@ -904,13 +900,12 @@ def _configure_di_container() -> None:
     # Re-wire VerifySignupOtpUseCase with sign-up linking now that
     # company_person_repo/person_repo/access_repo exist — it is constructed
     # earlier (OTP DI block, before the companies section) without them.
-    if _c.verify_signup_otp_usecase is not None and _c.password_hasher is not None:
+    if _c.verify_signup_otp_usecase is not None:
         from app.application.usecases.otp_login import VerifySignupOtpUseCase as _VerifySignupOtpUseCaseV2
 
         _c.verify_signup_otp_usecase = _VerifySignupOtpUseCaseV2(
             _c.user_repository,
             _otp_repo,
-            _c.password_hasher,
             _c.authorization_service,
             _c.token_issuer,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
@@ -931,7 +926,6 @@ def _configure_di_container() -> None:
             invitation_repo=_c.invitation_repo,
             user_repo=_c.user_repository,
             project_membership_repo=_c.project_membership_repo,
-            password_hasher=_c.password_hasher,
             token_issuer=_c.token_issuer,
             db_session=db.session,
             authz_reader=_c.authz_reader,

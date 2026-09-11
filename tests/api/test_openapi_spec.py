@@ -201,12 +201,19 @@ class TestRequestEnrichment:
 
 
 class TestSecurityAnnotations:
-    def test_login_has_no_bearer_security(self, spec):
-        """Login is public — must not carry bearerAuth requirement."""
-        post_op = spec["paths"]["/api/v1/auth/login"]["post"]
+    def test_otp_verify_has_no_bearer_security(self, spec):
+        """Signing in is public — must not carry bearerAuth requirement.
+
+        POST /auth/login no longer exists (phone + SMS code is the only sign-in);
+        /auth/otp/verify is the endpoint that carries this "public" invariant now.
+        """
+        post_op = spec["paths"]["/api/v1/auth/otp/verify"]["post"]
         # Either security key absent or the list is empty/falsy.
         security = post_op.get("security", None)
-        assert not security, f"login POST should be public (no security requirement), got: {security}"
+        assert not security, f"otp/verify POST should be public (no security requirement), got: {security}"
+
+    def test_login_path_is_gone(self, spec):
+        assert "/api/v1/auth/login" not in spec["paths"]
 
     def test_projects_list_requires_bearer(self, spec):
         """GET /api/v1/projects is secured — must list bearerAuth."""

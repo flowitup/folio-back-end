@@ -38,7 +38,7 @@ def _person(session, user, name: str) -> PersonModel:
 
 
 def _setup(session):
-    user = UserModel(id=uuid4(), email=f"u-{uuid4().hex[:6]}@t.com", password_hash="x" * 60, is_active=True)
+    user = UserModel(id=uuid4(), email=f"u-{uuid4().hex[:6]}@t.com", is_active=True)
     session.add(user)
     session.flush()
     return user

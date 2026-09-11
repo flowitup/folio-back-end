@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.auth_login_helper import mint_access_token
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -80,7 +82,6 @@ def rate_limit_app():
     os.environ.setdefault("APP_BASE_URL", "http://localhost:3000")
 
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -111,7 +112,6 @@ def rate_limit_app():
         if _wiring._inmemory_email_adapter is None:
             _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
 
-        hasher = Argon2PasswordHasher()
         token_issuer = JWTTokenIssuer()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
@@ -121,7 +121,6 @@ def rate_limit_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=token_issuer,
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
@@ -131,11 +130,7 @@ def rate_limit_app():
         # Seed roles + admin user
         db.session.flush()
 
-        admin_user = UserModel(
-            email="rl-admin@rate-test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="rl-admin@rate-test.com", is_active=True)
         db.session.add(admin_user)
         db.session.commit()
 
@@ -250,15 +245,7 @@ def rl_client(rate_limit_app):
 
 @pytest.fixture
 def rl_token(rl_client, rate_limit_app):
-    resp = rl_client.post(
-        "/api/v1/auth/login",
-        json={
-            "email": rate_limit_app._rl_admin_email,
-            "password": rate_limit_app._rl_admin_password,
-        },
-    )
-    assert resp.status_code == 200
-    return resp.get_json()["access_token"]
+    return mint_access_token(rl_client, rate_limit_app._rl_admin_email)
 
 
 @pytest.fixture

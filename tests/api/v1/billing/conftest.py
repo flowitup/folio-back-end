@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.auth_login_helper import mint_access_token
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -36,29 +38,13 @@ def _billing_client(invitation_app):
 @pytest.fixture(scope="module")
 def billing_token(_billing_client, invitation_app):
     """JWT token for the admin user (superadmin — owns billing data in tests)."""
-    resp = _billing_client.post(
-        "/api/v1/auth/login",
-        json={
-            "email": invitation_app._test_superadmin_email,
-            "password": invitation_app._test_superadmin_password,
-        },
-    )
-    assert resp.status_code == 200
-    return resp.get_json()["access_token"]
+    return mint_access_token(_billing_client, invitation_app._test_superadmin_email)
 
 
 @pytest.fixture(scope="module")
 def other_token(_billing_client, invitation_app):
     """JWT token for member user (used for ownership isolation tests)."""
-    resp = _billing_client.post(
-        "/api/v1/auth/login",
-        json={
-            "email": invitation_app._test_member_email,
-            "password": invitation_app._test_member_password,
-        },
-    )
-    assert resp.status_code == 200
-    return resp.get_json()["access_token"]
+    return mint_access_token(_billing_client, invitation_app._test_member_email)
 
 
 # ---------------------------------------------------------------------------

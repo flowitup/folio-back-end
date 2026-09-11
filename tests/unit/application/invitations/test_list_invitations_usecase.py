@@ -37,13 +37,7 @@ def _make_inv(status: InvitationStatus = InvitationStatus.PENDING, inviter_id=No
 
 
 def _make_user(email="member@example.com") -> User:
-    return User(
-        id=uuid4(),
-        email=email,
-        password_hash="h",
-        is_active=True,
-        created_at=datetime.now(timezone.utc),
-    )
+    return User(id=uuid4(), email=email, is_active=True, created_at=datetime.now(timezone.utc))
 
 
 def _reader(project_id, *, role="manager", assigned=True, ops=False) -> FakeAuthzReader:

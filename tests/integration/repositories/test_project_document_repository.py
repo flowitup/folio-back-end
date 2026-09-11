@@ -80,12 +80,7 @@ def _seed_project_and_user(session) -> tuple[UUID, UUID]:
     from app.infrastructure.database.models import ProjectModel, UserModel
 
     uid = uuid4()
-    user = UserModel(
-        id=uid,
-        email=f"user-{uid}@test.com",
-        password_hash="hash",
-        is_active=True,
-    )
+    user = UserModel(id=uid, email=f"user-{uid}@test.com", is_active=True)
     session.add(user)
     session.flush()
 

@@ -24,6 +24,7 @@ from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from tests.company_tenancy_helper import seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,6 @@ from tests.company_tenancy_helper import seed_company_tenancy
 def cs_app():
     """Flask app with two projects: one with company, one without."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
@@ -57,15 +57,9 @@ def cs_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         db.session.flush()
 
-        admin_user = UserModel(
-            email="cs_admin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="cs_admin@test.com", is_active=True)
         db.session.add(admin_user)
         db.session.flush()
 
@@ -135,7 +129,6 @@ def cs_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invoice_repository=invoice_repo,
@@ -171,9 +164,7 @@ def cs_client(cs_app):
 
 
 def _login(client, email, password):
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

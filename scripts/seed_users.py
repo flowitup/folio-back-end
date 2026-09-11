@@ -1,9 +1,10 @@
 """Seed script for a richer test user roster.
 
-Creates the roster used by every other seed script, all with a hardcoded
-password (`password123`) so any test scenario has the credentials it needs.
-What each of them may do comes from the company role assigned in
-`scripts/seed_companies.py`, not from anything stored here.
+Creates the roster used by every other seed script. Phone + SMS code is the
+only way to sign in, so every user here gets a French number from TEST_PHONES
+(SMS_PROVIDER=log prints the code in the API log — there is no password to
+hand out any more). What each of them may do comes from the company role
+assigned in `scripts/seed_companies.py`, not from anything stored here.
 
 Idempotent: re-running skips users that already exist (matched by email).
 
@@ -24,13 +25,8 @@ import os
 import sys
 from uuid import uuid4
 
-from argon2 import PasswordHasher
-
 from app import db
 from app.infrastructure.database.models import UserModel
-
-# Hardcoded password for ALL seeded test users — DEV/TEST ONLY.
-TEST_PASSWORD = "password123"
 
 # The roster member `--with-ops` flags as platform ops.
 OPS_EMAIL = "superadmin@example.com"
@@ -54,12 +50,20 @@ TEST_USERS: list[tuple[str, str | None, bool]] = [
 
 
 # Dev phone numbers for SMS-code sign-in (SMS_PROVIDER=log prints the code in the API log).
+# Phone is now the only way to sign in, so every TEST_USERS entry needs one — sign-in only
+# accepts French numbers (normalize_french_phone), so all of them are +33.
 TEST_PHONES: dict[str, str] = {
     "superadmin@example.com": "+33600000001",
     "admin2@example.com": "+33600000002",
     "manager.alice@example.com": "+33600000003",
     "manager.bob@example.com": "+33600000004",
-    "user.dave@example.com": "+84900000005",
+    "manager.carol@example.com": "+33600000005",
+    "user.dave@example.com": "+33600000006",
+    "user.eve@example.com": "+33600000007",
+    "user.frank@example.com": "+33600000008",
+    "user.grace@example.com": "+33600000009",
+    "user.henry@example.com": "+33600000010",
+    "inactive@example.com": "+33600000011",
 }
 
 
@@ -69,11 +73,9 @@ def seed_test_users(with_ops: bool = False) -> dict[str, UserModel]:
     With `with_ops`, `superadmin@example.com` also gets the platform-ops flag
     so the `/api/v1/admin/*` endpoints are reachable on a dev database.
     """
-    # Hardcoded TEST_PASSWORD must never reach production.
+    # Hardcoded, well-known test phone numbers must never reach production.
     if os.environ.get("FLASK_ENV") == "production":
-        raise RuntimeError("REFUSING to seed test users with hardcoded password in FLASK_ENV=production.")
-    ph = PasswordHasher()
-    password_hash = ph.hash(TEST_PASSWORD)
+        raise RuntimeError("REFUSING to seed test users with hardcoded phone numbers in FLASK_ENV=production.")
     created_count = 0
     user_map: dict[str, UserModel] = {}
 
@@ -91,7 +93,6 @@ def seed_test_users(with_ops: bool = False) -> dict[str, UserModel]:
         user = UserModel(
             id=uuid4(),
             email=email.lower(),
-            password_hash=password_hash,
             is_active=is_active,
             display_name=display_name,
             phone=TEST_PHONES.get(email.lower()),
@@ -112,7 +113,7 @@ def seed_test_users(with_ops: bool = False) -> dict[str, UserModel]:
             print(f"  [ops]  {OPS_EMAIL} is now platform ops")
 
     db.session.commit()
-    print(f"\n  Created {created_count} test users (password: '{TEST_PASSWORD}')")
+    print(f"\n  Created {created_count} test users (sign in by phone; see TEST_PHONES)")
     return user_map
 
 

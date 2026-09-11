@@ -32,6 +32,7 @@ from uuid import uuid4
 
 import pytest
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,9 +82,7 @@ def _upload_doc(client, project_id: str, token: str) -> str:
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +106,6 @@ def doc_app():
       - superadmin_user: platform ops (the support bypass flag)
     """
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -146,7 +144,6 @@ def doc_app():
         if _wiring._inmemory_email_adapter is None:
             _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
 
-        hasher = Argon2PasswordHasher()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
         inv_repo = SqlAlchemyInvitationRepository(db.session)
@@ -155,7 +152,6 @@ def doc_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
@@ -169,30 +165,13 @@ def doc_app():
         db.session.flush()
 
         # Seed users
-        owner_user = UserModel(
-            email="doc_owner@test.com",
-            password_hash=hasher.hash("Owner1234!"),
-            is_active=True,
-        )
+        owner_user = UserModel(email="doc_owner@test.com", is_active=True)
 
-        member_user = UserModel(
-            email="doc_member@test.com",
-            password_hash=hasher.hash("Member1234!"),
-            is_active=True,
-        )
+        member_user = UserModel(email="doc_member@test.com", is_active=True)
 
-        outsider_user = UserModel(
-            email="doc_outsider@test.com",
-            password_hash=hasher.hash("Outsider1234!"),
-            is_active=True,
-        )
+        outsider_user = UserModel(email="doc_outsider@test.com", is_active=True)
 
-        superadmin_user = UserModel(
-            email="doc_superadmin@test.com",
-            password_hash=hasher.hash("Superadmin1234!"),
-            is_active=True,
-            is_platform_ops=True,
-        )
+        superadmin_user = UserModel(email="doc_superadmin@test.com", is_active=True, is_platform_ops=True)
 
         db.session.add_all([owner_user, member_user, outsider_user, superadmin_user])
         db.session.flush()
@@ -513,7 +492,6 @@ class TestUploadRateLimit:
     def rate_limit_client(self):
         """App fixture with rate limiting enabled + a seeded owner user and project."""
         from app import create_app, db
-        from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
         from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
         from app.infrastructure.adapters.flask_session import FlaskSessionManager
         from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -553,7 +531,6 @@ class TestUploadRateLimit:
             if _wiring._inmemory_email_adapter is None:
                 _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
 
-            hasher = Argon2PasswordHasher()
             user_repo = SQLAlchemyUserRepository(db.session)
             project_repo = SQLAlchemyProjectRepository(db.session)
             inv_repo = SqlAlchemyInvitationRepository(db.session)
@@ -562,7 +539,6 @@ class TestUploadRateLimit:
             configure_container(
                 user_repository=user_repo,
                 project_repository=project_repo,
-                password_hasher=hasher,
                 token_issuer=JWTTokenIssuer(),
                 session_manager=FlaskSessionManager(),
                 invitation_repo=inv_repo,
@@ -571,11 +547,7 @@ class TestUploadRateLimit:
 
             db.session.flush()
 
-            owner_user = UserModel(
-                email="rl_owner@test.com",
-                password_hash=hasher.hash("Owner1234!"),
-                is_active=True,
-            )
+            owner_user = UserModel(email="rl_owner@test.com", is_active=True)
             db.session.add(owner_user)
             db.session.flush()
 
@@ -609,13 +581,7 @@ class TestUploadRateLimit:
 
             client = rl_app.test_client()
 
-            # Login to get token
-            login_resp = client.post(
-                "/api/v1/auth/login",
-                json={"email": "rl_owner@test.com", "password": "Owner1234!"},
-            )
-            assert login_resp.status_code == 200, f"Login failed: {login_resp.get_data(as_text=True)}"
-            token = login_resp.get_json()["access_token"]
+            token = mint_access_token(client, "rl_owner@test.com")
 
             yield client, str(project.id), token
 
@@ -891,7 +857,6 @@ class TestCrossProjectDownloadAdversarial:
     def dual_member_app(self):
         """App with two real projects; the dual_member user is ORM-wired to both."""
         from app import create_app, db
-        from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
         from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
         from app.infrastructure.adapters.flask_session import FlaskSessionManager
         from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -930,7 +895,6 @@ class TestCrossProjectDownloadAdversarial:
             if _wiring._inmemory_email_adapter is None:
                 _wiring._inmemory_email_adapter = InMemoryEmailAdapter()
 
-            hasher = Argon2PasswordHasher()
             user_repo = SQLAlchemyUserRepository(db.session)
             project_repo = SQLAlchemyProjectRepository(db.session)
             inv_repo = SqlAlchemyInvitationRepository(db.session)
@@ -939,7 +903,6 @@ class TestCrossProjectDownloadAdversarial:
             configure_container(
                 user_repository=user_repo,
                 project_repository=project_repo,
-                password_hasher=hasher,
                 token_issuer=JWTTokenIssuer(),
                 session_manager=FlaskSessionManager(),
                 invitation_repo=inv_repo,
@@ -949,17 +912,9 @@ class TestCrossProjectDownloadAdversarial:
             db.session.flush()
 
             # dual_member is assigned to BOTH project A and B
-            owner_user = UserModel(
-                email="xp_owner@test.com",
-                password_hash=hasher.hash("Owner1234!"),
-                is_active=True,
-            )
+            owner_user = UserModel(email="xp_owner@test.com", is_active=True)
 
-            dual_member = UserModel(
-                email="xp_dual@test.com",
-                password_hash=hasher.hash("Dual1234!"),
-                is_active=True,
-            )
+            dual_member = UserModel(email="xp_dual@test.com", is_active=True)
 
             db.session.add_all([owner_user, dual_member])
             db.session.flush()

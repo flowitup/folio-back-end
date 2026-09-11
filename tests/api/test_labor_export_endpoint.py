@@ -26,6 +26,7 @@ from app.infrastructure.database.models import (
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +38,6 @@ from tests.company_tenancy_helper import company_for_projects, seed_company_tena
 def export_app():
     """Flask app with in-memory DB + full labor + export container for route tests."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -55,7 +55,6 @@ def export_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
         token_issuer = JWTTokenIssuer()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
@@ -71,20 +70,12 @@ def export_app():
         db.session.flush()
 
         # Admin user (has project:read)
-        admin_user = UserModel(
-            email="exportadmin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="exportadmin@test.com", is_active=True)
         db.session.add(admin_user)
         db.session.flush()
 
         # Unprivileged user (lacks project:read)
-        noperm_user = UserModel(
-            email="noperm@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        noperm_user = UserModel(email="noperm@test.com", is_active=True)
         db.session.add(noperm_user)
         db.session.flush()
 
@@ -109,7 +100,6 @@ def export_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=token_issuer,
             session_manager=FlaskSessionManager(),
             worker_repository=worker_repo,
@@ -138,9 +128,7 @@ def export_client(export_app):
 
 
 def _login(client, email: str, password: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture
@@ -563,7 +551,6 @@ def _worker_export_url(project_id: str, worker_id: str) -> str:
 def worker_export_app():
     """Flask app seeded with a project, two workers, and a no-perm user."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -581,7 +568,6 @@ def worker_export_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
         token_issuer = JWTTokenIssuer()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
@@ -594,18 +580,10 @@ def worker_export_app():
         db.session.flush()
 
         # Users
-        admin_user = UserModel(
-            email="wexportadmin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="wexportadmin@test.com", is_active=True)
         db.session.add(admin_user)
 
-        noperm_user = UserModel(
-            email="wexportnoperm@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        noperm_user = UserModel(email="wexportnoperm@test.com", is_active=True)
         db.session.add(noperm_user)
         db.session.flush()
 
@@ -655,7 +633,6 @@ def worker_export_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=token_issuer,
             session_manager=FlaskSessionManager(),
             worker_repository=worker_repo,
@@ -1026,7 +1003,6 @@ class TestWorkerLaborExportEndpoint:
 def cjk_worker_export_app():
     """Flask app seeded with a CJK-named project and CJK-named worker for slug-fallback test."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -1044,7 +1020,6 @@ def cjk_worker_export_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
         token_issuer = JWTTokenIssuer()
         user_repo = SQLAlchemyUserRepository(db.session)
         project_repo = SQLAlchemyProjectRepository(db.session)
@@ -1055,11 +1030,7 @@ def cjk_worker_export_app():
 
         db.session.flush()
 
-        admin_user = UserModel(
-            email="cjkadmin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="cjkadmin@test.com", is_active=True)
         db.session.add(admin_user)
         db.session.flush()
 
@@ -1083,7 +1054,6 @@ def cjk_worker_export_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=token_issuer,
             session_manager=FlaskSessionManager(),
             worker_repository=worker_repo,

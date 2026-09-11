@@ -135,10 +135,9 @@ class CompanyInviteTokenRepositoryPort(Protocol):
 class Argon2HasherPort(Protocol):
     """Port for argon2 hashing and constant-time verification.
 
-    The existing PasswordHasherPort in app.application.ports.password_hasher
-    has the same interface. This alias is defined here so the companies layer
-    imports stay self-contained and the infrastructure adapter can satisfy
-    either protocol without modification.
+    User sign-in has no password any more (phone + SMS code only), so this is
+    now the only hashing protocol in the codebase — it exists here, scoped to
+    the companies layer, for hashing company invite tokens.
     """
 
     def hash(self, plaintext: str) -> str:

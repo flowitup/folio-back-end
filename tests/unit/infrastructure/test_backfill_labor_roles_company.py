@@ -72,7 +72,7 @@ def test_slug_seed_rows_does_not_overwrite_existing_slug(session):
 
 
 def test_backfill_company_when_sole_company_exists(session):
-    owner = UserModel(id=uuid4(), email="lr-owner@test.com", password_hash=PASSWORD_HASH, is_active=True)
+    owner = UserModel(id=uuid4(), email="lr-owner@test.com", is_active=True)
     session.add(owner)
     session.flush()
     company = _make_company(session, owner.id)
@@ -89,7 +89,7 @@ def test_backfill_company_when_sole_company_exists(session):
 
 
 def test_backfill_company_when_sole_skips_when_multiple_companies(session):
-    owner = UserModel(id=uuid4(), email="lr-owner2@test.com", password_hash=PASSWORD_HASH, is_active=True)
+    owner = UserModel(id=uuid4(), email="lr-owner2@test.com", is_active=True)
     session.add(owner)
     session.flush()
     _make_company(session, owner.id)

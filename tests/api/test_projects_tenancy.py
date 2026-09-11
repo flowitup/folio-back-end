@@ -22,6 +22,7 @@ import pytest
 from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 
@@ -38,7 +39,6 @@ def tenancy_app():
       - outsider: no company relation either.
     """
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
@@ -66,10 +66,8 @@ def tenancy_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         def user(email: str) -> UserModel:
-            return UserModel(email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            return UserModel(email=email, is_active=True)
 
         admin_a = user("tn_admin_a@test.com")
         admin_b = user("tn_admin_b@test.com")
@@ -129,7 +127,6 @@ def tenancy_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             project_membership_repo=membership_repo,
@@ -166,9 +163,7 @@ def client(tenancy_app):
 
 
 def _login(client, email: str) -> dict:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_json()
-    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture

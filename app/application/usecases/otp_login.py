@@ -29,7 +29,6 @@ from app.application.ports.sms_sender import SmsSenderPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
 from app.domain.entities.login_otp import LoginOtp
-from app.application.ports.password_hasher import PasswordHasherPort
 from app.domain.entities.user import User
 from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
@@ -285,7 +284,6 @@ class VerifySignupOtpUseCase:
         self,
         user_repo: UserRepositoryPort,
         otp_repo: LoginOtpRepositoryPort,
-        password_hasher: PasswordHasherPort,
         authorization_service: AuthorizationService,
         token_issuer: TokenIssuerPort,
         *,
@@ -295,7 +293,6 @@ class VerifySignupOtpUseCase:
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
-        self._hasher = password_hasher
         self._authz = authorization_service
         self._tokens = token_issuer
         self._max_attempts = max_attempts

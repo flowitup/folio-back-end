@@ -23,8 +23,7 @@ import pytest
 from app.infrastructure.database.models import ProjectModel, UserModel
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
-
-PASSWORD = "Pass1234!"
+from tests.auth_login_helper import mint_access_token
 
 
 @pytest.fixture(scope="module")
@@ -33,7 +32,6 @@ def deny_app():
     "manager" (JWT claim carries project:manage_labor) and the company-tenant
     "manager" assigned to the project (resolver also grants it)."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from config import TestingConfig
 
     class DenyTestConfig(TestingConfig):
@@ -45,10 +43,9 @@ def deny_app():
 
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
         now = datetime.now(timezone.utc)
 
-        user = UserModel(email="dw_manager@test.com", password_hash=hasher.hash(PASSWORD), is_active=True)
+        user = UserModel(email="dw_manager@test.com", is_active=True)
         db.session.add(user)
         db.session.flush()
 
@@ -97,9 +94,7 @@ def client(deny_app):
 
 @pytest.fixture
 def manager_h(client):
-    resp = client.post("/api/v1/auth/login", json={"email": "dw_manager@test.com", "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_json()
-    return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, 'dw_manager@test.com')}"}
 
 
 @pytest.fixture

@@ -29,7 +29,6 @@ def _make_superadmin(id=None) -> User:
     return User(
         id=id or uuid4(),
         email="superadmin@example.com",
-        password_hash="hashed",
         is_active=True,
         created_at=datetime.now(timezone.utc),
         display_name="Super Admin",
@@ -47,13 +46,7 @@ class _OpsRoleChecker:
 
 
 def _make_user(id=None, email="target@example.com") -> User:
-    return User(
-        id=id or uuid4(),
-        email=email,
-        password_hash="hashed",
-        is_active=True,
-        created_at=datetime.now(timezone.utc),
-    )
+    return User(id=id or uuid4(), email=email, is_active=True, created_at=datetime.now(timezone.utc))
 
 
 def _make_project(name="Test Project") -> Project:

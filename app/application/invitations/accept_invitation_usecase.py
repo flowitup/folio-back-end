@@ -12,7 +12,6 @@ from app.application.invitations.ports import (
     TransactionalSessionPort,
 )
 from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
-from app.application.ports.password_hasher import PasswordHasherPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
 from app.application.usecases.otp_login import RequestOtpResult, RequestSignupOtpUseCase, _consume_code
@@ -98,7 +97,6 @@ class AcceptInvitationUseCase:
         invitation_repo: InvitationRepositoryPort,
         user_repo: UserRepositoryPort,
         project_membership_repo: ProjectMembershipRepositoryPort,
-        password_hasher: PasswordHasherPort,
         token_issuer: TokenIssuerPort,
         db_session: TransactionalSessionPort,
         authz_reader: "Optional[AuthzReaderPort]" = None,
@@ -112,7 +110,6 @@ class AcceptInvitationUseCase:
         self._inv_repo = invitation_repo
         self._user_repo = user_repo
         self._membership_repo = project_membership_repo
-        self._hasher = password_hasher
         self._tokens = token_issuer
         self._db = db_session
         self._authz_reader = authz_reader

@@ -32,7 +32,6 @@ pytestmark = pytest.mark.skipif(
 def pg_app():
     """Flask app wired against the Postgres TEST_DATABASE_URL (cascade tests)."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -58,7 +57,6 @@ def pg_app():
         configure_container(
             user_repository=SQLAlchemyUserRepository(db.session),
             project_repository=SQLAlchemyProjectRepository(db.session),
-            password_hasher=Argon2PasswordHasher(),
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invitation_repo=SqlAlchemyInvitationRepository(db.session),
@@ -99,8 +97,7 @@ def _seed_user(session) -> uuid4:
     now = datetime.now(UTC)
     session.execute(
         text(
-            "INSERT INTO users (id, email, password_hash, is_active, created_at, updated_at) "
-            "VALUES (:id, :email, 'hash', true, :now, :now)"
+            "INSERT INTO users (id, email, is_active, created_at, updated_at) " "VALUES (:id, :email, true, :now, :now)"
         ),
         {"id": str(uid), "email": f"{uid}@cascade.test", "now": now},
     )

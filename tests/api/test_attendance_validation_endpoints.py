@@ -25,6 +25,7 @@ from app.infrastructure.database.models import (
 )
 from app.infrastructure.database.models.associations import user_projects
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
+from tests.auth_login_helper import mint_access_token
 
 # Membership-role permission lookups use raw SQL with dashed UUID strings → Postgres only.
 _needs_pg = pytest.mark.skipif(
@@ -37,7 +38,6 @@ _needs_pg = pytest.mark.skipif(
 def av_app():
     """App with an owner/manager, a linked member worker and an unlinked member."""
     from app import create_app, db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
@@ -69,13 +69,12 @@ def av_app():
 
     with test_app.app_context():
         db.create_all()
-        hasher = Argon2PasswordHasher()
 
-        owner = UserModel(email="owner@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
-        linked = UserModel(email="linked@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
-        unlinked = UserModel(email="unlinked@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
+        owner = UserModel(email="owner@av-test.com", is_active=True)
+        linked = UserModel(email="linked@av-test.com", is_active=True)
+        unlinked = UserModel(email="unlinked@av-test.com", is_active=True)
         # Manager rights come from the company role the tenancy helper sets below.
-        chef = UserModel(email="chef@av-test.com", password_hash=hasher.hash("Pass1234!"), is_active=True)
+        chef = UserModel(email="chef@av-test.com", is_active=True)
         db.session.add_all([owner, linked, unlinked, chef])
         db.session.flush()
 
@@ -106,7 +105,6 @@ def av_app():
         configure_container(
             user_repository=SQLAlchemyUserRepository(db.session),
             project_repository=SQLAlchemyProjectRepository(db.session),
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             worker_repository=worker_repo,
@@ -155,9 +153,7 @@ def ids(av_app):
 
 
 def _login(client, email):
-    r = client.post("/api/v1/auth/login", json={"email": email, "password": "Pass1234!"})
-    assert r.status_code == 200, r.get_json()
-    return {"Authorization": f"Bearer {r.get_json()['access_token']}"}
+    return {"Authorization": f"Bearer {mint_access_token(client, email)}"}
 
 
 @pytest.fixture

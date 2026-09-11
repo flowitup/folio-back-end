@@ -24,6 +24,7 @@ import io
 import pytest
 from uuid import UUID, uuid4
 from werkzeug.datastructures import MultiDict
+from tests.auth_login_helper import mint_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +119,7 @@ def _upload_analysis(
 
 
 def _login(client, email: str, password: str) -> str:
-    """Authenticate and return access token."""
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture

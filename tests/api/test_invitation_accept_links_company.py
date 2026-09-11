@@ -21,14 +21,14 @@ from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
-
-PASSWORD = "Pass1234!"
+from tests.auth_login_helper import mint_access_token
 
 
 @pytest.fixture(scope="module")
 def accept_app():
     from app import create_app, db
     from config import TestingConfig
+    from wiring import get_container
 
     class AcceptTestConfig(TestingConfig):
         JWT_TOKEN_LOCATION = ["headers", "cookies"]
@@ -39,6 +39,17 @@ def accept_app():
     with test_app.app_context():
         db.create_all()
         db.session.commit()
+
+        # This module exercises the production DI wiring on purpose (see module
+        # docstring), so SMS_PROVIDER defaults to LoggingSmsSender, which only
+        # logs. Intercept the SAME instance the OTP use cases already hold a
+        # reference to (they captured it at construction time, so swapping
+        # container.sms_sender afterwards would not reach them) to recover the
+        # real 6-digit code sent to each acceptor's phone.
+        sent: list[tuple[str, str]] = []
+        get_container().sms_sender.send = lambda to, text: sent.append((to, text))
+        test_app._sms_sent = sent
+
         yield test_app
         db.session.remove()
         db.drop_all()
@@ -54,9 +65,14 @@ def _auth(token: str) -> dict:
 
 
 def _login(client, email: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
+
+
+def _code_from_sms(app) -> str:
+    to, text = app._sms_sent[-1]
+    match = re.search(r"\b(\d{6})\b", text)
+    assert match, text
+    return match.group(1)
 
 
 def _make_admin_with_company_project(app):
@@ -65,7 +81,6 @@ def _make_admin_with_company_project(app):
     The app fixture is module-scoped, so each call needs its own admin email.
     """
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
 
     now = datetime.now(timezone.utc)
     admin_email = f"ial_admin_{uuid.uuid4().hex[:8]}@test.com"
@@ -73,7 +88,6 @@ def _make_admin_with_company_project(app):
         admin = UserModel(
             id=uuid.uuid4(),
             email=admin_email,
-            password_hash=Argon2PasswordHasher().hash(PASSWORD),
             is_active=True,
         )
         db.session.add(admin)
@@ -97,6 +111,9 @@ def _make_admin_with_company_project(app):
 def _invite_and_accept(client, app, admin_token, project_id) -> str:
     """Run the whole outsider path; returns the acceptor's email."""
     invitee_email = f"ial-invitee-{uuid.uuid4().hex[:8]}@example.com"
+    # A fresh French mobile number per call — users.phone is unique, and this
+    # helper runs more than once against the same module-scoped database.
+    invitee_phone = f"+336{uuid.uuid4().int % 10**8:08d}"
     create_resp = client.post(
         "/api/v1/invitations",
         json={"project_id": str(project_id), "email": invitee_email},
@@ -111,10 +128,18 @@ def _invite_and_accept(client, app, admin_token, project_id) -> str:
     match = re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", body_text)
     if not match:
         pytest.skip("Token extraction failed")
+    token = match.group(1)
+
+    code_resp = client.post(
+        "/api/v1/invitations/accept/request-code",
+        json={"token": token, "phone": invitee_phone},
+    )
+    assert code_resp.status_code == 202, code_resp.get_data(as_text=True)
+    code = _code_from_sms(app)
 
     accept_resp = client.post(
         "/api/v1/invitations/accept",
-        json={"token": match.group(1), "name": "Invited Outsider", "password": "SecurePass123!"},
+        json={"token": token, "name": "Invited Outsider", "phone": invitee_phone, "code": code},
     )
     assert accept_resp.status_code == 200, accept_resp.get_data(as_text=True)
     return invitee_email

@@ -22,6 +22,7 @@ import pytest
 from app import db
 from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
 from app.infrastructure.database.models import ProjectModel, UserModel
+from tests.auth_login_helper import mint_access_token
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.invoice import InvoiceModel
 
@@ -77,7 +78,6 @@ def bank_refund_app():
     """Flask app wired the same way as production: SetInvoiceRefundableStatusUseCase
     receives a real FundsReleaseAdapter, so PATCH requests reconcile for real."""
     from app import create_app
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.adapters.flask_session import FlaskSessionManager
     from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
     from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
@@ -104,15 +104,9 @@ def bank_refund_app():
     with test_app.app_context():
         db.create_all()
 
-        hasher = Argon2PasswordHasher()
-
         db.session.flush()
 
-        admin_user = UserModel(
-            email="bank_refund_admin@test.com",
-            password_hash=hasher.hash("Admin1234!"),
-            is_active=True,
-        )
+        admin_user = UserModel(email="bank_refund_admin@test.com", is_active=True)
         # Platform access is the ops flag now, not the legacy `*:*` role.
         admin_user.is_platform_ops = True
         db.session.add(admin_user)
@@ -143,7 +137,6 @@ def bank_refund_app():
         configure_container(
             user_repository=user_repo,
             project_repository=project_repo,
-            password_hasher=hasher,
             token_issuer=JWTTokenIssuer(),
             session_manager=FlaskSessionManager(),
             invoice_repository=invoice_repo,
@@ -182,12 +175,7 @@ def brl_client(bank_refund_app):
 
 @pytest.fixture(scope="module")
 def admin_tok(brl_client):
-    resp = brl_client.post(
-        "/api/v1/auth/login",
-        json={"email": "bank_refund_admin@test.com", "password": "Admin1234!"},
-    )
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(brl_client, "bank_refund_admin@test.com")
 
 
 def _patch(client, tok, invoice_id, refundable_status, refunded_by=None):

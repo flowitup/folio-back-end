@@ -5,15 +5,15 @@ Every persona set is tagged by a suffix: the company is named
 several QA runs can coexist and `--delete` can never reach production data.
 The CLI lives in ``scripts/qa_personas_cli.py``:
 
-    QA_PASSWORD='…' uv run python -m scripts.qa_personas --create --suffix smoke \\
-        --admin-email qa.admin@example.com \\
-        --manager-email qa.manager@example.com \\
-        --member-email qa.member@example.com
+    uv run python -m scripts.qa_personas --create --suffix smoke \\
+        --admin-email qa.admin@example.com --admin-phone +33600000101 \\
+        --manager-email qa.manager@example.com --manager-phone +33600000102 \\
+        --member-email qa.member@example.com --member-phone +33600000103
 
 This script is run against PRODUCTION, so `--create` never takes over an
 account it did not make: an email that already exists is refused unless that
-user is already attached to this QA company, and a pre-existing user's
-password, activation state and primary company are left exactly as they were.
+user is already attached to this QA company, and a pre-existing user's phone,
+activation state and primary company are left exactly as they were.
 
 `--create` is idempotent: re-running finds the company, the users, the
 attachments, the project and the assignments it made last time.
@@ -26,6 +26,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from app.domain.value_objects.phone_number import normalize_french_phone
 from app.infrastructure.database.backfills.authz_backfill_report import BackfillReport
 from app.infrastructure.database.backfills.directory_profiles import ensure_directory_profile
 from scripts.qa_personas_guards import (
@@ -51,7 +52,7 @@ def project_name(suffix: str) -> str:
     return f"Folio QA Project {suffix.strip()}"
 
 
-def _ensure_user(email: str, password_hash: str, display_name: str):
+def _ensure_user(email: str, phone: str, display_name: str):
     """Find the user, or create them. A pre-existing row is never modified."""
     from app import db
     from app.infrastructure.database.models import UserModel
@@ -61,7 +62,7 @@ def _ensure_user(email: str, password_hash: str, display_name: str):
         return user
     user = UserModel(
         email=email.lower(),
-        password_hash=password_hash,
+        phone=normalize_french_phone(phone),
         display_name=display_name,
         is_active=True,
     )
@@ -146,7 +147,7 @@ def _ensure_assignment(project, user) -> None:
     )
 
 
-def create_personas(suffix: str, emails: dict[str, str], password: str, address: str) -> dict[str, UUID]:
+def create_personas(suffix: str, emails: dict[str, str], phones: dict[str, str], address: str) -> dict[str, UUID]:
     """Create (or find) the QA company, its three personas and its project.
 
     Returns the ids worth pasting into a QA session. Raises `QaPersonaRefused`
@@ -154,14 +155,12 @@ def create_personas(suffix: str, emails: dict[str, str], password: str, address:
     QA company.
     """
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
 
     name = company_name(suffix)
     refuse_accounts_we_do_not_own(emails, find_company(name), name)
 
-    password_hash = Argon2PasswordHasher().hash(password)
     users = {
-        role: _ensure_user(emails[role], password_hash, f"QA {role.capitalize()} {suffix}")
+        role: _ensure_user(emails[role], phones[role], f"QA {role.capitalize()} {suffix}")
         for role in ("admin", "manager", "member")
     }
 

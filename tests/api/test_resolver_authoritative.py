@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Persona1234!"
 
@@ -28,22 +29,18 @@ def _auth(token: str) -> dict:
 
 
 def _login(client, email: str) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture(scope="module")
 def personas(invitation_app):
     """Seed the personas above into the shared fixture app; returns their ids."""
     from app import db
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models import ProjectModel, UserModel
     from app.infrastructure.database.models.company import CompanyModel
     from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
     from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
-    hasher = Argon2PasswordHasher()
     now = datetime.now(timezone.utc)
     company_id = UUID(invitation_app._test_company_id)
     project_id = UUID(invitation_app._test_project_id)
@@ -52,7 +49,7 @@ def personas(invitation_app):
     with invitation_app.app_context():
 
         def user(email: str) -> UserModel:
-            u = UserModel(id=uuid4(), email=email, password_hash=hasher.hash(PASSWORD), is_active=True)
+            u = UserModel(id=uuid4(), email=email, is_active=True)
             db.session.add(u)
             return u
 

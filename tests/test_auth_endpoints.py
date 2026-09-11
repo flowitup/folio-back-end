@@ -1,52 +1,41 @@
 """Integration tests for auth API endpoints."""
 
+import re
+
 import pytest
-from uuid import uuid4, UUID
-from typing import Optional
 
 from app import create_app, db
-from app.infrastructure.database.models import UserModel
-from app.domain.entities.user import User
-from app.application.ports.user_repository import UserRepositoryPort
-from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
-from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+from app.application.usecases.otp_login import RequestOtpUseCase, VerifyOtpUseCase
 from app.infrastructure.adapters.flask_session import FlaskSessionManager
+from app.infrastructure.adapters.jwt_issuer import JWTTokenIssuer
+from app.infrastructure.adapters.sqlalchemy_login_otp import SQLAlchemyLoginOtpRepository
+from app.infrastructure.adapters.sqlalchemy_user import SQLAlchemyUserRepository
+from app.infrastructure.database.models import UserModel
 from config import TestingConfig
-from wiring import configure_container
+from tests.auth_login_helper import mint_access_token, mint_tokens
+from wiring import configure_container, get_container
+
+# The only user in this module with a phone — phone + SMS code is the only way to
+# sign in, so this is the one account TestSessionPolicy can drive through a real
+# /auth/otp/request + /auth/otp/verify round-trip.
+ACTIVE_PHONE = "+33600000101"
 
 
-class SQLAlchemyUserRepository(UserRepositoryPort):
-    """SQLAlchemy implementation of UserRepositoryPort for testing."""
+class RecordingSmsSender:
+    """Captures outbound SMS text so tests can extract the real 6-digit code."""
 
-    def find_by_email(self, email: str) -> Optional[User]:
-        """Find user by email."""
-        user_model = db.session.query(UserModel).filter_by(email=email.lower().strip()).first()
-        if not user_model:
-            return None
-        return self._to_domain(user_model)
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
 
-    def find_by_id(self, user_id: UUID) -> Optional[User]:
-        """Find user by ID."""
-        user_model = db.session.get(UserModel, user_id)
-        if not user_model:
-            return None
-        return self._to_domain(user_model)
+    def send(self, to: str, text: str) -> None:
+        self.sent.append((to, text))
 
-    def save(self, user: User) -> User:
-        """Save user to database."""
-        # For simplicity in tests, we skip full implementation
-        return user
 
-    def _to_domain(self, model: UserModel) -> User:
-        """Convert database model to domain entity."""
-        return User(
-            id=model.id,
-            email=model.email,
-            password_hash=model.password_hash,
-            is_active=model.is_active,
-            created_at=model.created_at,
-            updated_at=model.updated_at,
-        )
+def _code_from_sms(app) -> str:
+    to, text = app._sms.sent[-1]
+    match = re.search(r"\b(\d{6})\b", text)
+    assert match, text
+    return match.group(1)
 
 
 @pytest.fixture(scope="module")
@@ -64,32 +53,38 @@ def app():
         db.create_all()
 
         # Configure dependency injection container
-        user_repo = SQLAlchemyUserRepository()
-        password_hasher = Argon2PasswordHasher()
+        user_repo = SQLAlchemyUserRepository(db.session)
         token_issuer = JWTTokenIssuer(access_expires_minutes=30, refresh_expires_days=7)
         session_manager = FlaskSessionManager()
 
         configure_container(
             user_repository=user_repo,
-            password_hasher=password_hasher,
             token_issuer=token_issuer,
             session_manager=session_manager,
         )
 
-        # Create test user with hashed password
-        hasher = Argon2PasswordHasher()
-
-        # Create active and inactive users
-        active_user = UserModel(email="active@example.com", password_hash=hasher.hash("password123"), is_active=True)
-
-        admin_user = UserModel(email="admin@example.com", password_hash=hasher.hash("admin123"), is_active=True)
-
-        inactive_user = UserModel(
-            email="inactive@example.com", password_hash=hasher.hash("password123"), is_active=False
-        )
+        # Create active and inactive users — no password any more (phone + SMS
+        # code only). active_user gets a phone so TestSessionPolicy can sign in
+        # for real, through the same route production traffic uses.
+        active_user = UserModel(email="active@example.com", is_active=True, phone=ACTIVE_PHONE)
+        admin_user = UserModel(email="admin@example.com", is_active=True)
+        inactive_user = UserModel(email="inactive@example.com", is_active=False)
 
         db.session.add_all([active_user, admin_user, inactive_user])
         db.session.commit()
+
+        # Wire phone sign-in (request + verify) so TestSessionPolicy exercises the
+        # real REFRESH_TOKEN_POLICY-reading route rather than a minted shortcut.
+        otp_repo = SQLAlchemyLoginOtpRepository(db.session)
+        sms = RecordingSmsSender()
+        container = get_container()
+        container.sms_sender = sms
+        container.login_otp_repository = otp_repo
+        container.request_otp_usecase = RequestOtpUseCase(user_repo, otp_repo, sms)
+        container.verify_otp_usecase = VerifyOtpUseCase(
+            user_repo, otp_repo, container.authorization_service, token_issuer
+        )
+        test_app._sms = sms
 
         yield test_app
 
@@ -106,124 +101,16 @@ def client(app):
 @pytest.fixture
 def container(app):
     """Get dependency injection container."""
-    from wiring import get_container
-
     with app.app_context():
         return get_container()
 
 
-class TestLoginEndpoint:
-    """Test POST /api/v1/auth/login endpoint."""
+class TestLoginRemoved:
+    """POST /auth/login no longer exists: phone + SMS code is the only sign-in."""
 
-    def test_login_with_valid_credentials(self, client):
-        """Test login with valid email and password."""
-        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
-
-        assert response.status_code == 200
-        data = response.get_json()
-
-        assert "access_token" in data
-        assert "refresh_token" in data
-        assert "user" in data
-        assert data["user"]["email"] == "active@example.com"
-        # What the user may do comes from their company role, and this account
-        # has none. The token itself carries no permissions at all.
-        assert "roles" not in data["user"]
-        assert data["user"]["permissions"] == []
-        assert data["user"]["is_platform_ops"] is False
-        # Same shape as /auth/me: companies[] present even with no company_repo wired.
-        assert data["user"]["companies"] == []
-
-    def test_login_without_a_company_grants_nothing(self, client):
-        """An account attached to no company resolves to an empty permission set."""
-        response = client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "admin123"})
-
-        assert response.status_code == 200
-        data = response.get_json()
-
-        assert data["user"]["email"] == "admin@example.com"
-        assert data["user"]["permissions"] == []
-
-    def test_login_with_invalid_email(self, client):
-        """Test login with non-existent email."""
-        response = client.post(
-            "/api/v1/auth/login", json={"email": "nonexistent@example.com", "password": "password123"}
-        )
-
-        assert response.status_code == 401
-        data = response.get_json()
-        assert data["error"] == "Unauthorized"
-        assert "Invalid email or password" in data["message"]
-
-    def test_login_with_invalid_password(self, client):
-        """Test login with wrong password."""
-        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "wrongpassword"})
-
-        assert response.status_code == 401
-        data = response.get_json()
-        assert data["error"] == "Unauthorized"
-
-    def test_login_with_inactive_user(self, client):
-        """Deactivated account must return the same generic 401 as bad credentials —
-        no enumeration via status code or body (B-2)."""
-        response = client.post("/api/v1/auth/login", json={"email": "inactive@example.com", "password": "password123"})
-
-        assert response.status_code == 401
-        data = response.get_json()
-        assert data["error"] == "Unauthorized"
-        assert data["message"] == "Invalid email or password"
-
-    def test_login_inactive_response_indistinguishable_from_invalid(self, client):
-        """Regression for B-2 — deactivated, unknown-email, and wrong-password
-        login responses must be byte-identical (status + body) so an attacker
-        cannot enumerate active users from the login endpoint."""
-        invalid_email = client.post(
-            "/api/v1/auth/login",
-            json={"email": "nonexistent@example.com", "password": "password123"},
-        )
-        invalid_password = client.post(
-            "/api/v1/auth/login",
-            json={"email": "active@example.com", "password": "wrongpassword"},
-        )
-        deactivated = client.post(
-            "/api/v1/auth/login",
-            json={"email": "inactive@example.com", "password": "password123"},
-        )
-
-        assert invalid_email.status_code == invalid_password.status_code == deactivated.status_code == 401
-        assert invalid_email.get_json() == invalid_password.get_json() == deactivated.get_json()
-
-    def test_login_with_missing_email(self, client):
-        """Test login without email field."""
-        response = client.post("/api/v1/auth/login", json={"password": "password123"})
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert data["error"] == "ValidationError"
-
-    def test_login_with_missing_password(self, client):
-        """Test login without password field."""
-        response = client.post("/api/v1/auth/login", json={"email": "active@example.com"})
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert data["error"] == "ValidationError"
-
-    def test_login_with_empty_payload(self, client):
-        """Test login with empty JSON."""
-        response = client.post("/api/v1/auth/login", json={})
-
-        assert response.status_code == 400
-
-    def test_login_sets_cookies(self, client):
-        """Test that login sets JWT cookies."""
-        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
-
-        assert response.status_code == 200
-        # Check cookies are set
-        cookies = response.headers.getlist("Set-Cookie")
-        cookie_names = [c.split("=")[0] for c in cookies]
-        assert any("access_token" in name for name in cookie_names)
+    def test_login_endpoint_is_gone(self, client):
+        response = client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "whatever"})
+        assert response.status_code == 404
 
 
 class TestLogoutEndpoint:
@@ -240,13 +127,8 @@ class TestLogoutEndpoint:
 
     def test_logout_with_token(self, client):
         """Test logout with valid token."""
-        # First login
-        login_response = client.post(
-            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
-        )
-        token = login_response.get_json()["access_token"]
+        token = mint_access_token(client, "active@example.com")
 
-        # Then logout
         response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
 
         assert response.status_code == 200
@@ -255,13 +137,8 @@ class TestLogoutEndpoint:
 
     def test_logout_clears_cookies(self, client):
         """Test that logout clears JWT cookies."""
-        # First login
-        login_response = client.post(
-            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
-        )
-        token = login_response.get_json()["access_token"]
+        token = mint_access_token(client, "active@example.com")
 
-        # Then logout
         response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
 
         # Check cookies are cleared (max-age=0 or expires in past)
@@ -274,14 +151,10 @@ class TestRefreshEndpoint:
 
     def test_refresh_with_valid_refresh_token(self, client):
         """Test refreshing access token with valid refresh token."""
-        # First login to get refresh token
-        login_response = client.post(
-            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
-        )
-        refresh_token = login_response.get_json()["refresh_token"]
+        tokens = mint_tokens(client, "active@example.com")
 
         # Use refresh token to get new access token
-        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {refresh_token}"})
+        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {tokens['refresh_token']}"})
 
         assert response.status_code == 200
         data = response.get_json()
@@ -298,14 +171,10 @@ class TestRefreshEndpoint:
 
     def test_refresh_with_access_token_instead_of_refresh(self, client):
         """Test refresh with access token (should fail)."""
-        # Login to get access token
-        login_response = client.post(
-            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
-        )
-        access_token = login_response.get_json()["access_token"]
+        tokens = mint_tokens(client, "active@example.com")
 
         # Try to use access token for refresh (should fail)
-        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {access_token}"})
+        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {tokens['access_token']}"})
 
         # Should fail because we need refresh token, not access token
         assert response.status_code in [401, 422]
@@ -316,11 +185,7 @@ class TestGetCurrentUserEndpoint:
 
     def test_get_current_user_with_valid_token(self, client):
         """Test getting current user info with valid token."""
-        # Login first
-        login_response = client.post(
-            "/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"}
-        )
-        token = login_response.get_json()["access_token"]
+        token = mint_access_token(client, "active@example.com")
 
         # Get current user
         response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -350,11 +215,21 @@ class TestGetCurrentUserEndpoint:
 
 
 class TestRateLimiting:
-    """Test rate limiting on login endpoint."""
+    """Test rate limiting on the phone sign-in endpoint."""
 
     @pytest.fixture
     def rate_limited_client(self):
-        """Create a client with rate limiting enabled."""
+        """Create a client with rate limiting enabled.
+
+        configure_container() mutates the process-wide `wiring.container` singleton
+        (see wiring.get_container()'s own docstring), so this fixture's own call to
+        it would otherwise leak into every test that runs afterward in this module
+        — including TestSessionPolicy, which needs the original `app` fixture's
+        container (its db.session, its seeded active_user). Save and restore it.
+        """
+        import wiring as _wiring
+
+        saved_container = _wiring.container
 
         # Create custom config with rate limiting enabled
         class RateLimitTestConfig(TestingConfig):
@@ -368,45 +243,36 @@ class TestRateLimiting:
         with rate_limited_app.app_context():
             db.create_all()
 
-            password_hasher = Argon2PasswordHasher()
             token_issuer = JWTTokenIssuer()
-            user_repo = SQLAlchemyUserRepository()
+            user_repo = SQLAlchemyUserRepository(db.session)
+            otp_repo = SQLAlchemyLoginOtpRepository(db.session)
 
-            # Create test user in database
-            from app.infrastructure.database.models import UserModel
+            configure_container(user_repository=user_repo, token_issuer=token_issuer)
 
-            test_user = UserModel(
-                id=uuid4(),
-                email="ratelimit@example.com",
-                password_hash=password_hasher.hash("password123"),
-                is_active=True,
-            )
-            db.session.add(test_user)
-            db.session.commit()
+            container = get_container()
+            container.request_otp_usecase = RequestOtpUseCase(user_repo, otp_repo, RecordingSmsSender())
 
-            configure_container(
-                user_repository=user_repo,
-                password_hasher=password_hasher,
-                token_issuer=token_issuer,
-            )
             yield rate_limited_app.test_client()
 
             # Cleanup
             db.drop_all()
 
-    def test_login_rate_limiting(self, rate_limited_client):
-        """Test that login endpoint is rate limited after 5 attempts."""
-        # Try to login 6 times rapidly (limit is 5 per minute)
+        _wiring.container = saved_container
+
+    def test_otp_request_rate_limiting(self, rate_limited_client):
+        """Test that /auth/otp/request is rate limited after 5 attempts (per minute).
+
+        The phone below has no account: RequestOtpUseCase silently ignores unknown
+        numbers and always answers 202 without ever touching the throttle counters
+        in otp_login._issue_code, so only the route's own `@limiter.limit("5 per
+        minute")` can produce the 429 this test is actually about.
+        """
         for i in range(6):
-            response = rate_limited_client.post(
-                "/api/v1/auth/login", json={"email": "ratelimit@example.com", "password": "password123"}
-            )
+            response = rate_limited_client.post("/api/v1/auth/otp/request", json={"phone": "+33698765432"})
 
             if i < 5:
-                # First 5 should succeed (or fail with auth error)
-                assert response.status_code in [200, 401, 403]
+                assert response.status_code == 202
             else:
-                # 6th request should be rate limited (429 Too Many Requests)
                 assert response.status_code == 429
 
 
@@ -422,17 +288,17 @@ class TestHealthCheck:
         assert data["status"] == "ok"
 
 
-class TestSessionPolicyAndLoginMode:
-    """REFRESH_TOKEN_POLICY and LOGIN_MODE are deployment switches read at request time."""
+class TestSessionPolicy:
+    """REFRESH_TOKEN_POLICY is a deployment switch read at request time."""
 
     @pytest.fixture(autouse=True)
     def _fresh_rate_limit(self, client):
         from app.infrastructure.rate_limiter import limiter
 
         limiter.reset()
-        saved = {k: client.application.config.get(k) for k in ("LOGIN_MODE", "REFRESH_TOKEN_POLICY")}
+        saved = client.application.config.get("REFRESH_TOKEN_POLICY")
         yield
-        client.application.config.update(saved)
+        client.application.config.update(REFRESH_TOKEN_POLICY=saved)
 
     def _refresh_claims(self, client, token):
         from flask_jwt_extended import decode_token
@@ -441,13 +307,28 @@ class TestSessionPolicyAndLoginMode:
             return decode_token(token, allow_expired=True)
 
     def _login(self, client):
-        return client.post("/api/v1/auth/login", json={"email": "active@example.com", "password": "password123"})
+        """Sign active@example.com in for real, via /auth/otp/request + /auth/otp/verify,
+        so REFRESH_TOKEN_POLICY is exercised exactly the way a real client triggers it.
+        """
+        app = client.application
+        with app.app_context():
+            from app.infrastructure.database.models import LoginOtpOrm
+
+            # This class calls _login() more than once against the same phone; clear
+            # earlier codes first so otp_login._issue_code's per-phone resend/hourly
+            # throttles never block a later call here.
+            db.session.query(LoginOtpOrm).delete()
+            db.session.commit()
+        resp = client.post("/api/v1/auth/otp/request", json={"phone": ACTIVE_PHONE})
+        assert resp.status_code == 202, resp.get_json()
+        code = _code_from_sms(app)
+        return client.post("/api/v1/auth/otp/verify", json={"phone": ACTIVE_PHONE, "code": code})
 
     def test_config_endpoint_is_public_and_reflects_settings(self, client):
-        client.application.config.update(LOGIN_MODE="phone", REFRESH_TOKEN_POLICY="persistent")
+        client.application.config.update(REFRESH_TOKEN_POLICY="persistent")
         resp = client.get("/api/v1/auth/config")
         assert resp.status_code == 200
-        assert resp.get_json() == {"login_mode": "phone", "session": "persistent", "signup": True}
+        assert resp.get_json() == {"session": "persistent", "signup": True}
 
     def test_expiring_policy_issues_seven_day_refresh_token(self, client):
         client.application.config.update(REFRESH_TOKEN_POLICY="expiring")
@@ -461,12 +342,6 @@ class TestSessionPolicyAndLoginMode:
         assert "exp" not in claims and claims["persistent"] is True
         refreshed = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {login['refresh_token']}"})
         assert refreshed.status_code == 200
-
-    def test_phone_mode_disables_password_login(self, client):
-        client.application.config.update(LOGIN_MODE="phone")
-        assert self._login(client).status_code == 404
-        client.application.config.update(LOGIN_MODE="both")
-        assert self._login(client).status_code == 200
 
     def test_logout_accepts_refresh_token_in_body(self, client):
         login = self._login(client).get_json()

@@ -17,7 +17,6 @@ class TestUserModel:
         """Test creating a user with all required fields."""
         user = UserModel(
             email="test@example.com",
-            password_hash="hashed_password_123",
             is_active=True,
         )
         session.add(user)
@@ -25,18 +24,18 @@ class TestUserModel:
 
         assert user.id is not None
         assert user.email == "test@example.com"
-        assert user.password_hash == "hashed_password_123"
+        assert not hasattr(user, "password_hash")
         assert user.is_active is True
         assert user.created_at is not None
         assert user.updated_at is not None
 
     def test_email_uniqueness_constraint(self, session):
         """Test that duplicate emails are rejected."""
-        user1 = UserModel(email="unique@example.com", password_hash="hash1")
+        user1 = UserModel(email="unique@example.com")
         session.add(user1)
         session.commit()
 
-        user2 = UserModel(email="unique@example.com", password_hash="hash2")
+        user2 = UserModel(email="unique@example.com")
         session.add(user2)
 
         with pytest.raises(IntegrityError):
@@ -44,7 +43,7 @@ class TestUserModel:
 
     def test_user_carries_no_roles(self, session):
         """A user row has no role relationship: roles are per company."""
-        user = UserModel(email="norole@example.com", password_hash="hash")
+        user = UserModel(email="norole@example.com")
         session.add(user)
         session.commit()
 
@@ -74,7 +73,7 @@ class TestDatabaseSchema:
 
         assert "id" in columns
         assert "email" in columns
-        assert "password_hash" in columns
+        assert "password_hash" not in columns
         assert "is_active" in columns
         assert "is_platform_ops" in columns
         assert "created_at" in columns

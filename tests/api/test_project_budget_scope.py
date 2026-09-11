@@ -36,6 +36,7 @@ from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+from tests.auth_login_helper import mint_access_token
 
 PASSWORD = "Pass1234!"
 BUDGET = 50000.0
@@ -70,17 +71,15 @@ def bs_app(invitation_app):
     """Give `_test_project_id` a budget and a company with one manager + one grantee."""
     from app import db
 
-    from app.infrastructure.adapters.argon2_hasher import Argon2PasswordHasher
     from app.infrastructure.database.models.associations import user_projects
 
     with invitation_app.app_context():
         now = datetime.now(timezone.utc)
-        hasher = Argon2PasswordHasher()
         admin_id = UUID(invitation_app._test_admin_user_id)
         project_id = UUID(invitation_app._test_project_id)
 
-        manager_user = UserModel(email=MANAGER_EMAIL, password_hash=hasher.hash(PASSWORD), is_active=True)
-        grantee_user = UserModel(email=GRANTEE_EMAIL, password_hash=hasher.hash(PASSWORD), is_active=True)
+        manager_user = UserModel(email=MANAGER_EMAIL, is_active=True)
+        grantee_user = UserModel(email=GRANTEE_EMAIL, is_active=True)
         db.session.add_all([manager_user, grantee_user])
         db.session.flush()
 
@@ -148,9 +147,7 @@ def bs_client(bs_app):
 
 
 def _login(client, email: str, password: str = PASSWORD) -> str:
-    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    return resp.get_json()["access_token"]
+    return mint_access_token(client, email)
 
 
 @pytest.fixture(scope="module")

@@ -11,7 +11,7 @@ from tests.company_tenancy_helper import company_for_projects
 @pytest.fixture
 def owner_user(session):
     """Create owner user for projects."""
-    user = UserModel(id=uuid4(), email="owner@test.com", password_hash="hashed", is_active=True)
+    user = UserModel(id=uuid4(), email="owner@test.com", is_active=True)
     session.add(user)
     session.commit()
     return user
@@ -20,7 +20,7 @@ def owner_user(session):
 @pytest.fixture
 def regular_user(session):
     """Create regular user to assign to projects."""
-    user = UserModel(id=uuid4(), email="user@test.com", password_hash="hashed", is_active=True)
+    user = UserModel(id=uuid4(), email="user@test.com", is_active=True)
     session.add(user)
     session.commit()
     return user
