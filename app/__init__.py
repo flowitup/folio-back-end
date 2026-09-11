@@ -557,23 +557,15 @@ def _configure_di_container() -> None:
     from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
         SqlAlchemyUserCompanyAccessRepository,
     )
-    from app.infrastructure.database.repositories.sqlalchemy_company_invite_token_repository import (
-        SqlAlchemyCompanyInviteTokenRepository,
-    )
-    from app.infrastructure.security.argon2_hasher import Argon2Hasher
-    from app.infrastructure.security.secure_token_generator import SecureTokenGenerator
     from app.application.companies import (
         CreateCompanyUseCase as _CreateCompanyUseCase,
         UpdateCompanyUseCase as _UpdateCompanyUseCase,
         DeleteCompanyUseCase as _DeleteCompanyUseCase,
         ListAllCompaniesUseCase as _ListAllCompaniesUseCase,
-        GenerateInviteTokenUseCase as _GenerateInviteTokenUseCase,
-        RevokeInviteTokenUseCase as _RevokeInviteTokenUseCase,
         ListAttachedUsersUseCase as _ListAttachedUsersUseCase,
         BootAttachedUserUseCase as _BootAttachedUserUseCase,
         ListMyCompaniesUseCase as _ListMyCompaniesUseCase,
         GetCompanyUseCase as _GetCompanyUseCase,
-        RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
         SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
         SetMemberRoleUseCase as _SetMemberRoleUseCase,
         DetachCompanyUseCase as _DetachCompanyUseCase,
@@ -588,9 +580,6 @@ def _configure_di_container() -> None:
 
     _company_repo = SqlAlchemyCompanyRepository(db.session)
     _access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
-    _token_repo = SqlAlchemyCompanyInviteTokenRepository(db.session)
-    _argon2_hasher = Argon2Hasher()
-    _token_generator = SecureTokenGenerator()
     _clock = _UtcClock()
     # Reuse authorization_service as RoleCheckerPort (structurally compatible)
     _role_checker = _c.authorization_service
@@ -609,7 +598,6 @@ def _configure_di_container() -> None:
 
     _c.company_repo = _company_repo
     _c.user_company_access_repo = _access_repo
-    _c.company_invite_token_repo = _token_repo
 
     # Membership pushes need both name sources, so they are wired here rather than in the
     # push block above, where the company repo does not exist yet.
@@ -687,19 +675,6 @@ def _configure_di_container() -> None:
         company_repo=_company_repo,
         role_checker=_role_checker,
     )
-    _c.generate_invite_token_usecase = _GenerateInviteTokenUseCase(
-        company_repo=_company_repo,
-        token_repo=_token_repo,
-        hasher=_argon2_hasher,
-        token_generator=_token_generator,
-        clock=_clock,
-        role_checker=_role_checker,
-    )
-    _c.revoke_invite_token_usecase = _RevokeInviteTokenUseCase(
-        company_repo=_company_repo,
-        token_repo=_token_repo,
-        role_checker=_role_checker,
-    )
     _c.list_attached_users_usecase = _ListAttachedUsersUseCase(
         company_repo=_company_repo,
         access_repo=_access_repo,
@@ -719,13 +694,6 @@ def _configure_di_container() -> None:
         company_repo=_company_repo,
         access_repo=_access_repo,
         role_checker=_role_checker,
-    )
-    _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
-        token_repo=_token_repo,
-        access_repo=_access_repo,
-        hasher=_argon2_hasher,
-        clock=_clock,
-        # Directory repos are wired further down; injected after construction.
     )
     _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
         access_repo=_access_repo,
@@ -772,19 +740,6 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
-
-    # Attach-by-token is built above, before the directory repos exist; give it
-    # those repos now so a redeemed invite also produces the profile that makes
-    # the new member assignable ("attached ⇒ listed in the directory").
-    _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
-        token_repo=_token_repo,
-        access_repo=_access_repo,
-        hasher=_argon2_hasher,
-        clock=_clock,
-        person_repo=_person_repo,
-        company_person_repo=_c.company_person_repo,
-        user_repo=_c.user_repository,
-    )
 
     # Onboarding use cases (Phase 2 slice B): add member by phone, import
     # from another company, company directory, and the derived "new members"

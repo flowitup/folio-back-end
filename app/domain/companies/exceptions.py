@@ -24,43 +24,8 @@ class UserCompanyAccessNotFoundError(CompaniesDomainError):
         super().__init__(f"User {user_id} has no access to company {company_id}")
 
 
-class InviteTokenNotFoundError(CompaniesDomainError):
-    """Raised when an invite token cannot be found."""
-
-    def __init__(self, token_id: UUID) -> None:
-        self.token_id = token_id
-        super().__init__(f"Invite token {token_id} not found")
-
-
-class InviteTokenExpiredError(CompaniesDomainError):
-    """Raised when an invite token has passed its expiry timestamp."""
-
-    def __init__(self, token_id: UUID) -> None:
-        self.token_id = token_id
-        super().__init__(f"Invite token {token_id} has expired")
-
-
-class InviteTokenAlreadyRedeemedError(CompaniesDomainError):
-    """Raised when an invite token was already redeemed by a user."""
-
-    def __init__(self, token_id: UUID) -> None:
-        self.token_id = token_id
-        super().__init__(f"Invite token {token_id} has already been redeemed")
-
-
-class ActiveInviteTokenAlreadyExistsError(CompaniesDomainError):
-    """Raised when an admin tries to generate a second active token without revoking the first."""
-
-    def __init__(self, company_id: UUID) -> None:
-        self.company_id = company_id
-        super().__init__(
-            f"An active invite token already exists for company {company_id}. "
-            "Revoke the existing token before generating a new one."
-        )
-
-
 class CompanyAlreadyAttachedError(CompaniesDomainError):
-    """Raised when a user tries to redeem a token for a company they already have access to."""
+    """Raised when a user tries to join a company they already have access to."""
 
     def __init__(self, user_id: UUID, company_id: UUID) -> None:
         self.user_id = user_id
@@ -112,17 +77,3 @@ class CompanyHasProjectsError(CompaniesDomainError):
         self.company_id = company_id
         self.project_count = project_count
         super().__init__(f"Company {company_id} still owns {project_count} project(s); delete or reassign them first")
-
-
-class InviteTokenSystemOverloadError(CompaniesDomainError):
-    """Raised when the DOS guard fires: too many active invite tokens in the system.
-
-    The route handler maps this to HTTP 503 with reason=redeem_overloaded so
-    callers can surface a user-friendly message and retry after admin cleanup.
-    """
-
-    def __init__(self, count: int) -> None:
-        self.count = count
-        super().__init__(
-            f"Too many active invite tokens ({count}). " "Admin must revoke stale tokens before redemption is allowed."
-        )

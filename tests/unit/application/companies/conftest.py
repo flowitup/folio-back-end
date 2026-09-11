@@ -3,9 +3,6 @@
 Fakes:
   InMemoryCompanyRepository
   InMemoryUserCompanyAccessRepository
-  InMemoryCompanyInviteTokenRepository
-  FakeArgon2Hasher
-  FakeSecureTokenGenerator
   FakeRoleService
   FakeClock
   _FakeSession
@@ -21,7 +18,6 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.domain.companies.company import Company
-from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.user_company_access import UserCompanyAccess
 
 
@@ -100,68 +96,9 @@ class InMemoryUserCompanyAccessRepository:
                 self._store[key] = access.with_updates(is_primary=False)
 
 
-class InMemoryCompanyInviteTokenRepository:
-    """Dict-backed invite token store for unit tests."""
-
-    def __init__(self):
-        self._store: dict[UUID, CompanyInviteToken] = {}
-
-    def find_active_for_company(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return unredeemed token for company regardless of expiry (matches real repo).
-
-        M3: real repo does not filter by expiry; use-case handles expiry check.
-        """
-        for token in self._store.values():
-            if token.company_id == company_id and token.redeemed_at is None:
-                return token
-        return None
-
-    def find_active_for_company_for_update(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """M1: in-memory fake — same as find_active_for_company (no lock needed in tests)."""
-        return self.find_active_for_company(company_id)
-
-    def find_by_id_for_update(self, token_id: UUID) -> Optional[CompanyInviteToken]:
-        return self._store.get(token_id)
-
-    def list_active(self) -> list[CompanyInviteToken]:
-        """Return all unredeemed tokens regardless of expiry (matches real repo semantics).
-
-        M3 fix: real repo does not filter by expiry; use-case checks expiry.
-        """
-        return [t for t in self._store.values() if t.redeemed_at is None]
-
-    def save(self, token: CompanyInviteToken) -> CompanyInviteToken:
-        self._store[token.id] = token
-        return token
-
-    def delete(self, token_id: UUID) -> None:
-        self._store.pop(token_id, None)
-
-
 # ---------------------------------------------------------------------------
 # Fake ports
 # ---------------------------------------------------------------------------
-
-
-class FakeArgon2Hasher:
-    """Deterministic hasher: hash(s) → 'argon2_' + s; verify checks prefix+value."""
-
-    def hash(self, plaintext: str) -> str:
-        return "argon2_" + plaintext
-
-    def verify(self, plaintext: str, hashed: str) -> bool:
-        return hashed == "argon2_" + plaintext
-
-
-class FakeSecureTokenGenerator:
-    """Returns a deterministic incrementing token for predictable assertions."""
-
-    def __init__(self):
-        self._counter = 0
-
-    def generate(self, byte_length: int = 32) -> str:
-        self._counter += 1
-        return f"fake_token_{self._counter:04d}"
 
 
 class FakeRoleService:
@@ -275,28 +212,6 @@ def make_access(
     )
 
 
-def make_token(
-    company_id: UUID,
-    created_by: UUID,
-    clock: FakeClock | None = None,
-    token_hash: str = "argon2_fake_token_0001",
-    redeemed_at: datetime | None = None,
-    redeemed_by: UUID | None = None,
-    days_until_expiry: int = 7,
-) -> CompanyInviteToken:
-    now = clock.now() if clock else datetime.now(timezone.utc)
-    return CompanyInviteToken(
-        id=uuid4(),
-        company_id=company_id,
-        token_hash=token_hash,
-        created_by=created_by,
-        created_at=now,
-        expires_at=now + timedelta(days=days_until_expiry),
-        redeemed_at=redeemed_at,
-        redeemed_by=redeemed_by,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Pytest fixtures
 # ---------------------------------------------------------------------------
@@ -310,26 +225,6 @@ def company_repo():
 @pytest.fixture
 def access_repo():
     return InMemoryUserCompanyAccessRepository()
-
-
-@pytest.fixture
-def token_repo():
-    return InMemoryCompanyInviteTokenRepository()
-
-
-@pytest.fixture
-def hasher():
-    return FakeArgon2Hasher()
-
-
-@pytest.fixture
-def token_generator():
-    return FakeSecureTokenGenerator()
-
-
-@pytest.fixture
-def clock():
-    return FakeClock()
 
 
 @pytest.fixture

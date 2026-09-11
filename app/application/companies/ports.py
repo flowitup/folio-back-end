@@ -14,7 +14,6 @@ from typing import Any, Optional, Protocol
 from uuid import UUID
 
 from app.domain.companies.company import Company
-from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.user_company_access import UserCompanyAccess
 
 
@@ -89,46 +88,6 @@ class UserCompanyAccessRepositoryPort(Protocol):
         Used inside a transaction by SetPrimaryCompanyUseCase to guarantee
         at most one primary per user atomically.
         """
-        ...
-
-
-class CompanyInviteTokenRepositoryPort(Protocol):
-    """Persistence contract for CompanyInviteToken records."""
-
-    def find_active_for_company(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the single unredeemed token for a company, or None.
-
-        Does not filter by expiry here — expiry check is the use-case responsibility.
-        """
-        ...
-
-    def find_active_for_company_for_update(self, company_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the single unredeemed token for a company with SELECT FOR UPDATE, or None.
-
-        M1: used by GenerateInviteTokenUseCase (regenerate=True path) to serialise
-        concurrent admin calls and prevent the partial-unique IntegrityError 500.
-        Does not filter by expiry.
-        """
-        ...
-
-    def find_by_id_for_update(self, token_id: UUID) -> Optional[CompanyInviteToken]:
-        """Return the token with SELECT FOR UPDATE lock, or None."""
-        ...
-
-    def list_active(self) -> list[CompanyInviteToken]:
-        """Return all active (unredeemed + non-expired) tokens.
-
-        Used by RedeemInviteTokenUseCase to verify plaintext against stored
-        argon2 hashes. Bounded by a DOS guard (N ≤ 1000) in the use-case.
-        """
-        ...
-
-    def save(self, token: CompanyInviteToken) -> CompanyInviteToken:
-        """Insert or update a token row. Returns the persisted instance."""
-        ...
-
-    def delete(self, token_id: UUID) -> None:
-        """Hard-delete a token row by UUID."""
         ...
 
 

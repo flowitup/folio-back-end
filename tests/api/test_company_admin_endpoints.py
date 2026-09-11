@@ -1,7 +1,7 @@
 """API + use-case tests: company admins manage their own company without platform '*:*'.
 
 Phase 1 of the roles/permissions redesign moves company management
-(members, invite tokens, join code, company profile, payment methods) from
+(members, join code, company profile, payment methods) from
 "platform admin only" to "company admin of THIS company, or platform admin".
 
 Covers, for every endpoint listed in the phase spec:
@@ -281,40 +281,6 @@ class TestSetMemberRole:
         resp = cadm_client.patch(
             f"/api/v1/companies/{cadm_app._test_company_a_id}/access/{target_id}/role",
             json={"role": "admin"},
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# Invite tokens
-# ---------------------------------------------------------------------------
-
-
-class TestInviteTokens:
-    def test_company_admin_generates_and_revokes_own_company(self, cadm_client, cadm_app, company_a_admin_token):
-        gen = cadm_client.post(
-            f"/api/v1/companies/{cadm_app._test_company_a_id}/invite-tokens",
-            headers=_auth(company_a_admin_token),
-        )
-        assert gen.status_code == 201, gen.get_data(as_text=True)
-
-        rev = cadm_client.delete(
-            f"/api/v1/companies/{cadm_app._test_company_a_id}/invite-tokens/active",
-            headers=_auth(company_a_admin_token),
-        )
-        assert rev.status_code == 204
-
-    def test_company_admin_403_generate_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
-        resp = cadm_client.post(
-            f"/api/v1/companies/{cadm_app._test_company_b_id}/invite-tokens",
-            headers=_auth(company_a_admin_token),
-        )
-        assert resp.status_code == 403
-
-    def test_member_403_generate(self, cadm_client, cadm_app, member_token):
-        resp = cadm_client.post(
-            f"/api/v1/companies/{cadm_app._test_company_a_id}/invite-tokens",
             headers=_auth(member_token),
         )
         assert resp.status_code == 403

@@ -16,7 +16,6 @@ from typing import Optional
 from uuid import UUID
 
 from app.domain.companies.company import Company
-from app.domain.companies.invite_token import CompanyInviteToken
 from app.domain.companies.user_company_access import UserCompanyAccess
 
 
@@ -60,50 +59,6 @@ class UpdateCompanyInput:
     logo_url: Optional[str] = None
     default_payment_terms: Optional[str] = None
     prefix_override: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
-# Invite token DTOs
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class GenerateInviteTokenInput:
-    """Input for GenerateInviteTokenUseCase."""
-
-    company_id: UUID
-    caller_id: UUID
-    regenerate: bool = False  # True → revoke existing active token first
-    role: str = "member"  # per-company role granted on redemption (admin | member)
-
-
-@dataclass(frozen=True)
-class GenerateInviteTokenOutput:
-    """Result of GenerateInviteTokenUseCase.
-
-    plaintext_token is returned ONCE to the caller (copy-to-clipboard).
-    Only the argon2 hash is persisted. Do not log or cache plaintext_token.
-    """
-
-    plaintext_token: str
-    token_id: UUID
-    expires_at: datetime
-
-
-@dataclass(frozen=True)
-class RevokeInviteTokenInput:
-    """Input for RevokeInviteTokenUseCase."""
-
-    company_id: UUID
-    caller_id: UUID
-
-
-@dataclass(frozen=True)
-class RedeemInviteTokenInput:
-    """Input for RedeemInviteTokenUseCase."""
-
-    user_id: UUID
-    plaintext_token: str
 
 
 # ---------------------------------------------------------------------------
@@ -298,29 +253,3 @@ class NewMemberEvent:
     display_name: str
     company_id: UUID
     attached_at: datetime
-
-
-@dataclass(frozen=True)
-class InviteTokenResponse:
-    """Serialisable invite token (no plaintext, no hash — metadata only)."""
-
-    id: UUID
-    company_id: UUID
-    created_by: UUID
-    created_at: datetime
-    expires_at: datetime
-    redeemed_at: Optional[datetime] = None
-    redeemed_by: Optional[UUID] = None
-
-    @staticmethod
-    def from_entity(token: CompanyInviteToken) -> "InviteTokenResponse":
-        """Build response DTO from a domain entity."""
-        return InviteTokenResponse(
-            id=token.id,
-            company_id=token.company_id,
-            created_by=token.created_by,
-            created_at=token.created_at,
-            expires_at=token.expires_at,
-            redeemed_at=token.redeemed_at,
-            redeemed_by=token.redeemed_by,
-        )

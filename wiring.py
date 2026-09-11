@@ -193,13 +193,10 @@ from app.application.companies import (
     UpdateCompanyUseCase,
     DeleteCompanyUseCase,
     ListAllCompaniesUseCase,
-    GenerateInviteTokenUseCase,
-    RevokeInviteTokenUseCase,
     ListAttachedUsersUseCase,
     BootAttachedUserUseCase,
     ListMyCompaniesUseCase,
     GetCompanyUseCase,
-    RedeemInviteTokenUseCase,
     SetPrimaryCompanyUseCase,
     SetMemberRoleUseCase,
     DetachCompanyUseCase,
@@ -428,7 +425,6 @@ class Container:
     # -----------------------------------------------------------------------
     company_repo: Optional[Any] = None  # SqlAlchemyCompanyRepository
     user_company_access_repo: Optional[Any] = None  # SqlAlchemyUserCompanyAccessRepository
-    company_invite_token_repo: Optional[Any] = None  # SqlAlchemyCompanyInviteTokenRepository
 
     # Company-aware authz resolver read port (app.application.authz.ports.AuthzReaderPort).
     # Wired in app/__init__.py alongside the other company repos; None in test fixtures
@@ -440,15 +436,12 @@ class Container:
     update_company_usecase: Optional[UpdateCompanyUseCase] = None
     delete_company_usecase: Optional[DeleteCompanyUseCase] = None
     list_all_companies_usecase: Optional[ListAllCompaniesUseCase] = None
-    generate_invite_token_usecase: Optional[GenerateInviteTokenUseCase] = None
-    revoke_invite_token_usecase: Optional[RevokeInviteTokenUseCase] = None
     list_attached_users_usecase: Optional[ListAttachedUsersUseCase] = None
     boot_attached_user_usecase: Optional[BootAttachedUserUseCase] = None
 
     # companies use-cases: authenticated user
     list_my_companies_usecase: Optional[ListMyCompaniesUseCase] = None
     get_company_usecase: Optional[GetCompanyUseCase] = None
-    redeem_invite_token_usecase: Optional[RedeemInviteTokenUseCase] = None
     set_primary_company_usecase: Optional[SetPrimaryCompanyUseCase] = None
     set_member_role_usecase: Optional[SetMemberRoleUseCase] = None
     detach_company_usecase: Optional[DetachCompanyUseCase] = None

@@ -14,13 +14,10 @@ from app.application.companies.boot_attached_user_usecase import BootAttachedUse
 from app.application.companies.delete_company_usecase import DeleteCompanyUseCase
 from app.application.companies.dtos import (
     BootAttachedUserInput,
-    GenerateInviteTokenInput,
     ListAllCompaniesInput,
     UpdateCompanyInput,
 )
-from app.application.companies.generate_invite_token_usecase import GenerateInviteTokenUseCase
 from app.application.companies.list_all_companies_usecase import ListAllCompaniesUseCase
-from app.application.companies.revoke_invite_token_usecase import RevokeInviteTokenUseCase
 from app.application.companies.update_company_usecase import UpdateCompanyUseCase
 from app.domain.companies.exceptions import ForbiddenCompanyError
 
@@ -28,11 +25,7 @@ from app.domain.companies.exceptions import ForbiddenCompanyError
 def test_role_guard_on_admin_endpoints(
     company_repo,
     access_repo,
-    token_repo,
     role_service,
-    hasher,
-    token_generator,
-    clock,
     fake_session,
     user_id,
     seeded_company,
@@ -65,30 +58,6 @@ def test_role_guard_on_admin_endpoints(
     list_uc = ListAllCompaniesUseCase(company_repo=company_repo, role_checker=role_service)
     with pytest.raises(ForbiddenCompanyError):
         list_uc.execute(ListAllCompaniesInput(caller_id=user_id, limit=10, offset=0))
-
-    # GenerateInviteToken
-    gen_uc = GenerateInviteTokenUseCase(
-        company_repo=company_repo,
-        token_repo=token_repo,
-        hasher=hasher,
-        token_generator=token_generator,
-        clock=clock,
-        role_checker=role_service,
-    )
-    with pytest.raises(ForbiddenCompanyError):
-        gen_uc.execute(
-            GenerateInviteTokenInput(company_id=dummy_company_id, caller_id=user_id),
-            fake_session,
-        )
-
-    # RevokeInviteToken — uses positional args (caller_id, company_id, db_session)
-    revoke_uc = RevokeInviteTokenUseCase(
-        company_repo=company_repo,
-        token_repo=token_repo,
-        role_checker=role_service,
-    )
-    with pytest.raises(ForbiddenCompanyError):
-        revoke_uc.execute(user_id, dummy_company_id, fake_session)
 
     # BootAttachedUser
     boot_uc = BootAttachedUserUseCase(

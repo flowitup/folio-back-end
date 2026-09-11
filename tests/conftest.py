@@ -402,23 +402,15 @@ def invitation_app():
         from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
             SqlAlchemyUserCompanyAccessRepository,
         )
-        from app.infrastructure.database.repositories.sqlalchemy_company_invite_token_repository import (
-            SqlAlchemyCompanyInviteTokenRepository,
-        )
-        from app.infrastructure.security.argon2_hasher import Argon2Hasher
-        from app.infrastructure.security.secure_token_generator import SecureTokenGenerator
         from app.application.companies import (
             CreateCompanyUseCase as _CreateCompanyUseCase,
             UpdateCompanyUseCase as _UpdateCompanyUseCase,
             DeleteCompanyUseCase as _DeleteCompanyUseCase,
             ListAllCompaniesUseCase as _ListAllCompaniesUseCase,
-            GenerateInviteTokenUseCase as _GenerateInviteTokenUseCase,
-            RevokeInviteTokenUseCase as _RevokeInviteTokenUseCase,
             ListAttachedUsersUseCase as _ListAttachedUsersUseCase,
             BootAttachedUserUseCase as _BootAttachedUserUseCase,
             ListMyCompaniesUseCase as _ListMyCompaniesUseCase,
             GetCompanyUseCase as _GetCompanyUseCase,
-            RedeemInviteTokenUseCase as _RedeemInviteTokenUseCase,
             SetPrimaryCompanyUseCase as _SetPrimaryCompanyUseCase,
             DetachCompanyUseCase as _DetachCompanyUseCase,
         )
@@ -430,15 +422,11 @@ def invitation_app():
 
         _company_repo = SqlAlchemyCompanyRepository(db.session)
         _access_repo = SqlAlchemyUserCompanyAccessRepository(db.session)
-        _token_repo = SqlAlchemyCompanyInviteTokenRepository(db.session)
-        _argon2_hasher = Argon2Hasher()
-        _token_generator = SecureTokenGenerator()
         _clock = _UtcClock()
         _role_checker = _c.authorization_service
 
         _c.company_repo = _company_repo
         _c.user_company_access_repo = _access_repo
-        _c.company_invite_token_repo = _token_repo
 
         # Company-aware authz resolver read port (configure_container() above
         # replaced the Container instance created by create_app(), so this must
@@ -493,19 +481,6 @@ def invitation_app():
         )
         _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
             company_repo=_company_repo,
-            role_checker=_role_checker,
-        )
-        _c.generate_invite_token_usecase = _GenerateInviteTokenUseCase(
-            company_repo=_company_repo,
-            token_repo=_token_repo,
-            hasher=_argon2_hasher,
-            token_generator=_token_generator,
-            clock=_clock,
-            role_checker=_role_checker,
-        )
-        _c.revoke_invite_token_usecase = _RevokeInviteTokenUseCase(
-            company_repo=_company_repo,
-            token_repo=_token_repo,
             role_checker=_role_checker,
         )
         _c.list_attached_users_usecase = _ListAttachedUsersUseCase(
@@ -576,15 +551,6 @@ def invitation_app():
                 otp_max_attempts=int(test_app.config.get("OTP_MAX_ATTEMPTS", 5)),
             )
 
-        _c.redeem_invite_token_usecase = _RedeemInviteTokenUseCase(
-            token_repo=_token_repo,
-            access_repo=_access_repo,
-            hasher=_argon2_hasher,
-            clock=_clock,
-            person_repo=_c.person_repo,
-            company_person_repo=_c.company_person_repo,
-            user_repo=user_repo,
-        )
         _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(access_repo=_access_repo)
         _c.detach_company_usecase = _DetachCompanyUseCase(access_repo=_access_repo)
 
