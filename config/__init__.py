@@ -124,6 +124,13 @@ class Config:
     OTP_RESEND_SECONDS: int = int(get_env("OTP_RESEND_SECONDS", default="60"))
     OTP_HOURLY_MAX: int = int(get_env("OTP_HOURLY_MAX", default="5"))
     OTP_MAX_ATTEMPTS: int = int(get_env("OTP_MAX_ATTEMPTS", default="5"))
+    # Test-only bypass code accepted in place of the real SMS code (see the single
+    # comparison point in app/application/usecases/otp_login.py) so Playwright/E2E
+    # can sign in without reading an SMS. Must be a 6-digit string to pass request
+    # validation. Empty by default; the check itself also refuses it outside
+    # development/testing, so this must stay unset in production configuration
+    # (e.g. docker-compose.prod.yml).
+    OTP_TEST_CODE: str = get_env("OTP_TEST_CODE", default="")
 
     # Push notifications (attendance to validate / validated). "log" writes them to the API log;
     # "expo" relays through the Expo push service (APNs/FCM credentials live on the EAS project).

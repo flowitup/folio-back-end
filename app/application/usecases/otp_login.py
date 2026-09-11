@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -78,6 +79,28 @@ class RequestOtpResult:
     expires_in: int
 
 
+# Environment names this deployment recognises as "not production". An unset or
+# unrecognised FLASK_ENV (a typo, or a staging value nobody declared here) counts
+# as production, so the test bypass below fails closed rather than open.
+_NON_PRODUCTION_ENVIRONMENTS = frozenset({"development", "testing"})
+
+
+def _test_code_accepted(submitted: str) -> bool:
+    """Whether `submitted` is the test-only OTP bypass code (see OTP_TEST_CODE).
+
+    This is an authentication bypass, so BOTH conditions are required:
+      1. FLASK_ENV is an explicit non-production value — unset/unrecognised is
+         treated as production, never as an accident-prone default.
+      2. OTP_TEST_CODE is configured (non-empty) — it is absent from production
+         configuration and must stay absent.
+    Only the exact configured code is accepted; every other wrong code still fails.
+    """
+    if os.environ.get("FLASK_ENV") not in _NON_PRODUCTION_ENVIRONMENTS:
+        return False
+    test_code = os.environ.get("OTP_TEST_CODE", "")
+    return bool(test_code) and submitted == test_code
+
+
 def _issue_code(
     otps: LoginOtpRepositoryPort,
     sms: SmsSenderPort,
@@ -112,11 +135,17 @@ def _issue_code(
 
 
 def _consume_code(otps: LoginOtpRepositoryPort, *, phone: str, code: str, now: datetime, max_attempts: int) -> LoginOtp:
-    """Return the matching active code (marked consumed) or raise ``OtpInvalidError``; wrong guesses count."""
+    """Return the matching active code (marked consumed) or raise ``OtpInvalidError``; wrong guesses count.
+
+    Login, signup and (from phase 02) invite acceptance all funnel through this one
+    comparison — the single point where the non-production ``OTP_TEST_CODE`` bypass
+    is honoured (see ``_test_code_accepted``).
+    """
     otp = otps.latest_for_phone(phone)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
         raise OtpInvalidError("Invalid or expired code")
-    if not hmac.compare_digest(otp.code_hash, _hash_code(phone, code.strip())):
+    submitted = code.strip()
+    if not (hmac.compare_digest(otp.code_hash, _hash_code(phone, submitted)) or _test_code_accepted(submitted)):
         otp.attempts += 1
         otps.save(otp)
         raise OtpInvalidError("Invalid or expired code")
