@@ -130,6 +130,18 @@ def create_app(config_class: type = Config) -> Flask:
 
         clear_request_memo()
 
+    # Recognize an API-key credential (Authorization: Bearer folio_sk_... or
+    # X-API-Key) and, on a match, mint a normal short-lived JWT for its owner
+    # so every downstream check (@jwt_required, get_jwt_identity, the authz
+    # resolver, is_platform_ops, rate-limit keying) runs through the exact
+    # same path it already does for a browser session. See
+    # app/api/_helpers/api_key_request_auth.py for the full rationale.
+    @app.before_request
+    def _authenticate_api_key_request() -> None:
+        from app.api._helpers.api_key_request_auth import authenticate_api_key_request
+
+        authenticate_api_key_request()
+
     # Health check endpoint
     @app.route("/health", methods=["GET"])
     def health_check():
@@ -149,6 +161,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.admin import admin_bp
     from app.api.v1.chiffrage import chiffrage_bp
     from app.api.v1.notes import notes_bp
+    from app.api.v1.api_keys import api_keys_bp
     from app.api.v1.chat import chat_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.push import push_bp
@@ -173,6 +186,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(invitations_bp, url_prefix="/api/v1/invitations")
     app.register_blueprint(admin_bp, url_prefix="/api/v1/admin")
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
+    app.register_blueprint(api_keys_bp, url_prefix="/api/v1")
     app.register_blueprint(chat_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(push_bp, url_prefix="/api/v1")
@@ -376,6 +390,22 @@ def _configure_di_container() -> None:
         membership_reader=_membership_reader,
         db_session=db.session,
     )
+
+    # Wire api-keys use-cases (personal automation credentials) — same
+    # late-injection pattern as notes above: constructed post-configure_container
+    # so we can pass db.session directly without adding params to that signature.
+    from app.infrastructure.database.repositories.sqlalchemy_api_key_repository import (
+        SqlAlchemyApiKeyRepository,
+    )
+    from app.application.api_keys.create_api_key_usecase import CreateApiKeyUseCase
+    from app.application.api_keys.list_api_keys_usecase import ListApiKeysUseCase
+    from app.application.api_keys.revoke_api_key_usecase import RevokeApiKeyUseCase
+
+    _api_key_repo = SqlAlchemyApiKeyRepository(db.session)
+    _c.api_key_repository = _api_key_repo
+    _c.create_api_key_usecase = CreateApiKeyUseCase(api_key_repo=_api_key_repo, db_session=db.session)
+    _c.list_api_keys_usecase = ListApiKeysUseCase(api_key_repo=_api_key_repo)
+    _c.revoke_api_key_usecase = RevokeApiKeyUseCase(api_key_repo=_api_key_repo, db_session=db.session)
 
     # Attendance validation: worker self-log → pending → manager validate/reject;
     # the bell reads pending entries through the dedicated query adapter.

@@ -380,6 +380,25 @@ def invitation_app():
             db_session=db.session,
         )
 
+        # ------------------------------------------------------------------
+        # Wire api-keys use-cases — mirrors app/__init__.py wiring. CRITICAL:
+        # any use-case added to _configure_di_container() MUST also appear
+        # here or this fixture drifts from prod (a BC absent from the test
+        # app fails in a way that looks like a route bug, not a wiring gap).
+        # ------------------------------------------------------------------
+        from app.infrastructure.database.repositories.sqlalchemy_api_key_repository import (
+            SqlAlchemyApiKeyRepository,
+        )
+        from app.application.api_keys.create_api_key_usecase import CreateApiKeyUseCase
+        from app.application.api_keys.list_api_keys_usecase import ListApiKeysUseCase
+        from app.application.api_keys.revoke_api_key_usecase import RevokeApiKeyUseCase
+
+        _api_key_repo = SqlAlchemyApiKeyRepository(db.session)
+        _c.api_key_repository = _api_key_repo
+        _c.create_api_key_usecase = CreateApiKeyUseCase(api_key_repo=_api_key_repo, db_session=db.session)
+        _c.list_api_keys_usecase = ListApiKeysUseCase(api_key_repo=_api_key_repo)
+        _c.revoke_api_key_usecase = RevokeApiKeyUseCase(api_key_repo=_api_key_repo, db_session=db.session)
+
         # Attendance validation — mirrors app/__init__.py (bell reads pending entries).
         from app.infrastructure.adapters.sqlalchemy_pending_attendance_query import (
             SQLAlchemyPendingAttendanceQuery as _PendingAttendanceQuery,
