@@ -108,9 +108,11 @@ jobs:
   # tests then said. "lint-test already passed on the pull request" does not
   # cover it: a squash merge builds a commit that was never tested in that form
   # once master has moved on, and nothing obliges a pull request's checks to
-  # have passed before someone merges it. success() below spells out the rule
-  # the implicit one would apply anyway, because what it guards is a production
-  # deploy: no green lint-test, no tag, no release, no deploy.
+  # have passed before someone merges it. The condition is always() plus an
+  # explicit result check rather than success(): success() reads the whole
+  # ancestry instead of just `needs`, so any skipped job upstream would skip the
+  # release too — that mistake cost the front end a release when the same gate
+  # went in there. No green lint-test, no tag, no release, no deploy.
   #
   # The version is computed HERE, at merge time, from the tag list. Computing it
   # per pull request meant two branches open across one master version both read
@@ -125,7 +127,8 @@ jobs:
     timeout-minutes: 5
     needs: [lint-test]
     if: >-
-      success()
+      always()
+      && needs['lint-test'].result == 'success'
       && github.event_name == 'push'
       && github.ref == 'refs/heads/master'
     # Widened over the workflow default (pull-requests: read): recording the version
