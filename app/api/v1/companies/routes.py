@@ -1,4 +1,4 @@
-"""Companies API routes — 13 endpoints.
+"""Companies API routes — 14 endpoints.
 
 Decorator order (MANDATORY): @jwt_required() BEFORE @limiter.limit(...) BEFORE role checks.
 
@@ -25,6 +25,7 @@ from app.api.v1.companies import companies_bp, users_me_bp
 from app.api.v1.companies.decorators import require_admin, require_attached_company, require_company_role
 from app.api.v1.companies.schemas import (
     AttachedUsersListResponse,
+    AttachUserToCompanyResponse,
     JoinCompanyRequest,
     JoinCodeResponse,
     CreateCompanyRequest,
@@ -32,6 +33,7 @@ from app.api.v1.companies.schemas import (
     UpdateCompanyRequest,
 )
 from app.application.companies import (
+    AttachUserToCompanyInput,
     BootAttachedUserInput,
     CompanyResponse,
     CreateCompanyInput,
@@ -48,9 +50,11 @@ from app.application.companies import (
     ForbiddenCompanyError,
     LastCompanyAdminError,
     MissingPrimaryCompanyError,
+    TargetUserNotFoundError,
     UserCompanyAccessNotFoundError,
 )
 from app.application.companies.join_code_usecases import JoinCodeNotFoundError
+from app.domain.companies.roles import CompanyRole
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -420,6 +424,60 @@ def boot_attached_user(company_id: str, target_user_id: str):
 
 
 # ---------------------------------------------------------------------------
+# POST /companies/<company_id>/access/<target_user_id> — attach user (admin)
+# ---------------------------------------------------------------------------
+
+
+@companies_bp.route("/companies/<company_id>/access/<target_user_id>", methods=["POST"])
+@openapi_doc(
+    summary="Attach an existing user account to a company as member (admin only)",
+    responses={200: AttachUserToCompanyResponse},
+    tags=["companies"],
+)
+@jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+@require_company_role("admin")
+def attach_user_to_company(company_id: str, target_user_id: str):
+    """Attach an existing user account to a company as `member` (admin or platform admin).
+
+    D1: guarded by @require_company_role("admin") on the PATH company, so an
+    admin may only attach people to companies they administer. Idempotent:
+    already attached is a success, not a conflict — the existing row and its
+    role come back untouched, never duplicated or changed. Silent like every
+    other admin bulk-attach path (import, add-by-phone): no
+    `company_member_added` push kind exists.
+    """
+    try:
+        company_uuid = UUID(company_id)
+    except ValueError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    try:
+        target_uuid = UUID(target_user_id)
+    except ValueError:
+        return _err("NotFound", f"User {target_user_id} not found", 404)
+
+    caller_id = UUID(get_jwt_identity())
+    inp = AttachUserToCompanyInput(
+        caller_id=caller_id,
+        company_id=company_uuid,
+        target_user_id=target_uuid,
+    )
+
+    from app import db
+
+    try:
+        result = get_container().attach_user_to_company_usecase.execute(inp, db.session)
+    except CompanyNotFoundError:
+        return _err("NotFound", f"Company {company_id} not found", 404)
+    except TargetUserNotFoundError:
+        return _err("NotFound", f"User {target_user_id} not found", 404)
+    except ForbiddenCompanyError:
+        return _err("Forbidden", "Admin permission required", 403)
+
+    return jsonify(dataclasses.asdict(result)), 200
+
+
+# ---------------------------------------------------------------------------
 # PATCH /companies/<company_id>/access/<target_user_id>/role — set member role (admin)
 # ---------------------------------------------------------------------------
 
@@ -600,6 +658,8 @@ def list_attached_users(company_id: str):
 
     items = [dataclasses.asdict(r) for r in result.items]
     _attach_user_identity(items)
+    _attach_user_companies(items, caller_id)
+    _attach_user_assignments(items, company_uuid)
     return jsonify({"items": items, "total": result.total})
 
 
@@ -621,6 +681,74 @@ def _attach_user_identity(items: list[dict]) -> None:
         row["email"] = user.email if user else None
         row["display_name"] = (user.display_name if user else None) or (user.email.split("@", 1)[0] if user else None)
         row["phone"] = user.phone if user else None
+
+
+def _attach_user_assignments(items: list[dict], company_id: UUID) -> None:
+    """Add `assigned_project_ids` to attached-user rows (one batch query).
+
+    The directory carries this for people who have a `company_persons`
+    profile, but an account attached without one (every pre-Phase-2 user,
+    and any path that writes the access row directly) is absent from it —
+    so a member list that sourced assignments from the directory alone
+    would show "no projects" for a user who is in fact assigned.
+    """
+    for row in items:
+        row["assigned_project_ids"] = []
+
+    ids = [row["user_id"] for row in items]
+    if not ids:
+        return
+
+    reader = get_container().authz_reader
+    if reader is None:
+        return
+
+    by_user = reader.assigned_project_ids_for_users(company_id, ids)
+    for row in items:
+        row["assigned_project_ids"] = [str(pid) for pid in by_user.get(row["user_id"], [])]
+
+
+def _attach_user_companies(items: list[dict], caller_id: UUID) -> None:
+    """Add `companies: [{id, legal_name}]` to attached-user rows (one batch query).
+
+    D4 (no cross-tenant leak): each row lists the target's OWN company
+    attachments intersected with the companies the CALLER administers — a
+    company the target belongs to that the caller does not administer is
+    neither shown nor counted here.
+    """
+    for row in items:
+        row["companies"] = []
+
+    ids = [row["user_id"] for row in items]
+    if not ids:
+        return
+
+    caller_admin_company_ids = [
+        access.company_id
+        for access in get_container().user_company_access_repo.list_for_user(caller_id)
+        if access.role == CompanyRole.ADMIN.value
+    ]
+    if not caller_admin_company_ids:
+        return
+
+    from app import db
+    from app.infrastructure.database.models import CompanyModel, UserCompanyAccessModel
+
+    rows = (
+        db.session.query(UserCompanyAccessModel.user_id, CompanyModel.id, CompanyModel.legal_name)
+        .join(CompanyModel, CompanyModel.id == UserCompanyAccessModel.company_id)
+        .filter(
+            UserCompanyAccessModel.user_id.in_(ids),
+            UserCompanyAccessModel.company_id.in_(caller_admin_company_ids),
+        )
+        .all()
+    )
+    by_user: dict[UUID, list[dict]] = {}
+    for user_id, company_id, legal_name in rows:
+        by_user.setdefault(user_id, []).append({"id": str(company_id), "legal_name": legal_name})
+
+    for row in items:
+        row["companies"] = by_user.get(row["user_id"], [])
 
 
 # ---------------------------------------------------------------------------

@@ -101,6 +101,15 @@ class BootAttachedUserInput:
     target_user_id: UUID
 
 
+@dataclass(frozen=True)
+class AttachUserToCompanyInput:
+    """Input for AttachUserToCompanyUseCase (admin attaches an existing user to a company)."""
+
+    caller_id: UUID
+    company_id: UUID
+    target_user_id: UUID
+
+
 # ---------------------------------------------------------------------------
 # List / get inputs
 # ---------------------------------------------------------------------------

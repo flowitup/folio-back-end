@@ -13,6 +13,7 @@ from app.application.companies.delete_company_usecase import DeleteCompanyUseCas
 from app.application.companies.list_all_companies_usecase import ListAllCompaniesUseCase
 from app.application.companies.list_attached_users_usecase import ListAttachedUsersUseCase
 from app.application.companies.boot_attached_user_usecase import BootAttachedUserUseCase
+from app.application.companies.attach_user_to_company_usecase import AttachUserToCompanyUseCase
 from app.application.companies.list_new_members_usecase import ListNewMembersUseCase
 
 # --- Use-cases: authenticated user ---
@@ -30,6 +31,7 @@ from app.application.companies.dtos import (
     SetMemberRoleInput,
     DetachCompanyInput,
     BootAttachedUserInput,
+    AttachUserToCompanyInput,
     ListAllCompaniesInput,
     GetCompanyInput,
     ListAttachedUsersInput,
@@ -61,6 +63,7 @@ from app.domain.companies.exceptions import (
     ForbiddenCompanyError,
     MissingPrimaryCompanyError,
     LastCompanyAdminError,
+    TargetUserNotFoundError,
 )
 
 __all__ = [
@@ -71,6 +74,7 @@ __all__ = [
     "ListAllCompaniesUseCase",
     "ListAttachedUsersUseCase",
     "BootAttachedUserUseCase",
+    "AttachUserToCompanyUseCase",
     "ListNewMembersUseCase",
     # use-cases: authenticated user
     "ListMyCompaniesUseCase",
@@ -85,6 +89,7 @@ __all__ = [
     "SetMemberRoleInput",
     "DetachCompanyInput",
     "BootAttachedUserInput",
+    "AttachUserToCompanyInput",
     "ListAllCompaniesInput",
     "GetCompanyInput",
     "ListAttachedUsersInput",
@@ -110,4 +115,5 @@ __all__ = [
     "ForbiddenCompanyError",
     "MissingPrimaryCompanyError",
     "LastCompanyAdminError",
+    "TargetUserNotFoundError",
 ]

@@ -118,11 +118,25 @@ class JoinCompanyRequest(_StrictBase):
     code: str = Field(..., min_length=4, max_length=32)
 
 
+class CompanySummary(_StrictBase):
+    """Minimal company reference nested in other responses (id + display name only)."""
+
+    id: UUID
+    legal_name: str
+
+
 class AttachedUserRow(_StrictBase):
     """One row of GET /companies/<id>/attached-users.
 
     Access fields come from the use case; `email` / `display_name` / `phone`
     are joined from `users` so clients can render the member list directly.
+    `companies` (D4) lists the target's OWN attachments intersected with the
+    companies the CALLER administers — never a company the caller cannot
+    manage, so this can never leak cross-tenant membership.
+    `assigned_project_ids` lists this company's projects the user is
+    assigned to: the directory only carries it for people who have a
+    `company_persons` profile, so an account attached without one would
+    otherwise look unassigned.
     """
 
     user_id: UUID
@@ -133,11 +147,27 @@ class AttachedUserRow(_StrictBase):
     email: Optional[str] = None
     display_name: Optional[str] = None
     phone: Optional[str] = None
+    companies: list[CompanySummary] = Field(default_factory=list)
+    assigned_project_ids: list[UUID] = Field(default_factory=list)
 
 
 class AttachedUsersListResponse(_StrictBase):
     items: list[AttachedUserRow]
     total: int
+
+
+class AttachUserToCompanyResponse(_StrictBase):
+    """Response of POST /companies/<id>/access/<user_id>.
+
+    Same shape whether the call created the row or found the user already
+    attached (idempotent) — the current state of the access row either way.
+    """
+
+    user_id: UUID
+    company_id: UUID
+    role: str
+    is_primary: bool
+    attached_at: datetime
 
 
 class JoinCodeResponse(_StrictBase):
