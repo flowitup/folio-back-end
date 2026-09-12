@@ -186,6 +186,9 @@ from app.application.notes.update_note_usecase import UpdateNoteUseCase
 from app.application.notes.delete_note_usecase import DeleteNoteUseCase
 from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
 from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
+from app.application.api_keys.create_api_key_usecase import CreateApiKeyUseCase
+from app.application.api_keys.list_api_keys_usecase import ListApiKeysUseCase
+from app.application.api_keys.revoke_api_key_usecase import RevokeApiKeyUseCase
 
 # Companies use-cases (phase 03)
 from app.application.companies import (
@@ -403,6 +406,13 @@ class Container:
     list_project_notes_usecase: Optional[ListProjectNotesUseCase] = None
     update_note_usecase: Optional[UpdateNoteUseCase] = None
     delete_note_usecase: Optional[DeleteNoteUseCase] = None
+
+    # Personal automation API keys (repo + use-cases wired in app/__init__.py
+    # once db.session exists — same late-injection pattern as notes above).
+    api_key_repository: Optional[Any] = None  # SqlAlchemyApiKeyRepository (ApiKeyRepositoryPort)
+    create_api_key_usecase: Optional[CreateApiKeyUseCase] = None
+    list_api_keys_usecase: Optional[ListApiKeysUseCase] = None
+    revoke_api_key_usecase: Optional[RevokeApiKeyUseCase] = None
     list_due_notifications_usecase: Optional[ListDueNotificationsUseCase] = None
     dismiss_notification_usecase: Optional[DismissNotificationUseCase] = None
 

@@ -7,6 +7,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.api_key_request_auth import reject_api_key_mutations
 from app.api.openapi import openapi_doc
 from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.admin import admin_bp
@@ -246,3 +247,11 @@ def update_user(user_id: str):
         jsonify({"id": str(user.id), "email": user.email, "display_name": user.display_name, "phone": user.phone}),
         200,
     )
+
+
+# An API key may READ this blueprint but never mutate it. `users.phone` IS the
+# sign-in factor, so a caller able to rewrite it turns a leaked, never-expiring
+# key into permanent account takeover. Registered here at blueprint-definition
+# time rather than in create_app(), because a Blueprint is a module-level
+# singleton and Flask forbids mutating one after its first registration.
+admin_bp.before_request(reject_api_key_mutations)
