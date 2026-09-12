@@ -47,6 +47,7 @@ from app.infrastructure.database.models.chiffrage_room import ChiffrageRoomModel
 from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+from app.infrastructure.database.models.api_key import ApiKeyOrm
 
 __all__ = [
     "Base",
@@ -91,6 +92,7 @@ __all__ = [
     "ChiffrageRoomModel",
     "CompanyPersonModel",
     "CompanyMemberGrantModel",
+    "ApiKeyOrm",
     "NotificationPreferenceModel",
     "ChatPushMarkerModel",
 ]
