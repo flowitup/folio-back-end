@@ -21,10 +21,11 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from flask import Response, g, jsonify, request
+from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.api_key_request_auth import reject_api_key_callers
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.validation_error import safe_validation_fields
 from app.api.openapi import openapi_doc
@@ -57,17 +58,10 @@ def _serialize_key(dto: ApiKeyDto) -> dict[str, Any]:
     }
 
 
-@api_keys_bp.before_request
-def _reject_api_key_callers() -> Any:
-    """A request authenticated BY an API key may never manage API keys.
-
-    Otherwise a leaked key could enumerate its siblings, mint itself
-    replacements indefinitely, or revoke another key to cover its tracks.
-    Escalating past the key itself requires an ordinary interactive session.
-    """
-    if g.get("authenticated_via_api_key"):
-        return _err(403, "Forbidden", "API keys cannot manage API keys")
-    return None
+# A request authenticated BY an API key may never manage API keys — see
+# reject_api_key_callers for why. The same module carries the companion rule
+# applied to /auth/* and /admin/* (a key may read them, never mutate them).
+api_keys_bp.before_request(reject_api_key_callers)
 
 
 # ---------------------------------------------------------------------------

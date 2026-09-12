@@ -100,6 +100,25 @@ def create_app(config_class: type = Config) -> Flask:
     )
     db.init_app(app)
     jwt.init_app(app)
+
+    # Recognize an API-key credential (Authorization: Bearer folio_sk_... or
+    # X-API-Key) and, on a match, mint a normal short-lived JWT for its owner
+    # so every downstream check (@jwt_required, get_jwt_identity, the authz
+    # resolver, is_platform_ops, rate-limit keying) runs through the exact
+    # same path it already does for a browser session. See
+    # app/api/_helpers/api_key_request_auth.py for the full rationale.
+    #
+    # Registered BEFORE limiter.init_app so it lands earlier in
+    # before_request_funcs: flask-limiter enforces every limit from its own
+    # before_request hook, so a seam registered after it would run too late and
+    # `jwt_user_key` would still see no identity — silently degrading every
+    # per-user limit to per-IP for API-key traffic.
+    @app.before_request
+    def _authenticate_api_key_request() -> None:
+        from app.api._helpers.api_key_request_auth import authenticate_api_key_request
+
+        authenticate_api_key_request()
+
     limiter.init_app(app)
     # flask-limiter keys every limit on the client address, which behind cloudflared or the
     # Next.js server actions is the proxy rather than the visitor unless the forwarded one is
@@ -129,18 +148,6 @@ def create_app(config_class: type = Config) -> Flask:
         from app.api.v1.authz_context import clear_request_memo
 
         clear_request_memo()
-
-    # Recognize an API-key credential (Authorization: Bearer folio_sk_... or
-    # X-API-Key) and, on a match, mint a normal short-lived JWT for its owner
-    # so every downstream check (@jwt_required, get_jwt_identity, the authz
-    # resolver, is_platform_ops, rate-limit keying) runs through the exact
-    # same path it already does for a browser session. See
-    # app/api/_helpers/api_key_request_auth.py for the full rationale.
-    @app.before_request
-    def _authenticate_api_key_request() -> None:
-        from app.api._helpers.api_key_request_auth import authenticate_api_key_request
-
-        authenticate_api_key_request()
 
     # Health check endpoint
     @app.route("/health", methods=["GET"])

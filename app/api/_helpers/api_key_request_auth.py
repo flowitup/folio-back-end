@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import g, request
+from flask import g, jsonify, request
 
 from app.application.api_keys.token_factory import API_KEY_PREFIX
 from app.domain.value_objects.invite_token import hash_token
@@ -48,8 +48,12 @@ logger = logging.getLogger(__name__)
 def _extract_candidate_credential() -> str | None:
     """Return the raw credential from `Authorization: Bearer <v>`, else `X-API-Key`."""
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        candidate = auth_header[len("Bearer ") :].strip()
+    # RFC 7235 makes the auth-scheme token case-insensitive, and real HTTP
+    # clients do send "bearer". Matching case-sensitively would silently drop
+    # the credential and answer 401 for a perfectly valid key.
+    scheme, _, rest = auth_header.partition(" ")
+    if scheme.lower() == "bearer":
+        candidate = rest.strip()
         if candidate:
             return candidate
 
@@ -105,3 +109,57 @@ def authenticate_api_key_request() -> None:
         repo.touch_last_used(row.id)
     except Exception:
         logger.exception("API key authentication failed unexpectedly; request stays unauthenticated.")
+
+
+# ---------------------------------------------------------------------------
+# Blueprint guards — what an API key may NOT reach
+# ---------------------------------------------------------------------------
+#
+# A key inherits its owner's permissions in full (locked decision D1), which
+# governs what it may DO with those permissions. It deliberately does NOT
+# extend to changing the account's authentication factor or administering
+# accounts: `users.phone` IS the sign-in identity (phone + SMS code is the only
+# way in), so a caller able to rewrite it converts a leaked, never-expiring key
+# into permanent account takeover — rewrite the phone, receive the SMS, and the
+# resulting session is an ordinary interactive one that is NOT
+# `authenticated_via_api_key`, so it walks straight past the key-management
+# guard below and locks the real owner out for good.
+#
+# Reads stay open: an automation legitimately calls `GET /auth/me` to discover
+# which account its key belongs to.
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _forbidden(message: str):
+    return (
+        jsonify({"error": "Forbidden", "message": message, "status_code": 403}),
+        403,
+    )
+
+
+def reject_api_key_callers():
+    """Blueprint `before_request`: refuse EVERY request that authenticated with a key.
+
+    Used by the API-key management blueprint itself. A leaked key must not be
+    able to enumerate its siblings, mint itself replacements indefinitely, or
+    revoke another key to cover its tracks; escalating past the key requires an
+    ordinary interactive session.
+    """
+    if g.get("authenticated_via_api_key"):
+        return _forbidden("API keys cannot manage API keys")
+    return None
+
+
+def reject_api_key_mutations():
+    """Blueprint `before_request`: a key may READ these routes but never mutate them.
+
+    Registered on the auth and admin blueprints. Safe methods pass (so
+    `GET /auth/me` keeps working, and CORS preflight is unaffected); anything
+    that writes is refused for a key-authenticated caller.
+    """
+    if request.method in _SAFE_METHODS:
+        return None
+    if g.get("authenticated_via_api_key"):
+        return _forbidden("API keys cannot modify account or administration settings")
+    return None

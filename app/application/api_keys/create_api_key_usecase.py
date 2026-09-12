@@ -20,6 +20,14 @@ class CreateApiKeyUseCase:
     The key inherits the owner's permissions in full — there is no scope,
     read-only mode, or company pinning, and it never expires (locked product
     decisions).
+
+
+    The per-user cap is a guardrail against unbounded growth, not a security
+    boundary: it is checked and then written without a lock, so two truly
+    simultaneous creates can both observe `count == cap - 1` and leave the user
+    one key over. Serialising this would cost a lock on every create to defend
+    a limit whose only job is to stop a runaway script, so the race is accepted
+    deliberately. Nothing downstream reads the count.
     """
 
     def __init__(self, api_key_repo: ApiKeyRepositoryPort, db_session: TransactionalSessionPort) -> None:

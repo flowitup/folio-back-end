@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api._helpers.api_key_request_auth import reject_api_key_mutations
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
@@ -390,3 +391,11 @@ def verify_signup_otp():
     response = _login_response(container, result)
     response.status_code = 201
     return response
+
+
+# An API key may READ this blueprint but never mutate it. `users.phone` IS the
+# sign-in factor, so a caller able to rewrite it turns a leaked, never-expiring
+# key into permanent account takeover. Registered here at blueprint-definition
+# time rather than in create_app(), because a Blueprint is a module-level
+# singleton and Flask forbids mutating one after its first registration.
+auth_bp.before_request(reject_api_key_mutations)
