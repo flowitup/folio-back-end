@@ -195,6 +195,7 @@ from app.application.companies import (
     ListAllCompaniesUseCase,
     ListAttachedUsersUseCase,
     BootAttachedUserUseCase,
+    AttachUserToCompanyUseCase,
     ListMyCompaniesUseCase,
     GetCompanyUseCase,
     SetPrimaryCompanyUseCase,
@@ -438,6 +439,7 @@ class Container:
     list_all_companies_usecase: Optional[ListAllCompaniesUseCase] = None
     list_attached_users_usecase: Optional[ListAttachedUsersUseCase] = None
     boot_attached_user_usecase: Optional[BootAttachedUserUseCase] = None
+    attach_user_to_company_usecase: Optional[AttachUserToCompanyUseCase] = None
 
     # companies use-cases: authenticated user
     list_my_companies_usecase: Optional[ListMyCompaniesUseCase] = None

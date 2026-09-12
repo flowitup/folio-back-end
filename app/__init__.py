@@ -780,6 +780,26 @@ def _configure_di_container() -> None:
         user_repo=_c.user_repository,
     )
 
+    # Admin attaches an existing user account to a company (mirrors the
+    # join-code attach step, but admin-initiated and silent — no push kind
+    # exists for it). Needs person_repo/company_person_repo for
+    # ensure_company_person, so — like the two rewires just above — it is
+    # wired here rather than in the earlier companies admin/user use-case
+    # block, where those two repos do not exist yet.
+    from app.application.companies.attach_user_to_company_usecase import (
+        AttachUserToCompanyUseCase as _AttachUserToCompanyUseCase,
+    )
+
+    _c.attach_user_to_company_usecase = _AttachUserToCompanyUseCase(
+        company_repo=_company_repo,
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+        clock=_clock,
+        user_repo=_c.user_repository,
+        person_repo=_person_repo,
+        company_person_repo=_c.company_person_repo,
+    )
+
     _c.list_directory_usecase = _ListDirectoryUseCase(
         company_person_repo=_c.company_person_repo,
         person_repo=_person_repo,

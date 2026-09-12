@@ -33,6 +33,14 @@ class CompanyAlreadyAttachedError(CompaniesDomainError):
         super().__init__(f"User {user_id} already has access to company {company_id}")
 
 
+class TargetUserNotFoundError(CompaniesDomainError):
+    """Raised when an admin attaches a user_id that has no corresponding user account."""
+
+    def __init__(self, user_id: UUID) -> None:
+        self.user_id = user_id
+        super().__init__(f"User {user_id} not found")
+
+
 class ForbiddenCompanyError(CompaniesDomainError):
     """Raised when a non-admin user attempts an admin-only company operation."""
 
