@@ -93,6 +93,7 @@ The most useful settings, configured through environment variables:
 | `EMAIL_PROVIDER`, `SMTP_*` | Outgoing email — invitations and reminders. Email is a contact field only; it is never a sign-in credential. |
 | `SMS_PROVIDER` | How sign-in codes go out: `log` (API log, dev), `twilio` (`TWILIO_*`) or `gateway` — an "SMS Gateway for Android" endpoint (`SMS_GATEWAY_URL`, `SMS_GATEWAY_USERNAME`, `SMS_GATEWAY_PASSWORD`). Phone + SMS code is the only way to sign in. |
 | `OTP_TEST_CODE` | **Must stay unset in production.** A fixed sign-in code accepted in place of the real SMS one, so automated tests can complete a phone sign-in without reading a message. It is refused unless `FLASK_ENV` is explicitly `development` or `testing` — an unset, empty or unrecognised value counts as production — and it still requires a code to have been requested for that number. |
+| `OTP_REVIEWER_PHONE` / `OTP_REVIEWER_CODE` | Store-review account (App Store / Play review). **Set both or neither.** One French phone number whose sign-in code is always `OTP_REVIEWER_CODE` (6 digits): `/otp/request` for that number stores a code but sends no SMS and skips the throttle, and `/otp/verify` accepts the fixed code for that number only — every other phone still needs its real SMS code, and the fixed code is rejected for them. Meant for production while an app version is under review; unset both afterwards. The number must exist as an active user (sign it up once through the app: the sign-up code follows the same rule). |
 
 A full template lives in `.env.example`.
 

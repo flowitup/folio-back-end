@@ -137,6 +137,15 @@ class Config:
     # development/testing, so this must stay unset in production configuration
     # (e.g. docker-compose.prod.yml).
     OTP_TEST_CODE: str = get_env("OTP_TEST_CODE", default="")
+    # App Store / Play review account: ONE phone number whose sign-in code is fixed so
+    # store reviewers can log in without receiving an SMS. Unlike OTP_TEST_CODE this is
+    # meant for production, but it is scoped to that single number (see
+    # ``_reviewer_code_for`` in app/application/usecases/otp_login.py): every other phone
+    # still needs the real SMS code, and the fixed code is rejected for any other number.
+    # Both values must be set for the bypass to exist; the number must be French (E.164 or
+    # 0X form) and the code a 6-digit string. Leave both empty when not under review.
+    OTP_REVIEWER_PHONE: str = get_env("OTP_REVIEWER_PHONE", default="")
+    OTP_REVIEWER_CODE: str = get_env("OTP_REVIEWER_CODE", default="")
 
     # Push notifications (attendance to validate / validated). "log" writes them to the API log;
     # "expo" relays through the Expo push service (APNs/FCM credentials live on the EAS project).
@@ -157,6 +166,10 @@ class Config:
             raise ValueError("PUSH_PROVIDER must be 'log' or 'expo'")
         if self.SMS_PROVIDER not in ("log", "twilio", "gateway"):
             raise ValueError("SMS_PROVIDER must be 'log', 'twilio' or 'gateway'")
+        if bool(self.OTP_REVIEWER_PHONE) != bool(self.OTP_REVIEWER_CODE):
+            raise ValueError("OTP_REVIEWER_PHONE and OTP_REVIEWER_CODE must be set together")
+        if self.OTP_REVIEWER_CODE and not (self.OTP_REVIEWER_CODE.isdigit() and len(self.OTP_REVIEWER_CODE) == 6):
+            raise ValueError("OTP_REVIEWER_CODE must be a 6-digit string")
 
 
 class DevelopmentConfig(Config):

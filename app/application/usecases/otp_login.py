@@ -100,6 +100,28 @@ def _test_code_accepted(submitted: str) -> bool:
     return bool(test_code) and submitted == test_code
 
 
+def _reviewer_code_for(phone: str) -> Optional[str]:
+    """Fixed sign-in code for the store-review account, or ``None`` for every other phone.
+
+    Configured by OTP_REVIEWER_PHONE + OTP_REVIEWER_CODE (both required). This one runs in
+    production on purpose — App Store / Play reviewers must be able to sign in without an
+    SMS — so it is scoped as tightly as possible: only the normalised reviewer number gets a
+    fixed code; the code is never accepted for any other phone; a malformed configuration
+    disables the bypass rather than widening it. Sign-in, sign-up and invitation acceptance
+    all funnel through ``_consume_code``, so this is honoured (and only honoured) there,
+    while ``_issue_code`` skips the SMS and the per-phone throttle for that number.
+    """
+    reviewer_phone = os.environ.get("OTP_REVIEWER_PHONE", "").strip()
+    code = os.environ.get("OTP_REVIEWER_CODE", "").strip()
+    if not reviewer_phone or not code:
+        return None
+    try:
+        normalized = normalize_french_phone(reviewer_phone)
+    except ValueError:
+        return None
+    return code if phone == normalized else None
+
+
 def _issue_code(
     otps: LoginOtpRepositoryPort,
     sms: SmsSenderPort,
@@ -113,11 +135,13 @@ def _issue_code(
     message: str,
 ) -> None:
     """Throttle per phone, void older codes, store the hash and send the SMS."""
+    is_reviewer = _reviewer_code_for(phone) is not None
     latest = otps.latest_for_phone(phone)
-    if latest is not None and (now - latest.created_at) < timedelta(seconds=resend_after):
-        raise OtpThrottledError("A code was sent recently; wait before asking again")
-    if otps.count_created_since(phone, now - timedelta(hours=1)) >= hourly_max:
-        raise OtpThrottledError("Too many codes requested; try again later")
+    if not is_reviewer:
+        if latest is not None and (now - latest.created_at) < timedelta(seconds=resend_after):
+            raise OtpThrottledError("A code was sent recently; wait before asking again")
+        if otps.count_created_since(phone, now - timedelta(hours=1)) >= hourly_max:
+            raise OtpThrottledError("Too many codes requested; try again later")
     code = f"{secrets.randbelow(10**6):06d}"
     otps.void_active(phone, now)
     otps.save(
@@ -130,6 +154,10 @@ def _issue_code(
             created_at=now,
         )
     )
+    if is_reviewer:
+        # The reviewer signs in with the fixed code; nothing to deliver (and the number may not exist).
+        logger.info("auth.otp.request.reviewer_account")
+        return
     sms.send(phone, message.format(code=code, minutes=max(1, ttl // 60)))
 
 
@@ -138,13 +166,20 @@ def _consume_code(otps: LoginOtpRepositoryPort, *, phone: str, code: str, now: d
 
     Login, signup and (from phase 02) invite acceptance all funnel through this one
     comparison — the single point where the non-production ``OTP_TEST_CODE`` bypass
-    is honoured (see ``_test_code_accepted``).
+    (``_test_code_accepted``) and the store-review account's fixed code
+    (``_reviewer_code_for``) are honoured.
     """
     otp = otps.latest_for_phone(phone)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
         raise OtpInvalidError("Invalid or expired code")
     submitted = code.strip()
-    if not (hmac.compare_digest(otp.code_hash, _hash_code(phone, submitted)) or _test_code_accepted(submitted)):
+    reviewer_code = _reviewer_code_for(phone)
+    accepted = (
+        hmac.compare_digest(otp.code_hash, _hash_code(phone, submitted))
+        or _test_code_accepted(submitted)
+        or (reviewer_code is not None and hmac.compare_digest(submitted, reviewer_code))
+    )
+    if not accepted:
         otp.attempts += 1
         otps.save(otp)
         raise OtpInvalidError("Invalid or expired code")
