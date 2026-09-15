@@ -1,7 +1,7 @@
 """User domain entity."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
@@ -35,6 +35,9 @@ class User:
     phone: Optional[str] = None
     # Platform-ops (flowitup support) bypass — a hidden flag, not a role.
     is_platform_ops: bool = False
+    # Set when the user erased their own account. The row is kept (company data
+    # references it) but carries no personal data and can no longer sign in.
+    deleted_at: Optional[datetime] = None
 
     def __eq__(self, other: object) -> bool:
         """Users are equal if they have the same ID."""
@@ -50,6 +53,32 @@ class User:
     def display_or_email(self) -> str:
         """Return display_name if set, otherwise the local part of the email address."""
         return self.display_name or self.email.split("@")[0]
+
+    @property
+    def is_deleted(self) -> bool:
+        """True once the user has erased their account."""
+        return self.deleted_at is not None
+
+    def anonymized(self, now: datetime) -> "User":
+        """Return this user stripped of every piece of personal data.
+
+        The phone is released rather than kept: it is the sign-in identity and is
+        unique, so holding on to it would both retain personal data and block the
+        person from ever signing up again. The email is replaced with a
+        non-routable placeholder because the column is NOT NULL and unique.
+        ``is_platform_ops`` is not touched here: the repository does not persist
+        it (it is ops-owned, set out of band), so clearing it on the entity would
+        be a silent no-op. The eraser clears that column directly instead.
+        """
+        return replace(
+            self,
+            email=f"deleted-{self.id}@deleted.invalid",
+            display_name=None,
+            phone=None,
+            is_active=False,
+            deleted_at=now,
+            updated_at=now,
+        )
 
     @classmethod
     def create(

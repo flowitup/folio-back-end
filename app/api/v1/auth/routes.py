@@ -21,6 +21,7 @@ from app.api._helpers.api_key_request_auth import reject_api_key_mutations
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
+    AccountDeletionBlockedResponse,
     AuthConfigResponse,
     LoginResponse,
     LogoutBody,
@@ -37,6 +38,10 @@ from app.api.v1.auth.schemas import (
     LogoutResponse,
 )
 from app.application.ports.sms_sender import SmsSendError
+from app.application.usecases.delete_account import (
+    AccountNotFoundError,
+    LastCompanyAdminError,
+)
 from app.application.usecases.otp_login import LoginResult
 from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
@@ -200,30 +205,41 @@ def logout():
     # (its persistent refresh tokens never expire, so this revocation is what ends the session).
     # Decoded with allow_expired because flask-jwt-extended only treats one token kind per
     # request and logout must not fail when the token is missing or already expired.
-    if token_issuer:
-        _cookie_name = current_app.config.get("JWT_REFRESH_COOKIE_NAME", "refresh_token_cookie")
-        candidates = [request.cookies.get(_cookie_name)]
-        try:
-            body = LogoutBody(**(request.get_json(silent=True) or {}))
-            candidates.append(body.refresh_token)
-        except ValidationError:
-            pass
-        for refresh_token in candidates:
-            if not refresh_token:
-                continue
-            try:
-                from flask_jwt_extended import decode_token
-
-                refresh_claims = decode_token(refresh_token, allow_expired=True)
-                refresh_jti = refresh_claims.get("jti") if refresh_claims else None
-                if refresh_jti:
-                    token_issuer.revoke_token(
-                        refresh_jti, token_type="refresh", persistent=bool(refresh_claims.get("persistent"))
-                    )
-            except Exception:  # pragma: no cover - defensive; logout must not 500
-                logger.info("auth.logout: refresh-token decode failed; access JTI still revoked")
+    _revoke_presented_refresh_tokens(token_issuer)
 
     return response
+
+
+def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
+    """Blacklist whatever refresh token the caller presented, cookie or JSON body.
+
+    Shared by logout and account deletion. Decoded with allow_expired because
+    flask-jwt-extended only treats one token kind per request, and neither caller
+    may fail because the token is missing or already expired.
+    """
+    if not token_issuer:
+        return
+    _cookie_name = current_app.config.get("JWT_REFRESH_COOKIE_NAME", "refresh_token_cookie")
+    candidates = [request.cookies.get(_cookie_name)]
+    try:
+        body = LogoutBody(**(request.get_json(silent=True) or {}))
+        candidates.append(body.refresh_token)
+    except ValidationError:
+        pass
+    for refresh_token in candidates:
+        if not refresh_token:
+            continue
+        try:
+            from flask_jwt_extended import decode_token
+
+            refresh_claims = decode_token(refresh_token, allow_expired=True)
+            refresh_jti = refresh_claims.get("jti") if refresh_claims else None
+            if refresh_jti:
+                token_issuer.revoke_token(
+                    refresh_jti, token_type="refresh", persistent=bool(refresh_claims.get("persistent"))
+                )
+        except Exception:  # pragma: no cover - defensive; must not 500
+            logger.info("auth: refresh-token decode failed; access JTI still revoked")
 
 
 @auth_bp.route("/refresh", methods=["POST"])
@@ -321,6 +337,70 @@ def update_current_user():
 
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())
+
+
+@auth_bp.route("/me", methods=["DELETE"])
+@openapi_doc(
+    summary="Permanently delete the current user's own account",
+    # Same body as logout: the mobile app hands its refresh token back so that
+    # token is blacklisted too, rather than relying only on the per-request
+    # check that its user is gone.
+    request=LogoutBody,
+    responses={204: None, 409: AccountDeletionBlockedResponse},
+    tags=["auth"],
+)
+@jwt_required()
+@limiter.limit("5 per hour", key_func=jwt_user_key)
+def delete_current_user():
+    """Erase the caller's account: anonymized, signed out everywhere, irreversible.
+
+    Required by App Store guideline 5.1.1(v) for any app offering account creation.
+    The user row is kept but stripped of all personal data — company records point
+    at it and several of those foreign keys are RESTRICT/NOT NULL — while every
+    credential, device and access grant is deleted outright. See
+    ``DeleteAccountUseCase`` for the full erase/keep split.
+
+    Refused with 409 when the caller is the last admin of a company that still has
+    other members, so their colleagues are not stranded without an administrator.
+    """
+    container = get_container()
+    usecase = getattr(container, "delete_account_usecase", None)
+    if usecase is None:
+        return _error(500, "ServerError", "Account deletion not configured")
+
+    try:
+        usecase.execute(UUID(get_jwt_identity()))
+    except AccountNotFoundError:
+        return _error(404, "NotFound", "User not found")
+    except LastCompanyAdminError as exc:
+        # `reason` is the discriminator clients branch on; `message` is the fallback
+        # for anything that has not been taught this case yet.
+        return (
+            jsonify(
+                AccountDeletionBlockedResponse(
+                    message=(
+                        f"You are the last administrator of {exc.company_name}. "
+                        "Make someone else an administrator before deleting your account."
+                    ),
+                    company_name=exc.company_name,
+                ).model_dump()
+            ),
+            409,
+        )
+
+    # The account is gone; make the caller's own tokens unusable straight away
+    # rather than waiting for the per-request user check to notice.
+    token_issuer = container.token_issuer if container else None
+    jwt_data = get_jwt()
+    if jwt_data and token_issuer:
+        jti = jwt_data.get("jti")
+        if jti:
+            token_issuer.revoke_token(jti, token_type="access")
+    _revoke_presented_refresh_tokens(token_issuer)
+
+    response = make_response("", 204)
+    unset_jwt_cookies(response)
+    return response
 
 
 @auth_bp.route("/signup/request", methods=["POST"])

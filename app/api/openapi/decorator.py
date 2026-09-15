@@ -19,7 +19,7 @@ def openapi_doc(
     description: Optional[str] = None,
     request: Optional[Type[BaseModel]] = None,
     query: Optional[Type[BaseModel]] = None,
-    responses: Optional[dict[int, Type[BaseModel]]] = None,
+    responses: Optional[dict[int, Optional[Type[BaseModel]]]] = None,
     tags: Optional[list[str]] = None,
     auth: bool = True,
 ) -> Callable:
@@ -35,7 +35,8 @@ def openapi_doc(
         description: Longer Markdown description for the operation.
         request:     Pydantic model class for the JSON request body.
         query:       Pydantic model class whose fields become query parameters.
-        responses:   Mapping of HTTP status code → Pydantic response model.
+        responses:   Mapping of HTTP status code → Pydantic response model,
+                     or None for a status that carries no body (204).
         tags:        List of tag strings for grouping in the UI.
         auth:        If False, the bearerAuth security requirement is omitted
                      (use for public endpoints like login/refresh).

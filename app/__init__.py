@@ -636,6 +636,24 @@ def _configure_di_container() -> None:
     _c.company_repo = _company_repo
     _c.user_company_access_repo = _access_repo
 
+    # Self-service account deletion needs identity, company access (for the
+    # last-admin guard) and the personal-data eraser, so it is wired here where
+    # the company repositories exist rather than in wiring.py.
+    if _c.user_repository is not None:
+        from app.application.usecases.delete_account import DeleteAccountUseCase
+        from app.infrastructure.adapters.sqlalchemy_personal_data_eraser import (
+            SQLAlchemyPersonalDataEraser,
+        )
+
+        _c.delete_account_usecase = DeleteAccountUseCase(
+            user_repo=_c.user_repository,
+            access_repo=_access_repo,
+            company_repo=_company_repo,
+            eraser=SQLAlchemyPersonalDataEraser(db.session),
+            db_session=db.session,
+            clock=_clock,
+        )
+
     # Membership pushes need both name sources, so they are wired here rather than in the
     # push block above, where the company repo does not exist yet.
     if _c.push_dispatcher is not None and _c.project_repository is not None:

@@ -322,6 +322,9 @@ class Container:
 
     # Use cases (configured after domain services)
     logout_usecase: Optional[LogoutUseCase] = None
+    # Self-service account erasure (App Store 5.1.1(v)); wired post-configure in
+    # app/__init__.py and tests, because it needs the company repositories.
+    delete_account_usecase: Optional[Any] = None
     # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
     sms_sender: Optional[Any] = None
     # Push notifications (attendance): device registry, provider adapter, notifier
