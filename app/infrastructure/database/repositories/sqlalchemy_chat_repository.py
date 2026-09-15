@@ -17,6 +17,11 @@ from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
+# Shown in place of an erased account's name. A single stable string rather than a
+# translated one: this is an API value read by three locales, so the clients map it
+# if they want it localized.
+DELETED_ACCOUNT_NAME = "Deleted account"
+
 
 def _naive_utc(value: datetime) -> datetime:
     """Compare timestamps in one convention: SQLite stores naive values, Postgres tz-aware."""
@@ -219,9 +224,22 @@ class SqlAlchemyChatRepository:
         return sorted((MemberInfo(id=uid, name=names.get(uid, "?")) for uid in ids), key=lambda m: m.name.lower())
 
     def display_names(self, user_ids: list[UUID]) -> dict[UUID, str]:
+        """Names to show beside messages, one lookup for the whole channel.
+
+        An erased account has no display_name and a placeholder email built from
+        its own id, so falling through to `email` would print that user's internal
+        UUID to everyone else in the channel. Messages are deliberately kept when
+        an account is deleted, so the sender needs a name that is neither the
+        person nor their id.
+        """
         if not user_ids:
             return {}
         rows = self._session.execute(
-            select(UserModel.id, UserModel.display_name, UserModel.email).where(UserModel.id.in_(list(set(user_ids))))
+            select(UserModel.id, UserModel.display_name, UserModel.email, UserModel.deleted_at).where(
+                UserModel.id.in_(list(set(user_ids)))
+            )
         ).all()
-        return {uid: (display_name or email) for uid, display_name, email in rows}
+        return {
+            uid: (DELETED_ACCOUNT_NAME if deleted_at is not None else (display_name or email))
+            for uid, display_name, email, deleted_at in rows
+        }

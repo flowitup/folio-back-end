@@ -40,7 +40,7 @@ from app.api.v1.auth.schemas import (
 from app.application.ports.sms_sender import SmsSendError
 from app.application.usecases.delete_account import (
     AccountNotFoundError,
-    LastCompanyAdminError,
+    DeletionBlockedByLastAdminError,
 )
 from app.application.usecases.otp_login import LoginResult
 from app.domain.exceptions.auth_exceptions import (
@@ -180,6 +180,12 @@ def verify_otp():
     return _login_response(container, result)
 
 
+# Logout is exempt from the "is this user still allowed to sign in?" check in
+# app.infrastructure.jwt_handlers: that check exists to stop an erased or
+# deactivated account from *acting*, and signing out grants no access. Without
+# the exemption, logging out after deletion (or as a deactivated user) returns
+# 401 and the response never runs unset_jwt_cookies, stranding stale JWT cookies
+# in the browser — the opposite of what the caller asked for.
 @auth_bp.route("/logout", methods=["POST"])
 @openapi_doc(
     summary="Logout user, clear cookies, revoke the access and refresh tokens", request=LogoutBody, tags=["auth"]
@@ -221,8 +227,13 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
         return
     _cookie_name = current_app.config.get("JWT_REFRESH_COOKIE_NAME", "refresh_token_cookie")
     candidates = [request.cookies.get(_cookie_name)]
+    # A body that parses to a non-mapping (`["x"]`, `"abc"`) makes `**` raise
+    # TypeError, which used to escape here — 500-ing the DELETE *after* the
+    # erasure had already committed, so the refresh token was never blacklisted
+    # and the cookies were never cleared.
+    payload = request.get_json(silent=True)
     try:
-        body = LogoutBody(**(request.get_json(silent=True) or {}))
+        body = LogoutBody(**payload) if isinstance(payload, dict) else LogoutBody()
         candidates.append(body.refresh_token)
     except ValidationError:
         pass
@@ -239,7 +250,7 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
                     refresh_jti, token_type="refresh", persistent=bool(refresh_claims.get("persistent"))
                 )
         except Exception:  # pragma: no cover - defensive; must not 500
-            logger.info("auth: refresh-token decode failed; access JTI still revoked")
+            logger.info("auth.revoke: refresh-token decode failed; access JTI still revoked")
 
 
 @auth_bp.route("/refresh", methods=["POST"])
@@ -372,7 +383,7 @@ def delete_current_user():
         usecase.execute(UUID(get_jwt_identity()))
     except AccountNotFoundError:
         return _error(404, "NotFound", "User not found")
-    except LastCompanyAdminError as exc:
+    except DeletionBlockedByLastAdminError as exc:
         # `reason` is the discriminator clients branch on; `message` is the fallback
         # for anything that has not been taught this case yet.
         return (

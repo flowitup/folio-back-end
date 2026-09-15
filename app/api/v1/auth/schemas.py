@@ -125,12 +125,13 @@ class ErrorResponse(BaseModel):
 class AccountDeletionBlockedResponse(BaseModel):
     """409 body for DELETE /auth/me when the caller is a company's last admin.
 
-    ``reason`` is the discriminator clients branch on — declared here rather than
-    bolted onto a generic error body so it reaches the generated client types.
+    ``reason`` is the discriminator clients branch on. It reuses the value the
+    company demote/boot/detach endpoints already emit for the same condition, so
+    a client needs one branch, not two.
     """
 
     error: str = "Conflict"
     message: str
     status_code: int = 409
-    reason: Literal["last_company_admin"] = "last_company_admin"
+    reason: Literal["last_admin"] = "last_admin"
     company_name: str

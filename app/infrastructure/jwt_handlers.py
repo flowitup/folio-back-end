@@ -4,10 +4,18 @@ JWT Error Handlers
 Configures Flask-JWT-Extended error callbacks for consistent error responses.
 """
 
+import logging
 from uuid import UUID
 
-from flask import jsonify
+from flask import jsonify, request
 from flask_jwt_extended import JWTManager
+
+logger = logging.getLogger(__name__)
+
+# Signing out grants no access, so it stays reachable for an erased or
+# deactivated account: otherwise logout 401s, its response never clears the JWT
+# cookies, and the client is stuck holding credentials it asked to discard.
+_SIGN_IN_CHECK_EXEMPT_ENDPOINTS = frozenset({"auth.logout"})
 
 
 def configure_jwt_handlers(jwt: JWTManager) -> None:
@@ -52,22 +60,35 @@ def configure_jwt_handlers(jwt: JWTManager) -> None:
         container = get_container()
         if container.token_issuer and container.token_issuer.is_token_revoked(jti):
             return True
+        if request.endpoint in _SIGN_IN_CHECK_EXEMPT_ENDPOINTS:
+            return False
         return not _token_subject_may_sign_in(container, jwt_payload.get("sub"))
 
 
 def _token_subject_may_sign_in(container, subject) -> bool:
     """True when the token's subject is a user that still exists and is active.
 
-    Fails open only when there is no user repository to ask (unit-test containers
-    that wire nothing) — never when the repository answers "no such user".
+    Fails open only when there is no repository to ask (unit-test containers that
+    wire nothing) — never when the repository answers "no such user". That
+    fallback is loud, because silently authorising everyone is the worst possible
+    way for a misconfigured container to present itself.
     """
     repository = getattr(container, "user_repository", None)
     check = getattr(repository, "is_sign_in_allowed", None)
-    if check is None or not subject:
+    if not subject:
+        return True
+    if check is None:
+        logger.warning(
+            "auth: user repository exposes no is_sign_in_allowed; erased and "
+            "deactivated accounts are NOT being rejected on this request"
+        )
         return True
 
     try:
-        return bool(check(UUID(str(subject))))
+        user_id = UUID(str(subject))
     except ValueError:
-        # Not a UUID subject: let the normal token validation reject it.
+        # Not a UUID subject: let the normal token validation reject it. Scoped
+        # to the parse alone — a ValueError from inside the query must not read
+        # as "may sign in".
         return True
+    return bool(check(user_id))

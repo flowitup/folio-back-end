@@ -123,7 +123,13 @@ class SQLAlchemyUserRepository:
             # entity silently cleared the flag for accounts that had it. Account
             # erasure clears it with a targeted UPDATE instead — see
             # SQLAlchemyPersonalDataEraser.
-            existing.deleted_at = user.deleted_at
+            # Never clear an erasure through the generic save(): a caller that
+            # rebuilds a User from partial data and saves it over an existing id
+            # would otherwise resurrect a deleted account. Same footgun shape as
+            # the is_platform_ops incident above; guarded rather than trusted to
+            # call-site discipline.
+            if existing.deleted_at is None or user.deleted_at is not None:
+                existing.deleted_at = user.deleted_at
         else:
             user_model = UserModel(
                 id=user.id,
