@@ -103,11 +103,7 @@ class SQLAlchemyUserRepository:
         # point — surfacing unrelated integrity errors inside auth — and makes
         # every authenticated request pay for a flush it did not ask for.
         with self._session.no_autoflush:
-            row = (
-                self._session.query(UserModel.is_active, UserModel.deleted_at)
-                .filter(UserModel.id == user_id)
-                .first()
-            )
+            row = self._session.query(UserModel.is_active, UserModel.deleted_at).filter(UserModel.id == user_id).first()
         return bool(row is not None and row.is_active and row.deleted_at is None)
 
     def save(self, user: User) -> User:

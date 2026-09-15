@@ -107,9 +107,7 @@ class DeleteAccountUseCase:
             )
         self._db.commit()
 
-    def _reject_if_last_admin_of_a_shared_company(
-        self, user_id: UUID, accesses: list
-    ) -> list:
+    def _reject_if_last_admin_of_a_shared_company(self, user_id: UUID, accesses: list) -> list:
         """Block the erasure when it would strand other members without an admin.
 
         A solo user is always allowed to leave — their company has nobody left to
@@ -144,9 +142,7 @@ class DeleteAccountUseCase:
                 # last member; the caller logs that so ops can find it.
                 orphaned.append(access.company_id)
                 continue
-            raise DeletionBlockedByLastAdminError(
-                access.company_id, self._company_name(access.company_id)
-            )
+            raise DeletionBlockedByLastAdminError(access.company_id, self._company_name(access.company_id))
         return orphaned
 
     def _company_name(self, company_id: UUID) -> str:

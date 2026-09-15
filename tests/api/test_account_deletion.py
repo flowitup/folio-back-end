@@ -106,9 +106,7 @@ class TestDeleteAccountHappyPath:
         assert inv_client.delete("/api/v1/auth/me", headers=_auth(token)).status_code == 204
         assert inv_client.get("/api/v1/auth/me", headers=_auth(token)).status_code == 401
 
-    def test_a_token_minted_before_deletion_on_another_device_is_rejected(
-        self, inv_client, invitation_app
-    ):
+    def test_a_token_minted_before_deletion_on_another_device_is_rejected(self, inv_client, invitation_app):
         """The reason the user check lives in the blocklist loader (D1).
 
         Revocation is per-JTI, so a second device's token is never presented at
@@ -122,9 +120,7 @@ class TestDeleteAccountHappyPath:
         inv_client.delete("/api/v1/auth/me", headers=_auth(deleting_device))
 
         assert inv_client.get("/api/v1/auth/me", headers=_auth(other_device["access_token"])).status_code == 401
-        refreshed = inv_client.post(
-            "/api/v1/auth/refresh", headers=_auth(other_device["refresh_token"])
-        )
+        refreshed = inv_client.post("/api/v1/auth/refresh", headers=_auth(other_device["refresh_token"]))
         assert refreshed.status_code == 401
 
     def test_the_phone_number_is_released_for_a_fresh_signup(self, inv_client, invitation_app):
@@ -135,9 +131,7 @@ class TestDeleteAccountHappyPath:
 
         inv_client.delete("/api/v1/auth/me", headers=_auth(token))
 
-        response = inv_client.post(
-            "/api/v1/auth/signup/request", json={"phone": "+33600009004"}
-        )
+        response = inv_client.post("/api/v1/auth/signup/request", json={"phone": "+33600009004"})
         assert response.status_code == 202, response.get_json()
 
     def test_a_second_token_for_the_same_account_is_dead_too(self, inv_client, invitation_app):
@@ -177,9 +171,7 @@ class TestCompanyDataSurvives:
         inv_client.delete("/api/v1/auth/me", headers=_auth(token))
 
         with invitation_app.app_context():
-            remaining = (
-                db.session.query(UserCompanyAccessModel).filter_by(user_id=user.id).count()
-            )
+            remaining = db.session.query(UserCompanyAccessModel).filter_by(user_id=user.id).count()
             assert remaining == 0
 
 
@@ -333,11 +325,7 @@ class TestWhatSurvivesErasure:
                     last_seen_at=datetime.now(timezone.utc),
                 )
             )
-            db.session.add(
-                NotificationPreferenceModel(
-                    user_id=user.id, updated_at=datetime.now(timezone.utc)
-                )
-            )
+            db.session.add(NotificationPreferenceModel(user_id=user.id, updated_at=datetime.now(timezone.utc)))
             db.session.commit()
 
         assert inv_client.delete("/api/v1/auth/me", headers=_auth(token)).status_code == 204
@@ -345,9 +333,7 @@ class TestWhatSurvivesErasure:
         with invitation_app.app_context():
             assert db.session.query(ApiKeyOrm).filter_by(user_id=user.id).count() == 0
             assert db.session.query(PushDeviceOrm).filter_by(user_id=user.id).count() == 0
-            assert (
-                db.session.query(NotificationPreferenceModel).filter_by(user_id=user.id).count() == 0
-            )
+            assert db.session.query(NotificationPreferenceModel).filter_by(user_id=user.id).count() == 0
 
     def test_the_platform_ops_bypass_is_cleared(self, inv_client, invitation_app):
         """An erased support account must not come back carrying its bypass."""
@@ -364,9 +350,7 @@ class TestWhatSurvivesErasure:
 
         assert _reload(invitation_app, user.id).is_platform_ops is False
 
-    def test_the_account_is_not_re_identifiable_through_its_worker_record(
-        self, inv_client, invitation_app
-    ):
+    def test_the_account_is_not_re_identifiable_through_its_worker_record(self, inv_client, invitation_app):
         """The worker stays (the company needs it); the link back to the person goes."""
         from app import db
         from app.infrastructure.database.models.worker import WorkerModel
