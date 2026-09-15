@@ -4,8 +4,18 @@ JWT Error Handlers
 Configures Flask-JWT-Extended error callbacks for consistent error responses.
 """
 
-from flask import jsonify
+import logging
+from uuid import UUID
+
+from flask import jsonify, request
 from flask_jwt_extended import JWTManager
+
+logger = logging.getLogger(__name__)
+
+# Signing out grants no access, so it stays reachable for an erased or
+# deactivated account: otherwise logout 401s, its response never clears the JWT
+# cookies, and the client is stuck holding credentials it asked to discard.
+_SIGN_IN_CHECK_EXEMPT_ENDPOINTS = frozenset({"auth.logout"})
 
 
 def configure_jwt_handlers(jwt: JWTManager) -> None:
@@ -29,10 +39,56 @@ def configure_jwt_handlers(jwt: JWTManager) -> None:
 
     @jwt.token_in_blocklist_loader
     def check_if_token_revoked(jwt_header, jwt_payload):
+        """Reject the token if it was revoked, or if its user can no longer sign in.
+
+        The user check is what makes account deletion actually end a session.
+        Revocation is per-JTI, so it only reaches tokens the server has seen: a
+        refresh token sitting on a second device is never presented at deletion
+        time, and mobile refresh tokens do not expire. Without this, an erased
+        account could keep minting access tokens indefinitely. Checking here
+        rather than in /auth/refresh alone also invalidates access tokens already
+        issued, instead of leaving a window until they expire.
+
+        Costs one primary-key lookup per authenticated request. Deliberately not
+        cached: ``flask.g`` is bound to the application context, not the request,
+        so any caller holding one open across requests would serve a stale
+        "still active" verdict — exactly the failure this check exists to prevent.
+        """
         jti = jwt_payload.get("jti")
         from wiring import get_container
 
         container = get_container()
-        if container.token_issuer:
-            return container.token_issuer.is_token_revoked(jti)
-        return False
+        if container.token_issuer and container.token_issuer.is_token_revoked(jti):
+            return True
+        if request.endpoint in _SIGN_IN_CHECK_EXEMPT_ENDPOINTS:
+            return False
+        return not _token_subject_may_sign_in(container, jwt_payload.get("sub"))
+
+
+def _token_subject_may_sign_in(container, subject) -> bool:
+    """True when the token's subject is a user that still exists and is active.
+
+    Fails open only when there is no repository to ask (unit-test containers that
+    wire nothing) — never when the repository answers "no such user". That
+    fallback is loud, because silently authorising everyone is the worst possible
+    way for a misconfigured container to present itself.
+    """
+    repository = getattr(container, "user_repository", None)
+    check = getattr(repository, "is_sign_in_allowed", None)
+    if not subject:
+        return True
+    if check is None:
+        logger.warning(
+            "auth: user repository exposes no is_sign_in_allowed; erased and "
+            "deactivated accounts are NOT being rejected on this request"
+        )
+        return True
+
+    try:
+        user_id = UUID(str(subject))
+    except ValueError:
+        # Not a UUID subject: let the normal token validation reject it. Scoped
+        # to the parse alone — a ValueError from inside the query must not read
+        # as "may sign in".
+        return True
+    return bool(check(user_id))

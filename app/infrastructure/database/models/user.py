@@ -24,6 +24,10 @@ class UserModel(Base):
     # flowitup support bypass — not a role, never carried in the token, so
     # revoking it applies on the next request (see app.api.v1.ops_context).
     is_platform_ops = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Set when the user erases their own account (App Store 5.1.1(v)). The row
+    # survives anonymized because company data references it; this is the audit
+    # trail of when the erasure happened.
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,

@@ -22,6 +22,16 @@ class UserRepositoryPort(Protocol):
         """Find a user by E.164 phone number. Returns user or None."""
         ...
 
+    def is_sign_in_allowed(self, user_id: UUID) -> bool:
+        """True when this user still exists, is active, and has not been erased.
+
+        Deliberately not expressed as ``find_by_id(...).is_active``: this is
+        checked on every authenticated request, so it must read the columns
+        straight from the database rather than whatever the ORM session has
+        cached, and must not add the user to the identity map.
+        """
+        ...
+
     def save(self, user: "User") -> "User":
         """Save a user (create or update). Returns saved user."""
         ...

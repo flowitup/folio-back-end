@@ -89,6 +89,23 @@ class SQLAlchemyUserRepository:
         )
         return [self._to_entity(u) for u in users]
 
+    def is_sign_in_allowed(self, user_id: UUID) -> bool:
+        """True when the user exists, is active, and has not erased their account.
+
+        Selects the two columns rather than the entity on purpose: this runs on
+        every authenticated request, so it must not return an instance the
+        session cached earlier in the request, and must not put one there for
+        later readers to pick up.
+        """
+        # no_autoflush matters: this runs during token verification, before the
+        # request handler has done anything. Letting it flush would push the
+        # caller's half-built pending objects to the database at an arbitrary
+        # point — surfacing unrelated integrity errors inside auth — and makes
+        # every authenticated request pay for a flush it did not ask for.
+        with self._session.no_autoflush:
+            row = self._session.query(UserModel.is_active, UserModel.deleted_at).filter(UserModel.id == user_id).first()
+        return bool(row is not None and row.is_active and row.deleted_at is None)
+
     def save(self, user: User) -> User:
         """Save a user (create or update)."""
         existing = self._session.query(UserModel).filter_by(id=user.id).first()
@@ -97,6 +114,18 @@ class SQLAlchemyUserRepository:
             existing.is_active = user.is_active
             existing.display_name = user.display_name
             existing.phone = user.phone
+            # is_platform_ops is deliberately NOT written here: it is owned by ops
+            # (set out-of-band in SQL), and round-tripping it through every caller's
+            # entity silently cleared the flag for accounts that had it. Account
+            # erasure clears it with a targeted UPDATE instead — see
+            # SQLAlchemyPersonalDataEraser.
+            # Never clear an erasure through the generic save(): a caller that
+            # rebuilds a User from partial data and saves it over an existing id
+            # would otherwise resurrect a deleted account. Same footgun shape as
+            # the is_platform_ops incident above; guarded rather than trusted to
+            # call-site discipline.
+            if existing.deleted_at is None or user.deleted_at is not None:
+                existing.deleted_at = user.deleted_at
         else:
             user_model = UserModel(
                 id=user.id,
@@ -104,6 +133,7 @@ class SQLAlchemyUserRepository:
                 is_active=user.is_active,
                 display_name=user.display_name,
                 phone=user.phone,
+                deleted_at=user.deleted_at,
             )
             self._session.add(user_model)
         self._session.flush()
@@ -120,4 +150,5 @@ class SQLAlchemyUserRepository:
             display_name=model.display_name,
             phone=model.phone,
             is_platform_ops=bool(model.is_platform_ops),
+            deleted_at=model.deleted_at,
         )

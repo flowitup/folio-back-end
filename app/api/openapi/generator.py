@@ -96,9 +96,15 @@ def _build_operation(
     if meta and meta.get("responses"):
         responses = {}
         for status_code, resp_model in meta["responses"].items():
+            description = _http_status_description(int(status_code))
+            if resp_model is None:
+                # A bodyless status (204) declares itself with no schema, so the
+                # spec documents the success case instead of omitting it.
+                responses[str(status_code)] = {"description": description}
+                continue
             ref = register_model(spec, resp_model)
             responses[str(status_code)] = {
-                "description": _http_status_description(int(status_code)),
+                "description": description,
                 "content": {"application/json": {"schema": {"$ref": ref}}},
             }
     else:

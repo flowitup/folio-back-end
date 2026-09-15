@@ -1,6 +1,6 @@
 """Pydantic schemas for auth endpoints."""
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -120,3 +120,18 @@ class ErrorResponse(BaseModel):
     error: str
     message: str
     status_code: int
+
+
+class AccountDeletionBlockedResponse(BaseModel):
+    """409 body for DELETE /auth/me when the caller is a company's last admin.
+
+    ``reason`` is the discriminator clients branch on. It reuses the value the
+    company demote/boot/detach endpoints already emit for the same condition, so
+    a client needs one branch, not two.
+    """
+
+    error: str = "Conflict"
+    message: str
+    status_code: int = 409
+    reason: Literal["last_admin"] = "last_admin"
+    company_name: str

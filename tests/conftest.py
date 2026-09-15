@@ -447,6 +447,22 @@ def invitation_app():
         _c.company_repo = _company_repo
         _c.user_company_access_repo = _access_repo
 
+        # Mirrors app/__init__.py: self-service account deletion.
+        if _c.user_repository is not None:
+            from app.application.usecases.delete_account import DeleteAccountUseCase
+            from app.infrastructure.adapters.sqlalchemy_personal_data_eraser import (
+                SQLAlchemyPersonalDataEraser,
+            )
+
+            _c.delete_account_usecase = DeleteAccountUseCase(
+                user_repo=_c.user_repository,
+                access_repo=_access_repo,
+                company_repo=_company_repo,
+                eraser=SQLAlchemyPersonalDataEraser(db.session),
+                db_session=db.session,
+                clock=_clock,
+            )
+
         # Company-aware authz resolver read port (configure_container() above
         # replaced the Container instance created by create_app(), so this must
         # be re-wired here).
