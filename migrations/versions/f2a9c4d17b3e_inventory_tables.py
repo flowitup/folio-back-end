@@ -4,6 +4,11 @@ Company equipment inventory: the tools and machines a company owns, how many,
 whether each is working or damaged, and where it is — one of the company's
 warehouses (with its address) or a site (a project).
 
+No permission row is seeded: the ``permissions`` catalog table was dropped in
+c2b8f1a0d743 (roles & permissions redesign). ``inventory:manage`` lives in the
+code matrix (``app.domain.authz.matrix``) and D8 grant rows store the
+permission name as a string, so the schema needs nothing for it.
+
 Revision ID: f2a9c4d17b3e
 Revises: a3c81d69b420
 Create Date: 2026-09-20
@@ -77,19 +82,6 @@ def upgrade():
     op.create_index("ix_inventory_items_warehouse_id", "inventory_items", ["warehouse_id"])
     op.create_index("ix_inventory_items_project_id", "inventory_items", ["project_id"])
 
-    # Seed the inventory:manage permission (additive — skip if present). The
-    # role matrix lives in code (app.domain.authz.matrix); this row exists for
-    # the permissions catalog and D8 grant/deny rows.
-    op.execute(
-        sa.text(
-            """
-            INSERT INTO permissions (id, name, resource, action, created_at)
-            VALUES (gen_random_uuid(), 'inventory:manage', 'inventory', 'manage', NOW())
-            ON CONFLICT (name) DO NOTHING
-            """
-        )
-    )
-
 
 def downgrade():
     op.drop_index("ix_inventory_items_project_id", "inventory_items")
@@ -99,5 +91,3 @@ def downgrade():
 
     op.drop_index("ix_inventory_warehouses_company_id", "inventory_warehouses")
     op.drop_table("inventory_warehouses")
-
-    op.execute(sa.text("DELETE FROM permissions WHERE name = 'inventory:manage'"))
