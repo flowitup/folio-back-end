@@ -180,6 +180,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.project_analyses import project_analyses_bp
     from app.api.v1.project_photos import project_photos_bp
     from app.api.v1.bibliotheque import bibliotheque_bp
+    from app.api.v1.inventory import inventory_bp
 
     app.register_blueprint(api_v1_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
@@ -208,6 +209,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(project_analyses_bp, url_prefix="/api/v1")
     app.register_blueprint(project_photos_bp, url_prefix="/api/v1")
     app.register_blueprint(bibliotheque_bp, url_prefix="/api/v1")
+    app.register_blueprint(inventory_bp, url_prefix="/api/v1")
 
     # Test-only blueprint: exposes InMemoryEmailAdapter state for e2e tests.
     # MUST only be registered when TESTING=True — never in production.
@@ -1480,6 +1482,88 @@ def _configure_di_container() -> None:
     _c.bibliotheque_fetch_image_from_url_usecase = _FetchProductImageFromUrlUC(
         product_repo=_biblio_product_repo,
         image_storage=_biblio_image_storage,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+
+    # -----------------------------------------------------------------------
+    # Inventory DI wiring (company equipment: warehouses + items)
+    # -----------------------------------------------------------------------
+    from app.infrastructure.database.repositories.sqlalchemy_inventory_repository import (
+        SqlAlchemyInventoryItemRepository,
+        SqlAlchemyInventoryWarehouseRepository,
+    )
+    from app.infrastructure.adapters.project_company_reader import ProjectCompanyReader
+    from app.application.inventory.warehouse_usecases import (
+        CreateWarehouseUseCase as _CreateWarehouseUC,
+        DeleteWarehouseUseCase as _DeleteWarehouseUC,
+        ListWarehousesUseCase as _ListWarehousesUC,
+        UpdateWarehouseUseCase as _UpdateWarehouseUC,
+    )
+    from app.application.inventory.item_usecases import (
+        CreateInventoryItemUseCase as _CreateInventoryItemUC,
+        DeleteInventoryItemUseCase as _DeleteInventoryItemUC,
+        GetInventoryItemUseCase as _GetInventoryItemUC,
+        ListInventoryItemsUseCase as _ListInventoryItemsUC,
+        UpdateInventoryItemUseCase as _UpdateInventoryItemUC,
+    )
+
+    _inventory_warehouse_repo = SqlAlchemyInventoryWarehouseRepository(db.session)
+    _inventory_item_repo = SqlAlchemyInventoryItemRepository(db.session)
+    _inventory_project_reader = ProjectCompanyReader(db.session)
+
+    _c.inventory_warehouse_repo = _inventory_warehouse_repo
+    _c.inventory_item_repo = _inventory_item_repo
+    _c.inventory_list_warehouses_usecase = _ListWarehousesUC(
+        warehouse_repo=_inventory_warehouse_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.inventory_create_warehouse_usecase = _CreateWarehouseUC(
+        warehouse_repo=_inventory_warehouse_repo,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.inventory_update_warehouse_usecase = _UpdateWarehouseUC(
+        warehouse_repo=_inventory_warehouse_repo,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.inventory_delete_warehouse_usecase = _DeleteWarehouseUC(
+        warehouse_repo=_inventory_warehouse_repo,
+        item_repo=_inventory_item_repo,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.inventory_list_items_usecase = _ListInventoryItemsUC(
+        item_repo=_inventory_item_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.inventory_get_item_usecase = _GetInventoryItemUC(
+        item_repo=_inventory_item_repo,
+        membership_reader=_biblio_membership_reader,
+    )
+    _c.inventory_create_item_usecase = _CreateInventoryItemUC(
+        item_repo=_inventory_item_repo,
+        warehouse_repo=_inventory_warehouse_repo,
+        project_reader=_inventory_project_reader,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.inventory_update_item_usecase = _UpdateInventoryItemUC(
+        item_repo=_inventory_item_repo,
+        warehouse_repo=_inventory_warehouse_repo,
+        project_reader=_inventory_project_reader,
+        membership_reader=_biblio_membership_reader,
+        permission_checker=_biblio_permission_checker,
+        db_session=db.session,
+    )
+    _c.inventory_delete_item_usecase = _DeleteInventoryItemUC(
+        item_repo=_inventory_item_repo,
         membership_reader=_biblio_membership_reader,
         permission_checker=_biblio_permission_checker,
         db_session=db.session,

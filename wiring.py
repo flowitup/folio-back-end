@@ -626,6 +626,21 @@ class Container:
     bibliotheque_upload_image_usecase: Optional[Any] = None  # UploadProductImageUseCase
     bibliotheque_fetch_image_from_url_usecase: Optional[Any] = None  # FetchProductImageFromUrlUseCase
 
+    # -----------------------------------------------------------------------
+    # Inventory repos + use-cases (company equipment: warehouses + items)
+    # -----------------------------------------------------------------------
+    inventory_warehouse_repo: Optional[Any] = None  # SqlAlchemyInventoryWarehouseRepository
+    inventory_item_repo: Optional[Any] = None  # SqlAlchemyInventoryItemRepository
+    inventory_list_warehouses_usecase: Optional[Any] = None  # ListWarehousesUseCase
+    inventory_create_warehouse_usecase: Optional[Any] = None  # CreateWarehouseUseCase
+    inventory_update_warehouse_usecase: Optional[Any] = None  # UpdateWarehouseUseCase
+    inventory_delete_warehouse_usecase: Optional[Any] = None  # DeleteWarehouseUseCase
+    inventory_list_items_usecase: Optional[Any] = None  # ListInventoryItemsUseCase
+    inventory_get_item_usecase: Optional[Any] = None  # GetInventoryItemUseCase
+    inventory_create_item_usecase: Optional[Any] = None  # CreateInventoryItemUseCase
+    inventory_update_item_usecase: Optional[Any] = None  # UpdateInventoryItemUseCase
+    inventory_delete_item_usecase: Optional[Any] = None  # DeleteInventoryItemUseCase
+
 
 # =============================================================================
 # EMAIL PORT FACTORY

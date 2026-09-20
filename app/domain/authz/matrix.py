@@ -36,6 +36,7 @@ ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         "project:manage_labor",
         "project:manage_invoices",
         "bibliotheque:manage",
+        "inventory:manage",
         "project:log_own_attendance",
         "project:view_pay",
         "project:view_budget",
@@ -62,6 +63,7 @@ MANAGER_PROJECT_PERMISSIONS: frozenset[str] = frozenset(
         "project:manage_labor",
         "project:manage_invoices",
         "bibliotheque:manage",
+        "inventory:manage",
         "project:log_own_attendance",
         "project:view_pay",
         "project:view_roster",
@@ -99,6 +101,7 @@ CUSTOMISABLE_PERMISSIONS: frozenset[str] = frozenset(
         "project:manage_invoices",
         "project:log_own_attendance",
         "bibliotheque:manage",
+        "inventory:manage",
         "project:view_pay",
         "project:view_budget",
     }

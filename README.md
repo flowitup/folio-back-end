@@ -113,6 +113,7 @@ The API exposes a small, predictable set of endpoints under `/api/v1/`:
 | **Labor exports** | Excel or PDF for the project or a single worker |
 | **Invoices** | Create, list, view, attach files |
 | **Notes** | Create, list, mark done, dismiss reminders |
+| **Inventory** | Company equipment: warehouses (with address) and rows of tools with quantity, working / damaged, and where they are (warehouse or site) |
 | **Notifications** | List, mark read |
 | **Admin** | Bulk-add users to projects, manage roles |
 
