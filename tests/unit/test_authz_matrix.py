@@ -51,6 +51,7 @@ class TestAdminMatrix:
             "project:manage_labor",
             "project:manage_invoices",
             "bibliotheque:manage",
+            "inventory:manage",
             "project:log_own_attendance",
             "project:view_pay",
             "project:view_budget",
@@ -91,6 +92,7 @@ class TestManagerMatrix:
             "project:manage_labor",
             "project:manage_invoices",
             "bibliotheque:manage",
+            "inventory:manage",
             "project:log_own_attendance",
             "project:view_pay",
         ):
@@ -121,6 +123,7 @@ class TestMemberMatrix:
             "project:manage_labor",
             "project:manage_invoices",
             "bibliotheque:manage",
+            "inventory:manage",
         ):
             assert perm not in perms, perm
 
@@ -175,6 +178,7 @@ class TestCustomisableWhitelist:
                 "project:manage_invoices",
                 "project:log_own_attendance",
                 "bibliotheque:manage",
+                "inventory:manage",
                 "project:view_pay",
                 "project:view_budget",
             }

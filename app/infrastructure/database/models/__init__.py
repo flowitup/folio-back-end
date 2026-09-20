@@ -38,6 +38,8 @@ from app.infrastructure.database.models.labor_day_description import LaborDayDes
 from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
+from app.infrastructure.database.models.inventory_warehouse import InventoryWarehouseModel
+from app.infrastructure.database.models.inventory_item import InventoryItemModel
 from app.infrastructure.database.models.chiffrage_poste import ChiffragePosteModel
 from app.infrastructure.database.models.chiffrage_article import ChiffrageArticleModel
 from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
@@ -83,6 +85,8 @@ __all__ = [
     "BibliothequeSupplierModel",
     "BibliothequeProductModel",
     "BibliothequePurchaseModel",
+    "InventoryWarehouseModel",
+    "InventoryItemModel",
     "WorkerRateChangeModel",
     "ChiffragePosteModel",
     "ChiffrageArticleModel",
