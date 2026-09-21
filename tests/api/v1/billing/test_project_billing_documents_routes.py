@@ -60,7 +60,7 @@ def billing_project_id(_billing_client, billing_token):
     """Create a project owned by the billing_token (superadmin) user."""
     resp = _billing_client.post(
         "/api/v1/projects",
-        json={"name": "Billing Test Project"},
+        json={"name": "Billing Test Project", "address": "1 Rue Test"},
         headers=_auth(billing_token),
     )
     assert resp.status_code == 201, resp.get_data(as_text=True)
@@ -72,7 +72,7 @@ def billing_project2_id(_billing_client, billing_token):
     """Second project owned by billing_token for relink tests."""
     resp = _billing_client.post(
         "/api/v1/projects",
-        json={"name": "Billing Test Project 2"},
+        json={"name": "Billing Test Project 2", "address": "1 Rue Test"},
         headers=_auth(billing_token),
     )
     assert resp.status_code == 201, resp.get_data(as_text=True)

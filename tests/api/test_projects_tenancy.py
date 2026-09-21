@@ -233,7 +233,11 @@ def test_admin_of_a_gets_denied_on_bs_project_get(client, admin_a_h, tenancy_app
 
 
 def test_admin_of_a_gets_denied_on_bs_project_put(client, admin_a_h, tenancy_app):
-    resp = client.put(f"/api/v1/projects/{tenancy_app._project_b_id}", json={"name": "Hijacked"}, headers=admin_a_h)
+    resp = client.put(
+        f"/api/v1/projects/{tenancy_app._project_b_id}",
+        json={"name": "Hijacked", "address": "1 Rue Test"},
+        headers=admin_a_h,
+    )
     assert resp.status_code == 403
 
 
@@ -252,7 +256,9 @@ def test_claim_holder_cannot_read_any_project(client, claim_holder_h, tenancy_ap
 
 def test_claim_holder_cannot_mutate_any_project(client, claim_holder_h, tenancy_app):
     resp = client.put(
-        f"/api/v1/projects/{tenancy_app._project_a_id}", json={"name": "Hijacked"}, headers=claim_holder_h
+        f"/api/v1/projects/{tenancy_app._project_a_id}",
+        json={"name": "Hijacked", "address": "1 Rue Test"},
+        headers=claim_holder_h,
     )
     assert resp.status_code == 403
 
@@ -268,7 +274,7 @@ def test_outsider_cannot_read_any_project(client, outsider_h, tenancy_app):
 
 
 def test_create_project_company_admin_no_star_gets_201_with_company_id(client, admin_a_h, tenancy_app):
-    resp = client.post("/api/v1/projects", json={"name": "New A Project"}, headers=admin_a_h)
+    resp = client.post("/api/v1/projects", json={"name": "New A Project", "address": "1 Rue Test"}, headers=admin_a_h)
     assert resp.status_code == 201, resp.get_json()
     body = resp.get_json()
     assert body["company_id"] == str(tenancy_app._company_a_id)
@@ -293,7 +299,7 @@ def test_create_project_explicit_company_id_must_be_own(client, admin_a_h, tenan
     """Body company_id of a company the caller does NOT admin → 403."""
     resp = client.post(
         "/api/v1/projects",
-        json={"name": "Hijack Attempt", "company_id": str(tenancy_app._company_b_id)},
+        json={"name": "Hijack Attempt", "address": "1 Rue Test", "company_id": str(tenancy_app._company_b_id)},
         headers=admin_a_h,
     )
     assert resp.status_code == 403
@@ -302,7 +308,7 @@ def test_create_project_explicit_company_id_must_be_own(client, admin_a_h, tenan
 def test_create_project_explicit_own_company_id_accepted(client, admin_a_h, tenancy_app):
     resp = client.post(
         "/api/v1/projects",
-        json={"name": "Explicit Own Co", "company_id": str(tenancy_app._company_a_id)},
+        json={"name": "Explicit Own Co", "address": "1 Rue Test", "company_id": str(tenancy_app._company_a_id)},
         headers=admin_a_h,
     )
     assert resp.status_code == 201
@@ -311,13 +317,15 @@ def test_create_project_explicit_own_company_id_accepted(client, admin_a_h, tena
 
 def test_create_project_no_company_relation_gets_400(client, outsider_h):
     """No company admin-ship anywhere, no `*:*` → 400 (no company to attach to)."""
-    resp = client.post("/api/v1/projects", json={"name": "Orphan Project"}, headers=outsider_h)
+    resp = client.post("/api/v1/projects", json={"name": "Orphan Project", "address": "1 Rue Test"}, headers=outsider_h)
     assert resp.status_code == 400
 
 
 def test_create_project_claim_holder_gets_400(client, claim_holder_h):
     """A bare JWT project:create claim is NOT a company — 400, not 201."""
-    resp = client.post("/api/v1/projects", json={"name": "Should Not Exist"}, headers=claim_holder_h)
+    resp = client.post(
+        "/api/v1/projects", json={"name": "Should Not Exist", "address": "1 Rue Test"}, headers=claim_holder_h
+    )
     assert resp.status_code == 400
 
 
@@ -326,7 +334,7 @@ def test_create_project_platform_admin_nonexistent_company_id_gets_400(client, p
     a bogus id must 400, not hit the projects.company_id FK constraint (500)."""
     resp = client.post(
         "/api/v1/projects",
-        json={"name": "Bogus Company", "company_id": str(uuid4())},
+        json={"name": "Bogus Company", "address": "1 Rue Test", "company_id": str(uuid4())},
         headers=platform_admin_h,
     )
     assert resp.status_code == 400
@@ -336,7 +344,7 @@ def test_create_project_platform_admin_existing_company_id_still_works(client, p
     """The 400 guard above must not regress the existing-company path."""
     resp = client.post(
         "/api/v1/projects",
-        json={"name": "Platform Admin Project", "company_id": str(tenancy_app._company_a_id)},
+        json={"name": "Platform Admin Project", "address": "1 Rue Test", "company_id": str(tenancy_app._company_a_id)},
         headers=platform_admin_h,
     )
     assert resp.status_code == 201, resp.get_json()

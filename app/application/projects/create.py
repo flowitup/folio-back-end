@@ -13,9 +13,11 @@ from app.domain.exceptions.project_exceptions import InvalidProjectDataError
 
 @dataclass
 class CreateProjectRequest:
-    name: str
+    # The site address identifies a project and is mandatory; the name is an
+    # optional label that defaults to the address.
+    address: str
     owner_id: UUID
-    address: Optional[str] = None
+    name: Optional[str] = None
     budget: Optional[Decimal] = None
     budget_source: Optional[str] = None
     # Tenant the project belongs to. Resolved by the route (body company_id →
@@ -39,6 +41,33 @@ class CreateProjectResponse:
     company_id: Optional[str] = None
 
 
+NAME_MAX_LENGTH = 255
+
+
+def derive_project_name(name: Optional[str], address: str) -> str:
+    """Resolve the stored name: the trimmed label when given, else the address.
+
+    The name column stays NOT NULL so every list, invoice and switcher keeps
+    working; an address longer than the name column is cut to fit.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return address_label(address)
+    if len(cleaned) > NAME_MAX_LENGTH:
+        raise InvalidProjectDataError("Project name exceeds 255 characters")
+    return cleaned
+
+
+def address_label(address: str) -> str:
+    """The name a project carries when it is labelled by its address."""
+    return address[:NAME_MAX_LENGTH]
+
+
+def is_address_labelled(project: Project) -> bool:
+    """True when the project has no custom label: its name is its address label."""
+    return bool(project.address) and project.name == address_label(project.address)
+
+
 class CreateProjectUseCase:
     """Create a new construction project."""
 
@@ -46,15 +75,17 @@ class CreateProjectUseCase:
         self._repo = project_repo
 
     def execute(self, request: CreateProjectRequest) -> CreateProjectResponse:
-        if not request.name or len(request.name.strip()) == 0:
-            raise InvalidProjectDataError("Project name is required")
-        if len(request.name) > 255:
-            raise InvalidProjectDataError("Project name exceeds 255 characters")
+        address = (request.address or "").strip()
+        if not address:
+            raise InvalidProjectDataError("Project address is required")
+        if len(address) > 500:
+            raise InvalidProjectDataError("Project address exceeds 500 characters")
+        name = derive_project_name(request.name, address)
 
         project = Project(
             id=uuid4(),
-            name=request.name.strip(),
-            address=request.address.strip() if request.address else None,
+            name=name,
+            address=address,
             owner_id=request.owner_id,
             created_at=datetime.now(timezone.utc),
             budget=request.budget,

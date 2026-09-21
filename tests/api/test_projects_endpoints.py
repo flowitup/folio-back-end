@@ -30,7 +30,7 @@ def _auth(token: str) -> dict:
 
 def _create_project(client, token, *, name: str = "Budget Project", budget=None, budget_source=None):
     """POST /api/v1/projects and return (status_code, body)."""
-    payload: dict = {"name": name}
+    payload: dict = {"name": name, "address": "1 Rue Test"}
     if budget is not None:
         payload["budget"] = budget
     if budget_source is not None:
@@ -399,3 +399,76 @@ def test_api_list_spent_is_numeric(inv_client, admin_token):
     assert resp.status_code == 200
     for p in resp.get_json()["projects"]:
         assert isinstance(p["spent"], (int, float))
+
+
+# ---------------------------------------------------------------------------
+# Address is mandatory, name is an optional label
+# ---------------------------------------------------------------------------
+
+
+def test_create_project_without_address_is_rejected(inv_client, admin_token):
+    for payload in ({"name": "No Address"}, {"name": "Blank Address", "address": ""}):
+        resp = inv_client.post("/api/v1/projects", json=payload, headers=_auth(admin_token))
+        assert resp.status_code in (400, 422), resp.get_json()
+
+
+def test_create_project_without_name_is_labelled_by_address(inv_client, admin_token):
+    for payload in ({"address": "12 Rue des Martyrs"}, {"name": "  ", "address": "12 Rue des Martyrs"}):
+        resp = inv_client.post("/api/v1/projects", json=payload, headers=_auth(admin_token))
+        assert resp.status_code == 201, resp.get_json()
+        body = resp.get_json()
+        assert body["name"] == "12 Rue des Martyrs"
+        assert body["address"] == "12 Rue des Martyrs"
+
+        status, fetched = _get_project(inv_client, admin_token, body["id"])
+        assert status == 200
+        assert fetched["name"] == "12 Rue des Martyrs"
+
+
+def test_update_project_blank_name_relabels_by_address(inv_client, admin_token):
+    status, body = _create_project(inv_client, admin_token, name="Custom label")
+    assert status == 201
+
+    status, updated = _update_project(inv_client, admin_token, body["id"], {"name": "", "address": "9 Avenue Neuve"})
+    assert status == 200, updated
+    assert updated["name"] == "9 Avenue Neuve"
+    assert updated["address"] == "9 Avenue Neuve"
+
+
+def test_update_project_cannot_blank_address(inv_client, admin_token):
+    status, body = _create_project(inv_client, admin_token, name="Keep Address")
+    assert status == 201
+
+    status, resp = _update_project(inv_client, admin_token, body["id"], {"address": "   "})
+    assert status == 400, resp
+
+    status, fetched = _get_project(inv_client, admin_token, body["id"])
+    assert fetched["address"] == "1 Rue Test"
+
+
+def test_update_project_address_only_relabels_address_labelled_project(inv_client, admin_token):
+    resp = inv_client.post("/api/v1/projects", json={"address": "12 Rue des Martyrs"}, headers=_auth(admin_token))
+    assert resp.status_code == 201, resp.get_json()
+    project_id = resp.get_json()["id"]
+
+    status, updated = _update_project(inv_client, admin_token, project_id, {"address": "9 Avenue Neuve"})
+    assert status == 200, updated
+    assert updated["name"] == "9 Avenue Neuve"
+    assert updated["address"] == "9 Avenue Neuve"
+
+
+def test_update_project_null_name_leaves_name_untouched(inv_client, admin_token):
+    status, body = _create_project(inv_client, admin_token, name="Custom label")
+    assert status == 201
+
+    status, updated = _update_project(inv_client, admin_token, body["id"], {"name": None, "address": "9 Avenue Neuve"})
+    assert status == 200, updated
+    assert updated["name"] == "Custom label"
+
+
+def test_update_project_explicit_null_address_is_rejected(inv_client, admin_token):
+    status, body = _create_project(inv_client, admin_token, name="Keep Address")
+    assert status == 201
+
+    status, resp = _update_project(inv_client, admin_token, body["id"], {"address": None})
+    assert status == 400, resp
