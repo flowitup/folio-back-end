@@ -194,6 +194,12 @@ class SqlAlchemyAssistantJobRepository:
             query = query.with_for_update(skip_locked=True)
         model = self._session.execute(query).scalars().first()
         if model is None:
+            # End the SELECT's transaction: with FOR UPDATE it holds a ROW SHARE lock on
+            # assistant_jobs, and an idle poller that keeps it open across its sleep blocks
+            # every ALTER TABLE on the table (the v0.4.0 deploy hung on exactly that).
+            # A commit (not a rollback) ends a read-only transaction just the same and
+            # keeps the test fixtures' savepoint-based sessions intact.
+            self._session.commit()
             return None
         if model.status == "running":
             # Reaped from a stuck row — bump attempts so the existing attempts-exhausted

@@ -301,3 +301,12 @@ class TestReapUnprocessed:
         _set_updated_at(session, queued.id, now - timedelta(minutes=31))
 
         assert repo.reap_unprocessed(now) == []
+
+
+class TestClaimNextLeavesNoOpenTransaction:
+    def test_idle_claim_ends_the_transaction(self, session) -> None:
+        """An idle poll must not keep the FOR UPDATE read open across the worker's sleep:
+        that lock blocked ``ALTER TABLE assistant_jobs`` for the whole v0.4.0 deploy."""
+        repo = _repo(session)
+        assert repo.claim_next(datetime.now(timezone.utc)) is None
+        assert session.in_transaction() is False

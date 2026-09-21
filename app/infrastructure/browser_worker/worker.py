@@ -157,6 +157,9 @@ async def run_once(
     job = job_repo.claim_next(now)
     if job is None:
         _reap_unprocessed(job_repo, queue, now)
+        # Never sleep inside an open transaction: a lingering read transaction holds
+        # locks on assistant_jobs that block schema migrations during a deploy.
+        session.commit()
         return False
 
     if job.type == "find_product":
