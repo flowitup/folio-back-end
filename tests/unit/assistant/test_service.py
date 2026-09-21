@@ -17,7 +17,7 @@ import pytest
 from app.application.assistant.equipment import EquipmentService
 from app.application.assistant.messages import AssistantMessenger
 from app.application.assistant.models import ChannelScope, RouterDecision
-from app.application.assistant.ports import Decision
+from app.application.assistant.ports import Decision, NoulQuestion
 from app.application.assistant.router import Router
 from app.application.assistant.service import AssistantService, DefaultFeatureHandlers
 from app.application.inventory.item_usecases import UpdateInventoryItemUseCase
@@ -103,6 +103,16 @@ class FakeChecker:
 
     def has_permission_in_company(self, user_id: UUID, permission_name: str, company_id: UUID) -> bool:
         return True
+
+
+class _SafeOutputGuardDecisions:
+    """A ``DecisionPort`` that answers every Noul question with 0.0 — wired wherever a
+    test wants a non-admin chit-chat reply to actually go through the M4 output guard
+    instead of being refused for having no ``DecisionPort`` at all."""
+
+    def decide(self, state: dict, questions: dict) -> Decision:
+        nouls = {name: 0.0 for name, q in questions.items() if isinstance(q, NoulQuestion)}
+        return Decision(choices={}, nouls=nouls)
 
 
 class FakeProjectCompanyReader:
@@ -258,6 +268,44 @@ def test_move_equipment_never_calls_the_vision_port(world) -> None:
 
 
 # ---------------------------------------------------------------------------
+# H2 — equipment search never crosses the channel's own tenant boundary
+# ---------------------------------------------------------------------------
+
+
+def test_find_equipment_never_leaks_another_company_the_asker_belongs_to(world, session) -> None:
+    """H2: a user who belongs to two companies must never have the OTHER company's
+    inventory disclosed into a channel that belongs to just one of them."""
+    other_company_id = uuid4()
+    item_repo = SqlAlchemyInventoryItemRepository(session)
+    warehouse_repo = SqlAlchemyInventoryWarehouseRepository(session)
+    other_warehouse = warehouse_repo.add(Warehouse.create(company_id=other_company_id, name="Autre entrepôt"))
+    item_repo.add(
+        InventoryItem.create(
+            company_id=other_company_id,
+            name="Grue mobile",
+            quantity=1,
+            condition="working",
+            location_type="warehouse",
+            warehouse_id=other_warehouse.id,
+        )
+    )
+    session.commit()
+
+    message = _user_message(world["channel"], world["user_id"], body="Où est la grue mobile ?")
+    world["message_repo"].add(message)
+    # The asker belongs to BOTH companies (mirrors a real multi-company user).
+    service = world["build_service"](
+        ScriptedDecision(fixed=_fixed_decision("find_equipment")),
+        company_access_repo=FakeCompanyAccessRepo([world["company_id"], other_company_id]),
+    )
+
+    service.handle_message(user_id=world["user_id"], message_id=message.id)
+
+    reply = _last_message(world)
+    assert "Grue mobile" not in (reply.body or "")
+
+
+# ---------------------------------------------------------------------------
 # Cost cap
 # ---------------------------------------------------------------------------
 
@@ -314,9 +362,14 @@ def test_trivial_greeting_skips_the_vision_port(world) -> None:
 
 
 def test_non_trivial_chit_chat_calls_deepseek_text(world) -> None:
+    """M4: the output guard now fails CLOSED outside the admin channel when no
+    ``DecisionPort`` is wired, so this test (which wants the reply to go through) wires
+    a harmless one instead of leaving it unwired."""
     message = _user_message(world["channel"], world["user_id"], body="Raconte-moi une blague sur le chantier")
     world["message_repo"].add(message)
-    service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("chit_chat")))
+    service = world["build_service"](
+        ScriptedDecision(fixed=_fixed_decision("chit_chat")), decisions=_SafeOutputGuardDecisions()
+    )
 
     service.handle_message(user_id=world["user_id"], message_id=message.id)
 
@@ -385,6 +438,8 @@ def test_clarify_intent_action_redispatches_with_the_chosen_intent(world) -> Non
             }
         ],
         reply_to_id=original.id,
+        channel=world["channel"],
+        scope=None,
     )
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("find_equipment")))
 
@@ -467,6 +522,7 @@ def test_move_equipment_confirm_action_executes_the_move(world) -> None:
             }
         ],
         reply_to_id=original.id,
+        scope=None,
     )
     service = world["build_service"](ScriptedDecision())
 
@@ -489,6 +545,7 @@ def test_move_equipment_cancel_action_posts_nothing(world) -> None:
         "Déplacer ?",
         [{"label": "Annuler", "action": "move_equipment_cancel", "payload": {}}],
         reply_to_id=original.id,
+        scope=None,
     )
     before = len(world["message_repo"].messages)
     service = world["build_service"](ScriptedDecision())

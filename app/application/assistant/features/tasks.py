@@ -18,9 +18,20 @@ from app.application.assistant.exceptions import LlmOutputError
 from app.application.assistant.messages import AssistantMessenger
 from app.application.assistant.models import ChannelScope, TaskDraft
 from app.application.assistant.ports import VisionLlmPort
+from app.application.authz.ports import AuthzReaderPort
 from app.application.projects.ports import IProjectRepository
 from app.application.task.use_cases import CreateTaskRequest, CreateTaskUseCase, ListTasksUseCase
+from app.domain.authz.resolver import has_permission
 from app.domain.entities.task import TaskStatus
+
+#: The task routes (`GET`/`POST .../projects/<id>/tasks`) both gate on this single
+#: permission (`app/api/v1/tasks/task_routes.py`) — any project member may list or
+#: create tasks, matching the resolver's own `project:read` grant. Every handler here
+#: re-checks it explicitly (review finding C1): `resolve_project`'s candidate list is
+#: already filtered to readable projects, but a stale `pick_project_ctx`/
+#: `confirm_create_task` tap replays against whatever project_id it was given, so the
+#: check must happen again right before acting, not just when the choice was offered.
+TASK_PERMISSION = "project:read"
 
 # Keep byte-identical across every call — same rule as extract.py's S1 prompt.
 CREATE_TASK_SYSTEM_FR = (
@@ -44,11 +55,22 @@ class TasksFeature:
         project_repo: IProjectRepository,
         create_usecase: CreateTaskUseCase,
         list_usecase: ListTasksUseCase,
+        authz_reader: AuthzReaderPort,
     ) -> None:
         self._vision = vision
         self._project_repo = project_repo
         self._create_usecase = create_usecase
         self._list_usecase = list_usecase
+        self._authz_reader = authz_reader
+
+    def _permitted(self, user_id: UUID, project_id: UUID) -> bool:
+        return has_permission(
+            self._authz_reader,
+            user_id,
+            TASK_PERMISSION,
+            project_id=project_id,
+            is_platform_admin=self._authz_reader.is_platform_ops(user_id),
+        )
 
     # ------------------------------------------------------------------
     # 3.1 — create a task
@@ -66,6 +88,16 @@ class TasksFeature:
         messenger: AssistantMessenger,
         trace_id: str,
     ) -> str:
+        if not self._permitted(user_id, project_id):
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "refused"
         today = date.today()
         user_text = f"Aujourd'hui : {today.isoformat()}. Message : {text}"
         try:
@@ -139,6 +171,19 @@ class TasksFeature:
         trace_id: str,
     ) -> None:
         project_id = UUID(str(payload["project_id"]))
+        # Re-checked right before the write (not just when the confirm choice was
+        # offered): a role change between the offer and the tap must not let a stale
+        # choice through (same pattern as `LaborFeature.confirm_bulk_attendance`).
+        if not self._permitted(user_id, project_id):
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return
         title = str(payload["title"])
         due_date = _parse_due_date(payload.get("due_date"))
         task = self._create_usecase.execute(
@@ -168,6 +213,16 @@ class TasksFeature:
         messenger: AssistantMessenger,
         trace_id: str,
     ) -> str:
+        if not self._permitted(user_id, project_id):
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "refused"
         today = date.today()
         window_end = today + timedelta(days=_WEEK_WINDOW_DAYS)
         tasks = [

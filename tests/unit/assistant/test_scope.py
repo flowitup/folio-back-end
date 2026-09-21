@@ -67,17 +67,30 @@ class TestRedactNonAdminScope:
             },
             "options": [{"label": "ok", "payload": {"daily_rate": 50}}],
         }
+        # total_ttc is D19-visible supplier spend, never classified — it survives.
         assert redact(self.scope, payload) == {
-            "card": {"title": "Leroy Merlin", "extra": {}},
+            "card": {"title": "Leroy Merlin", "extra": {"total_ttc": 79.5}},
             "options": [{"label": "ok", "payload": {}}],
         }
+
+    @pytest.mark.parametrize("field_name", ["total_ht", "total_ttc", "total_amount", "amount", "total", "price"])
+    def test_supplier_spend_fields_survive_in_a_non_admin_scope(self, field_name: str) -> None:
+        """Product decision: supplier-invoice totals are D19 spend, not classified."""
+        payload = {field_name: 123.45, "safe": "ok"}
+        assert redact(self.scope, payload) == payload
+
+    @pytest.mark.parametrize("field_name", ["amount_due", "balance", "due_total", "hourly_rate"])
+    def test_m3_blocklist_additions_are_stripped(self, field_name: str) -> None:
+        payload = {field_name: 123.45, "safe": "ok"}
+        assert redact(self.scope, payload) == {"safe": "ok"}
 
     def test_none_payload_passes_through(self) -> None:
         assert redact(self.scope, None) is None
 
-    def test_none_scope_never_redacts(self) -> None:
-        payload = {"budget": 1000}
-        assert redact(None, payload) == payload
+    def test_none_scope_fails_closed(self) -> None:
+        """A caller with no channel context is treated as non-admin, not unredacted."""
+        payload = {"budget": 1000, "total_ttc": 79.5}
+        assert redact(None, payload) == {"total_ttc": 79.5}
 
 
 class TestRedactAdminScope:

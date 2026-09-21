@@ -207,6 +207,52 @@ def test_output_guard_lets_a_safe_reply_through(world) -> None:  # noqa: F811
     assert "Tout se passe bien" in (reply.body or "")
 
 
+def test_output_guard_refuses_when_no_decision_port_is_wired(world) -> None:  # noqa: F811
+    """M4: an unwired guard fails CLOSED outside the admin channel — it is no longer
+    treated as "no guard, let it through"."""
+    message = _user_message(world["channel"], world["user_id"], body="Comment va le chantier ?")
+    world["message_repo"].add(message)
+    audit = FakeAuditRepo()
+    service = world["build_service"](
+        ScriptedDecision(fixed=_admin_decision("chit_chat")),
+        vision=ScriptedVision(text_answers=["Tout va bien."]),
+        audit=audit,
+        # `decisions` deliberately left unwired (defaults to None).
+    )
+
+    service.handle_message(user_id=world["user_id"], message_id=message.id)
+
+    reply = _last_message(world)
+    assert "Tout va bien" not in (reply.body or "")
+    assert audit.rows[-1].refused_reason == "output_guard_error"
+    assert audit.rows[-1].outcome == "refused"
+
+
+class RaisingDecisionPort:
+    def decide(self, state: dict, questions: dict) -> Decision:
+        raise RuntimeError("provider outage")
+
+
+def test_output_guard_refuses_when_the_provider_call_raises(world) -> None:  # noqa: F811
+    """M4: a Jev outage must not silently downgrade to "no guard"."""
+    message = _user_message(world["channel"], world["user_id"], body="Comment va le chantier ?")
+    world["message_repo"].add(message)
+    audit = FakeAuditRepo()
+    service = world["build_service"](
+        ScriptedDecision(fixed=_admin_decision("chit_chat")),
+        vision=ScriptedVision(text_answers=["Tout va bien."]),
+        decisions=RaisingDecisionPort(),
+        audit=audit,
+    )
+
+    service.handle_message(user_id=world["user_id"], message_id=message.id)
+
+    reply = _last_message(world)
+    assert "Tout va bien" not in (reply.body or "")
+    assert audit.rows[-1].refused_reason == "output_guard_error"
+    assert audit.rows[-1].outcome == "refused"
+
+
 def test_output_guard_never_runs_in_the_admin_channel(world) -> None:  # noqa: F811
     admin_channel = ChannelRef(kind="admin", id=world["company_id"])
     message = _user_message(admin_channel, world["user_id"], body="Comment va le chantier ?")

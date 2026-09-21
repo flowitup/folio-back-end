@@ -1848,12 +1848,18 @@ def _configure_di_container() -> None:
             pending_attendance_usecase=_c.list_pending_attendance_usecase,
         )
 
-    if _c.create_task_usecase is not None and _c.list_tasks_usecase is not None and _c.project_repository is not None:
+    if (
+        _c.create_task_usecase is not None
+        and _c.list_tasks_usecase is not None
+        and _c.project_repository is not None
+        and _c.authz_reader is not None
+    ):
         _c.assistant_tasks_feature = _TasksFeature(
             vision=_c.assistant_vision_llm,
             project_repo=_c.project_repository,
             create_usecase=_c.create_task_usecase,
             list_usecase=_c.list_tasks_usecase,
+            authz_reader=_c.authz_reader,
         )
 
     if (
@@ -1861,6 +1867,7 @@ def _configure_di_container() -> None:
         and _c.invoice_repository is not None
         and _c.billing_document_repo is not None
         and _c.get_labor_payments_summary_usecase is not None
+        and _c.authz_reader is not None
     ):
         _c.assistant_admin_answers = _AdminAnswersFeature(
             project_repo=_c.project_repository,
@@ -1869,6 +1876,7 @@ def _configure_di_container() -> None:
             labor_payments_usecase=_c.get_labor_payments_summary_usecase,
             audit=_c.assistant_audit_repo,
             directory=_chat_repo,
+            authz_reader=_c.authz_reader,
         )
 
     if _c.assistant_service is not None and _c.project_repository is not None and _c.assistant_messenger is not None:

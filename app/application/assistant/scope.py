@@ -13,6 +13,12 @@ catch-all suffixes below, from a card/choice/job_status payload. Text bodies are
 walked here — a free-text DeepSeek reply is covered instead by the output guard
 (``gate.output_guard_triggered`` + the Jev Noul check in ``service.py``), since there is
 no fixed field name to strip out of prose.
+
+``scope=None`` fails CLOSED: it is treated exactly like a non-admin scope (every
+confidential class withheld), never like "no redaction". ``scope`` is a required keyword
+on every ``post_*`` (see ``messages.py``), so this only matters for a caller that
+explicitly has no channel context — it must never be read as permission to skip
+redaction.
 """
 
 from __future__ import annotations
@@ -23,6 +29,10 @@ if TYPE_CHECKING:
     from app.application.assistant.models import ChannelScope
 
 #: `finance_company` — released funds, budget, remaining, income, billing amounts/status.
+#: Deliberately excludes `total_ht`/`total_ttc`/`total_amount`: those are a SUPPLIER
+#: invoice's own total (ticket/material/invoice-fetch cards) — D19 project spend, visible
+#: to every member, never classified. Only the CLIENT billing document's own amount/
+#: status fields (`billing_*`) are confidential.
 FINANCE_COMPANY_FIELDS: frozenset[str] = frozenset(
     {
         "released_funds",
@@ -48,9 +58,9 @@ FINANCE_COMPANY_FIELDS: frozenset[str] = frozenset(
         "billing_status",
         "billing_total_ht",
         "billing_total_ttc",
-        "total_ht",
-        "total_ttc",
-        "total_amount",
+        "amount_due",
+        "balance",
+        "due_total",
     }
 )
 
@@ -58,6 +68,7 @@ FINANCE_COMPANY_FIELDS: frozenset[str] = frozenset(
 PAYROLL_FIELDS: frozenset[str] = frozenset(
     {
         "daily_rate",
+        "hourly_rate",
         "rate",
         "rate_history",
         "rate_changes",
@@ -129,15 +140,17 @@ def _strip(value: Any, blocked_names: frozenset[str]) -> Any:
 def redact(scope: "ChannelScope | None", payload: dict[str, Any] | None) -> dict[str, Any] | None:
     """Strips every field classified into a class ``scope`` does not allow.
 
-    ``scope=None`` (an internal/legacy call site with no channel context) never
-    redacts — the same fail-open-to-the-default-fallback-channel behaviour
-    ``AssistantMessenger._post`` already has for an omitted ``channel``. A payload of
-    ``None`` (every ``text`` message) passes through unchanged; there is nothing to
-    walk.
+    ``scope=None`` (a caller with no channel context) fails CLOSED — treated exactly
+    like a non-admin scope, so both confidential classes are withheld. This is defense
+    in depth only: ``scope`` is a required keyword on every ``AssistantMessenger.post_*``
+    (see ``messages.py``), so a caller can no longer omit it by accident; explicitly
+    passing ``scope=None`` must still never be read as "skip redaction". A payload of
+    ``None`` (every ``text`` message) passes through unchanged; there is nothing to walk.
     """
-    if payload is None or scope is None:
+    if payload is None:
         return payload
-    blocked_names = _blocked_field_names(scope.allowed_classes)
+    allowed_classes = scope.allowed_classes if scope is not None else frozenset()
+    blocked_names = _blocked_field_names(allowed_classes)
     if not blocked_names:
         return payload
     stripped = _strip(payload, blocked_names)

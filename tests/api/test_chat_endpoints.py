@@ -400,6 +400,7 @@ class TestFolioReplies:
                 uuid.UUID(invitation_app._test_member_user_id),
                 "Salut !",
                 channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
             )
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         reply = page["items"][-1]
@@ -420,6 +421,7 @@ class TestFolioReplies:
                 uuid.UUID(invitation_app._test_member_user_id),
                 "Voici la réponse pour toute l'équipe.",
                 channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
             )
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
         assert page["items"][-1]["body"] == "Voici la réponse pour toute l'équipe."
@@ -435,6 +437,7 @@ class TestFolioReplies:
                 uuid.UUID(invitation_app._test_member_user_id),
                 "Bonjour !",
                 channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
             )
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
         company_channel = next(c for c in items if c["key"] == key)
@@ -462,6 +465,7 @@ class TestFolioReplies:
                 thumbnail_url="/api/v1/bibliotheque/products/x/image",
                 extra={"has_image": True},
                 channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
             )
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         card_message = page["items"][-1]
@@ -519,6 +523,7 @@ class TestMentionDispatch:
                 uuid.UUID(invitation_app._test_member_user_id),
                 "Tu veux dire quoi exactement ?",
                 channel=ChannelRef(kind="project", id=uuid.UUID(invitation_app._test_project_id)),
+                scope=None,
             )
         invitation_app._assistant_dispatcher.messages_received.clear()
         sent = inv_client.post(

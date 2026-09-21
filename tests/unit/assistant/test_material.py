@@ -28,7 +28,7 @@ import pytest
 from app.application.assistant.features.material import MaterialFeature
 from app.application.assistant.jobs_repo import AssistantJobRecord
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import MaterialIdent, ProductCandidate, ProductSearchResult
+from app.application.assistant.models import ChannelScope, MaterialIdent, ProductCandidate, ProductSearchResult
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
 from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
 from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
@@ -209,6 +209,11 @@ class World:
             upload_image_usecase=self.upload_image_usecase,
         )
 
+    def default_scope(self) -> ChannelScope:
+        return ChannelScope(
+            kind="company", company_id=self.company_id, project_id=None, is_admin_channel=False, asker_id=self.user_id
+        )
+
     def post_photo(self, photo_bytes: bytes = _PHOTO_BYTES) -> UUID:
         key = f"chat/{uuid4()}"
         self.storage.put(key, io.BytesIO(photo_bytes), content_type="image/jpeg")
@@ -230,7 +235,12 @@ class World:
         """Runs `feature.run()` (already scripted with an ident answer) through to job
         creation, and returns the freshly created `find_product` job."""
         outcome = self.feature.run(
-            user_id=self.user_id, message_id=message_id, lang="fr", messenger=self.messenger, trace_id="t1"
+            user_id=self.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=self.messenger,
+            trace_id="t1",
+            scope=self.default_scope(),
         )
         assert outcome == "queued"
         jobs = self.job_repo.list_recent_for_user(self.user_id, limit=1)
@@ -301,7 +311,12 @@ class TestJobCreation:
         world.vision._json_answers = [_ident()]
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         jobs = world.job_repo.list_recent_for_user(world.user_id)
@@ -328,7 +343,13 @@ class TestChannelRoundTrip:
             lang="fr",
             messenger=world.messenger,
             trace_id="t1",
-            channel=channel,
+            scope=ChannelScope(
+                kind="project",
+                company_id=world.company_id,
+                project_id=channel.id,
+                is_admin_channel=False,
+                asker_id=world.user_id,
+            ),
         )
 
         job = world.job_repo.list_recent_for_user(world.user_id, limit=1)[0]
@@ -450,7 +471,12 @@ class TestCacheHitBySha:
 
         message_id = world.post_photo()
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
@@ -467,11 +493,52 @@ class TestDedupeByPhotoHash:
 
         second_message_id = world.post_photo()
         outcome = world.feature.run(
-            user_id=world.user_id, message_id=second_message_id, lang="fr", messenger=world.messenger, trace_id="t3"
+            user_id=world.user_id,
+            message_id=second_message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t3",
+            scope=world.default_scope(),
         )
 
         assert outcome == "asked"
         assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
+
+
+class TestNullChannelKeyDropsTheReply:
+    """M1: a job queued before `channel_key` existed (or with an unparsable one, e.g.
+    the retired `assistant:` kind) has nowhere safe to post — the reply is dropped and
+    the job is still marked processed, rather than resurrecting the dead fallback
+    channel."""
+
+    def test_null_channel_key_drops_the_reply_and_marks_processed(self, world: World) -> None:
+        job = world.job_repo.add(
+            job_type="find_product",
+            user_id=world.user_id,
+            project_hint=None,
+            lang="fr",
+            params={
+                "ident": _ident().model_dump(),
+                "search_queries": ["perceuse bosch 18v"],
+                "company_id": str(world.company_id),
+                "photo_sha256": _sha(_PHOTO_BYTES),
+                "message_id": str(uuid4()),
+            },
+            channel_key=None,
+        )
+        world.job_repo.update_result(
+            job.id,
+            status="done",
+            result=ProductSearchResult(
+                status="done", candidates=[_candidate("https://www.leroymerlin.fr/p/1")]
+            ).model_dump(),
+        )
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        assert world.last_replies() == []
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
 
 
 class TestIdempotentOnResult:
@@ -563,6 +630,7 @@ class TestDefenseInDepthPickCompanyForeignCompany:
             lang="fr",
             messenger=world.messenger,
             trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -579,7 +647,12 @@ class TestLowConfidenceIdentification:
         world.vision._json_answers = [_ident(confidence=0.2)]
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []

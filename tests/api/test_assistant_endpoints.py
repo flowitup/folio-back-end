@@ -28,6 +28,7 @@ def _post_choice(app, channel_key: str, addressed_to: str) -> str:
                 {"label": "Annuler", "action": "cancel", "payload": {}},
             ],
             channel=ChannelRef.parse(channel_key),
+            scope=None,
         )
         return str(message.id)
 

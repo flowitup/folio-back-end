@@ -22,7 +22,7 @@ import pytest
 
 from app.application.assistant.features.ticket import TicketFeature
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import Invoice
+from app.application.assistant.models import ChannelScope, Invoice
 from app.application.assistant.ports import Decision
 from app.application.invoice.create_invoice import CreateInvoiceUseCase
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
@@ -168,11 +168,12 @@ class World:
     def __init__(self, session, scan_mode: str = "opencv") -> None:
         self.session = session
         self.user_id = uuid4()
+        self.company_id = uuid4()
         self.project_a = _project("Villa Arcueil")
         self.project_b = _project("Extension Meaux")
         self.project_repo = FakeProjectRepo([self.project_a, self.project_b])
         self.authz_reader = FakeAuthzReader()
-        self.company_access = FakeCompanyAccessRepo(uuid4())
+        self.company_access = FakeCompanyAccessRepo(self.company_id)
         self.labor_entry_repo = FakeLaborEntryRepo()
         self.worker_repo = FakeWorkerRepo()
         self.invoice_repo = SQLAlchemyInvoiceRepository(session)
@@ -205,6 +206,11 @@ class World:
             create_invoice_usecase=self.create_invoice_usecase,
             delete_invoice_usecase=self.delete_invoice_usecase,
             upload_attachment_usecase=self.upload_attachment_usecase,
+        )
+
+    def default_scope(self) -> ChannelScope:
+        return ChannelScope(
+            kind="company", company_id=self.company_id, project_id=None, is_admin_channel=False, asker_id=self.user_id
         )
 
     def post_photo(self) -> UUID:
@@ -261,7 +267,12 @@ class TestCreateConfirmed:
         world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
@@ -281,7 +292,12 @@ class TestCreateConfirmed:
         world.vision._json_answers = [Invoice(merchant="Point P", total_ttc=50.0, readability=0.1)]
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         replies = world.last_replies()
@@ -302,7 +318,12 @@ class TestDuplicateRefused:
         }
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
@@ -328,7 +349,12 @@ class TestToConfirmWithMultipleProjects:
         world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.75)}
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert (
@@ -356,6 +382,7 @@ class TestToConfirmWithMultipleProjects:
             lang="fr",
             messenger=world.messenger,
             trace_id="t2",
+            scope=world.default_scope(),
         )
 
         created = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
@@ -372,7 +399,12 @@ class TestPickProjectAllBelowThreshold:
         world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.2)}
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert (
@@ -395,6 +427,7 @@ class TestPickProjectAllBelowThreshold:
             lang="fr",
             messenger=world.messenger,
             trace_id="t2",
+            scope=world.default_scope(),
         )
 
         created = world.invoice_repo.find_by_project_in_range(world.project_b.id, date(2026, 1, 1), date(2026, 12, 31))
@@ -419,7 +452,12 @@ class TestAttachToExisting:
         }
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         attachments = world.attachment_repo.list_by_invoice(UUID(existing.id))
@@ -447,7 +485,12 @@ class TestGenaiFallsBackToOpenCv:
         }
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         created = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
@@ -475,7 +518,12 @@ class TestDefenseInDepthPendingKeyPrefix:
         world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.75)}
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
         choice = next(m for m in world.last_replies() if m.content_type == "choice")
         forged_payload = dict(choice.payload["options"][0]["payload"])
@@ -489,6 +537,7 @@ class TestDefenseInDepthPendingKeyPrefix:
             lang="fr",
             messenger=world.messenger,
             trace_id="t2",
+            scope=world.default_scope(),
         )
 
         assert (
@@ -517,6 +566,7 @@ class TestDefenseInDepthConfirmDuplicateCrossProject:
             lang="fr",
             messenger=world.messenger,
             trace_id="t1",
+            scope=world.default_scope(),
         )
 
         replies = world.last_replies()

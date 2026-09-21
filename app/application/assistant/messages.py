@@ -14,16 +14,21 @@ admin-answers), all of which are channel-aware since phase 03/04. ``channel`` om
 falls back to the retired ``assistant:<user_id>`` channel — kept only so an internal
 caller with no channel context (none remain in production code) still compiles.
 
-Every ``post_*`` method also takes an optional ``scope`` — when given, ``_post`` runs
-the payload through ``app.application.assistant.scope.redact`` before persisting it
-(D17 layer 1): a card/choice/job_status built for a non-admin channel never carries a
-``finance_company``/``payroll`` classified field, whichever feature posted it.
+Every ``post_*`` method also takes a REQUIRED ``scope`` keyword (``ChannelScope | None``
+— required so a missing call site is a type error, not a silent bypass; ``None`` itself
+still fails closed, see ``scope.redact``) — ``_post`` runs the payload through
+``app.application.assistant.scope.redact`` before persisting it (D17 layer 1): a card/
+choice/job_status built for a non-admin channel never carries a ``finance_company``/
+``payroll`` classified field, whichever feature posted it. The plain-text ``body``
+fallback is always built from the REDACTED payload (never the raw one passed in), so a
+stripped field can never survive verbatim in the one field every client (and the push
+notification preview) always reads.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import UUID
 
 from app.application.assistant.exceptions import AssistantError
@@ -82,21 +87,28 @@ class AssistantMessenger:
         user_id: UUID,
         content_type: str,
         payload: dict[str, Any] | None,
-        body: str,
         reply_to_id: UUID | None,
         trace_id: str | None,
         channel: ChannelRef | None,
-        scope: ChannelScope | None = None,
+        scope: ChannelScope | None,
+        body: str | None = None,
+        body_builder: "Callable[[dict[str, Any] | None], str] | None" = None,
     ) -> ChatMessage:
         target = channel if channel is not None else ChannelRef(kind="assistant", id=user_id)
         # D17 layer 1: strip every confidential-class field the scope does not allow
         # before the message is ever built/persisted — the ONE place every card/choice/
-        # job_status payload passes through, whichever feature/service call site posted it.
+        # job_status payload passes through, whichever feature/service call site posted
+        # it. `body` is then derived from the REDACTED payload (via `body_builder`) when
+        # the caller has one — never from the raw `payload` — so a stripped field cannot
+        # resurface verbatim in the plain-text fallback every client (and the push
+        # preview) reads (review finding H1(b)).
+        redacted_payload = redact(scope, payload)
+        resolved_body = body_builder(redacted_payload) if body_builder is not None else (body or "")
         message = ChatMessage.assistant(
             channel=target,
             content_type=content_type,
-            payload=redact(scope, payload),
-            body=body,
+            payload=redacted_payload,
+            body=resolved_body,
             reply_to_id=reply_to_id,
             trace_id=trace_id,
         )
@@ -112,10 +124,10 @@ class AssistantMessenger:
         user_id: UUID,
         body: str,
         *,
+        scope: ChannelScope | None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
-        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         return self._post(
             user_id=user_id,
@@ -135,6 +147,7 @@ class AssistantMessenger:
         card_type: str,
         entity_id: UUID,
         title: str,
+        scope: ChannelScope | None,
         subtitle: str | None = None,
         badge: str | None = None,
         project_id: UUID | None = None,
@@ -143,7 +156,6 @@ class AssistantMessenger:
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
-        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         """Builds the ``card`` content-type's wire contract itself — callers pass typed
         fields, never a raw dict, so every card the assistant posts is shaped identically
@@ -170,7 +182,9 @@ class AssistantMessenger:
             user_id=user_id,
             content_type="card",
             payload={"card": card},
-            body=_card_fallback(card),
+            # Fallback built from the REDACTED payload (H1(b)): a stripped `extra` field
+            # must not resurface verbatim in the subtitle/body every client renders.
+            body_builder=lambda redacted: _card_fallback((redacted or {}).get("card") or {}),
             reply_to_id=reply_to_id,
             trace_id=trace_id,
             channel=channel,
@@ -183,11 +197,11 @@ class AssistantMessenger:
         prompt: str,
         options: list[dict[str, Any]],
         *,
+        scope: ChannelScope | None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
         addressed_to: UUID | None = None,
-        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         """``addressed_to`` (the asker) defaults to ``user_id`` — every current caller
         already passes the asker's id there, so this is free for them. Only the person
@@ -202,7 +216,9 @@ class AssistantMessenger:
             user_id=user_id,
             content_type="choice",
             payload=payload,
-            body=_choice_fallback(prompt, options),
+            # Same H1(b) fix as post_card: build the fallback from whatever survives
+            # redaction in `options`, never from the caller's original list.
+            body_builder=lambda redacted: _choice_fallback(prompt, (redacted or {}).get("options") or []),
             reply_to_id=reply_to_id,
             trace_id=trace_id,
             channel=channel,
@@ -216,11 +232,11 @@ class AssistantMessenger:
         state: str,
         text: str,
         *,
+        scope: ChannelScope | None,
         progress: float | None = None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
-        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         payload = {"job_id": job_id, "state": state, "text": text, "progress": progress}
         return self._post(

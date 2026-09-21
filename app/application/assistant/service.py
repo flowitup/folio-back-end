@@ -186,6 +186,7 @@ class DefaultFeatureHandlers:
             reply_to_id=message_id,
             trace_id=trace_id,
             channel=scope.channel,
+            scope=scope,
         )
         return "replied"
 
@@ -205,6 +206,7 @@ class DefaultFeatureHandlers:
             reply_to_id=message_id,
             trace_id=trace_id,
             channel=scope.channel,
+            scope=scope,
         )
         return "replied"
 
@@ -225,6 +227,7 @@ class DefaultFeatureHandlers:
             reply_to_id=message_id,
             trace_id=trace_id,
             channel=scope.channel,
+            scope=scope,
         )
         return "replied"
 
@@ -336,6 +339,18 @@ class AssistantService:
     def _company_ids(self, user_id: UUID) -> list[UUID]:
         return [access.company_id for access in self._company_access.list_for_user(user_id)]
 
+    def _channel_company_ids(self, scope: ChannelScope, user_id: UUID) -> list[UUID]:
+        """Company ids the router/equipment lookups may search — the channel's OWN
+        company only (H2), intersected with the asker's real memberships so a channel
+        member who somehow lost their company-access row still gets nothing. Every
+        company the asker happens to also belong to elsewhere must never leak into a
+        company/project/admin channel's search results or into the router's project-name
+        state sent to the provider — that was the cross-tenant disclosure the review
+        found in ``find_equipment``/``move_equipment`` and the S0 router context."""
+        if scope.company_id is None:
+            return []
+        return [c for c in self._company_ids(user_id) if c == scope.company_id]
+
     def _lang_for_original(self, original: Optional[ChatMessage]) -> str:
         if original is None:
             return _FALLBACK_LOCALE
@@ -346,17 +361,8 @@ class AssistantService:
         """Builds the ``ChannelScope`` a dispatch came from — a company/admin channel's
         id IS the company id; a project channel's company is looked up (a project with no
         company yet resolves to ``None``, same as everywhere else in the codebase)."""
-        if channel.kind == "project":
-            company_id = self._project_company_reader.project_company_id(channel.id)
-            return ChannelScope(
-                kind="project", company_id=company_id, project_id=channel.id, is_admin_channel=False, asker_id=asker_id
-            )
-        if channel.kind == "admin":
-            return ChannelScope(
-                kind="admin", company_id=channel.id, project_id=None, is_admin_channel=True, asker_id=asker_id
-            )
-        return ChannelScope(
-            kind="company", company_id=channel.id, project_id=None, is_admin_channel=False, asker_id=asker_id
+        return ChannelScope.for_channel(
+            channel, project_company_id=self._project_company_reader.project_company_id, asker_id=asker_id
         )
 
     def _is_company_admin(self, scope: ChannelScope, user_id: UUID) -> bool:
@@ -395,20 +401,21 @@ class AssistantService:
         )
         return 0, "refused"
 
-    def _output_guard_check(self, text: str) -> float:
+    def _output_guard_check(self, text: str) -> Optional[float]:
         """Jev Noul: does this free-text reply disclose a project's income/budget or a
-        person's pay? Returns 0.0 (never triggers) when no ``DecisionPort`` is wired —
-        the output guard degrades to a no-op rather than blocking every chit-chat reply
-        in a deployment that has not wired Jev for it."""
+        person's pay? Returns ``None`` when the guard could not run at all — no
+        ``DecisionPort`` wired, or the provider call itself raised — so the caller can
+        fail CLOSED in a non-admin scope (M4): an unwired port or a Jev outage must
+        never silently downgrade D17 layer 3 to "no guard"."""
         if self._decisions is None:
-            return 0.0
+            return None
         try:
             result = self._decisions.decide(
                 {"text": text}, {"leak": NoulQuestion(instructions=_OUTPUT_GUARD_INSTRUCTIONS)}
             )
         except Exception:
-            logger.exception("assistant output guard: Jev call failed, letting the reply through")
-            return 0.0
+            logger.exception("assistant output guard: Jev call failed, refusing the reply")
+            return None
         return result.noul("leak")
 
     def _write_audit(
@@ -503,7 +510,7 @@ class AssistantService:
             has_photo = message.content_type == "photo"
             if has_photo and not message_text:
                 outcome = "asked"
-                self._post_photo_ask_kind(user_id, message.id, lang, trace_id, channel)
+                self._post_photo_ask_kind(user_id, message.id, lang, trace_id, channel, scope)
                 return
             if not has_photo and not message_text:
                 # A message that is only "@folio" (or a bare reply to the assistant with
@@ -521,7 +528,7 @@ class AssistantService:
                 )
                 return
 
-            company_ids = self._company_ids(user_id)
+            company_ids = self._channel_company_ids(scope, user_id)
             projects = self._projects.list_for_user_and_companies(user_id, company_ids)
             project_names = [p.name for p in projects]
             history = [
@@ -535,7 +542,7 @@ class AssistantService:
 
             if intent_status(intent_confidence) != "confirmed":
                 outcome = "asked"
-                self._post_clarify_intent(user_id, message.id, decision, lang, trace_id, channel)
+                self._post_clarify_intent(user_id, message.id, decision, lang, trace_id, channel, scope)
                 return
 
             extra_calls, outcome = self._dispatch(
@@ -637,6 +644,7 @@ class AssistantService:
                 trace_id=trace_id,
                 company_ids=company_ids,
                 channel=channel,
+                scope=scope,
             )
             return 0, outcome
         if intent in ("question", "chit_chat"):
@@ -658,8 +666,11 @@ class AssistantService:
             # author did not already write.
             if not scope.is_admin_channel:
                 leak_confidence = self._output_guard_check(answer)
-                if output_guard_triggered(leak_confidence):
-                    audit_ctx.refused_reason = "output_guard"
+                # M4: a guard that could not run at all (unwired port, or the provider
+                # call raised) is not "no guard" — it is treated exactly like a positive
+                # leak-Noul, refusing the reply rather than letting it through unchecked.
+                if leak_confidence is None or output_guard_triggered(leak_confidence):
+                    audit_ctx.refused_reason = "output_guard" if leak_confidence is not None else "output_guard_error"
                     self._messenger.post_text(
                         user_id,
                         reply.render("refuse_generic", lang),
@@ -822,6 +833,15 @@ class AssistantService:
         )
         return 0, "replied"
 
+    @staticmethod
+    def _note_permission_refusal(audit_ctx: "_AuditContext", outcome: str) -> None:
+        """A feature handler's own ``project:read``/``project:manage_labor``/etc. check
+        (C1) denied the request — mark the audit row's reason so the admin-channel
+        supervision answer and the web audit page can tell it apart from a scope (D17)
+        or output-guard refusal."""
+        if outcome == "refused":
+            audit_ctx.refused_reason = "permission"
+
     # ------------------------------------------------------------------
     # Phase 03 — confidential-class questions (D17)
     # ------------------------------------------------------------------
@@ -850,7 +870,7 @@ class AssistantService:
                 scope=scope,
                 audit_ctx=audit_ctx,
             )
-        if self._admin_answers is None or self._decisions is None:
+        if self._admin_answers is None or self._decisions is None or self._authz_reader is None:
             return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
         project_id = resolve_project(
             scope=scope,
@@ -863,6 +883,7 @@ class AssistantService:
             project_repo=self._projects,
             decisions=self._decisions,
             messenger=self._messenger,
+            authz_reader=self._authz_reader,
         )
         if project_id is None:
             return 1, "asked"
@@ -877,6 +898,7 @@ class AssistantService:
                 messenger=self._messenger,
                 trace_id=trace_id,
             )
+            self._note_permission_refusal(audit_ctx, outcome)
             return 1, outcome
         audit_ctx.tools.append("GetLaborPaymentsSummaryUseCase")
         outcome = self._admin_answers.ask_salary(
@@ -889,6 +911,7 @@ class AssistantService:
             messenger=self._messenger,
             trace_id=trace_id,
         )
+        self._note_permission_refusal(audit_ctx, outcome)
         return 1, outcome
 
     # ------------------------------------------------------------------
@@ -908,7 +931,7 @@ class AssistantService:
         audit_ctx: "_AuditContext",
     ) -> tuple[int, str]:
         channel = scope.channel
-        if self._labor is None or self._decisions is None:
+        if self._labor is None or self._decisions is None or self._authz_reader is None:
             return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
         project_id = resolve_project(
             scope=scope,
@@ -921,6 +944,7 @@ class AssistantService:
             project_repo=self._projects,
             decisions=self._decisions,
             messenger=self._messenger,
+            authz_reader=self._authz_reader,
         )
         if project_id is None:
             return 1, "asked"
@@ -935,6 +959,7 @@ class AssistantService:
                 messenger=self._messenger,
                 trace_id=trace_id,
             )
+            self._note_permission_refusal(audit_ctx, outcome)
             return 1, outcome
         audit_ctx.tools.append("BulkLogAttendanceUseCase")
         outcome = self._labor.log_attendance(
@@ -947,6 +972,7 @@ class AssistantService:
             messenger=self._messenger,
             trace_id=trace_id,
         )
+        self._note_permission_refusal(audit_ctx, outcome)
         return 1, outcome
 
     def _dispatch_tasks_project_scoped(
@@ -962,7 +988,7 @@ class AssistantService:
         audit_ctx: "_AuditContext",
     ) -> tuple[int, str]:
         channel = scope.channel
-        if self._tasks is None or self._decisions is None:
+        if self._tasks is None or self._decisions is None or self._authz_reader is None:
             return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
         project_id = resolve_project(
             scope=scope,
@@ -975,6 +1001,7 @@ class AssistantService:
             project_repo=self._projects,
             decisions=self._decisions,
             messenger=self._messenger,
+            authz_reader=self._authz_reader,
         )
         if project_id is None:
             return 1, "asked"
@@ -990,6 +1017,7 @@ class AssistantService:
                 messenger=self._messenger,
                 trace_id=trace_id,
             )
+            self._note_permission_refusal(audit_ctx, outcome)
             return 2, outcome
         audit_ctx.tools.append("ListTasksUseCase")
         outcome = self._tasks.ask_tasks(
@@ -1001,6 +1029,7 @@ class AssistantService:
             messenger=self._messenger,
             trace_id=trace_id,
         )
+        self._note_permission_refusal(audit_ctx, outcome)
         return 1, outcome
 
     # ------------------------------------------------------------------
@@ -1008,7 +1037,7 @@ class AssistantService:
     # ------------------------------------------------------------------
 
     def _post_photo_ask_kind(
-        self, user_id: UUID, message_id: UUID, lang: str, trace_id: str, channel: ChannelRef
+        self, user_id: UUID, message_id: UUID, lang: str, trace_id: str, channel: ChannelRef, scope: ChannelScope
     ) -> None:
         prompt = reply.render("photo_ask_kind_prompt", lang)
         options = [
@@ -1024,11 +1053,18 @@ class AssistantService:
             },
         ]
         self._messenger.post_choice(
-            user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel
+            user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
         )
 
     def _post_clarify_intent(
-        self, user_id: UUID, message_id: UUID, decision: RouterDecision, lang: str, trace_id: str, channel: ChannelRef
+        self,
+        user_id: UUID,
+        message_id: UUID,
+        decision: RouterDecision,
+        lang: str,
+        trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
     ) -> None:
         ranked = sorted(decision.intent_probabilities.items(), key=lambda item: item[1], reverse=True)
         top_two = ranked[:2] or [(decision.intent, decision.intent_confidence)]
@@ -1047,6 +1083,7 @@ class AssistantService:
             reply_to_id=message_id,
             trace_id=trace_id,
             channel=channel,
+            scope=scope,
         )
 
     # ------------------------------------------------------------------
@@ -1065,6 +1102,7 @@ class AssistantService:
         trace_id: str,
         company_ids: list[UUID],
         channel: ChannelRef,
+        scope: ChannelScope,
     ) -> str:
         outcome = self._equipment.move(
             user_id=user_id,
@@ -1073,7 +1111,7 @@ class AssistantService:
             project_hint=project_hint,
             is_write_confirmed=is_write_confirmed,
         )
-        return self._reply_move_outcome(user_id, message_id, outcome, project_hint, lang, trace_id, channel)
+        return self._reply_move_outcome(user_id, message_id, outcome, project_hint, lang, trace_id, channel, scope)
 
     def _reply_move_outcome(
         self,
@@ -1084,6 +1122,7 @@ class AssistantService:
         lang: str,
         trace_id: str,
         channel: ChannelRef,
+        scope: ChannelScope,
     ) -> str:
         if outcome.status == "not_found":
             self._messenger.post_text(
@@ -1092,6 +1131,7 @@ class AssistantService:
                 reply_to_id=message_id,
                 trace_id=trace_id,
                 channel=channel,
+                scope=scope,
             )
             return "replied"
         elif outcome.status == "ambiguous_item":
@@ -1106,6 +1146,7 @@ class AssistantService:
                 reply_to_id=message_id,
                 trace_id=trace_id,
                 channel=channel,
+                scope=scope,
             )
             return "asked"
         elif outcome.status == "ambiguous_project":
@@ -1127,6 +1168,7 @@ class AssistantService:
                 reply_to_id=message_id,
                 trace_id=trace_id,
                 channel=channel,
+                scope=scope,
             )
             return "asked"
         elif outcome.status == "confirm":
@@ -1147,7 +1189,7 @@ class AssistantService:
                 },
             ]
             self._messenger.post_choice(
-                user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel
+                user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
             )
             return "asked"
         elif outcome.status == "moved":
@@ -1160,6 +1202,7 @@ class AssistantService:
                 reply_to_id=message_id,
                 trace_id=trace_id,
                 channel=channel,
+                scope=scope,
             )
             return "replied"
         elif outcome.status == "denied":
@@ -1169,6 +1212,7 @@ class AssistantService:
                 reply_to_id=message_id,
                 trace_id=trace_id,
                 channel=channel,
+                scope=scope,
             )
             return "refused"
         else:  # pragma: no cover - defensive, every status above is exhaustive
@@ -1277,7 +1321,7 @@ class AssistantService:
                     is_write_confirmed=True,  # an explicit tap on a named tool is itself the write confirmation
                 )
                 self._reply_move_outcome(
-                    user_id, message_id, move_outcome, payload.get("project_hint"), lang, trace_id, channel
+                    user_id, message_id, move_outcome, payload.get("project_hint"), lang, trace_id, channel, scope
                 )
             elif action == "move_equipment_set_project":
                 move_outcome = self._equipment.move_item(
@@ -1287,7 +1331,7 @@ class AssistantService:
                     is_write_confirmed=True,  # an explicit tap on a named project is itself the write confirmation
                 )
                 self._reply_move_outcome(
-                    user_id, message_id, move_outcome, payload.get("project_name"), lang, trace_id, channel
+                    user_id, message_id, move_outcome, payload.get("project_name"), lang, trace_id, channel, scope
                 )
             elif action == "move_equipment_confirm":
                 move_outcome = self._equipment.move_by_item_id(
@@ -1296,13 +1340,13 @@ class AssistantService:
                     project_id=_uuid_from_payload(payload, "project_id"),
                     is_write_confirmed=True,
                 )
-                self._reply_move_outcome(user_id, message_id, move_outcome, None, lang, trace_id, channel)
+                self._reply_move_outcome(user_id, message_id, move_outcome, None, lang, trace_id, channel, scope)
             elif action == "move_equipment_cancel":
                 # The tap already disabled the choice (SubmitAssistantActionUseCase marks
                 # `payload.answered`); nothing more to say.
                 pass
             elif action == "pick_project_ctx":
-                self._handle_pick_project_ctx(user_id, message_id, payload, lang, trace_id, scope, audit_ctx)
+                outcome = self._handle_pick_project_ctx(user_id, message_id, payload, lang, trace_id, scope, audit_ctx)
             elif action == "confirm_bulk_attendance":
                 if self._labor is None:
                     outcome = "error"
@@ -1413,16 +1457,23 @@ class AssistantService:
         trace_id: str,
         scope: ChannelScope,
         audit_ctx: "_AuditContext",
-    ) -> None:
+    ) -> str:
         """The tap on a ``resolve_project`` choice — re-runs the pending intent directly
-        against the tapped project, skipping ``resolve_project`` this time around."""
+        against the tapped project, skipping ``resolve_project`` this time around.
+
+        Every branch below re-checks the caller's permission on the tapped project
+        inside the feature method itself (C1: a stale tap after a role change must be
+        refused, not honoured just because the choice was offered earlier) — this
+        method only forwards that outcome into the audit row.
+        """
         intent = str(payload.get("intent") or "")
         project_id = UUID(str(payload["project_id"]))
         text = str(payload.get("text") or "")
+        outcome = "error"
         if intent in ("ask_roster", "log_attendance") and self._labor is not None:
             if intent == "ask_roster":
                 audit_ctx.tools.append("GetDayRosterUseCase")
-                self._labor.ask_roster(
+                outcome = self._labor.ask_roster(
                     scope=scope,
                     project_id=project_id,
                     user_id=user_id,
@@ -1433,7 +1484,7 @@ class AssistantService:
                 )
             else:
                 audit_ctx.tools.append("BulkLogAttendanceUseCase")
-                self._labor.log_attendance(
+                outcome = self._labor.log_attendance(
                     scope=scope,
                     project_id=project_id,
                     text=text,
@@ -1446,7 +1497,7 @@ class AssistantService:
         elif intent in ("create_task", "ask_tasks") and self._tasks is not None:
             if intent == "create_task":
                 audit_ctx.tools.append("CreateTaskUseCase")
-                self._tasks.create_task(
+                outcome = self._tasks.create_task(
                     scope=scope,
                     project_id=project_id,
                     text=text,
@@ -1458,7 +1509,7 @@ class AssistantService:
                 )
             else:
                 audit_ctx.tools.append("ListTasksUseCase")
-                self._tasks.ask_tasks(
+                outcome = self._tasks.ask_tasks(
                     scope=scope,
                     project_id=project_id,
                     user_id=user_id,
@@ -1470,7 +1521,7 @@ class AssistantService:
         elif intent in ("ask_project_income", "ask_salary", "ask_own_salary") and self._admin_answers is not None:
             if intent == "ask_project_income":
                 audit_ctx.tools.append("InvoiceRepository")
-                self._admin_answers.ask_project_income(
+                outcome = self._admin_answers.ask_project_income(
                     scope=scope,
                     project_id=project_id,
                     user_id=user_id,
@@ -1481,7 +1532,7 @@ class AssistantService:
                 )
             else:
                 audit_ctx.tools.append("GetLaborPaymentsSummaryUseCase")
-                self._admin_answers.ask_salary(
+                outcome = self._admin_answers.ask_salary(
                     scope=scope,
                     project_id=project_id,
                     text=text,
@@ -1500,6 +1551,8 @@ class AssistantService:
                 channel=scope.channel,
                 scope=scope,
             )
+        self._note_permission_refusal(audit_ctx, outcome)
+        return outcome
 
     def _handle_clarify_intent(
         self,
@@ -1520,7 +1573,7 @@ class AssistantService:
         # another channel's message body through DeepSeek into this caller's conversation.
         if message is None or message.sender_id != user_id:
             return
-        company_ids = self._company_ids(user_id)
+        company_ids = self._channel_company_ids(scope, user_id)
         # An explicitly clarified intent carries no merchant/project/write signal of its
         # own — every downstream gate (is_write in particular) stays conservative.
         decision = RouterDecision(intent=intent, intent_confidence=1.0, intent_probabilities={intent: 1.0})

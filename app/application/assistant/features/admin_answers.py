@@ -17,6 +17,7 @@ from app.application.assistant import reply
 from app.application.assistant.audit_ports import AssistantAuditPort
 from app.application.assistant.messages import AssistantMessenger
 from app.application.assistant.models import ChannelScope
+from app.application.authz.ports import AuthzReaderPort
 from app.application.billing.ports import BillingDocumentRepositoryPort
 from app.application.chat.ports import ChatDirectoryPort
 from app.application.invoice.get_labor_payments_summary_usecase import (
@@ -25,6 +26,7 @@ from app.application.invoice.get_labor_payments_summary_usecase import (
 )
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.projects.ports import IProjectRepository
+from app.domain.authz.resolver import has_permission
 from app.domain.entities.project import Project
 
 #: Billing document statuses counted as "unpaid" for a facture (draft/rejected/expired
@@ -33,6 +35,26 @@ _UNPAID_STATUSES = frozenset({"sent", "overdue"})
 
 #: The audit summary answers "this week" — a rolling 7-day window ending now.
 _AUDIT_WINDOW = timedelta(days=7)
+
+#: `ask_project_income` mirrors the HTTP budget gate (`app/api/v1/projects/routes.py`,
+#: `budget_scope.py`) — a company admin/platform-ops holds this implicitly through the
+#: matrix, so this re-check is defense in depth (C1): the admin CHANNEL is already
+#: admin-only, but the tapped/resolved project_id could in principle be one the caller's
+#: own company role does not actually cover (e.g. a D8 deny), and a template must never
+#: render a number the resolver itself would refuse on the equivalent HTTP route.
+PROJECT_INCOME_PERMISSION = "project:view_budget"
+
+
+def _may_view_all_pay(authz_reader: AuthzReaderPort, user_id: UUID, project_id: UUID) -> bool:
+    """Mirrors `app.api.v1.projects.labor_scope.labor_scope_for`'s unrestricted-read
+    gate: manage_labor (write) or view_pay (read-only) both unlock every worker's pay,
+    everyone else only ever sees their own — `ask_salary` must never show more."""
+    is_platform_admin = authz_reader.is_platform_ops(user_id)
+    return has_permission(
+        authz_reader, user_id, "project:manage_labor", project_id=project_id, is_platform_admin=is_platform_admin
+    ) or has_permission(
+        authz_reader, user_id, "project:view_pay", project_id=project_id, is_platform_admin=is_platform_admin
+    )
 
 
 def _money(amount: object) -> str:
@@ -52,6 +74,7 @@ class AdminAnswersFeature:
         labor_payments_usecase: GetLaborPaymentsSummaryUseCase,
         audit: AssistantAuditPort,
         directory: ChatDirectoryPort,
+        authz_reader: AuthzReaderPort,
     ) -> None:
         self._project_repo = project_repo
         self._invoice_repo = invoice_repo
@@ -59,6 +82,7 @@ class AdminAnswersFeature:
         self._labor_payments_usecase = labor_payments_usecase
         self._audit = audit
         self._directory = directory
+        self._authz_reader = authz_reader
 
     # ------------------------------------------------------------------
     # 1.1 — project money: spent split, released, budget, remaining
@@ -75,6 +99,22 @@ class AdminAnswersFeature:
         messenger: AssistantMessenger,
         trace_id: str,
     ) -> str:
+        if not has_permission(
+            self._authz_reader,
+            user_id,
+            PROJECT_INCOME_PERMISSION,
+            project_id=project_id,
+            is_platform_admin=self._authz_reader.is_platform_ops(user_id),
+        ):
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "refused"
         project = self._project_repo.find_by_id(project_id)
         project_name = project.name if project is not None else str(project_id)
         company_spent, personal_spent = self._invoice_repo.sum_spent_split(project_id)
@@ -115,6 +155,16 @@ class AdminAnswersFeature:
         messenger: AssistantMessenger,
         trace_id: str,
     ) -> str:
+        if not _may_view_all_pay(self._authz_reader, user_id, project_id):
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "refused"
         summary = self._labor_payments_usecase.execute(GetLaborPaymentsSummaryRequest(project_id=project_id))
         needle = text.lower()
         lines: list[str] = []

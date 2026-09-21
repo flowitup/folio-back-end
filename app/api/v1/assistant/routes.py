@@ -50,6 +50,29 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
+class _InvalidQueryParam(ValueError):
+    """Raised by `_require_datetime` for a `from`/`to` value that isn't a valid
+    ISO 8601 date/datetime — distinguishes "absent" (fine, no filter) from "present but
+    unparsable" (a 422, M5), which `_parse_datetime` alone cannot tell apart."""
+
+
+def _require_datetime(param: str, value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        raise _InvalidQueryParam(f"{param} must be an ISO 8601 date or datetime")
+    return parsed
+
+
+#: `GET /assistant/audit`'s own clamp on `limit` (M5) — 1..500, default 200. Mirrors
+#: `submit_action`'s rate limit below so a company admin cannot hammer this DB-heavy,
+#: otherwise-cheap-to-call endpoint.
+_AUDIT_LIMIT_MIN = 1
+_AUDIT_LIMIT_MAX = 500
+_AUDIT_LIMIT_DEFAULT = 200
+
+
 @assistant_bp.post("/assistant/actions")
 @openapi_doc(
     summary="Answer an assistant choice message",
@@ -95,6 +118,7 @@ def submit_action() -> Any:
     tags=["assistant"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 def get_audit() -> Any:
     """D17 layer 4: one row per handled mention, readable by a company admin of
     ``company_id`` or platform ops — the admin channel's own "who asked what" answer and
@@ -124,14 +148,20 @@ def get_audit() -> Any:
         return _err(422, "ValidationError", "user_id must be a UUID")
     limit_raw = request.args.get("limit")
     try:
-        limit = min(int(limit_raw), 200) if limit_raw else 200
+        limit = max(_AUDIT_LIMIT_MIN, min(int(limit_raw), _AUDIT_LIMIT_MAX)) if limit_raw else _AUDIT_LIMIT_DEFAULT
     except ValueError:
         return _err(422, "ValidationError", "limit must be an integer")
 
+    try:
+        from_ = _require_datetime("from", request.args.get("from"))
+        to = _require_datetime("to", request.args.get("to"))
+    except _InvalidQueryParam as exc:
+        return _err(422, "ValidationError", str(exc))
+
     rows = container.assistant_audit_repo.list_for_company(
         company_id,
-        from_=_parse_datetime(request.args.get("from")),
-        to=_parse_datetime(request.args.get("to")),
+        from_=from_,
+        to=to,
         user_id=user_id,
         limit=limit,
     )

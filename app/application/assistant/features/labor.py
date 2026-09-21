@@ -6,10 +6,16 @@ confirmed by a ``choice``, then ``BulkLogAttendanceUseCase`` with the asker's ow
 validate pending days (2.3 — one option per pending entry plus "all").
 
 Every write goes through the existing use case unchanged; this module only adds the
-chat-native "match names from free text -> confirm -> execute" flow around it. A
-permission check (``project:manage_labor``) runs both when the confirm choice is first
-offered and again right before the write, so a stale choice tapped after a role change
-can never bypass authorization.
+chat-native "match names from free text -> confirm -> execute" flow around it. For
+``log_attendance``/``confirm_bulk_attendance``, a permission check
+(``project:manage_labor``) runs both when the confirm choice is first offered and again
+right before the write, so a stale choice tapped after a role change can never bypass
+authorization. ``validate_attendance`` spans however many projects a company/admin
+channel's pending list touches, so there is no single project to gate the LISTING on —
+``ListPendingAttendanceUseCase`` already scopes each item to what the caller may
+validate, and a company/admin scope is additionally narrowed to that channel's own
+company (H3); ``confirm_validate_attendance`` re-checks per entry, right before each
+write, exactly like the bulk-attendance write does.
 """
 
 from __future__ import annotations
@@ -289,6 +295,18 @@ class LaborFeature:
         items = self._pending_attendance_usecase.execute(user_id=user_id)
         if scope.kind == "project":
             items = [item for item in items if item.project_id == str(scope.project_id)]
+        elif scope.company_id is not None:
+            # H3: a company/admin channel must never enumerate pending days across every
+            # company the caller may validate in (platform ops especially) — only the
+            # ones belonging to THIS channel's company. `ListPendingAttendanceUseCase`
+            # already scoped each item to what the caller may validate (a stricter bar
+            # than plain `project:read`), so the only thing missing is the tenant
+            # boundary itself.
+            items = [
+                item
+                for item in items
+                if self._authz_reader.project_company_id(UUID(item.project_id)) == scope.company_id
+            ]
         if not items:
             messenger.post_text(
                 user_id,

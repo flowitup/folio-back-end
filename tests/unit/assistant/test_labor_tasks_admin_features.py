@@ -138,6 +138,16 @@ class RestrictiveAuthzReader(PermissiveAuthzReader):
         return "member"
 
 
+class NoAccessAuthzReader(PermissiveAuthzReader):
+    """No `user_company_access` row at all — every permission check on this project
+    (including `project:read`, which a mere `member` role always keeps) resolves to an
+    empty set. Used where a test needs a genuine "cannot even read this project" caller,
+    unlike `RestrictiveAuthzReader` (a `member`, who DOES retain read)."""
+
+    def company_role_for(self, user_id: UUID, company_id: UUID) -> "str | None":
+        return None
+
+
 class FakeProjectRepo:
     def __init__(self, projects: list[Project]) -> None:
         self._by_id = {p.id: p for p in projects}
@@ -170,6 +180,34 @@ def _project(name: str) -> Project:
     return Project(id=uuid4(), name=name, owner_id=uuid4(), created_at=datetime.now(timezone.utc))
 
 
+class _ResolveProjectAuthzReader:
+    """Grants `project:read` on every project it is asked about, and agrees with a
+    fixed `company_id` for `project_company_id` — the accessible-projects filter (C1)
+    needs the scope's company and the project's owning company to actually match, or
+    every candidate gets filtered out regardless of the union step above it."""
+
+    def __init__(self, company_id: UUID) -> None:
+        self.company_id = company_id
+
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        return False
+
+    def admin_company_ids(self, user_id: UUID) -> list[UUID]:
+        return [self.company_id]
+
+    def project_company_id(self, project_id: UUID) -> "UUID | None":
+        return self.company_id
+
+    def company_role_for(self, user_id: UUID, company_id: UUID) -> "str | None":
+        return "admin"
+
+    def is_assigned(self, user_id: UUID, project_id: UUID) -> bool:
+        return True
+
+    def grants_for(self, user_id: UUID, company_id: UUID, project_id: "UUID | None") -> list:
+        return []
+
+
 class TestResolveProject:
     def test_project_channel_returns_its_own_project_without_calling_jev(self) -> None:
         project_id = uuid4()
@@ -191,12 +229,14 @@ class TestResolveProject:
             project_repo=FakeProjectRepo([]),
             decisions=ExplodingDecisions(),
             messenger=messenger,
+            authz_reader=_ResolveProjectAuthzReader(uuid4()),
         )
         assert result == project_id
 
     def test_company_channel_with_a_single_project_auto_resolves(self) -> None:
         p = _project("Villa Arcueil")
-        scope = _company_scope(uuid4())
+        company_id = uuid4()
+        scope = _company_scope(company_id)
         messenger = _messenger()
 
         class ExplodingDecisions:
@@ -214,11 +254,13 @@ class TestResolveProject:
             project_repo=FakeProjectRepo([p]),
             decisions=ExplodingDecisions(),
             messenger=messenger,
+            authz_reader=_ResolveProjectAuthzReader(company_id),
         )
         assert result == p.id
 
     def test_company_channel_with_no_project_posts_the_none_template(self) -> None:
-        scope = _company_scope(uuid4())
+        company_id = uuid4()
+        scope = _company_scope(company_id)
         messenger = _messenger()
         message_id = uuid4()
 
@@ -237,13 +279,15 @@ class TestResolveProject:
             project_repo=FakeProjectRepo([]),
             decisions=ExplodingDecisions(),
             messenger=messenger,
+            authz_reader=_ResolveProjectAuthzReader(company_id),
         )
         assert result is None
         assert "chantier" in (_last(messenger).body or "").lower()
 
     def test_high_confidence_jev_match_auto_resolves(self) -> None:
         p1, p2 = _project("A"), _project("B")
-        scope = _company_scope(uuid4())
+        company_id = uuid4()
+        scope = _company_scope(company_id)
         messenger = _messenger()
         result = resolve_project(
             scope=scope,
@@ -256,12 +300,14 @@ class TestResolveProject:
             project_repo=FakeProjectRepo([p1, p2]),
             decisions=FixedProjectDecision(str(p1.id), 0.9),
             messenger=messenger,
+            authz_reader=_ResolveProjectAuthzReader(company_id),
         )
         assert result == p1.id
 
     def test_low_confidence_posts_a_choice_addressed_to_the_asker(self) -> None:
         p1, p2 = _project("A"), _project("B")
-        scope = _company_scope(uuid4())
+        company_id = uuid4()
+        scope = _company_scope(company_id)
         messenger = _messenger()
         user_id = uuid4()
         result = resolve_project(
@@ -275,12 +321,45 @@ class TestResolveProject:
             project_repo=FakeProjectRepo([p1, p2]),
             decisions=FixedProjectDecision(str(p1.id), 0.5),
             messenger=messenger,
+            authz_reader=_ResolveProjectAuthzReader(company_id),
         )
         assert result is None
         posted = _last(messenger)
         assert posted.content_type == "choice"
         assert (posted.payload or {}).get("addressed_to") == str(user_id)
         assert len((posted.payload or {}).get("options", [])) == 2
+
+    def test_candidate_list_never_offers_a_project_the_caller_may_not_read(self) -> None:
+        """C1: even if the repository union hands back a project of the right company,
+        a caller with no `project:read` on it (e.g. an unassigned member) must never see
+        it in the choice or have it auto-picked."""
+        readable = _project("Readable")
+        unreadable = _project("Unreadable")
+        company_id = uuid4()
+        scope = _company_scope(company_id)
+        messenger = _messenger()
+
+        class _PartialAuthzReader(_ResolveProjectAuthzReader):
+            def company_role_for(self, user_id: UUID, company_id: UUID) -> "str | None":
+                return "member"
+
+            def is_assigned(self, user_id: UUID, project_id: UUID) -> bool:
+                return project_id == readable.id
+
+        result = resolve_project(
+            scope=scope,
+            text="peu importe",
+            user_id=uuid4(),
+            message_id=uuid4(),
+            lang="fr",
+            trace_id="t",
+            pending_intent="ask_roster",
+            project_repo=FakeProjectRepo([readable, unreadable]),
+            decisions=None,  # a single readable candidate never calls Jev
+            messenger=messenger,
+            authz_reader=_PartialAuthzReader(company_id),
+        )
+        assert result == readable.id
 
 
 # ---------------------------------------------------------------------------
@@ -488,10 +567,14 @@ class TestLaborFeature:
             note=None,
             submitted_at="2026-09-20T00:00:00Z",
         )
-        feature, _, validate = _labor_feature(pending=[item])
+        # H3: the item's project must resolve to the SAME company as the channel scope,
+        # or it is filtered out — `PermissiveAuthzReader.project_company_id` always
+        # answers its own `company_id`, so the scope must be built from that same id.
+        authz = PermissiveAuthzReader()
+        feature, _, validate = _labor_feature(authz=authz, pending=[item])
         messenger = _messenger()
         outcome = feature.validate_attendance(
-            scope=_company_scope(uuid4()),
+            scope=_company_scope(authz.company_id),
             user_id=uuid4(),
             message_id=uuid4(),
             lang="fr",
@@ -504,7 +587,7 @@ class TestLaborFeature:
 
         all_payload = posted.payload["options"][-1]["payload"]
         feature.confirm_validate_attendance(
-            scope=_company_scope(uuid4()),
+            scope=_company_scope(authz.company_id),
             payload=all_payload,
             user_id=uuid4(),
             message_id=uuid4(),
@@ -514,6 +597,35 @@ class TestLaborFeature:
         )
         assert len(validate.calls) == 1
         assert "1" in (_last(messenger).body or "")
+
+    def test_validate_attendance_excludes_pending_days_of_another_company(self) -> None:
+        """H3: a company/admin channel must never enumerate pending days across every
+        company the caller may validate in — only the ones in THIS channel's company."""
+        item = PendingAttendanceDto(
+            entry_id=str(uuid4()),
+            project_id=str(uuid4()),
+            project_name="Chantier d'une autre société",
+            worker_id=str(uuid4()),
+            worker_name="Minh",
+            date="2026-09-20",
+            shift_type="full",
+            supplement_hours=0,
+            note=None,
+            submitted_at="2026-09-20T00:00:00Z",
+        )
+        authz = PermissiveAuthzReader()
+        feature, _, _ = _labor_feature(authz=authz, pending=[item])
+        messenger = _messenger()
+        outcome = feature.validate_attendance(
+            scope=_company_scope(uuid4()),  # a DIFFERENT company than authz.company_id
+            user_id=uuid4(),
+            message_id=uuid4(),
+            lang="fr",
+            messenger=messenger,
+            trace_id="t",
+        )
+        assert outcome == "replied"
+        assert "Chantier d'une autre société" not in (_last(messenger).body or "")
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +687,7 @@ class TestTasksFeature:
             project_repo=FakeProjectRepo([]),
             create_usecase=create_uc,
             list_usecase=FakeListTasksUseCase([]),
+            authz_reader=PermissiveAuthzReader(),
         )
         messenger = _messenger()
         project_id = uuid4()
@@ -613,6 +726,7 @@ class TestTasksFeature:
             project_repo=FakeProjectRepo([]),
             create_usecase=FakeCreateTaskUseCase(),
             list_usecase=FakeListTasksUseCase([]),
+            authz_reader=PermissiveAuthzReader(),
         )
         messenger = _messenger()
         outcome = feature.create_task(
@@ -639,6 +753,7 @@ class TestTasksFeature:
             project_repo=FakeProjectRepo([]),
             create_usecase=FakeCreateTaskUseCase(),
             list_usecase=FakeListTasksUseCase([in_window, out_of_window, no_due, done]),
+            authz_reader=PermissiveAuthzReader(),
         )
         messenger = _messenger()
         outcome = feature.ask_tasks(
@@ -663,6 +778,7 @@ class TestTasksFeature:
             project_repo=FakeProjectRepo([]),
             create_usecase=FakeCreateTaskUseCase(),
             list_usecase=FakeListTasksUseCase([]),
+            authz_reader=PermissiveAuthzReader(),
         )
         messenger = _messenger()
         outcome = feature.ask_tasks(
@@ -675,6 +791,79 @@ class TestTasksFeature:
             trace_id="t",
         )
         assert outcome == "replied"
+
+    def test_ask_tasks_permission_denied(self) -> None:
+        """C1: a caller with no `project:read` on the project must never see its tasks,
+        even though `resolve_project` would already have filtered it out in the real
+        dispatch path — the feature re-checks on its own."""
+        feature = TasksFeature(
+            vision=ScriptedVision(),
+            project_repo=FakeProjectRepo([]),
+            create_usecase=FakeCreateTaskUseCase(),
+            list_usecase=FakeListTasksUseCase([_task("Poser le carrelage", None)]),
+            authz_reader=NoAccessAuthzReader(),
+        )
+        messenger = _messenger()
+        outcome = feature.ask_tasks(
+            scope=_project_scope(uuid4()),
+            project_id=uuid4(),
+            user_id=uuid4(),
+            message_id=uuid4(),
+            lang="fr",
+            messenger=messenger,
+            trace_id="t",
+        )
+        assert outcome == "refused"
+        assert "Poser le carrelage" not in (_last(messenger).body or "")
+
+    def test_create_task_permission_denied(self) -> None:
+        vision = ScriptedVision(json_answers=[TaskDraft(title="Couler la dalle", due_date=None)])
+        create_uc = FakeCreateTaskUseCase()
+        feature = TasksFeature(
+            vision=vision,
+            project_repo=FakeProjectRepo([]),
+            create_usecase=create_uc,
+            list_usecase=FakeListTasksUseCase([]),
+            authz_reader=NoAccessAuthzReader(),
+        )
+        messenger = _messenger()
+        outcome = feature.create_task(
+            scope=_project_scope(uuid4()),
+            project_id=uuid4(),
+            text="crée une tâche pour couler la dalle",
+            user_id=uuid4(),
+            message_id=uuid4(),
+            lang="fr",
+            messenger=messenger,
+            trace_id="t",
+        )
+        assert outcome == "refused"
+        assert create_uc.calls == []
+
+    def test_confirm_create_task_permission_denied_on_a_stale_tap(self) -> None:
+        """A stale `confirm_create_task` tap must be re-checked, not honoured just
+        because the choice was offered while the caller still had the role."""
+        create_uc = FakeCreateTaskUseCase()
+        feature = TasksFeature(
+            vision=ScriptedVision(),
+            project_repo=FakeProjectRepo([]),
+            create_usecase=create_uc,
+            list_usecase=FakeListTasksUseCase([]),
+            authz_reader=NoAccessAuthzReader(),
+        )
+        messenger = _messenger()
+        project_id = uuid4()
+        feature.confirm_create_task(
+            scope=_project_scope(project_id),
+            payload={"project_id": str(project_id), "title": "Couler la dalle", "due_date": None},
+            user_id=uuid4(),
+            message_id=uuid4(),
+            lang="fr",
+            messenger=messenger,
+            trace_id="t",
+        )
+        assert create_uc.calls == []
+        assert _last(messenger).content_type == "text"
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +937,7 @@ def test_ask_project_income_renders_a_template_with_no_model_text() -> None:
         labor_payments_usecase=FakeLaborPaymentsUseCase(None),
         audit=None,
         directory=FakeDirectory(),
+        authz_reader=PermissiveAuthzReader(),
     )
     messenger = _messenger()
     outcome = feature.ask_project_income(
@@ -781,6 +971,7 @@ def test_ask_unpaid_invoices_computes_days_late() -> None:
         labor_payments_usecase=FakeLaborPaymentsUseCase(None),
         audit=None,
         directory=FakeDirectory(),
+        authz_reader=PermissiveAuthzReader(),
     )
     messenger = _messenger()
     outcome = feature.ask_unpaid_invoices(
@@ -818,6 +1009,7 @@ def test_ask_audit_groups_by_user() -> None:
         labor_payments_usecase=FakeLaborPaymentsUseCase(None),
         audit=FakeAudit(),
         directory=FakeDirectory(),
+        authz_reader=PermissiveAuthzReader(),
     )
     messenger = _messenger()
     outcome = feature.ask_audit(
@@ -831,3 +1023,58 @@ def test_ask_audit_groups_by_user() -> None:
     assert outcome == "answered"
     body = _last(messenger).body or ""
     assert "2" in body and "1" in body
+
+
+def test_ask_project_income_permission_denied() -> None:
+    """C1 defense in depth: even inside the admin channel, `ask_project_income` must
+    still hold `project:view_budget` on the SPECIFIC project — a caller without it (e.g.
+    a D8 deny, or a project outside their own company) gets refused, never a number."""
+    project = _project("Villa Arcueil")
+    project.budget = Decimal("10000")
+    feature = AdminAnswersFeature(
+        project_repo=FakeProjectRepo([project]),
+        invoice_repo=FakeInvoiceRepoForAdmin(
+            spent_split=(Decimal("2000"), Decimal("0")), released_split=(Decimal("5000"), Decimal("0"), Decimal("0"))
+        ),
+        billing_repo=FakeBillingRepo({}),
+        labor_payments_usecase=FakeLaborPaymentsUseCase(None),
+        audit=None,
+        directory=FakeDirectory(),
+        authz_reader=NoAccessAuthzReader(),
+    )
+    messenger = _messenger()
+    outcome = feature.ask_project_income(
+        scope=_company_scope(uuid4(), is_admin=True),
+        project_id=project.id,
+        user_id=uuid4(),
+        message_id=uuid4(),
+        lang="fr",
+        messenger=messenger,
+        trace_id="t",
+    )
+    assert outcome == "refused"
+    assert "10000" not in (_last(messenger).body or "")
+
+
+def test_ask_salary_permission_denied() -> None:
+    feature = AdminAnswersFeature(
+        project_repo=FakeProjectRepo([]),
+        invoice_repo=FakeInvoiceRepoForAdmin((Decimal(0), Decimal(0)), (Decimal(0), Decimal(0), Decimal(0))),
+        billing_repo=FakeBillingRepo({}),
+        labor_payments_usecase=FakeLaborPaymentsUseCase(None),
+        audit=None,
+        directory=FakeDirectory(),
+        authz_reader=NoAccessAuthzReader(),
+    )
+    messenger = _messenger()
+    outcome = feature.ask_salary(
+        scope=_company_scope(uuid4(), is_admin=True),
+        project_id=uuid4(),
+        text="Minh",
+        user_id=uuid4(),
+        message_id=uuid4(),
+        lang="fr",
+        messenger=messenger,
+        trace_id="t",
+    )
+    assert outcome == "refused"

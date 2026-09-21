@@ -1322,6 +1322,7 @@ def invitation_app():
                     project_repo=_c.project_repository,
                     create_usecase=_c.create_task_usecase,
                     list_usecase=_c.list_tasks_usecase,
+                    authz_reader=_c.authz_reader,
                 )
 
             _c.assistant_service = AssistantService(

@@ -81,3 +81,41 @@ class TestGetAudit:
     def test_invalid_company_id_422(self, inv_client, admin_token):
         resp = inv_client.get("/api/v1/assistant/audit?company_id=not-a-uuid", headers=_auth(admin_token))
         assert resp.status_code == 422
+
+    def test_negative_limit_is_clamped_not_500(self, inv_client, admin_token, invitation_app):
+        """M5: `?limit=-1` used to reach `.limit(-1)` unclamped and 500 on the DB
+        DataError — it must now be clamped to the minimum (1) instead."""
+        resp = inv_client.get(
+            f"/api/v1/assistant/audit?company_id={invitation_app._test_company_id}&limit=-1",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+
+    def test_limit_above_max_is_clamped(self, inv_client, admin_token, invitation_app):
+        resp = inv_client.get(
+            f"/api/v1/assistant/audit?company_id={invitation_app._test_company_id}&limit=99999",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+
+    def test_invalid_from_is_422(self, inv_client, admin_token, invitation_app):
+        resp = inv_client.get(
+            f"/api/v1/assistant/audit?company_id={invitation_app._test_company_id}&from=not-a-date",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_to_is_422(self, inv_client, admin_token, invitation_app):
+        resp = inv_client.get(
+            f"/api/v1/assistant/audit?company_id={invitation_app._test_company_id}&to=not-a-date",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 422
+
+    def test_valid_from_and_to_are_accepted(self, inv_client, admin_token, invitation_app):
+        resp = inv_client.get(
+            f"/api/v1/assistant/audit?company_id={invitation_app._test_company_id}"
+            "&from=2026-01-01T00:00:00Z&to=2026-12-31T00:00:00Z",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200

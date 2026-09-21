@@ -8,7 +8,7 @@ Kept dependency-free of any provider SDK — only pydantic.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -231,6 +231,34 @@ class ChannelScope:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_classes", allowed_classes_for(self.is_admin_channel))
+
+    @staticmethod
+    def for_channel(
+        channel: ChannelRef, *, project_company_id: "Callable[[UUID], Optional[UUID]]", asker_id: UUID
+    ) -> "ChannelScope":
+        """Build the scope a bare ``ChannelRef`` resolves to.
+
+        Shared by ``AssistantService._resolve_scope`` (the synchronous dispatch path,
+        which always has the asker's own request to build a scope from) and an async
+        job's ``on_result`` (feature A/B), which only ever has the job's stored
+        ``channel_key`` to go on — never the original request's own scope object, since
+        the browser worker may finish long after that request returned.
+        """
+        if channel.kind == "project":
+            return ChannelScope(
+                kind="project",
+                company_id=project_company_id(channel.id),
+                project_id=channel.id,
+                is_admin_channel=False,
+                asker_id=asker_id,
+            )
+        if channel.kind == "admin":
+            return ChannelScope(
+                kind="admin", company_id=channel.id, project_id=None, is_admin_channel=True, asker_id=asker_id
+            )
+        return ChannelScope(
+            kind="company", company_id=channel.id, project_id=None, is_admin_channel=False, asker_id=asker_id
+        )
 
     @property
     def channel(self) -> ChannelRef:

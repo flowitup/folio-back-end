@@ -29,7 +29,7 @@ from app.application.assistant.features.invoice_fetch import (
 )
 from app.application.assistant.features.ticket import TicketFeature
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import AmountDate, RouterDecision
+from app.application.assistant.models import AmountDate, ChannelScope, RouterDecision
 from tests.fakes.ai import RecordingImageGen, ScriptedDecision, ScriptedVision
 from app.application.invoice.create_invoice import CreateInvoiceUseCase
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
@@ -233,10 +233,11 @@ class World:
     def __init__(self, session) -> None:
         self.session = session
         self.user_id = uuid4()
+        self.company_id = uuid4()
         self.project_a = _project("Villa Arcueil")
         self.project_repo = FakeProjectRepo([self.project_a])
         self.authz_reader = FakeAuthzReader()
-        self.company_access = FakeCompanyAccessRepo(uuid4())
+        self.company_access = FakeCompanyAccessRepo(self.company_id)
         self.labor_entry_repo = FakeLaborEntryRepo()
         self.worker_repo = FakeWorkerRepo()
         self.invoice_repo = SQLAlchemyInvoiceRepository(session)
@@ -308,6 +309,18 @@ class World:
         self.messages.add(message)
         return message
 
+    def default_scope(self) -> ChannelScope:
+        """A generic company-channel scope — every real ``fetch_invoice``/``handle_action``
+        call now requires one; most tests here don't care which channel, only that
+        ``on_result`` has a real ``channel_key`` to resolve back (M1: a NULL/unparsable
+        one now means the reply is dropped, matching production's post-migration
+        behaviour where a job is never created without one)."""
+        return ChannelScope(
+            kind="company", company_id=self.company_id, project_id=None, is_admin_channel=False, asker_id=self.user_id
+        )
+
+    _NO_CHANNEL_KEY_GIVEN = "__use_default_scope__"
+
     def create_job(
         self,
         *,
@@ -315,15 +328,21 @@ class World:
         amount: Decimal = Decimal("79.54"),
         job_date: date = date(2026, 9, 10),
         reply_to: Optional[ChatMessage] = None,
-        channel_key: Optional[str] = None,
+        channel_key: Optional[str] = _NO_CHANNEL_KEY_GIVEN,
     ):
+        # `channel_key=None` (as opposed to simply omitted) is a deliberate M1 test of
+        # the pre-migration "no channel at all" case, so it must NOT fall back to the
+        # default scope's channel — only an omitted argument does.
+        resolved_channel_key = (
+            self.default_scope().channel.key if channel_key == self._NO_CHANNEL_KEY_GIVEN else channel_key
+        )
         job = self.job_repo.add(
             user_id=self.user_id,
             merchant=merchant,
             amount_ttc=amount,
             date=job_date,
             project_hint=None,
-            channel_key=channel_key,
+            channel_key=resolved_channel_key,
         )
         status_message = self.messenger.post_job_status(
             self.user_id,
@@ -331,6 +350,7 @@ class World:
             state="queued",
             text="Je m'en occupe",
             reply_to_id=reply_to.id if reply_to is not None else None,
+            scope=None,
         )
         self.job_repo.set_status_message(job.id, status_message.id)
         return self.job_repo.find_by_id(job.id)
@@ -355,6 +375,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
 
         jobs = world.job_repo.list_recent_for_user(world.user_id)
@@ -379,6 +400,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
@@ -399,6 +421,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
@@ -416,6 +439,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
         assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
 
@@ -427,6 +451,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t2",
             decision=decision,
+            scope=world.default_scope(),
         )
         # No second job created — the existing active one is reused.
         assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
@@ -471,6 +496,26 @@ class TestOnResultNotReady:
         updated = world.job_repo.find_by_id(job.id)
         assert updated.status == "failed"
         assert len(world.notifier.calls) == 1  # terminal: pushed once
+
+
+class TestNullChannelKeyDropsTheReply:
+    """M1: a job queued before `channel_key` existed (or with an unparsable one, e.g.
+    the retired `assistant:` kind) has nowhere safe to post — the reply is dropped and
+    the job is still marked processed."""
+
+    def test_null_channel_key_drops_the_reply_and_marks_processed(self, session) -> None:
+        world = World(session)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(reply_to=original, channel_key=None)
+        world.job_repo.update_result(job.id, status="blocked", result={"status": "blocked"})
+        world.notifier.calls.clear()
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        assert world.messages.messages[job.status_message_id].payload["state"] == "queued"  # never updated
+        assert world.notifier.calls == []
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
 
 
 class TestOnResultBlocked:
@@ -590,7 +635,13 @@ class TestChannelRoundTrip:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
-            channel=channel,
+            scope=ChannelScope(
+                kind="project",
+                company_id=world.company_id,
+                project_id=world.project_a.id,
+                is_admin_channel=False,
+                asker_id=world.user_id,
+            ),
         )
 
         job = world.job_repo.list_recent_for_user(world.user_id, limit=1)[0]
@@ -657,6 +708,7 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -696,6 +748,7 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -713,6 +766,7 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -730,5 +784,6 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
         assert handled is False

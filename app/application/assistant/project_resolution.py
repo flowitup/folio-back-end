@@ -7,6 +7,18 @@ straight away, otherwise a ``choice`` is posted (addressed to the asker) and the
 must wait for the tap — reused by every handler that needs "which project" answered
 before it can do anything (day roster, attendance, tasks, the admin-only finance/payroll
 answers).
+
+Security-critical (review finding C1): the candidate list must never offer a project the
+asker may not actually read. ``accessible_projects`` below mirrors ``GET /projects``'s
+own visibility rule (``ListProjectsUseCase``/``list_for_user_and_companies`` — a UNION of
+"every project of a company the caller administers" with "the caller's own
+assignments", which is the intended, reviewed semantics for that endpoint), narrows it to
+the channel's own company (a company/admin channel never offers another company's
+projects), and then applies the resolver's ``project:read`` as the final authority —
+exactly the permission the route decorators (``app.api.v1.projects.decorators``) check
+for the same caller on ``GET /projects/<id>``. A project the union over-includes by
+mistake, or that the caller cannot read for any other reason, is filtered out here before
+it is ever offered as a choice or auto-picked.
 """
 
 from __future__ import annotations
@@ -18,7 +30,10 @@ from app.application.assistant import reply
 from app.application.assistant.messages import AssistantMessenger
 from app.application.assistant.models import ChannelScope
 from app.application.assistant.ports import ChoiceQuestion, DecisionPort
+from app.application.authz.ports import AuthzReaderPort
 from app.application.projects.ports import IProjectRepository
+from app.domain.authz.resolver import has_permission
+from app.domain.entities.project import Project
 
 #: Jev confidence a company/admin-channel project mention needs to auto-resolve; below
 #: this a `choice` is shown instead (mirrors gate.py's other project-assignment gates).
@@ -27,6 +42,39 @@ PROJECT_MATCH_CONFIDENCE = 0.85
 #: The action a "which project?" choice posts — `AssistantService.handle_action` re-runs
 #: the pending intent against the tapped project, carrying the original message text.
 PICK_PROJECT_CTX_ACTION = "pick_project_ctx"
+
+
+def accessible_projects(
+    *,
+    project_repo: IProjectRepository,
+    authz_reader: AuthzReaderPort,
+    user_id: UUID,
+    company_id: Optional[UUID],
+) -> list[Project]:
+    """Every project ``user_id`` may actually read, scoped to ``company_id`` when given.
+
+    Same visibility rule as ``GET /projects`` (owner-of-an-admin-company OR assigned OR
+    platform-ops-sees-everything), narrowed to one company (never advertise a project of
+    a company the asker merely administers elsewhere), and — the defense-in-depth layer
+    the review asked for — filtered to the resolver's own ``project:read`` grant, so a
+    future widening of the union above can never outrun what the caller may actually open
+    in the app.
+    """
+    is_platform_admin = authz_reader.is_platform_ops(user_id)
+    if is_platform_admin:
+        candidates = project_repo.list_all()
+    else:
+        admin_company_ids = authz_reader.admin_company_ids(user_id)
+        candidates = project_repo.list_for_user_and_companies(user_id, admin_company_ids)
+
+    if company_id is not None:
+        candidates = [p for p in candidates if authz_reader.project_company_id(p.id) == company_id]
+
+    return [
+        p
+        for p in candidates
+        if has_permission(authz_reader, user_id, "project:read", project_id=p.id, is_platform_admin=is_platform_admin)
+    ]
 
 
 def resolve_project(
@@ -41,6 +89,7 @@ def resolve_project(
     project_repo: IProjectRepository,
     decisions: DecisionPort,
     messenger: AssistantMessenger,
+    authz_reader: AuthzReaderPort,
 ) -> Optional[UUID]:
     """Returns the resolved project id, or ``None`` after already posting a reply
     (either "you have no project" or a "which one?" choice addressed to the asker) —
@@ -49,8 +98,9 @@ def resolve_project(
     if scope.kind == "project":
         return scope.project_id
 
-    company_ids = [scope.company_id] if scope.company_id is not None else []
-    projects = [p for p in project_repo.list_for_user_and_companies(user_id, company_ids)]
+    projects = accessible_projects(
+        project_repo=project_repo, authz_reader=authz_reader, user_id=user_id, company_id=scope.company_id
+    )
     if not projects:
         messenger.post_text(
             user_id,
@@ -97,4 +147,4 @@ def resolve_project(
     return None
 
 
-__all__ = ["resolve_project", "PROJECT_MATCH_CONFIDENCE", "PICK_PROJECT_CTX_ACTION"]
+__all__ = ["resolve_project", "accessible_projects", "PROJECT_MATCH_CONFIDENCE", "PICK_PROJECT_CTX_ACTION"]
