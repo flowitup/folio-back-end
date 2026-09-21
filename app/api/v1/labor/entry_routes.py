@@ -522,12 +522,14 @@ def get_labor_monthly_summary(project_id: str):
                 month=r.month,
                 total_days=sum(w.days_worked for w in workers) if scope.restricted else r.total_days,
                 total_cost=sum(w.total_cost for w in workers) if scope.restricted else r.total_cost,
+                total_bonus_cost=(sum(w.bonus_cost for w in workers) if scope.restricted else r.total_bonus_cost),
                 workers=[
                     MonthlyWorkerSubRowResponse(
                         worker_id=w.worker_id,
                         worker_name=w.worker_name,
                         days_worked=w.days_worked,
                         total_cost=w.total_cost,
+                        bonus_cost=w.bonus_cost,
                     )
                     for w in workers
                 ],

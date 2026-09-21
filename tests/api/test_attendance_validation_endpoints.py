@@ -13,7 +13,7 @@ Covers:
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -24,6 +24,7 @@ from app.infrastructure.database.models import (
     WorkerModel,
 )
 from app.infrastructure.database.models.associations import user_projects
+from app.domain.time import business_today
 from tests.company_tenancy_helper import company_for_projects, seed_company_tenancy
 from tests.auth_login_helper import mint_access_token
 
@@ -193,7 +194,7 @@ def _self_url(ids):
 
 
 def _submit(client, headers, ids, day=None, **body):
-    payload = {"date": (day or date.today()).isoformat(), "shift_type": "full"}
+    payload = {"date": (day or business_today()).isoformat(), "shift_type": "full"}
     payload.update(body)
     return client.post(_self_url(ids), json=payload, headers=headers)
 
@@ -221,15 +222,15 @@ class TestSelfLog:
     def test_yesterday_ok_but_two_days_back_rejected(self, client, linked_h, ids, monkeypatch):
         # The window is env-tunable (default 31 days); pin it to 1 to exercise the boundary.
         monkeypatch.setenv("SELF_ATTENDANCE_MAX_BACKDATE_DAYS", "1")
-        # The backdate window is measured in UTC on the server; a local clock past midnight
-        # (Europe/Paris) would otherwise count "two days back" as yesterday.
-        today = datetime.now(timezone.utc).date()
+        # The window runs on the business calendar: just after midnight on site, "two days
+        # back" in UTC is already three days back here.
+        today = business_today()
         assert _submit(client, linked_h, ids, day=today - timedelta(days=1)).status_code == 201
         r = _submit(client, linked_h, ids, day=today - timedelta(days=2))
         assert r.status_code == 400
 
     def test_empty_row_is_rejected(self, client, linked_h, ids):
-        r = client.post(_self_url(ids), json={"date": date.today().isoformat()}, headers=linked_h)
+        r = client.post(_self_url(ids), json={"date": business_today().isoformat()}, headers=linked_h)
         # Schema validation errors map to 400 ValidationError in this API (see validation_error_response).
         assert r.status_code == 400
         assert r.get_json()["error"] == "ValidationError"
@@ -340,7 +341,7 @@ class TestListAndStatusFilter:
         assert _submit(client, linked_h, ids).status_code == 201
         r = client.post(
             base,
-            json={"worker_id": ids["free_worker"], "date": date.today().isoformat(), "shift_type": "half"},
+            json={"worker_id": ids["free_worker"], "date": business_today().isoformat(), "shift_type": "half"},
             headers=owner_h,
         )
         assert r.status_code == 201
@@ -373,7 +374,7 @@ class TestNotificationsBell:
         assert item["project_name"] == "Chantier AV"
         assert item["worker_name"] == "Linked Worker"
         assert item["shift_type"] == "full"
-        assert item["date"] == date.today().isoformat()
+        assert item["date"] == business_today().isoformat()
 
         for h in (linked_h, unlinked_h):
             body = client.get("/api/v1/notifications", headers=h).get_json()

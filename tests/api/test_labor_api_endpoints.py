@@ -687,6 +687,49 @@ class TestLaborEntryRoutes:
         feb_names = [w["worker_name"] for w in feb_row["workers"]]
         assert "Monthly API Worker" in feb_names
 
+    def test_monthly_summary_earns_the_same_as_the_per_worker_summary(self, labor_client, admin_token, labor_app):
+        """One month, one worker: both endpoints must report the same earned total.
+
+        The banked-hours bonus used to be priced by /labor-summary only, so a worker
+        reading Attendance then Salary saw two different totals for the same month.
+        """
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Bonus Parity Worker")
+
+        # One full day at 100/day plus 8 banked hours = one bonus day, also 100.
+        create = labor_client.post(
+            _entries_url(pid),
+            json={
+                "worker_id": worker_id,
+                "date": "2026-11-03",
+                "shift_type": "full",
+                "supplement_hours": 8,
+            },
+            headers=_auth(admin_token),
+        )
+        assert create.status_code == 201, create.get_json()
+
+        summary = labor_client.get(
+            _summary_url(pid) + "?from=2026-11-01&to=2026-11-30",
+            headers=_auth(admin_token),
+        )
+        assert summary.status_code == 200
+        summary_row = next(r for r in summary.get_json()["rows"] if r["worker_id"] == worker_id)
+        assert summary_row["total_cost"] == pytest.approx(200.0)
+        assert summary_row["bonus_cost"] == pytest.approx(100.0)
+
+        monthly = labor_client.get(_monthly_summary_url(pid), headers=_auth(admin_token))
+        assert monthly.status_code == 200
+        november = next(r for r in monthly.get_json()["rows"] if (r["year"], r["month"]) == (2026, 11))
+        monthly_row = next(w for w in november["workers"] if w["worker_id"] == worker_id)
+
+        assert monthly_row["total_cost"] == pytest.approx(summary_row["total_cost"])
+        assert monthly_row["bonus_cost"] == pytest.approx(100.0)
+        # A bonus day is money, not attendance: it must not inflate the day count.
+        assert monthly_row["days_worked"] == pytest.approx(summary_row["days_worked"])
+        assert november["total_bonus_cost"] >= 100.0
+        assert november["total_cost"] == pytest.approx(sum(w["total_cost"] for w in november["workers"]))
+
     def test_get_labor_monthly_summary_empty_project_returns_empty_rows(self, labor_client, admin_token, labor_app):
         """Endpoint returns 200 with rows=[] for a project with no entries."""
         # Create an isolated project on the fly via the app's session so

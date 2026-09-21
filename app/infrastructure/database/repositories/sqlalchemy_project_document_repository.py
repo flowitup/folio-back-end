@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.application.project_documents.dtos import ListFiltersDTO, ListResultDTO
 from app.domain.project_document import ProjectDocument
 from app.infrastructure.database.models.project_document import ProjectDocumentModel, ProjectDocumentTagRow
+from app.infrastructure.database.models.user import UserModel
 
 # ---------------------------------------------------------------------------
 # Kind → file-extension mapping used for SQL-side filtering.
@@ -260,6 +261,24 @@ class SqlAlchemyProjectDocumentRepository:
         for tag in tags:
             self._session.add(ProjectDocumentTagRow(document_id=doc_id, tag=tag))
         self._session.flush()
+
+    def list_uploaders_for_project(self, project_id: UUID) -> list[tuple[UUID, Optional[str], str]]:
+        """Return (user_id, display_name, email) of everyone who uploaded a live document.
+
+        Taken from the documents themselves, not from the project assignments, so a
+        company admin who never got assigned still shows up as a filterable uploader.
+        """
+        stmt = (
+            select(UserModel.id, UserModel.display_name, UserModel.email)
+            .join(ProjectDocumentModel, ProjectDocumentModel.uploader_user_id == UserModel.id)
+            .where(
+                ProjectDocumentModel.project_id == project_id,
+                ProjectDocumentModel.deleted_at.is_(None),
+            )
+            .distinct()
+            .order_by(UserModel.display_name, UserModel.email)
+        )
+        return [(row[0], row[1], row[2]) for row in self._session.execute(stmt).all()]
 
     def list_tags_for_project(self, project_id: UUID) -> list[str]:
         """Return all distinct tags used by active documents in a project."""

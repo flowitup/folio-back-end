@@ -158,6 +158,15 @@ class SqlAlchemyBillingDocumentRepository:
             return None
         return deserialize_orm_to_doc(row)
 
+    def map_facture_ids_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, UUID]:
+        """Return {devis_id: facture_id} for the already-converted devis, in one query."""
+        if not devis_ids:
+            return {}
+        stmt = select(BillingDocumentModel.source_devis_id, BillingDocumentModel.id).where(
+            BillingDocumentModel.source_devis_id.in_(devis_ids)
+        )
+        return {row[0]: row[1] for row in self._session.execute(stmt).all()}
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------

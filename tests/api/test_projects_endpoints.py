@@ -75,7 +75,7 @@ def test_create_project_without_budget_defaults_null(inv_client, admin_token):
 
 
 def test_get_project_includes_budget_fields(inv_client, admin_token, invitation_app):
-    """GET detail includes budget/budget_source/spent/spent_by_credits."""
+    """GET detail includes budget/budget_source/spent/spent_invoiced/spent_by_credits."""
     # Use the seeded project (no budget set)
     pid = invitation_app._test_project_id
     status, body = _get_project(inv_client, admin_token, pid)
@@ -83,11 +83,12 @@ def test_get_project_includes_budget_fields(inv_client, admin_token, invitation_
     assert "budget" in body
     assert "budget_source" in body
     assert "spent" in body
+    assert "spent_invoiced" in body
     assert "spent_by_credits" in body
 
 
 def test_list_projects_includes_budget_fields(inv_client, admin_token):
-    """GET list includes budget/budget_source/spent/spent_by_credits on every project row."""
+    """GET list includes budget/budget_source/spent/spent_invoiced/spent_by_credits per row."""
     resp = inv_client.get("/api/v1/projects", headers=_auth(admin_token))
     assert resp.status_code == 200
     projects = resp.get_json()["projects"]
@@ -98,6 +99,8 @@ def test_list_projects_includes_budget_fields(inv_client, admin_token):
         assert "spent" in p
         # Always a number, never null — the card divides by it.
         assert isinstance(p["spent_by_credits"], (int, float))
+        # The ledger figure the overview hero shows; same contract, never null.
+        assert isinstance(p["spent_invoiced"], (int, float))
 
 
 # ---------------------------------------------------------------------------

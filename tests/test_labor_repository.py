@@ -637,7 +637,7 @@ class TestSQLAlchemyLaborEntryRepository:
             )
         )
         # Bob supplement-only row in April — should NOT add a Bob sub-row
-        # for April (his existing one absorbs days/cost; this row adds 0).
+        # for April (his existing one absorbs days/cost; this row banks hours).
         entry_repo.create(
             LaborEntry(
                 id=uuid4(),
@@ -674,6 +674,11 @@ class TestSQLAlchemyLaborEntryRepository:
         assert alice_sub.total_cost == Decimal("200.00")
         assert bob_sub.days_worked == 1
         assert bob_sub.total_cost == Decimal("150.00")
+        # Banked hours ride along per worker-month so the use case can price the bonus
+        # exactly as the per-worker summary does. Cost stays priced attendance only.
+        assert alice_sub.banked_hours == 0
+        assert bob_sub.banked_hours == 4
+        assert bob_sub.daily_rate == Decimal("150.00")
         # Top-level totals reconcile with the sum of sub-rows.
         assert april.total_days == 3
         assert april.total_cost == Decimal("350.00")
@@ -716,6 +721,57 @@ class TestSQLAlchemyLaborEntryRepository:
 
         all_rows = entry_repo.list_by_project(sample_project.id)
         assert len(all_rows) == 3
+
+
+class TestMonthlySummaryBonusRateResolution:
+    """Each month prices a bonus day at the rate in force when that month ended.
+
+    get_summary resolves the bonus rate as of its date_to; for a month bucket that
+    boundary is the month's last day, so a summary requested for one month and the
+    monthly rollup's row for it must agree.
+    """
+
+    def test_bonus_rate_follows_the_month_not_the_latest_rate(self, entry_repo, worker_repo, sample_project, session):
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Monthly Rate Worker",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+
+        session.add(
+            WorkerRateChangeModel(
+                id=uuid4(),
+                worker_id=worker.id,
+                effective_date=date(2026, 6, 1),
+                daily_rate=Decimal("200.00"),
+            )
+        )
+        for day in (date(2026, 5, 12), date(2026, 6, 12)):
+            session.add(
+                LaborEntryModel(
+                    id=uuid4(),
+                    worker_id=worker.id,
+                    date=day,
+                    shift_type=None,
+                    supplement_hours=8,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        session.commit()
+
+        by_month = {(r.year, r.month): r for r in entry_repo.get_monthly_summary(sample_project.id)}
+
+        # A month whose only rows are supplement-only still appears: the banked hours
+        # are worth a paid day, so the month is not empty.
+        may = by_month[(2026, 5)].workers[0]
+        june = by_month[(2026, 6)].workers[0]
+        assert (may.banked_hours, june.banked_hours) == (8, 8)
+        assert may.daily_rate == Decimal("100.00")
+        assert june.daily_rate == Decimal("200.00")
 
 
 class TestGetSummaryBonusRateResolution:

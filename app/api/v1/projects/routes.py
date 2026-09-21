@@ -38,6 +38,7 @@ from wiring import get_container
 # Zero rollup for projects with no spend, or when the reader is not wired.
 _NO_SPEND = ProjectSpent(
     total=Decimal("0"),
+    invoiced=Decimal("0"),
     by_credits=Decimal("0"),
     personal=Decimal("0"),
     labor_accrued=Decimal("0"),
@@ -76,6 +77,7 @@ def _spend_fields(rollup: ProjectSpent) -> dict:
     """Serialize a spend rollup into the ProjectResponse money fields."""
     return {
         "spent": float(rollup.total),
+        "spent_invoiced": float(rollup.invoiced),
         "spent_by_credits": float(rollup.by_credits),
         "spent_personal": float(rollup.personal),
         "labor_accrued": float(rollup.labor_accrued),

@@ -7,6 +7,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.application.labor.ports import ILaborEntryRepository
+from app.domain.labor.banked_hours_bonus import bonus_for_banked_hours
 
 
 @dataclass
@@ -63,32 +64,25 @@ class GetLaborSummaryUseCase:
 
         for row in summary_rows:
             banked = row.banked_hours or 0
-            bonus_full = banked // 8
-            bonus_half = 1 if (banked % 8) >= 4 else 0
-
-            daily_rate: Decimal = row.daily_rate
-            bonus_cost = Decimal(bonus_full) * daily_rate + Decimal(bonus_half) * daily_rate * Decimal("0.5")
+            bonus = bonus_for_banked_hours(banked, row.daily_rate)
             priced_cost = row.total_cost  # already Decimal from repo
-            total_cost_for_worker = priced_cost + bonus_cost
-
-            worker_bonus_days = Decimal(bonus_full) + Decimal(bonus_half) * Decimal("0.5")
 
             rows.append(
                 WorkerCostSummary(
                     worker_id=str(row.worker_id),
                     worker_name=row.worker_name,
                     days_worked=float(row.days_worked),
-                    total_cost=float(total_cost_for_worker),
+                    total_cost=float(priced_cost + bonus.cost),
                     banked_hours=banked,
-                    bonus_full_days=bonus_full,
-                    bonus_half_days=bonus_half,
-                    bonus_cost=float(bonus_cost),
+                    bonus_full_days=bonus.full_days,
+                    bonus_half_days=bonus.half_days,
+                    bonus_cost=float(bonus.cost),
                 )
             )
 
             total_banked_hours += banked
-            total_bonus_days += worker_bonus_days
-            total_bonus_cost += bonus_cost
+            total_bonus_days += bonus.days
+            total_bonus_cost += bonus.cost
 
         total_days = float(sum(r.days_worked for r in rows))
         total_cost = sum(r.total_cost for r in rows)

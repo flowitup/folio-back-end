@@ -45,6 +45,18 @@ def _assert_billing_doc_access(doc: BillingDocument, user_id: UUID, access_repo=
     raise ForbiddenBillingDocumentError(doc.id)
 
 
+def _converted_facture_id(doc_repo, doc: BillingDocument) -> Optional[UUID]:
+    """Id of the facture created from *doc*, or None.
+
+    Always None for a facture and for a devis nobody converted — that absence is
+    what lets a client stop offering the conversion a second time.
+    """
+    if doc.kind != BillingDocumentKind.DEVIS:
+        return None
+    facture = doc_repo.find_by_source_devis_id(doc.id)
+    return facture.id if facture is not None else None
+
+
 def _snapshot_issuer_from_company(company: Company) -> dict:
     """Copy all issuer fields from a Company entity by value.
 

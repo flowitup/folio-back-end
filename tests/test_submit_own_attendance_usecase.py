@@ -1,4 +1,4 @@
-"""Unit tests — SubmitOwnAttendanceUseCase date window (server-UTC based)."""
+"""Unit tests — SubmitOwnAttendanceUseCase date window (business calendar, Europe/Paris)."""
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -54,13 +54,29 @@ def test_two_days_back_rejected_with_window_in_message():
     assert "between 2026-09-04 and 2026-09-05" in str(exc.value)
 
 
-def test_tomorrow_rejected_at_midday_but_accepted_late_in_the_utc_day():
+def test_tomorrow_rejected_at_midday_but_accepted_once_the_site_day_has_rolled_over():
     uc, _ = _usecase(_worker())
     tomorrow = date(2026, 9, 6)
     with pytest.raises(AttendanceDateOutOfRangeError):
         uc.execute(_req(tomorrow, NOON))
-    # 23:00 UTC is 06:00 the next morning in Vietnam: the phone is already on "tomorrow".
+    # 23:00 UTC is 01:00 on site: the 6th is simply today there, no tolerance needed.
     assert uc.execute(_req(tomorrow, LATE)).date == "2026-09-06"
+
+
+def test_evening_on_site_tolerates_a_phone_already_on_tomorrow():
+    """18:00 on site is 23:00 in Vietnam — the worker's phone shows the next date."""
+    uc, _ = _usecase(_worker())
+    evening = datetime(2026, 9, 5, 16, 0, tzinfo=timezone.utc)  # 18:00 Paris
+    assert uc.execute(_req(date(2026, 9, 6), evening)).date == "2026-09-06"
+
+
+def test_just_after_midnight_on_site_shifts_the_whole_window():
+    """At 00:30 on site the window is [yesterday-on-site, today-on-site], not UTC's."""
+    uc, _ = _usecase(_worker())
+    just_after_midnight = datetime(2026, 9, 5, 22, 30, tzinfo=timezone.utc)  # 00:30 Paris on the 6th
+    assert uc.execute(_req(date(2026, 9, 6), just_after_midnight)).date == "2026-09-06"
+    with pytest.raises(AttendanceDateOutOfRangeError):
+        uc.execute(_req(date(2026, 9, 4), just_after_midnight))
 
 
 def test_unlinked_user_raises():

@@ -2,18 +2,31 @@
 
 Aggregates project spend, split by funding source:
 
-    total(project)      = max(labor_accrued, labor_paid)
-                          + Σ(invoice totals except released_funds and labor)
-    by_credits(project) = Σ(invoice totals funded with company money, except released_funds)
-    personal(project)   = Σ(invoice totals funded out of pocket, except released_funds)
-    labor_unpaid        = labor_accrued − labor_paid
+    labor_unpaid(project) = Σ over workers of max(0, accrued_w − paid_w)
+    total(project)        = labor_paid + labor_unpaid
+                            + Σ(invoice totals except released_funds and labor)
+    invoiced(project)     = Σ(invoice totals except released_funds)
+    by_credits(project)   = Σ(invoice totals funded with company money, except released_funds)
+    personal(project)     = Σ(invoice totals funded out of pocket, except released_funds)
 
 Labor is accrued from attendance entries and settled by labor-type invoices. Those invoices
 say *who paid* rather than adding cost, so they are excluded from ``total`` — counting the
 accrual and the payment would bill the same work twice. They still classify into
 by_credits/personal, because that money really did leave someone's account.
 
+What is owed is owed **per worker**: paying one worker twice over never settles another
+worker's days, so each worker's shortfall is floored at zero on its own and the shortfalls
+are summed. A labor invoice with no ``worker_id`` settles nobody's accrual — there is no
+worker to credit it to — so it raises ``labor_paid`` and ``total`` without reducing what
+anyone is owed. ``labor_unpaid`` therefore no longer equals ``labor_accrued − labor_paid``;
+that difference is exactly the money paid out beyond, or beside, what was logged.
+
 Invariant: ``by_credits + personal + labor_unpaid == total``.
+
+``invoiced`` is the same ledger the invoice list adds up client-side: every spend invoice
+plus every credit note, and nothing accrued. It sits alongside ``total`` rather than
+replacing it, because the two answer different questions — what the project has been
+billed, versus what the work has cost including wages nobody has paid yet.
 
 Labor cost uses the effective_cost expression shared with the labor summary endpoints:
   - shift_type IS NULL  → 0 (supplement-only rows contribute no cost)
@@ -67,9 +80,11 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             return {}
 
         zero = Decimal("0")
-        # labor_accrued doubles as the seed of `total`; invoice totals are added on top.
-        labor_accrued: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
-        labor_paid: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        # Labor is reconciled per worker, so both sides are kept keyed by worker id.
+        # Labor invoices with no worker attached settle nobody and live in their own bucket.
+        accrued_by_worker: dict[UUID, dict[UUID, Decimal]] = {pid: {} for pid in project_ids}
+        paid_by_worker: dict[UUID, dict[UUID, Decimal]] = {pid: {} for pid in project_ids}
+        labor_paid_unattributed: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
         non_labor_invoices: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
         credits: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
         personal: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
@@ -112,18 +127,20 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
         labor_rows = (
             self._session.query(
                 WorkerModel.project_id.label("project_id"),
+                WorkerModel.id.label("worker_id"),
                 func.sum(effective_cost).label("labor_cost"),
             )
             .join(LaborEntryModel, LaborEntryModel.worker_id == WorkerModel.id)
             .filter(WorkerModel.project_id.in_(project_ids), LaborEntryModel.status == "validated")
-            .group_by(WorkerModel.project_id)
+            .group_by(WorkerModel.project_id, WorkerModel.id)
             .all()
         )
 
         for row in labor_rows:
             pid = row.project_id
             cost = Decimal(str(row.labor_cost)) if row.labor_cost is not None else zero
-            labor_accrued[pid] = labor_accrued.get(pid, zero) + cost
+            by_worker = accrued_by_worker.setdefault(pid, {})
+            by_worker[row.worker_id] = by_worker.get(row.worker_id, zero) + cost
 
         # ------------------------------------------------------------------
         # Query 2 + 3: resolve each project's company, then that company's
@@ -152,6 +169,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
                 InvoiceModel.payment_method_id,
                 InvoiceModel.refundable_status,
                 InvoiceModel.refunded_by,
+                InvoiceModel.worker_id,
             )
             .filter(
                 InvoiceModel.project_id.in_(project_ids),
@@ -167,7 +185,13 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             if row.type == "labor":
                 # A settlement of accrued labor, not new cost: it decides who funded the
                 # work. Adding it to `total` on top of the accrual would double-bill it.
-                labor_paid[pid] = labor_paid.get(pid, zero) + amount
+                # Only a worker-tagged payment settles that worker's days; an untagged one
+                # is money out with nobody's accrual to cancel.
+                if row.worker_id is None:
+                    labor_paid_unattributed[pid] = labor_paid_unattributed.get(pid, zero) + amount
+                else:
+                    by_worker = paid_by_worker.setdefault(pid, {})
+                    by_worker[row.worker_id] = by_worker.get(row.worker_id, zero) + amount
             else:
                 non_labor_invoices[pid] = non_labor_invoices.get(pid, zero) + amount
 
@@ -187,18 +211,25 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
 
         result: dict[UUID, ProjectSpent] = {}
         for pid in project_ids:
-            accrued = labor_accrued.get(pid, zero)
-            paid = labor_paid.get(pid, zero)
-            # Overpaying workers must not produce negative "owed"; floor it.
-            unpaid = max(accrued - paid, zero)
-            # Labor costs whichever is larger. Normally that is the accrual, with payments
-            # settling it. But paying more than was logged means the extra really did leave
-            # someone's account — most often wages paid without the attendance being
-            # recorded — so it counts as spend rather than vanishing. Taking the max is also
-            # what keeps `by_credits + personal + labor_unpaid == total` true in both
-            # directions: paid + max(accrued - paid, 0) == max(accrued, paid).
+            accrued_w = accrued_by_worker.get(pid, {})
+            paid_w = paid_by_worker.get(pid, {})
+            accrued = sum(accrued_w.values(), zero)
+            paid = sum(paid_w.values(), zero) + labor_paid_unattributed.get(pid, zero)
+            # Per worker, and only then summed: overpaying one worker must not cancel what
+            # another is still owed, and no worker's shortfall may go negative.
+            unpaid = sum(
+                (max(cost - paid_w.get(worker_id, zero), zero) for worker_id, cost in accrued_w.items()),
+                zero,
+            )
+            # Labor costs what was paid out plus what is still owed. Where a worker was
+            # paid more than they logged — wages paid without the attendance recorded, or a
+            # payment tagged to nobody — the extra really did leave someone's account, so it
+            # counts as spend rather than vanishing. This is also what keeps
+            # `by_credits + personal + labor_unpaid == total` true: by_credits + personal
+            # already contains every labor invoice.
             result[pid] = ProjectSpent(
-                total=max(accrued, paid) + non_labor_invoices.get(pid, zero),
+                total=paid + unpaid + non_labor_invoices.get(pid, zero),
+                invoiced=paid + non_labor_invoices.get(pid, zero),
                 # Company refunds can exceed company spend; a negative "spent by credit"
                 # is meaningless for the KPI, so floor it exactly as sum_company_spent does.
                 by_credits=max(credits.get(pid, zero), zero),

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.application.billing._helpers import _assert_billing_doc_access, _items_from_inputs
+from app.application.billing._helpers import (
+    _assert_billing_doc_access,
+    _converted_facture_id,
+    _items_from_inputs,
+)
 from app.application.billing.dtos import BillingDocumentResponse, UpdateBillingDocumentInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
@@ -109,4 +113,4 @@ class UpdateBillingDocumentUseCase:
         updated = doc.with_updates(**updates)
         saved = self._doc_repo.save(updated)
         db_session.commit()
-        return BillingDocumentResponse.from_entity(saved)
+        return BillingDocumentResponse.from_entity(saved, _converted_facture_id(self._doc_repo, saved))

@@ -328,7 +328,18 @@ class TestSessionPolicy:
         client.application.config.update(REFRESH_TOKEN_POLICY="persistent")
         resp = client.get("/api/v1/auth/config")
         assert resp.status_code == 200
-        assert resp.get_json() == {"session": "persistent", "signup": True}
+        assert resp.get_json() == {
+            "session": "persistent",
+            "signup": True,
+            "self_attendance_max_backdate_days": 31,
+        }
+
+    def test_config_publishes_the_backdate_window_ops_configured(self, client, monkeypatch):
+        """Clients read the window from here instead of hard-coding the default."""
+        monkeypatch.setenv("SELF_ATTENDANCE_MAX_BACKDATE_DAYS", "7")
+        resp = client.get("/api/v1/auth/config")
+        assert resp.status_code == 200
+        assert resp.get_json()["self_attendance_max_backdate_days"] == 7
 
     def test_expiring_policy_issues_seven_day_refresh_token(self, client):
         client.application.config.update(REFRESH_TOKEN_POLICY="expiring")

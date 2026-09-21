@@ -30,6 +30,9 @@ class AuthConfigResponse(BaseModel):
 
     session: str  # "expiring" (7-day refresh token) | "persistent" (until sign-out)
     signup: bool  # phone self-registration — always true; phone is the only sign-in method
+    # How many days back a worker may still log their own attendance. Published so the
+    # apps mirror the server rule instead of hard-coding it and drifting when ops tunes it.
+    self_attendance_max_backdate_days: int
 
 
 class SignupRequestBody(BaseModel):
