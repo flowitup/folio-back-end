@@ -46,32 +46,53 @@ class TestCreateProjectUseCase:
         assert result.invoice_prefix is None
         mock_repo.create.assert_called_once()
 
-    def test_create_project_empty_name_fails(self):
-        """Test creation fails with empty name."""
+    def test_create_project_blank_name_falls_back_to_address(self):
+        """The name is optional: blank or missing, the address labels the project."""
+        for name in ("", "   ", None):
+            mock_repo = Mock()
+            mock_repo.create.side_effect = lambda project, **_: project
+            usecase = CreateProjectUseCase(mock_repo)
+
+            request = CreateProjectRequest(name=name, address="  12 Rue des Martyrs  ", owner_id=uuid4())
+            result = usecase.execute(request)
+
+            assert result.name == "12 Rue des Martyrs"
+            assert result.address == "12 Rue des Martyrs"
+
+    def test_create_project_derived_name_fits_name_column(self):
+        """An address longer than the 255-char name column is cut when used as the name."""
+        mock_repo = Mock()
+        mock_repo.create.side_effect = lambda project, **_: project
+        usecase = CreateProjectUseCase(mock_repo)
+
+        result = usecase.execute(CreateProjectRequest(address="a" * 400, owner_id=uuid4()))
+
+        assert result.address == "a" * 400
+        assert result.name == "a" * 255
+
+    def test_create_project_missing_address_fails(self):
+        """The address is mandatory."""
         mock_repo = Mock()
         usecase = CreateProjectUseCase(mock_repo)
 
-        request = CreateProjectRequest(name="", owner_id=uuid4())
+        for address in ("", "   "):
+            with pytest.raises(InvalidProjectDataError, match="address is required"):
+                usecase.execute(CreateProjectRequest(name="Test", address=address, owner_id=uuid4()))
+        mock_repo.create.assert_not_called()
 
-        with pytest.raises(InvalidProjectDataError, match="name is required"):
-            usecase.execute(request)
-
-    def test_create_project_whitespace_name_fails(self):
-        """Test creation fails with whitespace-only name."""
+    def test_create_project_address_too_long_fails(self):
         mock_repo = Mock()
         usecase = CreateProjectUseCase(mock_repo)
 
-        request = CreateProjectRequest(name="   ", owner_id=uuid4())
-
-        with pytest.raises(InvalidProjectDataError, match="name is required"):
-            usecase.execute(request)
+        with pytest.raises(InvalidProjectDataError, match="address exceeds 500"):
+            usecase.execute(CreateProjectRequest(name="Test", address="x" * 501, owner_id=uuid4()))
 
     def test_create_project_name_too_long_fails(self):
         """Test creation fails with name > 255 chars."""
         mock_repo = Mock()
         usecase = CreateProjectUseCase(mock_repo)
 
-        request = CreateProjectRequest(name="x" * 256, owner_id=uuid4())
+        request = CreateProjectRequest(name="x" * 256, address="123 St", owner_id=uuid4())
 
         with pytest.raises(InvalidProjectDataError, match="exceeds 255"):
             usecase.execute(request)
@@ -218,22 +239,180 @@ class TestUpdateProjectUseCase:
         with pytest.raises(ProjectNotFoundError):
             usecase.execute(uuid4(), name="New Name")
 
-    def test_update_project_empty_name_fails(self):
-        """Test update with empty name fails."""
+    def test_update_project_blank_name_relabels_by_address(self):
+        """Clearing the name labels the project by its (possibly new) address."""
+        project_id = uuid4()
+        mock_repo = Mock()
+        existing = Project(
+            id=project_id,
+            name="Old",
+            address="Old Address",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        usecase = UpdateProjectUseCase(mock_repo)
+        usecase.execute(project_id, name="   ", address="New Address")
+
+        assert existing.name == "New Address"
+        assert existing.address == "New Address"
+
+    def test_update_project_blank_name_without_address_change_uses_current_address(self):
+        project_id = uuid4()
+        mock_repo = Mock()
+        existing = Project(
+            id=project_id,
+            name="Custom label",
+            address="12 Rue X",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        UpdateProjectUseCase(mock_repo).execute(project_id, name="")
+
+        assert existing.name == "12 Rue X"
+
+    def test_update_project_blank_name_on_legacy_project_without_address_keeps_name(self):
+        """Projects created before the address became mandatory keep a non-empty name."""
+        project_id = uuid4()
+        mock_repo = Mock()
+        existing = Project(
+            id=project_id,
+            name="Legacy",
+            address=None,
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        UpdateProjectUseCase(mock_repo).execute(project_id, name="")
+
+        assert existing.name == "Legacy"
+
+    def test_update_project_address_only_change_keeps_address_label_in_sync(self):
+        """Without a custom label, changing the address re-labels the project."""
+        project_id = uuid4()
+        mock_repo = Mock()
+        existing = Project(
+            id=project_id,
+            name="12 Rue X",
+            address="12 Rue X",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        UpdateProjectUseCase(mock_repo).execute(project_id, address="9 Avenue Neuve")
+
+        assert existing.name == "9 Avenue Neuve"
+        assert existing.address == "9 Avenue Neuve"
+
+    def test_update_project_address_only_change_keeps_custom_label(self):
+        project_id = uuid4()
+        mock_repo = Mock()
+        existing = Project(
+            id=project_id,
+            name="Custom label",
+            address="12 Rue X",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        UpdateProjectUseCase(mock_repo).execute(project_id, address="9 Avenue Neuve")
+
+        assert existing.name == "Custom label"
+
+    def test_update_project_address_label_sync_survives_name_column_truncation(self):
+        """A label cut to the 255-char name column still counts as the address label."""
+        project_id = uuid4()
+        mock_repo = Mock()
+        long_address = "a" * 400
+        existing = Project(
+            id=project_id,
+            name=long_address[:255],
+            address=long_address,
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        UpdateProjectUseCase(mock_repo).execute(project_id, address="b" * 300)
+
+        assert existing.name == "b" * 255
+
+    def test_update_project_explicit_null_address_fails(self):
+        """`"address": null` in the body is a blank address, not a no-op."""
         project_id = uuid4()
         mock_repo = Mock()
         mock_repo.find_by_id.return_value = Project(
             id=project_id,
             name="Old",
-            address=None,
+            address="Old Address",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+
+        with pytest.raises(InvalidProjectDataError, match="address cannot be empty"):
+            UpdateProjectUseCase(mock_repo).execute(project_id, address=None, provided_fields={"address"})
+        mock_repo.update.assert_not_called()
+
+    def test_update_project_omitted_name_is_untouched(self):
+        project_id = uuid4()
+        mock_repo = Mock()
+        existing = Project(
+            id=project_id,
+            name="Custom label",
+            address="12 Rue X",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+        mock_repo.find_by_id.return_value = existing
+        mock_repo.update.return_value = existing
+
+        UpdateProjectUseCase(mock_repo).execute(project_id, invoice_prefix="ABC", provided_fields={"invoice_prefix"})
+
+        assert existing.name == "Custom label"
+
+    def test_update_project_empty_address_fails(self):
+        """The address cannot be blanked once the project exists."""
+        project_id = uuid4()
+        mock_repo = Mock()
+        mock_repo.find_by_id.return_value = Project(
+            id=project_id,
+            name="Old",
+            address="Old Address",
             owner_id=uuid4(),
             created_at=datetime.now(timezone.utc),
         )
 
         usecase = UpdateProjectUseCase(mock_repo)
 
-        with pytest.raises(InvalidProjectDataError, match="cannot be empty"):
-            usecase.execute(project_id, name="")
+        with pytest.raises(InvalidProjectDataError, match="address cannot be empty"):
+            usecase.execute(project_id, address="   ")
+        mock_repo.update.assert_not_called()
+
+    def test_update_project_name_too_long_fails(self):
+        project_id = uuid4()
+        mock_repo = Mock()
+        mock_repo.find_by_id.return_value = Project(
+            id=project_id,
+            name="Old",
+            address="Old Address",
+            owner_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+        )
+
+        with pytest.raises(InvalidProjectDataError, match="exceeds 255"):
+            UpdateProjectUseCase(mock_repo).execute(project_id, name="x" * 256)
 
 
 class TestDeleteProjectUseCase:

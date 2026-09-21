@@ -9,8 +9,10 @@ from pydantic import BaseModel, Field
 class CreateProjectRequest(BaseModel):
     """Request body for creating a project."""
 
-    name: str = Field(..., min_length=1, max_length=255)
-    address: Optional[str] = Field(None, max_length=500)
+    # The site address identifies a project; the name is an optional label and
+    # falls back to the address when omitted or blank.
+    address: str = Field(..., min_length=1, max_length=500)
+    name: Optional[str] = Field(None, max_length=255)
     budget: Optional[Decimal] = Field(None, ge=0)
     budget_source: Optional[str] = Field(None, max_length=120)
     # Target company (tenant). Must be a company where the caller is admin —
@@ -27,7 +29,9 @@ class UpdateProjectRequest(BaseModel):
     PATCH of only budget_source from accidentally wiping budget.
     """
 
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    # A blank name means "label the project by its address" (see the use case);
+    # a blank address is rejected there because the address is mandatory.
+    name: Optional[str] = Field(None, max_length=255)
     address: Optional[str] = Field(None, max_length=500)
     invoice_prefix: Optional[str] = Field(None, max_length=8)
     budget: Optional[Decimal] = Field(None, ge=0)

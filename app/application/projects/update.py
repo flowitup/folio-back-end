@@ -5,6 +5,11 @@ from decimal import Decimal
 from typing import Optional, Set
 from uuid import UUID
 
+from app.application.projects.create import (
+    address_label,
+    derive_project_name,
+    is_address_labelled,
+)
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.project import Project
 from app.domain.exceptions.project_exceptions import (
@@ -55,15 +60,23 @@ class UpdateProjectUseCase:
         if provided_fields is None:
             provided_fields = set()
 
-        if name is not None:
-            if len(name.strip()) == 0:
-                raise InvalidProjectDataError("Project name cannot be empty")
-            if len(name) > 255:
-                raise InvalidProjectDataError("Project name exceeds 255 characters")
-            project.name = name.strip()
-
+        # The address is mandatory: an explicit null or blank is rejected, and
+        # it is applied before the name so a blank name re-labels the project
+        # by whatever address it ends up with.
+        if "address" in provided_fields and address is None:
+            raise InvalidProjectDataError("Project address cannot be empty")
+        address_labelled = is_address_labelled(project)
         if address is not None:
-            project.address = address.strip() if address else None
+            cleaned_address = address.strip()
+            if not cleaned_address:
+                raise InvalidProjectDataError("Project address cannot be empty")
+            project.address = cleaned_address
+
+        if name is not None:
+            project.name = derive_project_name(name, project.address or project.name)
+        elif address_labelled and address is not None:
+            # No custom label: an address-only change keeps the label in sync.
+            project.name = address_label(project.address)
 
         if invoice_prefix is not None:
             cleaned = invoice_prefix.strip().upper()
