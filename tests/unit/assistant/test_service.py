@@ -26,6 +26,7 @@ from app.domain.entities.inventory_item import InventoryItem
 from app.domain.entities.project import Project
 from app.domain.entities.warehouse import Warehouse
 from app.infrastructure.ai.cost import InMemoryCostLedger
+from app.infrastructure.ai.rate_limit import InMemoryRateLimiter
 from app.infrastructure.database.repositories.sqlalchemy_inventory_repository import (
     SqlAlchemyInventoryItemRepository,
     SqlAlchemyInventoryWarehouseRepository,
@@ -158,6 +159,7 @@ def world(session):
     messenger = AssistantMessenger(message_repo, db_session)
     vision = ScriptedVision(text_answers=["Réponse du chat"])
     cost_ledger = InMemoryCostLedger(daily_cap_usd=5.0)
+    rate_limiter = InMemoryRateLimiter()
 
     def build_service(decision_port) -> AssistantService:
         return AssistantService(
@@ -169,6 +171,7 @@ def world(session):
             project_repo=project_repo,
             vision=vision,
             cost_ledger=cost_ledger,
+            rate_limiter=rate_limiter,
         )
 
     return {
@@ -176,6 +179,7 @@ def world(session):
         "messenger": messenger,
         "vision": vision,
         "cost_ledger": cost_ledger,
+        "rate_limiter": rate_limiter,
         "channel": channel,
         "user_id": user_id,
         "company_id": company_id,

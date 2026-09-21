@@ -36,6 +36,7 @@ class TicketDecision:
 
     project_id: Optional[UUID]
     project_confidence: float
+    project_probabilities: dict[str, float]
     category: str
     category_confidence: float
     duplicate_of: Optional[UUID]
@@ -87,7 +88,7 @@ def decide_ticket(
         ),
     }
     result = decisions.decide(state, questions)
-    project_label, project_confidence, _ = result.choice("project")
+    project_label, project_confidence, project_probabilities = result.choice("project")
     category_label, category_confidence, _ = result.choice("category")
     duplicate_label, duplicate_confidence, _ = result.choice("duplicate_of")
     amounts_consistent = result.noul("amounts_consistent")
@@ -95,6 +96,7 @@ def decide_ticket(
     return TicketDecision(
         project_id=UUID(project_label) if project_label in project_criteria else None,
         project_confidence=project_confidence,
+        project_probabilities=project_probabilities,
         category=category_label,
         category_confidence=category_confidence,
         duplicate_of=(

@@ -220,6 +220,12 @@ class SqlAlchemyChatRepository:
 
     def channel_exists(self, channel: ChannelRef) -> bool:
         if channel.kind == "assistant":
+            # FEATURE_ASSISTANT is the pipeline's real kill switch (not just the channel
+            # listing / actions endpoint): once off, the assistant channel does not
+            # exist at all, so send/list/read/attachment all answer as they would for
+            # any unknown channel (404), and nothing ever reaches the AI pipeline.
+            if not self._assistant_enabled():
+                return False
             return bool(self._session.execute(select(exists().where(UserModel.id == channel.id))).scalar())
         model = CompanyModel if channel.kind == "company" else ProjectModel
         return bool(self._session.execute(select(exists().where(model.id == channel.id))).scalar())
@@ -234,8 +240,9 @@ class SqlAlchemyChatRepository:
     def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
         if channel.kind == "assistant":
             # The only member of a user's assistant conversation is that user — not even
-            # a platform-ops superadmin can read someone else's.
-            return user_id == channel.id
+            # a platform-ops superadmin can read someone else's. FEATURE_ASSISTANT off
+            # means nobody is a member of any assistant channel (see channel_exists).
+            return self._assistant_enabled() and user_id == channel.id
         if channel.kind == "company":
             return (
                 self._session.execute(

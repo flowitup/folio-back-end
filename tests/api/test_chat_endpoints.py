@@ -310,6 +310,24 @@ class TestAssistantChannel:
         finally:
             invitation_app.config["FEATURE_ASSISTANT"] = True
 
+    def test_send_and_read_404_when_disabled(self, inv_client, member_token, invitation_app):
+        """FEATURE_ASSISTANT is the pipeline's real kill switch (review finding C3), not
+        just the channel listing / actions endpoint: with the flag off, the assistant
+        channel does not exist at all — send/list answer 404 exactly like any unknown
+        channel, so nothing ever reaches the AI pipeline even if the provider API keys
+        are already configured in the deployment's environment."""
+        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        invitation_app.config["FEATURE_ASSISTANT"] = False
+        try:
+            sent = inv_client.post(
+                f"/api/v1/chat/channels/{key}/messages", json={"body": "bonjour"}, headers=_auth(member_token)
+            )
+            assert sent.status_code == 404
+            listed = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
+            assert listed.status_code == 404
+        finally:
+            invitation_app.config["FEATURE_ASSISTANT"] = True
+
     def test_send_and_list_own_assistant_messages(self, inv_client, member_token, invitation_app):
         key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
         sent = inv_client.post(
@@ -379,3 +397,38 @@ class TestAssistantChannel:
         assert reply["sender_name"] == "Assistant"
         assert reply["sender_type"] == "assistant"
         assert reply["mine"] is False
+
+    def test_post_card_round_trips_with_the_wire_contract_shape(self, inv_client, member_token, invitation_app):
+        """A real `AssistantMessenger.post_card(...)` call, read back through the same
+        `GET .../messages` endpoint the app polls — proves the app's parser actually
+        receives `{"card": {type, id, project_id, title, subtitle, badge, thumbnail_url,
+        extra}}`, not the pre-fix ad-hoc shape (second addendum: the app's parser
+        rejected every real card and silently fell back to text)."""
+        from wiring import get_container
+
+        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        product_id = uuid.uuid4()
+        with invitation_app.app_context():
+            get_container().assistant_messenger.post_card(
+                uuid.UUID(invitation_app._test_member_user_id),
+                card_type="material",
+                entity_id=product_id,
+                title="Ciment Lafarge 25kg",
+                subtitle="Confirmé",
+                badge="confirmed",
+                thumbnail_url="/api/v1/bibliotheque/products/x/image",
+                extra={"has_image": True},
+            )
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
+        card_message = page["items"][-1]
+        assert card_message["content_type"] == "card"
+        assert card_message["payload"]["card"] == {
+            "type": "material",
+            "id": str(product_id),
+            "project_id": None,
+            "title": "Ciment Lafarge 25kg",
+            "subtitle": "Confirmé",
+            "badge": "confirmed",
+            "thumbnail_url": "/api/v1/bibliotheque/products/x/image",
+            "extra": {"has_image": True},
+        }

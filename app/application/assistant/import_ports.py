@@ -39,6 +39,7 @@ class MaterialImportRecord:
 
     id: UUID
     product_id: UUID
+    company_id: UUID
     status: str  # confirmed | to_confirm
     confidence: float
     photo_sha256: Optional[str]
@@ -101,6 +102,7 @@ class MaterialImportRepositoryPort(Protocol):
         self,
         *,
         product_id: UUID,
+        company_id: UUID,
         status: str,
         confidence: float,
         photo_sha256: Optional[str] = None,
@@ -109,8 +111,10 @@ class MaterialImportRepositoryPort(Protocol):
         """Insert a new import row for ``product_id``."""
         ...
 
-    def find_by_photo_hash(self, photo_sha256: str) -> Optional[MaterialImportRecord]:
-        """Return the import row whose ``photo_sha256`` matches, or None (cache hit)."""
+    def find_by_photo_hash(self, company_id: UUID, photo_sha256: str) -> Optional[MaterialImportRecord]:
+        """Return ``company_id``'s import row whose ``photo_sha256`` matches, or None
+        (cache hit) — scoped to ``company_id`` (review finding H4): the same photo taken
+        by two different companies is never a cross-tenant cache hit."""
         ...
 
     def find_by_reference(self, company_id: UUID, reference: str) -> Optional[MaterialImportRecord]:

@@ -9,7 +9,7 @@ exercise the router/equipment slice and do not care about features A/B/C.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 
 from app.application.assistant.features.invoice_fetch import InvoiceFetchFeature
@@ -28,14 +28,30 @@ class FeatureHandlers:
         self._invoice_fetch = invoice_fetch
 
     def identify_material(
-        self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
-    ) -> None:
-        self._material.run(user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id)
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        project_hint: Optional[str] = None,
+    ) -> str:
+        return self._material.run(
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            messenger=messenger,
+            trace_id=trace_id,
+            project_hint=project_hint,
+        )
 
     def import_ticket(
         self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
-    ) -> None:
-        self._ticket.run(user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id)
+    ) -> str:
+        return self._ticket.run(
+            user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id
+        )
 
     def fetch_invoice(
         self,
@@ -46,8 +62,8 @@ class FeatureHandlers:
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
-    ) -> None:
-        self._invoice_fetch.fetch_invoice(
+    ) -> str:
+        return self._invoice_fetch.fetch_invoice(
             user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id, decision=decision
         )
 

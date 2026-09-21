@@ -8,8 +8,12 @@ invoice or a library product, without touching either aggregate's own contract:
   produced (original photo + generated scan PDF) and the ai_confidence/flags/category
   the pipeline recorded at write time.
 - ``assistant_material_imports``: one row per assistant import of a library product
-  (feature A). ``photo_sha256`` is unique — it is the pipeline's cache key so the same
-  photo never re-runs the identify/search pipeline twice.
+  (feature A). ``(company_id, photo_sha256)`` is unique — it is the pipeline's
+  per-company cache key so the same photo never re-runs the identify/search pipeline
+  twice for the SAME company; two different companies photographing the same product
+  are two independent imports (``company_id`` is denormalised from
+  ``bibliotheque_products.company_id`` at write time so this can be a real DB
+  constraint, not just an application-level filter).
 
 Both tables are pure assistant provenance: no other bounded context reads them, and
 neither is referenced by any existing FK, so this migration only adds tables.
@@ -59,6 +63,7 @@ def upgrade() -> None:
         "assistant_material_imports",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("product_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("company_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("photo_sha256", sa.String(length=64), nullable=False),
         sa.Column("source_url", sa.String(length=1024), nullable=True),
@@ -66,13 +71,16 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["product_id"], ["bibliotheque_products.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["company_id"], ["companies.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("photo_sha256"),
+        sa.UniqueConstraint("company_id", "photo_sha256"),
     )
     op.create_index("ix_assistant_material_imports_product_id", "assistant_material_imports", ["product_id"])
+    op.create_index("ix_assistant_material_imports_company_id", "assistant_material_imports", ["company_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_assistant_material_imports_company_id", table_name="assistant_material_imports")
     op.drop_index("ix_assistant_material_imports_product_id", table_name="assistant_material_imports")
     op.drop_table("assistant_material_imports")
     op.drop_index("ix_invoice_ai_imports_invoice_id", table_name="invoice_ai_imports")

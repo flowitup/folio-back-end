@@ -1207,6 +1207,7 @@ def invitation_app():
         from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
         from app.application.assistant.router import Router as _Router
         from app.infrastructure.ai.cost import InMemoryCostLedger as _InMemoryCostLedger
+        from app.infrastructure.ai.rate_limit import InMemoryRateLimiter as _InMemoryRateLimiter
         from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
             SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
         )
@@ -1232,6 +1233,7 @@ def invitation_app():
         _c.assistant_cost_ledger = _InMemoryCostLedger(
             daily_cap_usd=float(test_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
         )
+        _c.assistant_rate_limiter = _InMemoryRateLimiter()
         _c.assistant_router = _Router(_assistant_decision_port)
         _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
         _c.assistant_import_repo = _assistant_import_repo
@@ -1282,6 +1284,8 @@ def invitation_app():
                     storage=_chat_storage,
                     company_access=_c.user_company_access_repo,
                     company_repo=_c.company_repo,
+                    project_repo=_c.project_repository,
+                    authz_reader=_c.authz_reader,
                     product_repo=_c.bibliotheque_product_repo,
                     supplier_repo=_c.bibliotheque_supplier_repo,
                     material_imports=_assistant_import_repo,
@@ -1315,6 +1319,7 @@ def invitation_app():
                 project_repo=_c.project_repository,
                 vision=_assistant_vision,
                 cost_ledger=_c.assistant_cost_ledger,
+                rate_limiter=_c.assistant_rate_limiter,
                 feature_handlers=_feature_handlers,
             )
         test_app._assistant_vision = _assistant_vision

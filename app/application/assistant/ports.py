@@ -159,13 +159,38 @@ class CostLedgerPort(Protocol):
     """Daily USD spend tracker gating every provider call (``ASSISTANT_DAILY_COST_CAP_USD``)."""
 
     def add(self, kind: str, usd: float) -> None:
-        """Record a provider call's cost against today's total."""
+        """Record a provider call's cost against today's total.
+
+        ``kind`` is one of ``deepseek_vision``/``deepseek_text``/``jev``/``tavily``/
+        ``gemini``/``serpapi`` — every adapter that spends money calls this so
+        ``today_total()`` (and ``by_kind()``) reflect the pipeline's real spend, not just
+        DeepSeek's.
+        """
         ...
 
     def today_total(self) -> float:
-        """Today's accumulated USD spend."""
+        """Today's accumulated USD spend, across every ``kind``."""
+        ...
+
+    def by_kind(self) -> dict[str, float]:
+        """Today's accumulated USD spend, broken down by ``kind`` — what
+        ``scripts/assistant_costs.py`` prints for the owner."""
         ...
 
     def over_cap(self) -> bool:
         """True once today's spend has reached the configured cap — stop calling providers."""
+        ...
+
+
+class RateLimiterPort(Protocol):
+    """Per-user, rolling-hour pipeline-run limiter (``AssistantService.handle_message``).
+
+    Backed by two Redis counters (the current and previous Paris-local hour, see
+    ``app.infrastructure.ai.rate_limit``) so the limit is a true rolling window, not a
+    fixed-clock-hour bucket that resets to 0 right on the hour.
+    """
+
+    def allow(self, user_id: UUID) -> bool:
+        """True (and records this run) when the caller is under the limit; False (the
+        run is NOT recorded) once the rolling-hour count has reached the limit."""
         ...

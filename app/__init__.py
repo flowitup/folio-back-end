@@ -459,14 +459,14 @@ def _configure_di_container() -> None:
 
     from config import assistant_flags_enabled as _assistant_flags_enabled
 
-    _chat_repo = SqlAlchemyChatRepository(
-        db.session,
-        assistant_enabled=lambda: _assistant_flags_enabled(
+    def _assistant_enabled_fn() -> bool:
+        return _assistant_flags_enabled(
             current_app.config.get("FEATURE_ASSISTANT"),
             current_app.config.get("DEEPSEEK_API_KEY"),
             current_app.config.get("TYPESAFE_API_KEY"),
-        ),
-    )
+        )
+
+    _chat_repo = SqlAlchemyChatRepository(db.session, assistant_enabled=_assistant_enabled_fn)
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
@@ -483,7 +483,9 @@ def _configure_di_container() -> None:
     from app.application.assistant.service import SubmitAssistantActionUseCase
     from app.infrastructure.adapters.rq_assistant_dispatcher import RqAssistantDispatcher
 
-    _c.assistant_dispatcher = RqAssistantDispatcher(current_app.config.get("REDIS_URL", ""))
+    _c.assistant_dispatcher = RqAssistantDispatcher(
+        current_app.config.get("REDIS_URL", ""), assistant_enabled=_assistant_enabled_fn
+    )
     _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
     _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _c.assistant_dispatcher)
     _c.send_chat_message_usecase.assistant_dispatcher = _c.assistant_dispatcher
@@ -1618,6 +1620,7 @@ def _configure_di_container() -> None:
     from app.infrastructure.ai.gemini_client import NullImageGenPort as _NullImageGenPort
     from app.infrastructure.ai.jev_client import JevDecisionPort as _JevDecisionPort
     from app.infrastructure.ai.jev_client import NullDecisionPort as _NullDecisionPort
+    from app.infrastructure.ai.rate_limit import RedisRateLimiter as _RedisRateLimiter
     from app.infrastructure.ai.serpapi_client import NullLensPort as _NullLensPort
     from app.infrastructure.ai.serpapi_client import SerpApiLens as _SerpApiLens
     from app.infrastructure.ai.tavily_client import NullWebSearchPort as _NullWebSearchPort
@@ -1628,17 +1631,25 @@ def _configure_di_container() -> None:
     _tavily_key = current_app.config.get("TAVILY_API_KEY", "")
     _gemini_key = current_app.config.get("GEMINI_API_KEY", "")
     _serpapi_key = current_app.config.get("SERPAPI_API_KEY", "")
+    _redis_url = current_app.config.get("REDIS_URL", "")
 
     _c.assistant_cost_ledger = _RedisCostLedger(
-        current_app.config.get("REDIS_URL", ""), float(current_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
+        _redis_url, float(current_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
     )
+    _c.assistant_rate_limiter = _RedisRateLimiter(_redis_url)
     _c.assistant_vision_llm = (
         _DeepSeekVisionLlm(_deepseek_key, _c.assistant_cost_ledger) if _deepseek_key else _NullVisionLlm()
     )
-    _c.assistant_decision_port = _JevDecisionPort(_typesafe_key) if _typesafe_key else _NullDecisionPort()
-    _c.assistant_web_search = _TavilyWebSearch(_tavily_key) if _tavily_key else _NullWebSearchPort()
-    _c.assistant_image_gen = _GeminiImageGen(_gemini_key) if _gemini_key else _NullImageGenPort()
-    _c.assistant_lens = _SerpApiLens(_serpapi_key) if _serpapi_key else _NullLensPort()
+    _c.assistant_decision_port = (
+        _JevDecisionPort(_typesafe_key, _c.assistant_cost_ledger) if _typesafe_key else _NullDecisionPort()
+    )
+    _c.assistant_web_search = (
+        _TavilyWebSearch(_tavily_key, _c.assistant_cost_ledger) if _tavily_key else _NullWebSearchPort()
+    )
+    _c.assistant_image_gen = (
+        _GeminiImageGen(_gemini_key, _c.assistant_cost_ledger) if _gemini_key else _NullImageGenPort()
+    )
+    _c.assistant_lens = _SerpApiLens(_serpapi_key, _c.assistant_cost_ledger) if _serpapi_key else _NullLensPort()
 
     _c.assistant_router = _Router(_c.assistant_decision_port)
     if _c.project_repository is not None:
@@ -1658,6 +1669,7 @@ def _configure_di_container() -> None:
                 project_repo=_c.project_repository,
                 vision=_c.assistant_vision_llm,
                 cost_ledger=_c.assistant_cost_ledger,
+                rate_limiter=_c.assistant_rate_limiter,
             )
 
     # -----------------------------------------------------------------------
@@ -1771,6 +1783,8 @@ def _configure_di_container() -> None:
             storage=storage,
             company_access=_access_repo,
             company_repo=_c.company_repo,
+            project_repo=_c.project_repository,
+            authz_reader=_c.authz_reader,
             product_repo=_c.bibliotheque_product_repo,
             supplier_repo=_c.bibliotheque_supplier_repo,
             material_imports=_assistant_import_repo,
@@ -1803,6 +1817,7 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             vision=_c.assistant_vision_llm,
             cost_ledger=_c.assistant_cost_ledger,
+            rate_limiter=_c.assistant_rate_limiter,
             feature_handlers=_c.assistant_feature_handlers,
         )
 

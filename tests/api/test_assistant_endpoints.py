@@ -85,9 +85,12 @@ class TestSubmitAction:
         invitation_app._assistant_dispatcher.actions_received.clear()
         choice_id = _post_choice(invitation_app, invitation_app._test_member_user_id)
 
+        # The submitted payload must be byte-for-byte the stored option's own payload
+        # (`{}`, see `_post_choice`) — this is what `SubmitAssistantActionUseCase` now
+        # requires (review finding C1); the app always resubmits an option unmodified.
         resp = inv_client.post(
             "/api/v1/assistant/actions",
-            json={"action": "confirm", "payload": {"note": "ok"}, "reply_to_id": choice_id},
+            json={"action": "confirm", "payload": {}, "reply_to_id": choice_id},
             headers=_auth(member_token),
         )
         assert resp.status_code == 202
@@ -97,11 +100,39 @@ class TestSubmitAction:
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         choice_message = next(m for m in page["items"] if m["id"] == choice_id)
         assert choice_message["payload"]["answered"] == "confirm"
-        assert choice_message["payload"]["answered_payload"] == {"note": "ok"}
+        assert choice_message["payload"]["answered_payload"] == {}
 
         user_id = uuid.UUID(invitation_app._test_member_user_id)
         message_id = uuid.UUID(choice_id)
-        assert (user_id, message_id, "confirm", {"note": "ok"}) in invitation_app._assistant_dispatcher.actions_received
+        assert (user_id, message_id, "confirm", {}) in invitation_app._assistant_dispatcher.actions_received
+
+    def test_forged_payload_not_matching_any_option_404s(self, inv_client, member_token, invitation_app):
+        """Review finding C1: a client-invented payload that does not byte-for-byte
+        match one of the choice's own stored options must never be accepted — this is
+        what closed the invoice-delete/S3-read/S3-delete/photo-OCR IDOR family (every
+        exploit in that finding relied on the server trusting an arbitrary payload)."""
+        choice_id = _post_choice(invitation_app, invitation_app._test_member_user_id)
+
+        resp = inv_client.post(
+            "/api/v1/assistant/actions",
+            json={"action": "confirm", "payload": {"invoice_id": str(uuid.uuid4())}, "reply_to_id": choice_id},
+            headers=_auth(member_token),
+        )
+
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "NotFound"
+
+    def test_forged_action_not_offered_on_the_choice_404s(self, inv_client, member_token, invitation_app):
+        choice_id = _post_choice(invitation_app, invitation_app._test_member_user_id)
+
+        resp = inv_client.post(
+            "/api/v1/assistant/actions",
+            json={"action": "delete_everything", "payload": {}, "reply_to_id": choice_id},
+            headers=_auth(member_token),
+        )
+
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "NotFound"
 
     def test_already_answered_409(self, inv_client, member_token, invitation_app):
         choice_id = _post_choice(invitation_app, invitation_app._test_member_user_id)

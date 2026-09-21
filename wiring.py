@@ -440,6 +440,7 @@ class Container:
     assistant_image_gen: Optional[Any] = None  # ImageGenPort (GeminiImageGen | NullImageGenPort)
     assistant_lens: Optional[Any] = None  # LensPort (SerpApiLens | NullLensPort)
     assistant_cost_ledger: Optional[Any] = None  # CostLedgerPort (RedisCostLedger)
+    assistant_rate_limiter: Optional[Any] = None  # RateLimiterPort (RedisRateLimiter)
     assistant_router: Optional[Any] = None  # Router (S0)
     assistant_equipment_service: Optional[Any] = None  # EquipmentService
 

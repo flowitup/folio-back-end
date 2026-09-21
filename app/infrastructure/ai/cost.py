@@ -45,12 +45,23 @@ def deepseek_cost_usd(usage: Any) -> float:
     )
 
 
+#: Every kind an adapter can record — kept here (not just in each adapter module) so
+#: `scripts/assistant_costs.py` can print a stable, complete table even for a kind that
+#: spent nothing today.
+COST_KINDS: tuple[str, ...] = ("deepseek_vision", "deepseek_text", "jev", "tavily", "gemini", "serpapi")
+
+
 def _today_key() -> str:
     return f"assistant:cost:{datetime.now(_PARIS).strftime('%Y-%m-%d')}"
 
 
+def _kind_key(kind: str) -> str:
+    return f"{_today_key()}:{kind}"
+
+
 class RedisCostLedger:
-    """Implements CostLedgerPort with a Redis float counter, one key per Paris-local day."""
+    """Implements CostLedgerPort with a Redis float counter, one key per Paris-local day
+    (plus one per ``kind`` for ``by_kind()`` — see ``scripts/assistant_costs.py``)."""
 
     #: Kept well past a day so a slow job that straddles midnight can still be read back.
     _TTL_SECONDS = 60 * 60 * 48
@@ -65,6 +76,9 @@ class RedisCostLedger:
         key = _today_key()
         self._redis.incrbyfloat(key, usd)
         self._redis.expire(key, self._TTL_SECONDS)
+        kind_key = _kind_key(kind)
+        self._redis.incrbyfloat(kind_key, usd)
+        self._redis.expire(kind_key, self._TTL_SECONDS)
 
     def today_total(self) -> float:
         # The sync `Redis` client's `.get()` is typed to also cover the async client
@@ -72,6 +86,13 @@ class RedisCostLedger:
         # never `aioredis`, so the result is always the plain bytes/str/None case.
         value = cast(Optional[bytes], self._redis.get(_today_key()))
         return float(value) if value is not None else 0.0
+
+    def by_kind(self) -> dict[str, float]:
+        result: dict[str, float] = {}
+        for kind in COST_KINDS:
+            value = cast(Optional[bytes], self._redis.get(_kind_key(kind)))
+            result[kind] = float(value) if value is not None else 0.0
+        return result
 
     def over_cap(self) -> bool:
         return self.today_total() >= self._cap
@@ -83,7 +104,7 @@ class InMemoryCostLedger:
     def __init__(self, daily_cap_usd: float = 5.0) -> None:
         self._cap = daily_cap_usd
         self._totals: dict[str, float] = {}
-        self._day: Optional[str] = None
+        self._by_kind: dict[str, dict[str, float]] = {}
 
     def _today(self) -> str:
         return datetime.now(_PARIS).strftime("%Y-%m-%d")
@@ -91,9 +112,15 @@ class InMemoryCostLedger:
     def add(self, kind: str, usd: float) -> None:
         today = self._today()
         self._totals[today] = self._totals.get(today, 0.0) + usd
+        today_by_kind = self._by_kind.setdefault(today, {})
+        today_by_kind[kind] = today_by_kind.get(kind, 0.0) + usd
 
     def today_total(self) -> float:
         return self._totals.get(self._today(), 0.0)
+
+    def by_kind(self) -> dict[str, float]:
+        today_by_kind = self._by_kind.get(self._today(), {})
+        return {kind: today_by_kind.get(kind, 0.0) for kind in COST_KINDS}
 
     def over_cap(self) -> bool:
         return self.today_total() >= self._cap

@@ -78,9 +78,15 @@ def workers_on_site(
 ) -> list[str]:
     """Names of workers with a labor entry on ``day`` for ``project_id``."""
     entries = labor_entry_repo.list_by_project(project_id, date_from=day, date_to=day)
+    if not entries:
+        return []
+    # One query for every worker on the project instead of one `find_by_id` per labor
+    # entry (review finding H5's N+1) — `active_only=False` since a worker who logged
+    # this entry may since have gone inactive but should still show up by name.
+    workers_by_id = {worker.id: worker for worker in worker_repo.list_by_project(project_id, active_only=False)}
     names: list[str] = []
     for entry in entries:
-        worker = worker_repo.find_by_id(entry.worker_id)
+        worker = workers_by_id.get(entry.worker_id)
         if worker is not None:
             names.append(worker.person_name or worker.name)
     return names

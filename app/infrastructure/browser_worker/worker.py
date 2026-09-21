@@ -106,7 +106,7 @@ async def run_once(
         job.date,
         job.attempts + 1,
     )
-    _update_status_message(session, job, state="running", text=reply.render("fetch_running", "fr"))
+    _update_status_message(session, job, state="running", text=reply.render("fetch_running", job.lang or "fr"))
 
     outcome = await job_runner(
         job,
@@ -157,19 +157,29 @@ async def run_forever(
     (if any) finish cleanly before the process exits."""
     while not stop_event.is_set():
         now = datetime.now(timezone.utc)
-        processed = await run_once(
-            session=session,
-            job_repo=job_repo,
-            storage=storage,
-            queue=queue,
-            job_runner=job_runner,
-            chrome_path=chrome_path,
-            profile_dir=profile_dir,
-            downloads_dir=downloads_dir,
-            deepseek_api_key=deepseek_api_key,
-            offpeak_only=offpeak_only,
-            now=now,
-        )
+        try:
+            processed = await run_once(
+                session=session,
+                job_repo=job_repo,
+                storage=storage,
+                queue=queue,
+                job_runner=job_runner,
+                chrome_path=chrome_path,
+                profile_dir=profile_dir,
+                downloads_dir=downloads_dir,
+                deepseek_api_key=deepseek_api_key,
+                offpeak_only=offpeak_only,
+                now=now,
+            )
+        except Exception:
+            # A DB blip, an S3 error, an `rq` enqueue failure, or anything else raised
+            # mid-iteration must never kill the poll loop (review finding H2) — log it,
+            # roll back whatever the failed iteration left half-committed, and try again
+            # on the next poll rather than crashing the container and leaving the job
+            # (already flipped to `running` by `claim_next`) wedged forever.
+            logger.exception("browser_worker: run_once failed, rolling back and continuing")
+            session.rollback()
+            processed = False
         if not processed:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=IDLE_SLEEP_SECONDS)

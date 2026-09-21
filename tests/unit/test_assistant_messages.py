@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+
+from app.application.assistant.exceptions import AssistantError
 from app.application.assistant.messages import AssistantMessenger
 from app.domain.entities.chat_message import ChatMessage
 
@@ -72,26 +75,78 @@ def test_post_text_notifies_after_commit() -> None:
 
 def test_post_card_fallback_is_title_dash_subtitle() -> None:
     messenger, _, _ = _messenger()
-    card = {
-        "type": "material",
-        "id": str(uuid4()),
-        "project_id": None,
-        "title": "Ciment Lafarge 25kg",
-        "subtitle": "Confirmé",
-        "badge": "confirmed",
-        "thumbnail_url": None,
-    }
-    message = messenger.post_card(uuid4(), card)
+    product_id = uuid4()
+    message = messenger.post_card(
+        uuid4(),
+        card_type="material",
+        entity_id=product_id,
+        title="Ciment Lafarge 25kg",
+        subtitle="Confirmé",
+        badge="confirmed",
+    )
     assert message.content_type == "card"
-    assert message.payload == {"card": card}
+    assert message.payload == {
+        "card": {
+            "type": "material",
+            "id": str(product_id),
+            "project_id": None,
+            "title": "Ciment Lafarge 25kg",
+            "subtitle": "Confirmé",
+            "badge": "confirmed",
+            "thumbnail_url": None,
+            "extra": {},
+        }
+    }
     assert message.body == "Ciment Lafarge 25kg – Confirmé"
 
 
 def test_post_card_fallback_without_subtitle_is_title_only() -> None:
     messenger, _, _ = _messenger()
-    card = {"type": "invoice", "id": str(uuid4()), "project_id": None, "title": "Facture Leroy Merlin"}
-    message = messenger.post_card(uuid4(), card)
+    message = messenger.post_card(uuid4(), card_type="invoice", entity_id=uuid4(), title="Facture Leroy Merlin")
     assert message.body == "Facture Leroy Merlin"
+
+
+def test_post_card_rejects_unknown_card_type() -> None:
+    messenger, _, _ = _messenger()
+    with pytest.raises(AssistantError):
+        messenger.post_card(uuid4(), card_type="bogus", entity_id=uuid4(), title="x")
+
+
+def test_post_card_rejects_absolute_thumbnail_url() -> None:
+    messenger, _, _ = _messenger()
+    with pytest.raises(AssistantError):
+        messenger.post_card(
+            uuid4(),
+            card_type="material",
+            entity_id=uuid4(),
+            title="x",
+            thumbnail_url="https://example.com/x.png",
+        )
+
+
+def test_post_card_thumbnail_url_and_project_id_and_extra_round_trip() -> None:
+    messenger, _, _ = _messenger()
+    product_id = uuid4()
+    project_id = uuid4()
+    message = messenger.post_card(
+        uuid4(),
+        card_type="invoice",
+        entity_id=product_id,
+        project_id=project_id,
+        title="Facture Leroy Merlin",
+        thumbnail_url="/api/v1/bibliotheque/products/x/image",
+        extra={"invoice_number": "F-2026-0001", "total_ttc": 79.54},
+    )
+    assert message.payload["card"] == {
+        "type": "invoice",
+        "id": str(product_id),
+        "project_id": str(project_id),
+        "title": "Facture Leroy Merlin",
+        "subtitle": None,
+        "badge": None,
+        "thumbnail_url": "/api/v1/bibliotheque/products/x/image",
+        "extra": {"invoice_number": "F-2026-0001", "total_ttc": 79.54},
+    }
 
 
 def test_post_choice_fallback_numbers_the_options() -> None:

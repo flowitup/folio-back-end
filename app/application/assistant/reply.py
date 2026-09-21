@@ -122,6 +122,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "fr": "{name} — {quantity} pce(s), état {condition}, chez {location}",
         "en": "{name} — {quantity} pc(s), {condition} condition, at {location}",
     },
+    "equipment_found_more": {
+        "vi": "…và {count} kết quả khác.",
+        "fr": "… et {count} autre(s) résultat(s).",
+        "en": "…and {count} more result(s).",
+    },
     "equipment_moved": {
         "vi": "Đã chuyển {name} đến {project}.",
         "fr": "{name} déplacé vers {project}.",
@@ -158,6 +163,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "vi": "Đã đạt giới hạn sử dụng hôm nay, thử lại vào ngày mai nhé.",
         "fr": "Le quota du jour est atteint, réessaie demain.",
         "en": "Today's usage quota is reached, please try again tomorrow.",
+    },
+    "rate_limited": {
+        "vi": "Bạn đã gửi khá nhiều yêu cầu trong giờ qua, vui lòng thử lại sau ít phút.",
+        "fr": "Tu as envoyé beaucoup de demandes cette dernière heure, réessaie dans quelques minutes.",
+        "en": "You've sent a lot of requests in the last hour, please try again in a few minutes.",
     },
     "error": {
         "vi": "Đã có lỗi xảy ra, vui lòng thử lại.",
@@ -215,6 +225,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "en": "I couldn't find the exact invoice — is it one of these?",
     },
     "fetch_none_option": {"vi": "Không phải cái nào cả", "fr": "Ce n'est aucune", "en": "None of these"},
+    "fetch_none_of_these": {
+        "vi": "Được, bạn gửi giúp tôi ảnh chụp hoá đơn nhé, tôi sẽ nhập từ đó.",
+        "fr": "D'accord, envoie-moi la photo du ticket à la place, je l'enregistrerai à partir de là.",
+        "en": "Got it — send me a photo of the receipt instead and I'll record it from that.",
+    },
     "fetch_extract_failed": {
         "vi": "Tôi tải được tệp nhưng không đọc được nội dung, vui lòng kiểm tra lại thủ công.",
         "fr": "J'ai téléchargé le fichier mais je n'arrive pas à en lire le contenu, merci de vérifier manuellement.",
@@ -331,7 +346,8 @@ INTENT_LABELS: dict[str, dict[str, str]] = {
     "question": {"vi": "Câu hỏi khác", "fr": "Une question", "en": "A question"},
     "chit_chat": {"vi": "Trò chuyện", "fr": "Discuter", "en": "Just chat"},
 }
-assert set(INTENT_LABELS) == set(INTENTS)
+if set(INTENT_LABELS) != set(INTENTS):
+    raise RuntimeError("INTENT_LABELS and INTENTS have drifted apart.")
 
 
 def render(key: str, lang: str, **kwargs: object) -> str:
@@ -341,8 +357,13 @@ def render(key: str, lang: str, **kwargs: object) -> str:
     return template.format(**kwargs) if kwargs else template
 
 
-def render_equipment_found(hits: list[EquipmentHit], lang: str) -> str:
-    """One line per hit via `equipment_found_line`, joined; empty list is never passed in."""
+def render_equipment_found(hits: list[EquipmentHit], lang: str, *, more: int = 0) -> str:
+    """One line per hit via `equipment_found_line`, joined; empty list is never passed in.
+
+    ``more`` (the count truncated off, `FindResult.total - len(hits)`) appends an
+    "+N more" line instead of ever growing unbounded — `equipment.py`'s `find()` already
+    caps `hits` at `MAX_CANDIDATES`, this just tells the user there was more.
+    """
     lines = [
         render(
             "equipment_found_line",
@@ -354,6 +375,8 @@ def render_equipment_found(hits: list[EquipmentHit], lang: str) -> str:
         )
         for hit in hits
     ]
+    if more > 0:
+        lines.append(render("equipment_found_more", lang, count=more))
     return "\n".join(lines)
 
 

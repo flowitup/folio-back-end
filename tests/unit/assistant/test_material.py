@@ -115,6 +115,18 @@ class FakeSession:
         pass
 
 
+class FakeProjectRepo:
+    """No projects — these tests never exercise the `project_hint` resolution path."""
+
+    def list_for_user_and_companies(self, user_id: UUID, company_ids: list[UUID]) -> list[Any]:
+        return []
+
+
+class FakeAuthzReader:
+    def project_company_id(self, project_id: UUID) -> Optional[UUID]:
+        return None
+
+
 _PHOTO_BYTES = b"\xff\xd8\xff\xe0fake-jpeg-bytes-for-a-material-photo"
 
 
@@ -156,6 +168,8 @@ class World:
             storage=self.storage,
             company_access=self.company_access,
             company_repo=self.company_repo,
+            project_repo=FakeProjectRepo(),
+            authz_reader=FakeAuthzReader(),
             product_repo=self.product_repo,
             supplier_repo=self.supplier_repo,
             material_imports=self.material_imports,
@@ -222,7 +236,7 @@ class TestConfirmed:
         assert products[0].supplier_reference == "GSB18V"
         supplier = world.supplier_repo.find_by_id(products[0].supplier_id)
         assert supplier is not None and supplier.name == "Leroy Merlin"
-        cached = world.material_imports.find_by_photo_hash(_sha(_PHOTO_BYTES))
+        cached = world.material_imports.find_by_photo_hash(world.company_id, _sha(_PHOTO_BYTES))
         assert cached is not None
         assert cached.status == "confirmed"
         card = next(m for m in world.last_replies() if m.content_type == "card")
@@ -242,7 +256,7 @@ class TestToConfirm:
             user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
         )
 
-        cached = world.material_imports.find_by_photo_hash(_sha(_PHOTO_BYTES))
+        cached = world.material_imports.find_by_photo_hash(world.company_id, _sha(_PHOTO_BYTES))
         assert cached is not None
         assert cached.status == "to_confirm"
         card = next(m for m in world.last_replies() if m.content_type == "card")
@@ -263,7 +277,7 @@ class TestNoMatchImportsPhotoOnly:
         products, total = world.product_repo.list(world.company_id)
         assert total == 1
         assert products[0].name == "Perceuse à percussion"
-        cached = world.material_imports.find_by_photo_hash(_sha(_PHOTO_BYTES))
+        cached = world.material_imports.find_by_photo_hash(world.company_id, _sha(_PHOTO_BYTES))
         assert cached is not None
         assert cached.status == "to_confirm"
         assert cached.source_url is None
@@ -282,7 +296,11 @@ class TestCacheHitBySha:
             supplier_reference="GSB18V",
         )
         world.material_imports.add_material_import(
-            product_id=existing.id, status="confirmed", confidence=0.95, photo_sha256=_sha(_PHOTO_BYTES)
+            product_id=existing.id,
+            company_id=world.company_id,
+            status="confirmed",
+            confidence=0.95,
+            photo_sha256=_sha(_PHOTO_BYTES),
         )
 
         message_id = world.post_photo()
@@ -292,7 +310,7 @@ class TestCacheHitBySha:
 
         assert world.web_search.search_calls == []
         card = next(m for m in world.last_replies() if m.content_type == "card")
-        assert card.payload["card"]["product_id"] == str(existing.id)
+        assert card.payload["card"]["id"] == str(existing.id)
         assert card.payload["card"]["badge"] == "confirmed"
 
 

@@ -111,6 +111,9 @@ class FakeWorkerRepo:
     def find_by_id(self, worker_id: UUID) -> Optional[Worker]:
         return self._workers.get(worker_id)
 
+    def list_by_project(self, project_id: UUID, active_only: bool = True) -> list[Worker]:
+        return [w for w in self._workers.values() if w.project_id == project_id]
+
 
 class _FakeEntry:
     def __init__(self, project_id: UUID, worker_id: UUID, day: date) -> None:

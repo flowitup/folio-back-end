@@ -43,6 +43,7 @@ from app.application.assistant.ports import (
     VisionLlmPort,
     WebSearchPort,
 )
+from app.application.authz.ports import AuthzReaderPort
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
@@ -54,6 +55,7 @@ from app.application.bibliotheque.ports import ILibraryProductRepository, ISuppl
 from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
 from app.application.chat.ports import ChatAttachmentStoragePort
 from app.application.companies.ports import CompanyRepositoryPort, UserCompanyAccessRepositoryPort
+from app.application.projects.ports import IProjectRepository
 from app.domain.entities.library_product import LibraryProduct
 from app.domain.value_objects.supplier_slug import slugify
 
@@ -117,6 +119,8 @@ class MaterialFeature:
         storage: ChatAttachmentStoragePort,
         company_access: UserCompanyAccessRepositoryPort,
         company_repo: CompanyRepositoryPort,
+        project_repo: IProjectRepository,
+        authz_reader: AuthzReaderPort,
         product_repo: ILibraryProductRepository,
         supplier_repo: ISupplierRepository,
         material_imports: MaterialImportRepositoryPort,
@@ -132,6 +136,8 @@ class MaterialFeature:
         self._storage = storage
         self._company_access = company_access
         self._company_repo = company_repo
+        self._project_repo = project_repo
+        self._authz_reader = authz_reader
         self._product_repo = product_repo
         self._supplier_repo = supplier_repo
         self._material_imports = material_imports
@@ -143,13 +149,22 @@ class MaterialFeature:
     # Entry point — a fresh photo (A1)
     # ------------------------------------------------------------------
 
-    def run(self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str) -> None:
-        photo = read_photo_bytes(self._messages, self._storage, message_id)
+    def run(
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        project_hint: Optional[str] = None,
+    ) -> str:
+        photo = read_photo_bytes(self._messages, self._storage, message_id, user_id)
         if photo is None:
             messenger.post_text(
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
         photo_bytes, photo_filename, photo_mime = photo
 
         try:
@@ -160,25 +175,30 @@ class MaterialFeature:
             messenger.post_text(
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
         if not gate.identify_ok(ident.confidence):
             messenger.post_text(
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
 
         sha = hashlib.sha256(photo_bytes).hexdigest()
-        cached = self._material_imports.find_by_photo_hash(sha)
+
+        # The photo-hash cache is scoped to a company (review finding H4): resolve the
+        # company FIRST, then check the cache — never before, or two different
+        # companies photographing the same product could leak each other's product
+        # card (and the DB's `(company_id, photo_sha256)` unique constraint would raise
+        # on the second company's own otherwise-legitimate import).
+        company_id = self._resolve_company(user_id, project_hint)
+        if company_id is None:
+            return self._post_pick_company(user_id, message_id, lang, messenger, trace_id, ident, sha, message_id)
+
+        cached = self._material_imports.find_by_photo_hash(company_id, sha)
         if cached is not None:
             self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
-            return
+            return "replied"
 
-        company_id = self._resolve_company(user_id)
-        if company_id is None:
-            self._post_pick_company(user_id, message_id, lang, messenger, trace_id, ident, sha, message_id)
-            return
-
-        self._continue_after_company(
+        return self._continue_after_company(
             user_id,
             message_id,
             company_id,
@@ -196,10 +216,21 @@ class MaterialFeature:
     # Company resolution (plan item 5)
     # ------------------------------------------------------------------
 
-    def _resolve_company(self, user_id: UUID) -> Optional[UUID]:
-        company_ids = {access.company_id for access in self._company_access.list_for_user(user_id)}
-        if len(company_ids) == 1:
-            return next(iter(company_ids))
+    def _resolve_company(self, user_id: UUID, project_hint: Optional[str] = None) -> Optional[UUID]:
+        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        needle = (project_hint or "").strip().lower()
+        if needle:
+            visible = self._project_repo.list_for_user_and_companies(user_id, company_ids)
+            matches = [p for p in visible if p.name.strip().lower() == needle]
+            if not matches:
+                matches = [p for p in visible if needle in p.name.strip().lower()]
+            if len(matches) == 1:
+                hinted_company_id = self._authz_reader.project_company_id(matches[0].id)
+                if hinted_company_id is not None:
+                    return hinted_company_id
+        unique_company_ids = set(company_ids)
+        if len(unique_company_ids) == 1:
+            return next(iter(unique_company_ids))
         return None
 
     def _post_pick_company(
@@ -212,7 +243,7 @@ class MaterialFeature:
         ident: MaterialIdent,
         sha: str,
         photo_message_id: UUID,
-    ) -> None:
+    ) -> str:
         options = []
         for access in self._company_access.list_for_user(user_id):
             company = self._company_repo.find_by_id(access.company_id)
@@ -232,10 +263,11 @@ class MaterialFeature:
             )
         if not options:
             messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
-            return
+            return "refused"
         messenger.post_choice(
             user_id, reply.render("pick_company_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
         )
+        return "asked"
 
     # ------------------------------------------------------------------
     # A1 cache-by-reference, A2-A5
@@ -254,12 +286,12 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
-    ) -> None:
+    ) -> str:
         if ident.reference:
             cached = self._material_imports.find_by_reference(company_id, ident.reference)
             if cached is not None:
                 self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
-                return
+                return "replied"
 
         hits = self._search(ident)
         if hits:
@@ -274,7 +306,7 @@ class MaterialFeature:
                 trace_id,
                 len(hits),
             )
-            self._import_photo_only(
+            return self._import_photo_only(
                 user_id,
                 message_id,
                 company_id,
@@ -287,12 +319,11 @@ class MaterialFeature:
                 messenger,
                 trace_id,
             )
-            return
 
         hit = hits[pick_index]
         status = gate.pick_status(pick_confidence)
         product_data = self._extract_product(hit)
-        self._create_from_hit(
+        return self._create_from_hit(
             user_id,
             message_id,
             company_id,
@@ -405,7 +436,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
-    ) -> None:
+    ) -> str:
         supplier_name = _supplier_name_for_url(str(hit.get("url") or "")) or ident.brand or "Fournisseur non identifié"
         reference = product_data.reference or product_data.ean or f"AI-{sha[:8]}"
         product = self._get_or_create_product(
@@ -424,16 +455,18 @@ class MaterialFeature:
             trace_id=trace_id,
         )
         if product is None:
-            return
+            return "refused"
         self._attach_image(user_id, product.id, product_data.image_url, photo_bytes, photo_mime, photo_filename)
         self._material_imports.add_material_import(
             product_id=product.id,
+            company_id=company_id,
             status=status,
             confidence=confidence,
             photo_sha256=sha,
             source_url=product_data.source_url,
         )
         self._reply_product(user_id, message_id, lang, messenger, trace_id, product, status, supplier_name)
+        return "created"
 
     def _import_photo_only(
         self,
@@ -448,7 +481,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
-    ) -> None:
+    ) -> str:
         supplier_name = ident.brand or "Fournisseur non identifié"
         reference = ident.reference or ident.ean or f"AI-{sha[:8]}"
         product = self._get_or_create_product(
@@ -467,15 +500,21 @@ class MaterialFeature:
             trace_id=trace_id,
         )
         if product is None:
-            return
+            return "refused"
         self._attach_image(user_id, product.id, None, photo_bytes, photo_mime, photo_filename)
         self._material_imports.add_material_import(
-            product_id=product.id, status="to_confirm", confidence=ident.confidence, photo_sha256=sha, source_url=None
+            product_id=product.id,
+            company_id=company_id,
+            status="to_confirm",
+            confidence=ident.confidence,
+            photo_sha256=sha,
+            source_url=None,
         )
         messenger.post_text(
             user_id, reply.render("material_photo_only", lang), reply_to_id=message_id, trace_id=trace_id
         )
         self._reply_product(user_id, message_id, lang, messenger, trace_id, product, "to_confirm", supplier_name)
+        return "created"
 
     def _get_or_create_product(
         self,
@@ -597,15 +636,20 @@ class MaterialFeature:
                 user_id, reply.render("material_to_confirm", lang), reply_to_id=message_id, trace_id=trace_id
             )
         subtitle = f"{supplier_name} · {product.supplier_reference}" if supplier_name else product.supplier_reference
-        card = {
-            "kind": "material",
-            "product_id": str(product.id),
-            "title": product.name,
-            "subtitle": subtitle,
-            "badge": status,
-            "has_image": product.image_storage_key is not None,
-        }
-        messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
+        thumbnail_url = (
+            f"/api/v1/bibliotheque/products/{product.id}/image" if product.image_storage_key is not None else None
+        )
+        messenger.post_card(
+            user_id,
+            card_type="material",
+            entity_id=product.id,
+            title=product.name,
+            subtitle=subtitle,
+            badge=status,
+            thumbnail_url=thumbnail_url,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+        )
 
     # ------------------------------------------------------------------
     # Action taps
@@ -626,10 +670,16 @@ class MaterialFeature:
         if action != "pick_company":
             return False
         company_id = UUID(str(payload["company_id"]))
+        # Defense in depth: `_post_pick_company` only ever offers the caller's own
+        # companies, but this is cheap insurance against a future caller of this method
+        # skipping that guarantee.
+        if company_id not in {access.company_id for access in self._company_access.list_for_user(user_id)}:
+            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            return True
         ident = MaterialIdent.model_validate(payload["ident"])
         sha = str(payload["sha256"])
         photo_message_id = UUID(str(payload["message_id"]))
-        photo = read_photo_bytes(self._messages, self._storage, photo_message_id)
+        photo = read_photo_bytes(self._messages, self._storage, photo_message_id, user_id)
         if photo is None:
             messenger.post_text(
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id

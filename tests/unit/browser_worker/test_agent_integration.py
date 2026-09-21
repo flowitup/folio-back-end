@@ -48,6 +48,8 @@ class TestRealBrowserAgentBlockedOnDisallowedTask:
             result=None,
             pdf_storage_key=None,
             status_message_id=None,
+            lang=None,
+            processed_at=None,
             created_at=None,  # type: ignore[arg-type]
             updated_at=None,  # type: ignore[arg-type]
         )

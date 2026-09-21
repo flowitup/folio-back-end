@@ -31,7 +31,8 @@ def main() -> int:
     from app.infrastructure.ai.deepseek_client import DeepSeekVisionLlm
     from app.infrastructure.ai.jev_client import JevDecisionPort
 
-    decisions = JevDecisionPort(Config.TYPESAFE_API_KEY)
+    cost_ledger = InMemoryCostLedger()
+    decisions = JevDecisionPort(Config.TYPESAFE_API_KEY, cost_ledger)
     router = Router(decisions)
     message = "máy cắt gạch ở đâu?"
     decision = router.route(message, has_photo=False, project_names=["Villa Arcueil"], history_texts=[])
@@ -42,7 +43,6 @@ def main() -> int:
     if len(sys.argv) > 1:
         from app.application.assistant.extract import extract_invoice
 
-        cost_ledger = InMemoryCostLedger()
         vision = DeepSeekVisionLlm(Config.DEEPSEEK_API_KEY, cost_ledger)
         with open(sys.argv[1], "rb") as handle:
             image_bytes = handle.read()

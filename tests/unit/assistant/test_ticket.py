@@ -314,8 +314,15 @@ class TestDuplicateRefused:
         )
 
 
-class TestToConfirmAndSetProject:
-    def test_offers_a_correction_choice_and_moves_the_invoice_on_tap(self, world: World) -> None:
+class TestToConfirmWithMultipleProjects:
+    """S3's project confidence lands in the `to_confirm` band (>= PROJECT_ASK_LOW,
+    < PROJECT_CONFIRMED) with more than one writable project — decision D13 (review
+    finding C2 removed the old behaviour: create immediately, then offer a "wrong
+    chantier?" button that deleted and recreated the invoice on tap, non-atomically
+    dropping payment/refund/highlight/worker links). The new behaviour never creates
+    until an explicit tap, exactly like the below-threshold multi-project case."""
+
+    def test_does_not_create_until_the_tap(self, world: World) -> None:
         message_id = world.post_photo()
         world.vision._json_answers = [Invoice(merchant="Point P", date="2026-09-10", total_ttc=50.0, readability=0.9)]
         world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.75)}
@@ -324,29 +331,38 @@ class TestToConfirmAndSetProject:
             user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
         )
 
-        created = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
-        assert len(created) == 1
-        original_invoice_id = created[0].id
-
+        assert (
+            world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31)) == []
+        )
+        assert (
+            world.invoice_repo.find_by_project_in_range(world.project_b.id, date(2026, 1, 1), date(2026, 12, 31)) == []
+        )
         choice = next(m for m in world.last_replies() if m.content_type == "choice")
         options = choice.payload["options"]
+        # The fake Jev decision carries no per-candidate `project` probabilities, so only
+        # S3's own pick (project_a) is offered — a real Jev call would rank a second
+        # candidate too (see `_top_candidate_projects`), but even a single option still
+        # requires an explicit tap before anything is written (hard rule 2).
+        assert len(options) == 1
         assert options[0]["action"] == "set_project"
-        assert options[0]["payload"]["invoice_id"] == str(original_invoice_id)
+        assert options[0]["payload"]["project_id"] == str(world.project_a.id)
+        assert "invoice" in options[0]["payload"]
 
         world.feature.handle_action(
             user_id=world.user_id,
             message_id=choice.id,
             action="set_project",
-            payload={**options[0]["payload"], "project_id": str(world.project_b.id)},
+            payload=options[0]["payload"],
             lang="fr",
             messenger=world.messenger,
             trace_id="t2",
         )
 
-        assert world.invoice_repo.find_by_id(original_invoice_id) is None
-        moved = world.invoice_repo.find_by_project_in_range(world.project_b.id, date(2026, 1, 1), date(2026, 12, 31))
-        assert len(moved) == 1
-        assert len(world.attachment_repo.list_by_invoice(moved[0].id)) == 2
+        created = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
+        assert len(created) == 1
+        import_row = world.import_repo.find_by_invoice(created[0].id)
+        assert import_row is not None
+        assert import_row.status == "confirmed"
 
 
 class TestPickProjectAllBelowThreshold:

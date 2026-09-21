@@ -58,3 +58,37 @@ def test_in_memory_cost_ledger_defaults_to_five_dollar_cap() -> None:
     assert ledger.over_cap() is False
     ledger.add("deepseek", 0.02)
     assert ledger.over_cap() is True
+
+
+def test_in_memory_cost_ledger_by_kind_breaks_down_every_provider() -> None:
+    """`scripts/assistant_costs.py`'s per-kind breakdown for the owner — every provider
+    that spends money records against its own `kind` (phase 05 hardening: previously
+    only DeepSeek ever called `.add()`, so `today_total()` undercounted real spend)."""
+    ledger = InMemoryCostLedger(daily_cap_usd=5.0)
+    ledger.add("deepseek_vision", 0.05)
+    ledger.add("deepseek_text", 0.01)
+    ledger.add("jev", 0.00004)
+    ledger.add("tavily", 0.0)
+    ledger.add("gemini", 0.04)
+    ledger.add("serpapi", 0.015)
+
+    by_kind = ledger.by_kind()
+
+    assert by_kind == {
+        "deepseek_vision": 0.05,
+        "deepseek_text": 0.01,
+        "jev": 0.00004,
+        "tavily": 0.0,
+        "gemini": 0.04,
+        "serpapi": 0.015,
+    }
+    assert ledger.today_total() == sum(by_kind.values())
+
+
+def test_in_memory_cost_ledger_by_kind_defaults_unseen_kinds_to_zero() -> None:
+    ledger = InMemoryCostLedger()
+    ledger.add("gemini", 0.04)
+    by_kind = ledger.by_kind()
+    assert by_kind["gemini"] == 0.04
+    assert by_kind["jev"] == 0.0
+    assert by_kind["serpapi"] == 0.0

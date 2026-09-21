@@ -51,6 +51,11 @@ class EquipmentHit:
 @dataclass(frozen=True)
 class FindResult:
     hits: list[EquipmentHit] = field(default_factory=list)
+    #: True when `hits` was truncated to `MAX_CANDIDATES` — the reply appends a "+N more"
+    #: line instead of ever exceeding `ChatMessage`'s body length limit (review finding
+    #: MEDIUM 12).
+    truncated: bool = False
+    total: int = 0
 
 
 @dataclass(frozen=True)
@@ -129,7 +134,8 @@ class EquipmentService:
         )
 
     def find(self, *, company_ids: list[UUID], query: str) -> FindResult:
-        return FindResult(hits=self._search(company_ids, query))
+        hits = self._search(company_ids, query)
+        return FindResult(hits=hits[:MAX_CANDIDATES], truncated=len(hits) > MAX_CANDIDATES, total=len(hits))
 
     # ------------------------------------------------------------------
     # Move

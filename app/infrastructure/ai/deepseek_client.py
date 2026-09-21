@@ -86,7 +86,8 @@ class DeepSeekVisionLlm:
             **extra,
         )
         if response.usage is not None:
-            self._cost_ledger.add("deepseek", deepseek_cost_usd(response.usage))
+            kind = "deepseek_vision" if images else "deepseek_text"
+            self._cost_ledger.add(kind, deepseek_cost_usd(response.usage))
         content = response.choices[0].message.content
         return content or ""
 

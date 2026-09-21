@@ -19,7 +19,8 @@ _INTENT_CRITERIA: dict[str, str | None] = {
     "question": "autre question chantier",
     "chit_chat": "autre",
 }
-assert set(_INTENT_CRITERIA) == set(INTENTS)
+if set(_INTENT_CRITERIA) != set(INTENTS):
+    raise RuntimeError("_INTENT_CRITERIA and INTENTS have drifted apart.")
 
 _MERCHANT_LABELS: dict[str, str] = {
     "leroymerlin": "Leroy Merlin",
@@ -28,8 +29,10 @@ _MERCHANT_LABELS: dict[str, str] = {
     "bricodepot": "Brico Dépôt",
     "gedimat": "Gedimat",
     "technomat": "Technomat",
+    "manomano": "ManoMano",
 }
-assert set(_MERCHANT_LABELS) == set(MERCHANTS)
+if set(_MERCHANT_LABELS) != set(MERCHANTS):
+    raise RuntimeError("_MERCHANT_LABELS and MERCHANTS have drifted apart.")
 
 _NONE = "none"
 

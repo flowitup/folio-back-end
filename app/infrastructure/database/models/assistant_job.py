@@ -51,6 +51,17 @@ class AssistantJobModel(Base):
     status_message_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
     )
+    # The requester's language (vi|fr|en), so the browser worker container — which has
+    # no chat-repository/messenger wiring to look up the original message's `lang`
+    # payload — can still render the transient "running" job_status text correctly
+    # instead of always French (review of phase 04, unresolved question 3).
+    lang: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    # Set exactly once, atomically, right before `on_result`'s "done" branch runs the
+    # create-invoice pipeline — guards against a duplicate invoice if
+    # `process_fetched_invoice` is ever invoked twice for the same job (an RQ retry
+    # policy, a manual requeue, a double enqueue after a worker crash between
+    # `update_result` and `enqueue`; review finding H3).
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow

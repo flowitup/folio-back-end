@@ -47,6 +47,7 @@ def _material_to_entity(m: AssistantMaterialImportModel) -> MaterialImportRecord
     return MaterialImportRecord(
         id=m.id,
         product_id=m.product_id,
+        company_id=m.company_id,
         status=m.status,
         confidence=float(m.confidence),
         photo_sha256=m.photo_sha256,
@@ -153,6 +154,7 @@ class SqlAlchemyAssistantImportRepository:
         self,
         *,
         product_id: UUID,
+        company_id: UUID,
         status: str,
         confidence: float,
         photo_sha256: Optional[str] = None,
@@ -162,6 +164,7 @@ class SqlAlchemyAssistantImportRepository:
         model = AssistantMaterialImportModel(
             id=uuid4(),
             product_id=product_id,
+            company_id=company_id,
             status=status,
             confidence=confidence,
             photo_sha256=photo_sha256 or uuid4().hex,
@@ -173,9 +176,12 @@ class SqlAlchemyAssistantImportRepository:
         self._session.commit()
         return _material_to_entity(model)
 
-    def find_by_photo_hash(self, photo_sha256: str) -> Optional[MaterialImportRecord]:
+    def find_by_photo_hash(self, company_id: UUID, photo_sha256: str) -> Optional[MaterialImportRecord]:
         model = self._session.execute(
-            select(AssistantMaterialImportModel).where(AssistantMaterialImportModel.photo_sha256 == photo_sha256)
+            select(AssistantMaterialImportModel).where(
+                AssistantMaterialImportModel.company_id == company_id,
+                AssistantMaterialImportModel.photo_sha256 == photo_sha256,
+            )
         ).scalar_one_or_none()
         return _material_to_entity(model) if model is not None else None
 

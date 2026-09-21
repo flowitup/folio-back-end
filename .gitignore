@@ -85,3 +85,15 @@ Thumbs.db
 
 # Flask runtime data
 instance/
+
+# AI eval harness (scripts/ai_eval) — real invoices/material photos and their gold
+# labels never get committed; keep only the README, the example gold files, and the
+# empty directories themselves.
+eval/**
+!eval/README.md
+!eval/invoices/
+!eval/invoices/gold.example.json
+!eval/invoices/.gitkeep
+!eval/materials/
+!eval/materials/gold.example.json
+!eval/materials/.gitkeep

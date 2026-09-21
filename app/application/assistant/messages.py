@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
+from app.application.assistant.exceptions import AssistantError
 from app.application.assistant.ports import MessagePosterPort
 from app.application.invitations.ports import TransactionalSessionPort
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
@@ -21,6 +22,14 @@ from app.domain.entities.chat_message import ChannelRef, ChatMessage
 # Keeps the text fallback of a choice message readable even if a caller ever passes an
 # unreasonably long option list.
 _MAX_OPTIONS_IN_FALLBACK = 20
+
+
+#: The card content-type's wire contract (phase 01, shared with the mobile/web apps):
+#: ``{"card": {"type", "id", "project_id", "title", "subtitle", "badge", "thumbnail_url",
+#: "extra"}}``. The app's parser only recognises this exact shape — never post a card
+#: with any other top-level keys, and never an absolute ``thumbnail_url`` (the app
+#: attaches its bearer token to a relative ``/api/...`` path only).
+CARD_TYPES = ("invoice", "material")
 
 
 def _card_fallback(card: dict[str, Any]) -> str:
@@ -87,8 +96,41 @@ class AssistantMessenger:
         )
 
     def post_card(
-        self, user_id: UUID, card: dict[str, Any], *, reply_to_id: UUID | None = None, trace_id: str | None = None
+        self,
+        user_id: UUID,
+        *,
+        card_type: str,
+        entity_id: UUID,
+        title: str,
+        subtitle: str | None = None,
+        badge: str | None = None,
+        project_id: UUID | None = None,
+        thumbnail_url: str | None = None,
+        extra: dict[str, Any] | None = None,
+        reply_to_id: UUID | None = None,
+        trace_id: str | None = None,
     ) -> ChatMessage:
+        """Builds the ``card`` content-type's wire contract itself — callers pass typed
+        fields, never a raw dict, so every card the assistant posts is shaped identically
+        for the app's parser (see ``CARD_TYPES``/the module docstring above).
+
+        ``thumbnail_url``, when set, must be a relative ``/api/...`` path (the app
+        attaches its own bearer token); an absolute URL would be rejected client-side.
+        """
+        if card_type not in CARD_TYPES:
+            raise AssistantError(f"Unknown card_type {card_type!r}, expected one of {CARD_TYPES}.")
+        if thumbnail_url is not None and not thumbnail_url.startswith("/api/"):
+            raise AssistantError("thumbnail_url must be a relative '/api/...' path.")
+        card: dict[str, Any] = {
+            "type": card_type,
+            "id": str(entity_id),
+            "project_id": str(project_id) if project_id is not None else None,
+            "title": title,
+            "subtitle": subtitle,
+            "badge": badge,
+            "thumbnail_url": thumbnail_url,
+            "extra": extra or {},
+        }
         return self._post(
             user_id=user_id,
             content_type="card",

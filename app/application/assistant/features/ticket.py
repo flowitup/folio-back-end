@@ -30,7 +30,7 @@ from uuid import UUID, uuid4
 
 from app.application.assistant import gate, reply
 from app.application.assistant.decide import TicketDecision, decide_ticket
-from app.application.assistant.exceptions import LlmOutputError
+from app.application.assistant.exceptions import AssistantError, LlmOutputError
 from app.application.assistant.extract import extract_invoice, is_readable, pdf_to_images
 from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import InvoiceImportRepositoryPort
@@ -87,8 +87,14 @@ _VERIFY_WORST_DIFF_CRITERIA: dict[str, Optional[str]] = {
 
 #: How many genai scan attempts before falling back to OpenCV (initial + one retry).
 _GENAI_ATTEMPTS = 2
-#: How many candidate projects the "pick a project" correction choice offers.
-_TOP_PROJECTS_FOR_CORRECTION = 2
+#: How many candidates the "which chantier?" choice offers when S3's project confidence
+#: lands in the `to_confirm` band (gate.PROJECT_ASK_LOW <= confidence < PROJECT_CONFIRMED).
+_TOP_PROJECT_CANDIDATES = 2
+
+#: Every pending object this feature ever writes lives under this prefix — `_fetch_pending`/
+#: `_cleanup_pending` refuse any key outside it (defense in depth against a storage key
+#: from elsewhere in the bucket ever being read/deleted through this path).
+_PENDING_PREFIX = "assistant/pending/"
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -130,6 +136,28 @@ def _build_single_line_item(invoice: Invoice) -> list[dict[str, Any]]:
         unit_price_ht = invoice.total_ttc / (1 + vat_rate / 100.0)
     label = f"Ticket {invoice.merchant} {invoice.date}".strip() if invoice.date else f"Ticket {invoice.merchant}"
     return [{"description": label, "quantity": 1, "unit_price": unit_price_ht, "vat_rate": vat_rate}]
+
+
+def _top_candidate_projects(
+    target: WritableProject, projects: list[WritableProject], decision: TicketDecision
+) -> list[WritableProject]:
+    """``target`` (S3's own pick) plus, when known, the next most likely project from
+    Jev's own ``project`` choice probabilities — at most `_TOP_PROJECT_CANDIDATES`."""
+    ordered = [target]
+    ranked = sorted(decision.project_probabilities.items(), key=lambda item: item[1], reverse=True)
+    for project_id_str, _probability in ranked:
+        if len(ordered) >= _TOP_PROJECT_CANDIDATES:
+            break
+        try:
+            candidate_id = UUID(project_id_str)
+        except ValueError:
+            continue
+        if candidate_id == target.id:
+            continue
+        candidate = next((p for p in projects if p.id == candidate_id), None)
+        if candidate is not None:
+            ordered.append(candidate)
+    return ordered
 
 
 class TicketFeature:
@@ -178,23 +206,23 @@ class TicketFeature:
     # Entry point — a fresh photo (C1-C4, S2-S4)
     # ------------------------------------------------------------------
 
-    def run(self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str) -> None:
-        photo = read_photo_bytes(self._messages, self._storage, message_id)
+    def run(self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str) -> str:
+        photo = read_photo_bytes(self._messages, self._storage, message_id, user_id)
         if photo is None:
             messenger.post_text(
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
         photo_bytes, photo_filename, photo_mime = photo
 
         try:
             invoice_a = extract_invoice(self._vision, [photo_bytes])
         except LlmOutputError:
             messenger.post_text(user_id, reply.render("retake_photo", lang), reply_to_id=message_id, trace_id=trace_id)
-            return
+            return "asked"
         if not is_readable(invoice_a):
             messenger.post_text(user_id, reply.render("retake_photo", lang), reply_to_id=message_id, trace_id=trace_id)
-            return
+            return "asked"
 
         company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
@@ -207,7 +235,7 @@ class TicketFeature:
             if picked is not None and gate.attach_existing_allowed(attach_confidence):
                 project, existing = picked
                 scan_pdf, _mode = self._make_scan(invoice_a, photo_bytes)
-                self._attach_to_existing(
+                return self._attach_to_existing(
                     user_id=user_id,
                     message_id=message_id,
                     lang=lang,
@@ -221,7 +249,6 @@ class TicketFeature:
                     photo_filename=photo_filename,
                     scan_pdf=scan_pdf,
                 )
-                return
 
         scan_pdf, _mode = self._make_scan(invoice_a, photo_bytes)
 
@@ -240,7 +267,7 @@ class TicketFeature:
         )
         decision = decide_ticket(self._decisions, ticket_state, projects, dup_candidates)
 
-        self._apply_gate(
+        return self._apply_gate(
             user_id=user_id,
             message_id=message_id,
             lang=lang,
@@ -271,7 +298,7 @@ class TicketFeature:
         chat_hint: Optional[str],
         source: str,
         reply_to_id: Optional[UUID] = None,
-    ) -> None:
+    ) -> str:
         """``InvoiceFetchFeature.on_result``'s "done" path: a browser-downloaded PDF is
         already a clean document — no scan step (plan: "the downloaded PDF is already
         clean"). Reuses ``run()``'s exact S2-S4 pipeline; the PDF itself becomes the
@@ -286,12 +313,12 @@ class TicketFeature:
             messenger.post_text(
                 user_id, reply.render("fetch_extract_failed", lang), reply_to_id=reply_to_id, trace_id=trace_id
             )
-            return
+            return "asked"
         if not is_readable(invoice_a):
             messenger.post_text(
                 user_id, reply.render("fetch_extract_failed", lang), reply_to_id=reply_to_id, trace_id=trace_id
             )
-            return
+            return "asked"
 
         filename = "facture.pdf" if content_type == "application/pdf" else "facture"
         company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
@@ -304,7 +331,7 @@ class TicketFeature:
             picked, attach_confidence = self._decide_attach(candidates, invoice_a)
             if picked is not None and gate.attach_existing_allowed(attach_confidence):
                 project, existing = picked
-                self._attach_to_existing(
+                return self._attach_to_existing(
                     user_id=user_id,
                     message_id=reply_to_id,
                     lang=lang,
@@ -319,7 +346,6 @@ class TicketFeature:
                     scan_pdf=None,
                     source=source,
                 )
-                return
 
         workers_by_project = {
             str(p.id): workers_on_site(self._labor_entry_repo, self._worker_repo, p.id, ticket_day) for p in projects
@@ -336,7 +362,7 @@ class TicketFeature:
         )
         decision = decide_ticket(self._decisions, ticket_state, projects, dup_candidates)
 
-        self._apply_gate(
+        return self._apply_gate(
             user_id=user_id,
             message_id=reply_to_id,
             lang=lang,
@@ -450,7 +476,7 @@ class TicketFeature:
         photo_filename: str,
         scan_pdf: Optional[bytes],
         source: str = "ticket",
-    ) -> None:
+    ) -> str:
         original_attachment = self._upload_attachment_usecase.execute(
             invoice_id=existing.id,
             filename=photo_filename,
@@ -489,6 +515,7 @@ class TicketFeature:
         )
         card = self._invoice_card(
             invoice_id=existing.id,
+            project_id=existing.project_id,
             invoice_number=existing.invoice_number,
             project_name=project.name,
             merchant=existing.recipient_name,
@@ -496,7 +523,8 @@ class TicketFeature:
             issue_date=existing.issue_date.isoformat(),
             status=status,
         )
-        messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
+        return "attached"
 
     # ------------------------------------------------------------------
     # S4 — gate: duplicate check, then project assignment
@@ -518,16 +546,15 @@ class TicketFeature:
         original_filename: str,
         scan_bytes: Optional[bytes],
         source: str = "ticket",
-    ) -> None:
+    ) -> str:
         if decision.duplicate_of is not None:
             dup_status = gate.duplicate_status(decision.duplicate_confidence)
             if dup_status == "reject":
-                self._post_duplicate_refused(
+                return self._post_duplicate_refused(
                     user_id, message_id, lang, messenger, trace_id, decision.duplicate_of, projects
                 )
-                return
             if dup_status == "ask":
-                self._post_duplicate_check(
+                return self._post_duplicate_check(
                     user_id=user_id,
                     message_id=message_id,
                     lang=lang,
@@ -541,8 +568,7 @@ class TicketFeature:
                     scan_bytes=scan_bytes,
                     source=source,
                 )
-                return
-        self._resolve_project_and_create(
+        return self._resolve_project_and_create(
             user_id=user_id,
             message_id=message_id,
             lang=lang,
@@ -567,12 +593,13 @@ class TicketFeature:
         trace_id: str,
         duplicate_of: UUID,
         projects: list[WritableProject],
-    ) -> None:
+    ) -> str:
         existing = self._invoice_repo.find_by_id(duplicate_of)
         if existing is not None:
             project_name = self._project_name(existing.project_id, projects)
             card = self._invoice_card(
                 invoice_id=existing.id,
+                project_id=existing.project_id,
                 invoice_number=existing.invoice_number,
                 project_name=project_name,
                 merchant=existing.recipient_name,
@@ -580,8 +607,9 @@ class TicketFeature:
                 issue_date=existing.issue_date.isoformat(),
                 status="confirmed",
             )
-            messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
         messenger.post_text(user_id, reply.render("duplicate_refused", lang), reply_to_id=message_id, trace_id=trace_id)
+        return "refused"
 
     def _post_duplicate_check(
         self,
@@ -598,7 +626,7 @@ class TicketFeature:
         original_filename: str,
         scan_bytes: Optional[bytes],
         source: str = "ticket",
-    ) -> None:
+    ) -> str:
         original_key, scan_key = self._store_pending(trace_id, original_bytes, original_mime, scan_bytes)
         base_payload = self._pending_payload(
             invoice_a, decision, original_key, original_mime, original_filename, scan_key, source
@@ -620,6 +648,7 @@ class TicketFeature:
         messenger.post_choice(
             user_id, reply.render("duplicate_check_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
         )
+        return "asked"
 
     def _resolve_project_and_create(
         self,
@@ -637,7 +666,7 @@ class TicketFeature:
         original_filename: str,
         scan_bytes: Optional[bytes],
         source: str = "ticket",
-    ) -> None:
+    ) -> str:
         projects_by_id = {project.id: project for project in projects}
         flags = [] if gate.amounts_ok(decision.amounts_consistent) else ["amounts_to_check"]
         target = projects_by_id.get(decision.project_id) if decision.project_id is not None else None
@@ -645,7 +674,7 @@ class TicketFeature:
 
         if status == "needs_review":
             if len(projects) == 1:
-                self._finalize_create(
+                return self._finalize_create(
                     user_id=user_id,
                     message_id=message_id,
                     lang=lang,
@@ -661,16 +690,14 @@ class TicketFeature:
                     original_mime=original_mime,
                     original_filename=original_filename,
                     scan_bytes=scan_bytes,
-                    offer_correction=False,
                     source=source,
                 )
-                return
             if not projects:
                 messenger.post_text(
                     user_id, reply.render("pick_project_none", lang), reply_to_id=message_id, trace_id=trace_id
                 )
-                return
-            self._post_pick_project_all(
+                return "refused"
+            return self._post_pick_project_all(
                 user_id=user_id,
                 message_id=message_id,
                 lang=lang,
@@ -685,10 +712,35 @@ class TicketFeature:
                 scan_bytes=scan_bytes,
                 source=source,
             )
-            return
 
-        assert target is not None  # status != "needs_review" implies target was resolved above
-        self._finalize_create(
+        if target is None:  # status != "needs_review" only when target was resolved above
+            raise AssistantError("_resolve_project_and_create: to_confirm/confirmed status without a target.")
+
+        # D13: below full confidence, don't create yet — ask (top-2 candidates) and
+        # create ON TAP from the pending state, exactly like the needs_review/multi-
+        # project branch above. A single writable project always creates directly
+        # (there is nothing to ask about). This replaces the old "create now, then
+        # offer a correction button that deletes+recreates the invoice" flow (decision
+        # D13 / review finding C2): that button silently dropped payment/refund/
+        # highlight/worker links and could destroy an invoice non-atomically.
+        if status == "to_confirm" and len(projects) > 1:
+            return self._post_pick_project_all(
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=messenger,
+                trace_id=trace_id,
+                invoice_a=invoice_a,
+                decision=decision,
+                projects=_top_candidate_projects(target, projects, decision),
+                original_bytes=original_bytes,
+                original_mime=original_mime,
+                original_filename=original_filename,
+                scan_bytes=scan_bytes,
+                source=source,
+            )
+
+        return self._finalize_create(
             user_id=user_id,
             message_id=message_id,
             lang=lang,
@@ -704,8 +756,6 @@ class TicketFeature:
             original_mime=original_mime,
             original_filename=original_filename,
             scan_bytes=scan_bytes,
-            offer_correction=(status == "to_confirm"),
-            other_projects=[p for p in projects if p.id != target.id],
             source=source,
         )
 
@@ -725,7 +775,7 @@ class TicketFeature:
         original_filename: str,
         scan_bytes: Optional[bytes],
         source: str = "ticket",
-    ) -> None:
+    ) -> str:
         original_key, scan_key = self._store_pending(trace_id, original_bytes, original_mime, scan_bytes)
         base_payload = self._pending_payload(
             invoice_a, decision, original_key, original_mime, original_filename, scan_key, source
@@ -741,6 +791,7 @@ class TicketFeature:
         messenger.post_choice(
             user_id, reply.render("pick_project_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
         )
+        return "asked"
 
     def _finalize_create(
         self,
@@ -760,10 +811,8 @@ class TicketFeature:
         original_mime: str,
         original_filename: str,
         scan_bytes: Optional[bytes],
-        offer_correction: bool,
-        other_projects: Optional[list[WritableProject]] = None,
         source: str = "ticket",
-    ) -> None:
+    ) -> str:
         response = self._create_and_attach(
             user_id=user_id,
             project_id=project.id,
@@ -791,6 +840,7 @@ class TicketFeature:
             )
         card = self._invoice_card(
             invoice_id=UUID(response.id),
+            project_id=project.id,
             invoice_number=response.invoice_number,
             project_name=project.name,
             merchant=response.recipient_name,
@@ -798,19 +848,8 @@ class TicketFeature:
             issue_date=response.issue_date,
             status=status,
         )
-        messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
-        if offer_correction and other_projects:
-            options = [
-                {
-                    "label": candidate.name,
-                    "action": "set_project",
-                    "payload": {"invoice_id": response.id, "project_id": str(candidate.id)},
-                }
-                for candidate in other_projects[:_TOP_PROJECTS_FOR_CORRECTION]
-            ]
-            messenger.post_choice(
-                user_id, reply.render("pick_project_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
-            )
+        messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
+        return "created"
 
     def _create_and_attach(
         self,
@@ -922,12 +961,16 @@ class TicketFeature:
         messenger: AssistantMessenger,
         trace_id: str,
     ) -> None:
+        # "Move an already-created invoice to another project" (delete + recreate) was
+        # removed entirely (decision D13): it was non-atomic, silently dropped payment/
+        # refund/highlight/worker links, and `invoices.refunds_invoice_id`/
+        # `applied_to_invoice_id` are ON DELETE SET NULL so it silently broke avoir/
+        # refund back-references. `set_project` now only ever creates from pending state.
+        if "invoice" not in payload:
+            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            return
         project_id = UUID(str(payload["project_id"]))
-        if "invoice" in payload:
-            self._create_from_pending(user_id, message_id, payload, project_id, lang, messenger, trace_id)
-        else:
-            invoice_id = UUID(str(payload["invoice_id"]))
-            self._move_invoice(user_id, message_id, invoice_id, project_id, lang, messenger, trace_id)
+        self._create_from_pending(user_id, message_id, payload, project_id, lang, messenger, trace_id)
 
     def _create_from_pending(
         self,
@@ -970,100 +1013,9 @@ class TicketFeature:
             original_mime=str(payload.get("original_mime") or "image/jpeg"),
             original_filename=str(payload.get("original_filename") or "ticket.jpg"),
             scan_bytes=scan_bytes,
-            offer_correction=False,
             source=str(payload.get("source") or "ticket"),
         )
         self._cleanup_pending(str(payload["original_key"]), str(scan_key or ""))
-
-    def _move_invoice(
-        self,
-        user_id: UUID,
-        message_id: UUID,
-        invoice_id: UUID,
-        project_id: UUID,
-        lang: str,
-        messenger: AssistantMessenger,
-        trace_id: str,
-    ) -> None:
-        existing = self._invoice_repo.find_by_id(invoice_id)
-        if existing is None:
-            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
-            return
-        new_project = self._resolve_writable_project(user_id, project_id)
-        if new_project is None:
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
-            return
-        blobs: list[tuple[str, str, bytes]] = []
-        for attachment in self._attachment_repo.list_by_invoice(invoice_id):
-            stream, _length = self._storage.get_stream(attachment.storage_key)
-            blobs.append((attachment.filename, attachment.mime_type, stream.read()))
-        prior_import = self._import_repo.find_by_invoice(invoice_id)
-
-        items = [
-            {
-                "description": item.description,
-                "quantity": float(item.quantity),
-                "unit_price": float(item.unit_price),
-                "vat_rate": float(item.vat_rate),
-            }
-            for item in existing.items
-        ]
-        self._delete_invoice_usecase.execute(invoice_id)
-        request = CreateInvoiceRequest(
-            project_id=project_id,
-            created_by=user_id,
-            type=existing.type,
-            issue_date=existing.issue_date,
-            recipient_name=existing.recipient_name,
-            recipient_address=existing.recipient_address,
-            items=items,
-            notes=existing.notes,
-        )
-        response = self._create_invoice_usecase.execute(request)
-        new_invoice_id = UUID(response.id)
-        original_attachment_id: Optional[UUID] = None
-        scan_attachment_id: Optional[UUID] = None
-        for filename, mime_type, data in blobs:
-            saved = self._upload_attachment_usecase.execute(
-                invoice_id=new_invoice_id,
-                filename=filename,
-                mime_type=mime_type,
-                size_bytes=len(data),
-                fileobj=io.BytesIO(data),
-                uploaded_by=user_id,
-            )
-            if mime_type == "application/pdf":
-                scan_attachment_id = saved.id
-            else:
-                original_attachment_id = saved.id
-        status = prior_import.status if prior_import is not None else "confirmed"
-        self._import_repo.add_invoice_import(
-            invoice_id=new_invoice_id,
-            status=status,
-            source=prior_import.source if prior_import is not None else "ticket",
-            ai_confidence=prior_import.ai_confidence if prior_import is not None else 0.0,
-            category=prior_import.category if prior_import is not None else None,
-            flags=prior_import.flags if prior_import is not None else [],
-            original_attachment_id=original_attachment_id,
-            scan_attachment_id=scan_attachment_id,
-            trace_id=trace_id,
-        )
-        messenger.post_text(
-            user_id,
-            reply.render("invoice_created", lang, number=response.invoice_number, project=new_project.name),
-            reply_to_id=message_id,
-            trace_id=trace_id,
-        )
-        card = self._invoice_card(
-            invoice_id=new_invoice_id,
-            invoice_number=response.invoice_number,
-            project_name=new_project.name,
-            merchant=response.recipient_name,
-            total_ttc=response.total_amount,
-            issue_date=response.issue_date,
-            status=status,
-        )
-        messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
 
     def _action_confirm_duplicate(
         self,
@@ -1077,20 +1029,23 @@ class TicketFeature:
         candidate_id = payload.get("candidate_invoice_id")
         if candidate_id:
             existing = self._invoice_repo.find_by_id(UUID(str(candidate_id)))
-            if existing is not None:
-                company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
-                projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
-                project_name = self._project_name(existing.project_id, projects)
+            # Only ever show a card for an invoice on a project the caller can see —
+            # closes the "any invoice's details disclosed" IDOR even if a forged
+            # `candidate_invoice_id` ever reached this far (defense in depth: the
+            # SubmitAssistantActionUseCase fix already stops a forged one from arriving).
+            writable = self._resolve_writable_project(user_id, existing.project_id) if existing is not None else None
+            if existing is not None and writable is not None:
                 card = self._invoice_card(
                     invoice_id=existing.id,
+                    project_id=existing.project_id,
                     invoice_number=existing.invoice_number,
-                    project_name=project_name,
+                    project_name=writable.name,
                     merchant=existing.recipient_name,
                     total_ttc=float(existing.total_amount),
                     issue_date=existing.issue_date.isoformat(),
                     status="confirmed",
                 )
-                messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
+                messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
         messenger.post_text(user_id, reply.render("duplicate_refused", lang), reply_to_id=message_id, trace_id=trace_id)
         self._cleanup_pending(str(payload.get("original_key") or ""), str(payload.get("scan_key") or ""))
 
@@ -1116,6 +1071,7 @@ class TicketFeature:
         decision = TicketDecision(
             project_id=UUID(str(project_id_raw)) if project_id_raw else None,
             project_confidence=float(payload.get("project_confidence") or 0.0),
+            project_probabilities={},
             category=str(payload.get("category") or "autre"),
             category_confidence=1.0,
             duplicate_of=None,
@@ -1184,7 +1140,7 @@ class TicketFeature:
     def _store_pending(
         self, trace_id: str, original_bytes: bytes, original_mime: str, scan_bytes: Optional[bytes]
     ) -> tuple[str, Optional[str]]:
-        prefix = f"assistant/pending/{trace_id}-{uuid4().hex[:8]}"
+        prefix = f"{_PENDING_PREFIX}{trace_id}-{uuid4().hex[:8]}"
         original_key = f"{prefix}/original"
         self._storage.put(original_key, io.BytesIO(original_bytes), content_type=original_mime)
         if scan_bytes is None:
@@ -1194,6 +1150,14 @@ class TicketFeature:
         return original_key, scan_key
 
     def _fetch_pending(self, key: str) -> Optional[bytes]:
+        # Defense in depth: a pending key only ever comes back from a stored choice
+        # option's own payload (see `SubmitAssistantActionUseCase`'s stored-option
+        # check), but this still refuses to fetch anything outside the one prefix this
+        # feature ever writes to — an attachment/photo storage key can never be read
+        # through this path even if a future handler forwarded one by mistake.
+        if not key.startswith(_PENDING_PREFIX):
+            logger.warning("assistant.ticket: refused to read a non-pending storage key %s", key)
+            return None
         try:
             stream, _length = self._storage.get_stream(key)
             return stream.read()
@@ -1203,10 +1167,10 @@ class TicketFeature:
 
     def _cleanup_pending(self, original_key: str, scan_key: str) -> None:
         for key in (original_key, scan_key):
-            if not key:
+            if not key or not key.startswith(_PENDING_PREFIX):
                 continue
             try:
-                self._storage.delete(key)  # type: ignore[attr-defined]
+                self._storage.delete(key)
             except Exception:
                 pass
 
@@ -1214,6 +1178,7 @@ class TicketFeature:
         self,
         *,
         invoice_id: UUID,
+        project_id: UUID,
         invoice_number: str,
         project_name: str,
         merchant: str,
@@ -1221,12 +1186,14 @@ class TicketFeature:
         issue_date: str,
         status: str,
     ) -> dict[str, Any]:
+        """Keyword arguments for ``AssistantMessenger.post_card(user_id, **card, ...)`` —
+        see that method for the wire contract this is shaped to feed."""
         return {
-            "kind": "invoice",
-            "invoice_id": str(invoice_id),
-            "invoice_number": invoice_number,
+            "card_type": "invoice",
+            "entity_id": invoice_id,
+            "project_id": project_id,
             "title": merchant,
             "subtitle": f"{project_name} · {issue_date} · {total_ttc}€",
-            "total_ttc": total_ttc,
             "badge": status,
+            "extra": {"invoice_number": invoice_number, "total_ttc": total_ttc},
         }

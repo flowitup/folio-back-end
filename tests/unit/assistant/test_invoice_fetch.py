@@ -595,7 +595,8 @@ class TestHandleAction:
         assert handled is True
         cards = [m for m in world.messages.messages.values() if m.content_type == "card"]
         assert len(cards) == 1
-        assert cards[0].payload["card"]["invoice_id"] == response.id
+        assert cards[0].payload["card"]["id"] == response.id
+        assert cards[0].payload["card"]["project_id"] == str(world.project_a.id)
 
     def test_fetch_none_asks_for_the_ticket_photo(self, session) -> None:
         world = World(session)

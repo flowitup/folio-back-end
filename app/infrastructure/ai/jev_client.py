@@ -13,7 +13,8 @@ from typing import Any, Optional
 from typesafe_sdk import Choice, Noul, TypeSafeClient, TypeSafeError
 
 from app.application.assistant.exceptions import DecisionError, ProviderNotConfiguredError
-from app.application.assistant.ports import ChoiceQuestion, Decision, NoulQuestion
+from app.application.assistant.ports import ChoiceQuestion, CostLedgerPort, Decision, NoulQuestion
+from app.infrastructure.ai.cost import TYPESAFE_PER_CALL_USD
 
 
 def _build_question(question: ChoiceQuestion | NoulQuestion) -> Any:
@@ -25,7 +26,8 @@ def _build_question(question: ChoiceQuestion | NoulQuestion) -> Any:
 class JevDecisionPort:
     """Implements DecisionPort against `typesafe_sdk.TypeSafeClient`."""
 
-    def __init__(self, api_key: str, client: Optional[TypeSafeClient] = None) -> None:
+    def __init__(self, api_key: str, cost_ledger: CostLedgerPort, client: Optional[TypeSafeClient] = None) -> None:
+        self._cost_ledger = cost_ledger
         self._client = client or TypeSafeClient(api_key=api_key)
 
     def decide(self, state: dict[str, Any], questions: dict[str, ChoiceQuestion | NoulQuestion]) -> Decision:
@@ -34,6 +36,7 @@ class JevDecisionPort:
             response = self._client.system_one(state=state, questions=built_questions)
         except TypeSafeError as exc:
             raise DecisionError(f"Jev system_one failed: {exc}") from exc
+        self._cost_ledger.add("jev", TYPESAFE_PER_CALL_USD)
 
         choices: dict[str, tuple[str, float, dict[str, float]]] = {}
         for name, question in questions.items():

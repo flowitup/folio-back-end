@@ -116,6 +116,9 @@ INTENTS: tuple[str, ...] = (
 )
 
 #: Merchants Jev is asked to recognise for `fetch_invoice` (S0 `merchant` question).
+#: Kept in lockstep with `app.infrastructure.browser_worker.merchants.MERCHANT_DOMAINS`
+#: (the browser allowlist) — a merchant absent here can never be routed to even though
+#: the agent is technically allowed to visit its domain.
 MERCHANTS: tuple[str, ...] = (
     "leroymerlin",
     "pointp",
@@ -123,6 +126,7 @@ MERCHANTS: tuple[str, ...] = (
     "bricodepot",
     "gedimat",
     "technomat",
+    "manomano",
 )
 
 

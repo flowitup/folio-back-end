@@ -69,6 +69,12 @@ DEDUPE_WINDOW = timedelta(hours=24)
 #: How many "closest purchase" candidates the not_found choice offers.
 NOT_FOUND_CANDIDATES = 5
 
+#: `_closest_purchases` only ever looks this far around the target date (review finding
+#: H5) — a legitimate "which purchase is this" match is always close in time; scanning
+#: every materials/services invoice ever recorded on every writable project was O(all
+#: invoices) per not_found reply.
+CLOSEST_PURCHASE_WINDOW = timedelta(days=90)
+
 _DATE_WITH_YEAR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATE_NO_YEAR_RE = re.compile(r"^(\d{2})-(\d{2})$")
 _AMOUNT_CLEAN_RE = re.compile(r"[^0-9.\-]")
@@ -189,13 +195,13 @@ class InvoiceFetchFeature:
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
-    ) -> None:
+    ) -> str:
         merchant = decision.merchant if decision.merchant in MERCHANTS else None
         if merchant is None:
             messenger.post_text(
                 user_id, reply.render("fetch_need_merchant", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
 
         message = self._messages.find_by_id(message_id)
         text = (message.body or "").strip() if message is not None else ""
@@ -209,14 +215,14 @@ class InvoiceFetchFeature:
             messenger.post_text(
                 user_id, reply.render("fetch_need_amount", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
 
         amount = _normalize_amount(parsed.amount_ttc)
         if amount is None:
             messenger.post_text(
                 user_id, reply.render("fetch_need_amount", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "asked"
         ticket_date = _normalize_date(parsed.date, today) or today
 
         since = datetime.now(timezone.utc) - DEDUPE_WINDOW
@@ -228,7 +234,7 @@ class InvoiceFetchFeature:
             messenger.post_text(
                 user_id, reply.render("fetch_already_running", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return
+            return "refused"
 
         job = self._job_repo.add(
             user_id=user_id,
@@ -236,6 +242,7 @@ class InvoiceFetchFeature:
             amount_ttc=amount_decimal,
             date=ticket_date,
             project_hint=decision.project_hint,
+            lang=lang,
         )
         status_message = messenger.post_job_status(
             user_id,
@@ -246,6 +253,7 @@ class InvoiceFetchFeature:
             trace_id=trace_id,
         )
         self._job_repo.set_status_message(job.id, status_message.id)
+        return "replied"
 
     # ------------------------------------------------------------------
     # B2 — the browser worker's result (`process_fetched_invoice` RQ job)
@@ -282,6 +290,14 @@ class InvoiceFetchFeature:
     def _handle_done(
         self, job: AssistantJobRecord, context: _StatusContext, messenger: AssistantMessenger, trace_id: str
     ) -> None:
+        if not self._job_repo.mark_processed(job.id):
+            # Already processed (a second `process_fetched_invoice` invocation for the
+            # same job — RQ retry, manual requeue, a double enqueue after a worker crash
+            # between `update_result` and `enqueue`) — skip re-running the create-invoice
+            # pipeline entirely rather than writing a duplicate invoice (review finding
+            # H3). The user already got their terminal reply the first time.
+            logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
+            return
         if job.pdf_storage_key is None:
             self._finish(job, context, messenger, state="failed", template="fetch_failed")
             return
@@ -369,8 +385,8 @@ class InvoiceFetchFeature:
     def _closest_purchases(
         self, projects: list[WritableProject], merchant: str, amount: float, target_date: date
     ) -> list[tuple[WritableProject, InvoiceEntity]]:
-        date_from = date(2000, 1, 1)
-        date_to = date.today() + timedelta(days=1)
+        date_from = target_date - CLOSEST_PURCHASE_WINDOW
+        date_to = min(target_date + CLOSEST_PURCHASE_WINDOW, date.today() + timedelta(days=1))
         found: list[tuple[WritableProject, InvoiceEntity]] = []
         for project in projects:
             rows = self._invoice_repo.find_by_project_in_range(
@@ -418,20 +434,32 @@ class InvoiceFetchFeature:
             invoice_id = payload.get("invoice_id")
             if invoice_id:
                 invoice = self._invoice_repo.find_by_id(UUID(str(invoice_id)))
-                if invoice is not None:
-                    card = {
-                        "kind": "invoice",
-                        "invoice_id": str(invoice.id),
-                        "invoice_number": invoice.invoice_number,
-                        "title": invoice.recipient_name,
-                        "subtitle": f"{invoice.issue_date.isoformat()} · {float(invoice.total_amount)}€",
-                        "total_ttc": float(invoice.total_amount),
-                        "badge": "confirmed",
-                    }
-                    messenger.post_card(user_id, card, reply_to_id=message_id, trace_id=trace_id)
+                # Only ever show a card for an invoice on a project the caller can see —
+                # closes the "any invoice's details disclosed" IDOR even if a forged
+                # `invoice_id` ever reached this far (defense in depth: the
+                # SubmitAssistantActionUseCase stored-option check already stops one).
+                company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+                projects_by_id = {
+                    p.id: p for p in writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
+                }
+                if invoice is not None and invoice.project_id in projects_by_id:
+                    messenger.post_card(
+                        user_id,
+                        card_type="invoice",
+                        entity_id=invoice.id,
+                        project_id=invoice.project_id,
+                        title=invoice.recipient_name,
+                        subtitle=f"{invoice.issue_date.isoformat()} · {float(invoice.total_amount)}€",
+                        badge="confirmed",
+                        extra={"invoice_number": invoice.invoice_number, "total_ttc": float(invoice.total_amount)},
+                        reply_to_id=message_id,
+                        trace_id=trace_id,
+                    )
             return True
         if action == "fetch_none":
-            messenger.post_text(user_id, reply.render("fetch_blocked", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id, reply.render("fetch_none_of_these", lang), reply_to_id=message_id, trace_id=trace_id
+            )
             return True
         return False
 

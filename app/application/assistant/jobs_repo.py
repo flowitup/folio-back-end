@@ -48,6 +48,8 @@ class AssistantJobRecord:
     result: Optional[dict[str, Any]]
     pdf_storage_key: Optional[str]
     status_message_id: Optional[UUID]
+    lang: Optional[str]
+    processed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
 
@@ -63,6 +65,7 @@ class AssistantJobRepositoryPort(Protocol):
         amount_ttc: Decimal,
         date: date,
         project_hint: Optional[str],
+        lang: Optional[str] = None,
         status_message_id: Optional[UUID] = None,
     ) -> AssistantJobRecord:
         """Insert a new ``fetch_invoice`` job, ``status="queued"``, ``run_after=now``."""
@@ -115,6 +118,16 @@ class AssistantJobRepositoryPort(Protocol):
 
     def list_recent_for_user(self, user_id: UUID, limit: int = 10) -> list[AssistantJobRecord]:
         """Most recent jobs for a user, newest first."""
+        ...
+
+    def mark_processed(self, job_id: UUID) -> bool:
+        """Atomically set ``processed_at`` when it is still NULL.
+
+        Returns True the first time (the caller should proceed with its one-time write),
+        False on every subsequent call for the same job (the caller must skip its write
+        — review finding H3, guards ``on_result``'s "done" -> create-invoice path against
+        running twice for the same job).
+        """
         ...
 
 

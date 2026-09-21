@@ -7,12 +7,15 @@ from typing import Any, Optional
 from tavily import TavilyClient
 
 from app.application.assistant.exceptions import ProviderNotConfiguredError
+from app.application.assistant.ports import CostLedgerPort
+from app.infrastructure.ai.cost import TAVILY_PER_CALL_USD
 
 
 class TavilyWebSearch:
     """Implements WebSearchPort against `tavily.TavilyClient`."""
 
-    def __init__(self, api_key: str, client: Optional[TavilyClient] = None) -> None:
+    def __init__(self, api_key: str, cost_ledger: CostLedgerPort, client: Optional[TavilyClient] = None) -> None:
+        self._cost_ledger = cost_ledger
         self._client = client or TavilyClient(api_key)
 
     def search(
@@ -30,10 +33,12 @@ class TavilyWebSearch:
             max_results=max_results,
             search_depth="basic",
         )
+        self._cost_ledger.add("tavily", TAVILY_PER_CALL_USD)
         return result
 
     def extract(self, urls: list[str], *, include_images: bool = True) -> dict[str, Any]:
         result: dict[str, Any] = self._client.extract(urls=urls, include_images=include_images)
+        self._cost_ledger.add("tavily", TAVILY_PER_CALL_USD)
         return result
 
 

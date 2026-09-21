@@ -33,8 +33,11 @@ _CORNERS_USER_TEXT = "Localise les 4 coins du document."
 
 
 class CornerPoint(BaseModel):
-    x: float
-    y: float
+    # Percentages of the image's width/height (0-100) — bounded (review finding MEDIUM
+    # 2) so a model hallucinating e.g. x=100000 cannot make `_warp`'s `max_width`/
+    # `max_height` allocate a multi-GB image in the shared RQ worker.
+    x: float = Field(ge=0, le=100)
+    y: float = Field(ge=0, le=100)
 
 
 class Corners(BaseModel):

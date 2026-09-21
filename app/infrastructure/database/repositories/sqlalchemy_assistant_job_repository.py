@@ -10,16 +10,22 @@ makes that dual use possible.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.application.assistant.jobs_repo import ACTIVE_JOB_STATUSES, AssistantJobRecord
 from app.infrastructure.database.models.assistant_job import AssistantJobModel
+
+#: A `running` job whose row hasn't been touched in this long is presumed abandoned
+#: (worker crash, unhandled exception before the terminal write — review finding H2):
+#: `claim_next` reclaims it exactly like a `not_ready` retry rather than leaving the
+#: user's job_status message on "running" forever.
+_STUCK_RUNNING_AFTER = timedelta(minutes=30)
 
 
 def _to_entity(m: AssistantJobModel) -> AssistantJobRecord:
@@ -37,6 +43,8 @@ def _to_entity(m: AssistantJobModel) -> AssistantJobRecord:
         result=dict(m.result) if m.result else None,
         pdf_storage_key=m.pdf_storage_key,
         status_message_id=m.status_message_id,
+        lang=m.lang,
+        processed_at=m.processed_at,
         created_at=m.created_at,
         updated_at=m.updated_at,
     )
@@ -56,6 +64,7 @@ class SqlAlchemyAssistantJobRepository:
         amount_ttc: Decimal,
         date: Any,
         project_hint: Optional[str],
+        lang: Optional[str] = None,
         status_message_id: Optional[UUID] = None,
     ) -> AssistantJobRecord:
         now = datetime.now(timezone.utc)
@@ -73,6 +82,8 @@ class SqlAlchemyAssistantJobRepository:
             result=None,
             pdf_storage_key=None,
             status_message_id=status_message_id,
+            lang=lang,
+            processed_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -115,9 +126,15 @@ class SqlAlchemyAssistantJobRepository:
         self._session.commit()
 
     def claim_next(self, now: datetime) -> Optional[AssistantJobRecord]:
+        stuck_before = now - _STUCK_RUNNING_AFTER
         query = (
             select(AssistantJobModel)
-            .where(AssistantJobModel.status == "queued", AssistantJobModel.run_after <= now)
+            .where(
+                or_(
+                    and_(AssistantJobModel.status == "queued", AssistantJobModel.run_after <= now),
+                    and_(AssistantJobModel.status == "running", AssistantJobModel.updated_at < stuck_before),
+                )
+            )
             .order_by(AssistantJobModel.run_after.asc())
             .limit(1)
         )
@@ -127,6 +144,11 @@ class SqlAlchemyAssistantJobRepository:
         model = self._session.execute(query).scalars().first()
         if model is None:
             return None
+        if model.status == "running":
+            # Reaped from a stuck row — bump attempts so the existing attempts-exhausted
+            # -> failed path (features/invoice_fetch.py's not_ready handler) naturally
+            # finalizes a job that keeps getting abandoned, instead of retrying forever.
+            model.attempts += 1
         model.status = "running"
         model.updated_at = datetime.now(timezone.utc)
         self._session.commit()
@@ -177,3 +199,12 @@ class SqlAlchemyAssistantJobRepository:
             .all()
         )
         return [_to_entity(m) for m in models]
+
+    def mark_processed(self, job_id: UUID) -> bool:
+        result = self._session.execute(
+            update(AssistantJobModel)
+            .where(AssistantJobModel.id == job_id, AssistantJobModel.processed_at.is_(None))
+            .values(processed_at=datetime.now(timezone.utc))
+        )
+        self._session.commit()
+        return bool(result.rowcount)
