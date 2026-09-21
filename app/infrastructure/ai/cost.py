@@ -19,9 +19,7 @@ DEEPSEEK_OUTPUT_PER_1M_USD = 1.20
 
 # Flat per-call estimates — log actual numbers in M6.
 TYPESAFE_PER_CALL_USD = 0.00004
-TAVILY_PER_CALL_USD = 0.0
 GEMINI_IMAGE_PER_CALL_USD = 0.04
-SERPAPI_PER_CALL_USD = 0.015
 
 #: Fallback for the browser agent (review finding NEW-H4) when browser-use's own
 #: `AgentHistoryList.usage.total_cost` comes back empty — an unrecognized model name in
@@ -56,16 +54,15 @@ def deepseek_cost_usd(usage: Any) -> float:
 #: Every kind an adapter can record — kept here (not just in each adapter module) so
 #: `scripts/assistant_costs.py` can print a stable, complete table even for a kind that
 #: spent nothing today. `deepseek_browser` is the `ai-browser` container's own DeepSeek
-#: spend driving `browser-use` (review finding NEW-H4) — a separate kind from
-#: `deepseek_vision`/`deepseek_text` because it runs in a different process with no
-#: access to the OpenAI-style `usage` object those two bill from.
+#: spend driving `browser-use` (review finding NEW-H4, also billed for the `find_product`
+#: browser-agent search since D16) — a separate kind from `deepseek_vision`/
+#: `deepseek_text` because it runs in a different process with no access to the
+#: OpenAI-style `usage` object those two bill from.
 COST_KINDS: tuple[str, ...] = (
     "deepseek_vision",
     "deepseek_text",
     "jev",
-    "tavily",
     "gemini",
-    "serpapi",
     "deepseek_browser",
 )
 

@@ -1,5 +1,8 @@
-"""Merchant domain allowlist + account-page URL map + the browser agent's TASK template
-(plan section 4 "Feature B", ``BrowserProfile``/TASK paragraph).
+"""Merchant domain allowlist + account-page URL map + the browser agent's TASK templates
+for both jobs that agent runs: ``fetch_invoice`` (feature B, ``build_task``) and
+``find_product`` (feature A, ``build_product_search_task`` — owner decision D16: this
+same agent searches the merchants' own search pages instead of calling an external
+web-search or reverse-image provider).
 
 Hard rule 3 (plan section 0): the agent never logs in and is restricted to these
 merchant domains only — ``build_allowed_domains()`` feeds ``Browser(allowed_domains=...)``
@@ -9,9 +12,10 @@ needed) so a regression here is caught without requiring ``BROWSER_TESTS=1``.
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 from app.application.assistant.jobs_repo import AssistantJobRecord
+from app.application.assistant.models import MaterialIdent
 
 #: The 7 merchants the S0 router (``models.MERCHANTS`` — 6 of them) plus ManoMano (an
 #: additional catalogue-wide fallback merchant the plan's Feature A search list also
@@ -75,11 +79,110 @@ def is_allowed(url: str) -> bool:
 def build_task(job: AssistantJobRecord) -> str:
     """The French TASK template filled in with this job's date/amount, prefixed with a
     direct link to the merchant's account page when we know one."""
+    if job.date is None or job.amount_ttc is None:  # pragma: no cover - defensive, fetch_invoice always sets both
+        raise ValueError(f"build_task requires a fetch_invoice job with date/amount_ttc set, got job {job.id}.")
     task = TASK_TEMPLATE_FR.format(date=job.date.strftime("%d/%m/%Y"), amount=f"{float(job.amount_ttc):.2f}")
-    account_url = MERCHANT_ACCOUNT_URLS.get(job.merchant)
+    account_url = MERCHANT_ACCOUNT_URLS.get(job.merchant or "")
     if account_url:
         task = f"Va d'abord sur {account_url}. " + task
     return task
 
 
-__all__ = ["MERCHANT_DOMAINS", "MERCHANT_ACCOUNT_URLS", "build_allowed_domains", "is_allowed", "build_task"]
+# ---------------------------------------------------------------------------
+# Feature A — find_product: on-site search across the merchant catalogue (owner
+# decision D16: no external web-search or reverse-image provider, this same browser
+# agent does the search).
+# ---------------------------------------------------------------------------
+
+#: The on-site search URL template for merchants that expose a plain query-string
+#: search. Technomat has no such URL — the agent is told to use its home page's own
+#: search box instead (see ``_merchant_search_instruction``).
+MERCHANT_SEARCH_URLS: dict[str, str] = {
+    "leroymerlin": "https://www.leroymerlin.fr/recherche?q={query}",
+    "pointp": "https://www.pointp.fr/recherche?text={query}",
+    "castorama": "https://www.castorama.fr/search?term={query}",
+    "bricodepot": "https://www.bricodepot.fr/recherche?q={query}",
+    "gedimat": "https://www.gedimat.fr/recherche?q={query}",
+    "manomano": "https://www.manomano.fr/recherche?q={query}",
+}
+
+#: Priority order the plan names for feature A's product search — the agent works
+#: through these in order and stops once it has enough candidates.
+PRODUCT_SEARCH_MERCHANT_ORDER: tuple[str, ...] = (
+    "leroymerlin",
+    "pointp",
+    "castorama",
+    "bricodepot",
+    "gedimat",
+    "technomat",
+    "manomano",
+)
+
+_MERCHANT_DISPLAY_NAMES: dict[str, str] = {
+    "leroymerlin": "Leroy Merlin",
+    "pointp": "Point P",
+    "castorama": "Castorama",
+    "bricodepot": "Brico Dépôt",
+    "gedimat": "Gedimat",
+    "technomat": "Technomat",
+    "manomano": "ManoMano",
+}
+
+#: Stop once at least this many candidates were found across every merchant visited...
+PRODUCT_SEARCH_MIN_CANDIDATES = 3
+#: ...or once this many merchants were visited, whichever happens first.
+PRODUCT_SEARCH_MAX_MERCHANTS = 3
+#: Never open more than this many product pages per merchant.
+PRODUCT_SEARCH_MAX_PAGES_PER_MERCHANT = 2
+
+PRODUCT_SEARCH_TASK_TEMPLATE_FR = (
+    "Tu cherches la fiche produit d'un matériau de construction chez plusieurs fournisseurs français, dans cet "
+    "ordre de priorité : {sites}. Ne te connecte JAMAIS, n'ajoute RIEN au panier et ne modifie AUCUNE donnée de "
+    "compte. Voici les requêtes de recherche à utiliser, de la plus précise à la plus générale : {queries}. Pour "
+    "chaque site, utilise sa recherche interne avec la requête la plus précise d'abord, ouvre au maximum "
+    "{max_pages} fiches produit, et relève pour chaque fiche pertinente : titre, marque, référence, EAN, prix "
+    "TTC, unité, URL de l'image et URL de la page. Arrête-toi dès que tu as trouvé au moins {min_candidates} "
+    "fiches au total ou après avoir visité {max_merchants} sites, selon ce qui arrive en premier. Réponds avec "
+    'le statut "done" et la liste des fiches trouvées, ou "not_found" si aucune fiche pertinente n\'a été '
+    "trouvée sur aucun site. Si un site demande une connexion, un captcha ou refuse l'accès, passe simplement au "
+    "site suivant sans t'arrêter ; si TOUS les sites bloquent l'accès, réponds avec le statut \"blocked\". "
+    "Navigue lentement, comme un humain qui lit la page, pas comme un script."
+)
+
+
+def _merchant_search_instruction(key: str, query: str) -> str:
+    name = _MERCHANT_DISPLAY_NAMES.get(key, key)
+    url_template = MERCHANT_SEARCH_URLS.get(key)
+    if url_template:
+        return f"{name} ({url_template.format(query=quote_plus(query))})"
+    domain = MERCHANT_DOMAINS.get(key, "")
+    return f"{name} (page d'accueil https://www.{domain}/, utilise la barre de recherche du site)"
+
+
+def build_product_search_task(ident: MaterialIdent, queries: list[str]) -> str:
+    """The French TASK template for a ``find_product`` job — filled in with ``ident``'s
+    search queries and the merchant priority order/search URLs above."""
+    resolved_queries = queries or [ident.name]
+    sites = " ; ".join(_merchant_search_instruction(key, resolved_queries[0]) for key in PRODUCT_SEARCH_MERCHANT_ORDER)
+    return PRODUCT_SEARCH_TASK_TEMPLATE_FR.format(
+        sites=sites,
+        queries=" ; ".join(resolved_queries),
+        max_pages=PRODUCT_SEARCH_MAX_PAGES_PER_MERCHANT,
+        min_candidates=PRODUCT_SEARCH_MIN_CANDIDATES,
+        max_merchants=PRODUCT_SEARCH_MAX_MERCHANTS,
+    )
+
+
+__all__ = [
+    "MERCHANT_DOMAINS",
+    "MERCHANT_ACCOUNT_URLS",
+    "MERCHANT_SEARCH_URLS",
+    "PRODUCT_SEARCH_MERCHANT_ORDER",
+    "PRODUCT_SEARCH_MIN_CANDIDATES",
+    "PRODUCT_SEARCH_MAX_MERCHANTS",
+    "PRODUCT_SEARCH_MAX_PAGES_PER_MERCHANT",
+    "build_allowed_domains",
+    "is_allowed",
+    "build_task",
+    "build_product_search_task",
+]

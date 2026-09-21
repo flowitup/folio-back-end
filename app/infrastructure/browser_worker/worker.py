@@ -1,6 +1,6 @@
-"""The poll loop: claim one ``fetch_invoice`` job, run the browser agent, store the
-result, enqueue ``process_fetched_invoice``. See the package docstring for why this
-never touches Flask.
+"""The poll loop: claim one job (``fetch_invoice`` or ``find_product``), run the matching
+browser agent, store the result, enqueue the matching ``process_*`` RQ job. See the
+package docstring for why this never touches Flask.
 
 ``run_once``/``run_forever`` take every dependency as a plain argument (no DI
 container) so a unit test can swap in a fake ``job_runner`` and a fake queue against a
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.application.assistant import reply
 from app.application.assistant.jobs_repo import AssistantJobRecord, AssistantJobRepositoryPort
+from app.application.assistant.models import ProductSearchResult
 from app.application.assistant.ports import CostLedgerPort
 from app.infrastructure.browser_worker.agent import FetchOutcome
 from app.infrastructure.database.models.chat_message import ChatMessageOrm
@@ -37,10 +38,17 @@ IDLE_SLEEP_SECONDS = 10.0
 #: (review finding NEW-H3: the kill switch is real, but should not spam the container's
 #: logs every ten seconds for however long the flag stays off).
 DISABLED_LOG_INTERVAL = timedelta(minutes=5)
-#: The RQ queue the browser container enqueues `process_fetched_invoice` onto — same
-#: queue name the web process's `RqAssistantDispatcher` uses, consumed by the shared
-#: `stack.queue.rq_worker` container (already listening on "assistant").
+#: The RQ queue the browser container enqueues `process_fetched_invoice`/
+#: `process_product_search` onto — same queue name the web process's
+#: `RqAssistantDispatcher` uses, consumed by the shared `stack.queue.rq_worker`
+#: container (already listening on "assistant").
 QUEUE_NAME = "assistant"
+
+#: Which RQ function a claimed/reaped job's result gets handed to, by `job.type`.
+_RESULT_JOB_NAME: dict[str, str] = {
+    "fetch_invoice": "app.application.assistant.jobs.process_fetched_invoice",
+    "find_product": "app.application.assistant.jobs.process_product_search",
+}
 
 
 class StorageLike(Protocol):
@@ -56,6 +64,16 @@ class QueueLike(Protocol):
 
 
 JobRunner = Callable[..., Awaitable[FetchOutcome]]
+ProductSearchRunner = Callable[..., Awaitable[ProductSearchResult]]
+
+
+async def _unconfigured_product_search_runner(job: AssistantJobRecord, **_kwargs: Any) -> ProductSearchResult:
+    """Default ``product_search_runner`` for every call site that never dispatches a
+    ``find_product`` job — keeps the many ``fetch_invoice``-only tests/call sites from
+    having to pass one. Raising loudly here (rather than silently no-opping) is
+    deliberate: reaching this means a ``find_product`` job was claimed without a real
+    runner wired in, which must never happen outside a test that forgot to configure one."""
+    raise RuntimeError(f"product_search_runner not configured (job {job.id} is type={job.type!r}).")
 
 
 def is_offpeak(now_utc: datetime) -> bool:
@@ -94,8 +112,12 @@ def _reap_unprocessed(job_repo: AssistantJobRepositoryPort, queue: QueueLike, no
     best-effort recovery path, never something that should crash the poll loop.
     """
     for job_id in job_repo.reap_unprocessed(now):
+        job = job_repo.find_by_id(job_id)
+        func_name = _RESULT_JOB_NAME.get(
+            job.type if job is not None else "fetch_invoice", "app.application.assistant.jobs.process_fetched_invoice"
+        )
         try:
-            queue.enqueue("app.application.assistant.jobs.process_fetched_invoice", str(job_id))
+            queue.enqueue(func_name, str(job_id))
             logger.info("browser_worker: reaped unprocessed job %s, re-enqueued", job_id)
         except Exception:
             logger.exception("browser_worker: failed to re-enqueue reaped job %s", job_id)
@@ -115,15 +137,20 @@ async def run_once(
     offpeak_only: bool,
     now: datetime,
     cost_ledger: Optional[CostLedgerPort] = None,
+    product_search_runner: ProductSearchRunner = _unconfigured_product_search_runner,
 ) -> bool:
     """Claims and processes at most one job. Returns True when a job was claimed
     (whatever its outcome), False when there was nothing to do (or it is not off-peak
     yet) — the caller uses this to decide whether to sleep.
 
-    ``cost_ledger`` (review finding NEW-H4) is forwarded to ``job_runner`` so the browser
-    agent's own DeepSeek spend gets billed — ``None`` (the default) only in the smoke
-    test's direct ``run_fetch`` calls; the real container always constructs one from
-    ``REDIS_URL`` (see ``__main__.py``).
+    ``cost_ledger`` (review finding NEW-H4) is forwarded to whichever runner handles the
+    claimed job so the browser agent's own DeepSeek spend gets billed — ``None`` (the
+    default) only in the smoke test's direct ``run_fetch``/``run_product_search`` calls;
+    the real container always constructs one from ``REDIS_URL`` (see ``__main__.py``).
+
+    Dispatches on ``job.type`` (owner decision D16 added ``find_product`` alongside the
+    original ``fetch_invoice``): each type has its own runner/result shape/RQ callback,
+    but shares this same claim/reaper/kill-switch/cost-billing plumbing.
     """
     if offpeak_only and not is_offpeak(now):
         return False
@@ -132,11 +159,56 @@ async def run_once(
         _reap_unprocessed(job_repo, queue, now)
         return False
 
+    if job.type == "find_product":
+        await _run_product_search_job(
+            job,
+            session=session,
+            job_repo=job_repo,
+            queue=queue,
+            product_search_runner=product_search_runner,
+            chrome_path=chrome_path,
+            profile_dir=profile_dir,
+            downloads_dir=downloads_dir,
+            deepseek_api_key=deepseek_api_key,
+            cost_ledger=cost_ledger,
+        )
+        return True
+
+    await _run_fetch_invoice_job(
+        job,
+        session=session,
+        job_repo=job_repo,
+        storage=storage,
+        queue=queue,
+        job_runner=job_runner,
+        chrome_path=chrome_path,
+        profile_dir=profile_dir,
+        downloads_dir=downloads_dir,
+        deepseek_api_key=deepseek_api_key,
+        cost_ledger=cost_ledger,
+    )
+    return True
+
+
+async def _run_fetch_invoice_job(
+    job: AssistantJobRecord,
+    *,
+    session: Session,
+    job_repo: AssistantJobRepositoryPort,
+    storage: StorageLike,
+    queue: QueueLike,
+    job_runner: JobRunner,
+    chrome_path: str,
+    profile_dir: str,
+    downloads_dir: str,
+    deepseek_api_key: str,
+    cost_ledger: Optional[CostLedgerPort],
+) -> None:
     logger.info(
         "browser_worker: claimed job %s merchant=%s amount=%.2f date=%s attempt=%d",
         job.id,
         job.merchant,
-        float(job.amount_ttc),
+        float(job.amount_ttc) if job.amount_ttc is not None else 0.0,
         job.date,
         job.attempts + 1,
     )
@@ -169,8 +241,37 @@ async def run_once(
         job.id, status=outcome.result.status, result=outcome.result.model_dump(), pdf_storage_key=pdf_key
     )
     logger.info("browser_worker: job %s finished with status=%s", job.id, outcome.result.status)
-    queue.enqueue("app.application.assistant.jobs.process_fetched_invoice", str(job.id))
-    return True
+    queue.enqueue(_RESULT_JOB_NAME["fetch_invoice"], str(job.id))
+
+
+async def _run_product_search_job(
+    job: AssistantJobRecord,
+    *,
+    session: Session,
+    job_repo: AssistantJobRepositoryPort,
+    queue: QueueLike,
+    product_search_runner: ProductSearchRunner,
+    chrome_path: str,
+    profile_dir: str,
+    downloads_dir: str,
+    deepseek_api_key: str,
+    cost_ledger: Optional[CostLedgerPort],
+) -> None:
+    logger.info("browser_worker: claimed job %s type=find_product attempt=%d", job.id, job.attempts + 1)
+    _update_status_message(session, job, state="running", text=reply.render("product_search_running", job.lang or "fr"))
+
+    result = await product_search_runner(
+        job,
+        chrome_path=chrome_path,
+        profile_dir=profile_dir,
+        downloads_dir=downloads_dir,
+        deepseek_api_key=deepseek_api_key,
+        cost_ledger=cost_ledger,
+    )
+
+    job_repo.update_result(job.id, status=result.status, result=result.model_dump())
+    logger.info("browser_worker: job %s finished with status=%s", job.id, result.status)
+    queue.enqueue(_RESULT_JOB_NAME["find_product"], str(job.id))
 
 
 async def run_forever(
@@ -188,6 +289,7 @@ async def run_forever(
     stop_event: asyncio.Event,
     assistant_enabled: Callable[[], bool] = lambda: True,
     cost_ledger: Optional[CostLedgerPort] = None,
+    product_search_runner: ProductSearchRunner = _unconfigured_product_search_runner,
 ) -> None:
     """SIGTERM-safe poll loop: ``stop_event`` is checked between jobs, never mid-job —
     the caller (``__main__.py``) sets it from a signal handler, letting the current job
@@ -227,6 +329,7 @@ async def run_forever(
                 offpeak_only=offpeak_only,
                 now=now,
                 cost_ledger=cost_ledger,
+                product_search_runner=product_search_runner,
             )
         except Exception:
             # A DB blip, an S3 error, an `rq` enqueue failure, or anything else raised
@@ -244,4 +347,13 @@ async def run_forever(
                 pass
 
 
-__all__ = ["run_once", "run_forever", "is_offpeak", "QUEUE_NAME", "IDLE_SLEEP_SECONDS", "DISABLED_LOG_INTERVAL"]
+__all__ = [
+    "run_once",
+    "run_forever",
+    "is_offpeak",
+    "QUEUE_NAME",
+    "IDLE_SLEEP_SECONDS",
+    "DISABLED_LOG_INTERVAL",
+    "JobRunner",
+    "ProductSearchRunner",
+]

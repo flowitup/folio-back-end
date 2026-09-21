@@ -77,6 +77,34 @@ class Product(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ProductCandidate(BaseModel):
+    """One product page the browser agent found for a `find_product` job (feature A)."""
+
+    url: str
+    title: str
+    brand: Optional[str] = None
+    reference: Optional[str] = None
+    ean: Optional[str] = None
+    price_ttc: Optional[float] = None
+    unit: Optional[str] = None
+    image_url: Optional[str] = None
+    merchant: str
+
+
+class ProductSearchResult(BaseModel):
+    """What the browser-use worker reports back for a `find_product` job.
+
+    "failed" is not something the agent itself ever reports (its structured output
+    schema only knows the plan's 3 outcomes) — it is what
+    ``app.infrastructure.browser_worker.agent`` falls back to when the agent run itself
+    raised, mirroring ``FetchResult`` below.
+    """
+
+    status: Literal["done", "not_found", "blocked", "failed"]
+    candidates: list[ProductCandidate] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
 class FetchResult(BaseModel):
     """What the browser-use worker reports back for a `fetch_invoice` job.
 

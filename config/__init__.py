@@ -131,9 +131,7 @@ class Config:
     FEATURE_ASSISTANT: bool = get_env("FEATURE_ASSISTANT", default="0") == "1"
     DEEPSEEK_API_KEY: str = get_env("DEEPSEEK_API_KEY", default="")
     TYPESAFE_API_KEY: str = get_env("TYPESAFE_API_KEY", default="")
-    TAVILY_API_KEY: str = get_env("TAVILY_API_KEY", default="")
     GEMINI_API_KEY: str = get_env("GEMINI_API_KEY", default="")
-    SERPAPI_API_KEY: str = get_env("SERPAPI_API_KEY", default="")
     # How the assistant turns a scanned receipt into a clean PDF: "genai" (Gemini image
     # generation) or "opencv" (perspective-correct + threshold, no API call).
     SCAN_MODE: str = get_env("SCAN_MODE", default="genai")

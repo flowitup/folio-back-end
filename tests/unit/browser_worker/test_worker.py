@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import update
 
 from app.application.assistant.jobs_repo import AssistantJobRecord
-from app.application.assistant.models import FetchResult
+from app.application.assistant.models import FetchResult, ProductSearchResult
 from app.infrastructure.browser_worker.agent import FetchOutcome
 from app.infrastructure.browser_worker.worker import is_offpeak, run_forever, run_once
 from app.infrastructure.database.models.assistant_job import AssistantJobModel
@@ -50,6 +50,17 @@ def _make_job_runner(outcome: FetchOutcome):
     async def _runner(job: AssistantJobRecord, **_kwargs: Any) -> FetchOutcome:
         calls.append(job)
         return outcome
+
+    _runner.calls = calls  # type: ignore[attr-defined]
+    return _runner
+
+
+def _make_product_search_runner(result: ProductSearchResult):
+    calls: list[AssistantJobRecord] = []
+
+    async def _runner(job: AssistantJobRecord, **_kwargs: Any) -> ProductSearchResult:
+        calls.append(job)
+        return result
 
     _runner.calls = calls  # type: ignore[attr-defined]
     return _runner
@@ -206,6 +217,91 @@ class TestRunOnce:
         assert queue.enqueued  # process_fetched_invoice still runs the retry/fail logic
 
 
+class TestRunOnceDispatchesFindProductJobs:
+    """Owner decision D16: `run_once` now claims two job types off the same table —
+    these prove a `find_product` job is routed to `product_search_runner` (never
+    `job_runner`), stores the `ProductSearchResult` dict (no PDF bookkeeping), and
+    enqueues `process_product_search` rather than `process_fetched_invoice`."""
+
+    def test_claims_a_find_product_job_and_enqueues_process_product_search(self, session) -> None:
+        job_repo = SqlAlchemyAssistantJobRepository(session)
+        job = job_repo.add(
+            job_type="find_product",
+            user_id=uuid4(),
+            params={
+                "ident": {"name": "Perceuse", "category": "outillage", "confidence": 0.9, "search_queries": ["x"]},
+                "search_queries": ["perceuse bosch"],
+                "company_id": str(uuid4()),
+                "photo_sha256": "abc123",
+                "message_id": str(uuid4()),
+                "lang": "fr",
+            },
+            lang="fr",
+        )
+        status_message = _status_message(session, job.id)
+        job_repo.set_status_message(job.id, status_message.id)
+
+        result = ProductSearchResult(status="done", candidates=[])
+        product_search_runner = _make_product_search_runner(result)
+        fetch_job_runner = _make_job_runner(FetchOutcome(result=FetchResult(status="done"), pdf_path=None))
+        queue = FakeQueue()
+
+        processed = asyncio.run(
+            run_once(
+                session=session,
+                job_repo=job_repo,
+                storage=FakeStorage(),
+                queue=queue,
+                job_runner=fetch_job_runner,
+                product_search_runner=product_search_runner,
+                chrome_path="",
+                profile_dir="",
+                downloads_dir="",
+                deepseek_api_key="",
+                offpeak_only=False,
+                now=datetime.now(timezone.utc),
+            )
+        )
+
+        assert processed is True
+        assert len(product_search_runner.calls) == 1  # type: ignore[attr-defined]
+        assert fetch_job_runner.calls == []  # type: ignore[attr-defined]
+        updated = job_repo.find_by_id(job.id)
+        assert updated.status == "done"
+        assert updated.pdf_storage_key is None
+        assert queue.enqueued == [("app.application.assistant.jobs.process_product_search", (str(job.id),))]
+        session.refresh(status_message)
+        assert status_message.payload["state"] == "running"
+
+    def test_a_find_product_job_never_calls_the_unconfigured_default_runner(self, session) -> None:
+        """`run_once`'s default `product_search_runner` raises loudly (see the module's
+        `_unconfigured_product_search_runner`) — this proves a real `find_product` job
+        reaching that default would fail fast rather than silently doing nothing, by
+        checking the opposite: passing a working runner explicitly succeeds."""
+        job_repo = SqlAlchemyAssistantJobRepository(session)
+        job_repo.add(
+            job_type="find_product",
+            user_id=uuid4(),
+            params={"ident": {"name": "x", "category": "y", "confidence": 0.9}, "photo_sha256": "x"},
+        )
+        with pytest.raises(RuntimeError, match="product_search_runner not configured"):
+            asyncio.run(
+                run_once(
+                    session=session,
+                    job_repo=job_repo,
+                    storage=FakeStorage(),
+                    queue=FakeQueue(),
+                    job_runner=_make_job_runner(FetchOutcome(result=FetchResult(status="done"), pdf_path=None)),
+                    chrome_path="",
+                    profile_dir="",
+                    downloads_dir="",
+                    deepseek_api_key="",
+                    offpeak_only=False,
+                    now=datetime.now(timezone.utc),
+                )
+            )
+
+
 class TestRunOnceReapsUnprocessedJobs:
     """Review finding NEW-H2: `run_once`'s idle branch (nothing new to claim) also
     re-enqueues any terminal job whose own `process_fetched_invoice` enqueue never
@@ -311,6 +407,34 @@ class TestRunOnceReapsUnprocessedJobs:
             )
         )
         assert queue.enqueued == []  # `job` (status=done) is fresh, not reap-worthy yet
+
+    def test_a_stale_find_product_job_is_reaped_to_process_product_search(self, session) -> None:
+        job_repo = SqlAlchemyAssistantJobRepository(session)
+        job = job_repo.add(job_type="find_product", user_id=uuid4(), params={"ident": {}, "photo_sha256": "x"})
+        job_repo.update_result(job.id, status="done", result={"status": "done", "candidates": []})
+        stale = datetime.now(timezone.utc) - timedelta(minutes=31)
+        session.execute(update(AssistantJobModel).where(AssistantJobModel.id == job.id).values(updated_at=stale))
+        session.commit()
+
+        queue = FakeQueue()
+        processed = asyncio.run(
+            run_once(
+                session=session,
+                job_repo=job_repo,
+                storage=FakeStorage(),
+                queue=queue,
+                job_runner=_make_job_runner(FetchOutcome(result=FetchResult(status="done"), pdf_path=None)),
+                chrome_path="",
+                profile_dir="",
+                downloads_dir="",
+                deepseek_api_key="",
+                offpeak_only=False,
+                now=datetime.now(timezone.utc),
+            )
+        )
+
+        assert processed is False
+        assert queue.enqueued == [("app.application.assistant.jobs.process_product_search", (str(job.id),))]
 
 
 class TestRunForeverFeatureFlag:

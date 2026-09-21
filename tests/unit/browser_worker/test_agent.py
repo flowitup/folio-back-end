@@ -20,7 +20,7 @@ import pytest
 
 from app.application.assistant.jobs_repo import AssistantJobRecord
 from app.infrastructure.ai.cost import BROWSER_AGENT_STEP_ESTIMATE_USD, InMemoryCostLedger
-from app.infrastructure.browser_worker.agent import COST_KIND, _browser_agent_cost_usd, run_fetch
+from app.infrastructure.browser_worker.agent import COST_KIND, _browser_agent_cost_usd, run_fetch, run_product_search
 
 
 class _FakeUsage:
@@ -79,6 +79,36 @@ def _job() -> AssistantJobRecord:
         processed_at=None,
         created_at=None,  # type: ignore[arg-type]
         updated_at=None,  # type: ignore[arg-type]
+    )
+
+
+def _product_search_job() -> AssistantJobRecord:
+    return AssistantJobRecord(
+        id=uuid4(),
+        type="find_product",
+        user_id=uuid4(),
+        merchant=None,
+        amount_ttc=None,
+        date=None,
+        project_hint=None,
+        status="running",
+        attempts=0,
+        run_after=None,  # type: ignore[arg-type]
+        result=None,
+        pdf_storage_key=None,
+        status_message_id=None,
+        lang=None,
+        processed_at=None,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+        params={
+            "ident": {"name": "Perceuse à percussion", "category": "outillage", "confidence": 0.9},
+            "search_queries": ["perceuse bosch 18v"],
+            "company_id": str(uuid4()),
+            "photo_sha256": "abc123",
+            "message_id": str(uuid4()),
+            "lang": "fr",
+        },
     )
 
 
@@ -162,3 +192,98 @@ class TestRunFetchBillsTheLedger:
             )
         )
         assert outcome.result.status == "failed"
+
+
+class _FakeHistoryWithResult(_FakeHistory):
+    def __init__(self, *, raw_result: str, total_cost: Optional[float] = 0.1) -> None:
+        super().__init__(total_cost=total_cost)
+        self._raw_result = raw_result
+
+    def final_result(self) -> Optional[str]:
+        return self._raw_result
+
+
+class TestRunProductSearch:
+    """Owner decision D16: the browser agent also runs feature A's product search —
+    mirrors `TestRunFetchBillsTheLedger` above (same lazy import, same billing, same
+    never-raises contract) but returns a `ProductSearchResult` directly, with no PDF."""
+
+    def test_returns_the_agents_structured_candidates(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        raw = (
+            '{"status": "done", "candidates": [{"url": "https://www.leroymerlin.fr/p/1", '
+            '"title": "Perceuse Bosch 18V", "merchant": "leroymerlin"}]}'
+        )
+        history = _FakeHistoryWithResult(raw_result=raw)
+        _install_fake_browser_use(monkeypatch, history)
+
+        result = asyncio.run(
+            run_product_search(
+                _product_search_job(),
+                chrome_path="/usr/bin/google-chrome",
+                profile_dir=str(tmp_path / "profile"),
+                downloads_dir=str(tmp_path / "downloads"),
+                deepseek_api_key="key",
+            )
+        )
+
+        assert result.status == "done"
+        assert len(result.candidates) == 1
+        assert result.candidates[0].url == "https://www.leroymerlin.fr/p/1"
+
+    def test_bills_the_ledger_after_a_successful_run(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        history = _FakeHistory(total_cost=0.33)
+        _install_fake_browser_use(monkeypatch, history)
+        ledger = InMemoryCostLedger()
+
+        result = asyncio.run(
+            run_product_search(
+                _product_search_job(),
+                chrome_path="/usr/bin/google-chrome",
+                profile_dir=str(tmp_path / "profile"),
+                downloads_dir=str(tmp_path / "downloads"),
+                deepseek_api_key="key",
+                cost_ledger=ledger,
+            )
+        )
+
+        assert ledger.by_kind()[COST_KIND] == pytest.approx(0.33)
+        # No structured output on this fake history -> the safe "failed" fallback, same
+        # as run_fetch's own billing-must-not-depend-on-the-outcome test.
+        assert result.status == "failed"
+
+    def test_a_missing_ledger_never_blocks_the_search(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        history = _FakeHistory(total_cost=0.1)
+        _install_fake_browser_use(monkeypatch, history)
+
+        result = asyncio.run(
+            run_product_search(
+                _product_search_job(),
+                chrome_path="/usr/bin/google-chrome",
+                profile_dir=str(tmp_path / "profile"),
+                downloads_dir=str(tmp_path / "downloads"),
+                deepseek_api_key="key",
+                cost_ledger=None,
+            )
+        )
+        assert result.status == "failed"  # no structured result — but no crash either
+
+    def test_browser_use_import_failure_is_reported_as_failed(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        monkeypatch.delitem(sys.modules, "browser_use", raising=False)
+        monkeypatch.setattr(
+            "builtins.__import__",
+            lambda name, *a, **k: (
+                (_ for _ in ()).throw(ImportError("no module")) if name == "browser_use" else __import__(name, *a, **k)
+            ),
+        )
+
+        result = asyncio.run(
+            run_product_search(
+                _product_search_job(),
+                chrome_path="/usr/bin/google-chrome",
+                profile_dir=str(tmp_path / "profile"),
+                downloads_dir=str(tmp_path / "downloads"),
+                deepseek_api_key="key",
+            )
+        )
+        assert result.status == "failed"
+        assert "browser-use unavailable" in (result.message or "")

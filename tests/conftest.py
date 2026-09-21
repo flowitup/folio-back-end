@@ -1215,21 +1215,15 @@ def invitation_app():
             SqlAlchemyAssistantJobRepository as _SqlAlchemyAssistantJobRepository,
         )
         from tests.fakes.ai import RecordingImageGen as _RecordingImageGen
-        from tests.fakes.ai import RecordingLens as _RecordingLens
-        from tests.fakes.ai import RecordingWebSearch as _RecordingWebSearch
         from tests.fakes.ai import ScriptedDecision as _ScriptedDecision
         from tests.fakes.ai import ScriptedVision as _ScriptedVision
 
         _assistant_decision_port = _ScriptedDecision()
         _assistant_vision = _ScriptedVision(text_answers=["(scripted chit-chat reply)"])
-        _assistant_web_search = _RecordingWebSearch()
         _assistant_image_gen = _RecordingImageGen()
-        _assistant_lens = _RecordingLens()
         _c.assistant_decision_port = _assistant_decision_port
         _c.assistant_vision_llm = _assistant_vision
-        _c.assistant_web_search = _assistant_web_search
         _c.assistant_image_gen = _assistant_image_gen
-        _c.assistant_lens = _assistant_lens
         _c.assistant_cost_ledger = _InMemoryCostLedger(
             daily_cap_usd=float(test_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
         )
@@ -1278,8 +1272,7 @@ def invitation_app():
                 _c.assistant_material_feature = _MaterialFeature(
                     vision=_assistant_vision,
                     decisions=_assistant_decision_port,
-                    web_search=_assistant_web_search,
-                    lens=_assistant_lens,
+                    job_repo=_assistant_job_repo,
                     messages=_chat_repo,
                     storage=_chat_storage,
                     company_access=_c.user_company_access_repo,
@@ -1324,9 +1317,7 @@ def invitation_app():
             )
         test_app._assistant_vision = _assistant_vision
         test_app._assistant_decision_port = _assistant_decision_port
-        test_app._assistant_web_search = _assistant_web_search
         test_app._assistant_image_gen = _assistant_image_gen
-        test_app._assistant_lens = _assistant_lens
 
         # ------------------------------------------------------------------
         # Sign in with a phone number + SMS code — recording sender, no SMS leaves the test.

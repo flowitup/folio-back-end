@@ -1,4 +1,6 @@
-"""browser-use agent runner (feature B).
+"""browser-use agent runner (feature B ``fetch_invoice`` + feature A ``find_product``,
+owner decision D16: the browser agent also does feature A's product search, with no
+external web-search or reverse-image provider involved).
 
 ``browser-use`` is deliberately NOT a project dependency (see ``Dockerfile.browser``'s
 docstring / the phase report): it pins ``openai``/``pydantic``/``httpx``/``google-genai``
@@ -18,10 +20,14 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from app.application.assistant.jobs_repo import AssistantJobRecord
-from app.application.assistant.models import FetchResult
+from app.application.assistant.models import FetchResult, MaterialIdent, ProductSearchResult
 from app.application.assistant.ports import CostLedgerPort
 from app.infrastructure.ai.cost import BROWSER_AGENT_STEP_ESTIMATE_USD
-from app.infrastructure.browser_worker.merchants import build_allowed_domains, build_task
+from app.infrastructure.browser_worker.merchants import (
+    build_allowed_domains,
+    build_product_search_task,
+    build_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +152,75 @@ def _browser_agent_cost_usd(history: Any) -> float:
     return steps * BROWSER_AGENT_STEP_ESTIMATE_USD
 
 
+async def run_product_search(
+    job: AssistantJobRecord,
+    *,
+    chrome_path: str,
+    profile_dir: str,
+    downloads_dir: str,
+    deepseek_api_key: str,
+    cost_ledger: Optional[CostLedgerPort] = None,
+) -> ProductSearchResult:
+    """Runs one browser-use agent session for a ``find_product`` job (feature A, owner
+    decision D16): searches the allow-listed merchant sites' own search pages for the
+    material identified in ``job.params["ident"]`` instead of calling a web-search API.
+
+    Mirrors ``run_fetch`` above (never raises, same ``Browser``/allowed-domains/cost
+    billing) minus the PDF-download bookkeeping — a product search has no file to save,
+    only the structured ``ProductSearchResult`` the agent's final answer carries.
+    """
+    try:
+        from browser_use import Agent, Browser, ChatOpenAI
+    except Exception as exc:  # pragma: no cover - only unreachable inside the real image
+        logger.exception("browser_worker: browser-use is not importable")
+        return ProductSearchResult(status="failed", message=f"browser-use unavailable: {exc}")
+
+    params = job.params or {}
+    ident = MaterialIdent.model_validate(params.get("ident") or {})
+    queries = list(params.get("search_queries") or ident.search_queries or [ident.name])
+    task = build_product_search_task(ident, queries)
+    try:
+        browser = Browser(
+            executable_path=chrome_path,
+            user_data_dir=profile_dir,
+            headless=False,
+            downloads_path=downloads_dir,
+            allowed_domains=build_allowed_domains(),
+            keep_alive=False,
+            # See run_fetch's identical comment: the container is the isolation boundary.
+            chromium_sandbox=False,
+        )
+        llm = ChatOpenAI(model=_LLM_MODEL, base_url=_LLM_BASE_URL, api_key=deepseek_api_key)
+        agent = Agent(task=task, llm=llm, browser=browser, use_vision=True, output_model_schema=ProductSearchResult)
+        history = await agent.run(max_steps=MAX_STEPS)
+    except Exception as exc:
+        logger.exception("browser_worker: product search agent run failed for job %s", job.id)
+        return ProductSearchResult(status="failed", message=str(exc))
+
+    if cost_ledger is not None:
+        try:
+            cost_ledger.add(COST_KIND, _browser_agent_cost_usd(history))
+        except Exception:
+            # See run_fetch's identical comment: under-billing one run is far cheaper
+            # than losing a search that otherwise succeeded.
+            logger.exception("browser_worker: failed to bill the cost ledger for job %s", job.id)
+
+    return _extract_product_search_result(history)
+
+
+def _extract_product_search_result(history: object) -> ProductSearchResult:
+    try:
+        raw = history.final_result()  # type: ignore[attr-defined]
+    except Exception:
+        raw = None
+    if raw:
+        try:
+            return ProductSearchResult.model_validate_json(raw)
+        except Exception:
+            logger.warning("browser_worker: agent final_result failed ProductSearchResult validation: %r", raw)
+    return ProductSearchResult(status="failed", message="Agent produced no usable result.")
+
+
 def _extract_result(history: object, *, has_pdf: bool) -> FetchResult:
     try:
         raw = history.final_result()  # type: ignore[attr-defined]
@@ -162,4 +237,4 @@ def _extract_result(history: object, *, has_pdf: bool) -> FetchResult:
     return FetchResult(status="failed", message="Agent produced no usable result and no PDF was downloaded.")
 
 
-__all__ = ["FetchOutcome", "run_fetch", "MAX_STEPS"]
+__all__ = ["FetchOutcome", "run_fetch", "run_product_search", "MAX_STEPS"]

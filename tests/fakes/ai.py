@@ -1,8 +1,7 @@
 """Fake `app.application.assistant.ports` implementations — no network, deterministic.
 
 Used by `tests/unit/assistant/*` and (once wired) by `tests/conftest.py`'s test app so
-the assistant pipeline is fully exercisable without real DeepSeek/Jev/Tavily/Gemini/
-SerpApi credentials.
+the assistant pipeline is fully exercisable without real DeepSeek/Jev/Gemini credentials.
 """
 
 from __future__ import annotations
@@ -151,31 +150,6 @@ class ScriptedDecision:
         )
 
 
-class RecordingWebSearch:
-    """Fake WebSearchPort — records calls, returns a scripted result."""
-
-    def __init__(self, search_result: Optional[dict[str, Any]] = None, extract_result: Optional[dict[str, Any]] = None):
-        self._search_result = search_result or {"results": [], "images": []}
-        self._extract_result = extract_result or {"results": [], "failed_results": []}
-        self.search_calls: list[tuple[str, list[str] | None]] = []
-        self.extract_calls: list[list[str]] = []
-
-    def search(
-        self,
-        query: str,
-        *,
-        include_domains: list[str] | None = None,
-        include_images: bool = True,
-        max_results: int = 6,
-    ) -> dict[str, Any]:
-        self.search_calls.append((query, include_domains))
-        return self._search_result
-
-    def extract(self, urls: list[str], *, include_images: bool = True) -> dict[str, Any]:
-        self.extract_calls.append(urls)
-        return self._extract_result
-
-
 class RecordingImageGen:
     """Fake ImageGenPort — records calls, returns fixed bytes."""
 
@@ -186,18 +160,6 @@ class RecordingImageGen:
     def generate(self, image: bytes, prompt: str) -> bytes:
         self.calls.append((image, prompt))
         return self._result
-
-
-class RecordingLens:
-    """Fake LensPort — records calls, returns a scripted hit list."""
-
-    def __init__(self, hits: Optional[list[dict[str, Any]]] = None) -> None:
-        self._hits = hits or []
-        self.calls: list[str] = []
-
-    def identify(self, image_url: str) -> list[dict[str, Any]]:
-        self.calls.append(image_url)
-        return self._hits
 
 
 # Kept for callers that want to sanity-check a raw utterance without going through
