@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -45,6 +45,7 @@ class ChatMessageOrm(Base):
     reply_to_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
     )
+    mentions_assistant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     ai_trace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
@@ -73,6 +74,7 @@ class ChatMessageOrm(Base):
             content_type=self.content_type,
             payload=self.payload,
             reply_to_id=self.reply_to_id,
+            mentions_assistant=self.mentions_assistant,
             ai_trace_id=self.ai_trace_id,
         )
 
@@ -93,6 +95,7 @@ class ChatMessageOrm(Base):
             content_type=message.content_type,
             payload=message.payload,
             reply_to_id=message.reply_to_id,
+            mentions_assistant=message.mentions_assistant,
             ai_trace_id=message.ai_trace_id,
             created_at=message.created_at,
         )

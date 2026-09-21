@@ -84,8 +84,10 @@ class ChatMessageRepositoryPort(Protocol):
         """Replace a message's ``payload`` in place (e.g. marking a choice answered)."""
         ...
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
-        """The channel's last ``limit`` text messages (oldest first) — conversation history."""
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        """The channel's last ``limit`` messages the assistant was addressed by/as
+        (``mentions_assistant`` true, or ``sender_type == "assistant"``), oldest first —
+        the assistant's conversation history never includes other chat (D18)."""
         ...
 
 

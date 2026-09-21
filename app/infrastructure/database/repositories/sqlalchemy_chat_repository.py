@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import bindparam, exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo
+from app.domain.companies.roles import CompanyRole
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.infrastructure.database.models.chat_message import ChatChannelReadOrm, ChatMessageOrm
 from app.infrastructure.database.models.company import CompanyModel
@@ -32,12 +33,8 @@ def _naive_utc(value: datetime) -> datetime:
 class SqlAlchemyChatRepository:
     """Implements ChatMessageRepositoryPort, ChatReadRepositoryPort and ChatDirectoryPort."""
 
-    def __init__(self, session: Session, assistant_enabled: Optional[Callable[[], bool]] = None) -> None:
+    def __init__(self, session: Session) -> None:
         self._session = session
-        # Whether to list "assistant:<user_id>" in list_channels_for_user. Defaults closed
-        # so a repository built outside an app context (a script, a unit test) never
-        # fabricates the channel.
-        self._assistant_enabled: Callable[[], bool] = assistant_enabled or (lambda: False)
 
     # ------------------------------------------------------------------
     # ChatMessageRepositoryPort
@@ -146,13 +143,15 @@ class SqlAlchemyChatRepository:
         # `update()`-construct version elsewhere in this codebase).
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        """Messages the assistant was actually addressed by/as, newest first (reversed
+        to oldest-first before returning) — never other chat in the channel (D18)."""
         stmt = (
             select(ChatMessageOrm)
             .where(
                 ChatMessageOrm.channel_kind == channel.kind,
                 ChatMessageOrm.channel_id == channel.id,
-                ChatMessageOrm.content_type == "text",
+                or_(ChatMessageOrm.mentions_assistant.is_(True), ChatMessageOrm.sender_type == "assistant"),
             )
             .order_by(ChatMessageOrm.created_at.desc())
             .limit(limit)
@@ -209,6 +208,22 @@ class SqlAlchemyChatRepository:
         )
         return int(self._session.execute(stmt).scalar_one())
 
+    def _admin_channel_member_ids(self, company_id: UUID) -> list[UUID]:
+        """Company admins + every platform-ops user — the ``admin:<company_id>``
+        channel's membership (D17)."""
+        admin_ids = self._session.execute(
+            select(UserCompanyAccessModel.user_id).where(
+                UserCompanyAccessModel.company_id == company_id,
+                UserCompanyAccessModel.role == CompanyRole.ADMIN.value,
+            )
+        ).scalars()
+        ops_ids = self._session.execute(select(UserModel.id).where(UserModel.is_platform_ops)).scalars()
+        ids: list[UUID] = []
+        for uid in [*admin_ids, *ops_ids]:
+            if uid not in ids:
+                ids.append(uid)
+        return ids
+
     def _membership_project_ids(self, user_id: UUID) -> list[UUID]:
         """Projects with a user_projects row for the user.
 
@@ -237,12 +252,8 @@ class SqlAlchemyChatRepository:
 
     def list_channels_for_user(self, user_id: UUID) -> list[ChannelInfo]:
         result: list[ChannelInfo] = []
-        if self._assistant_enabled():
-            result.append(
-                ChannelInfo(channel=ChannelRef(kind="assistant", id=user_id), name="Assistant", member_count=1)
-            )
         companies = self._session.execute(
-            select(CompanyModel.id, CompanyModel.legal_name)
+            select(CompanyModel.id, CompanyModel.legal_name, UserCompanyAccessModel.role)
             .join(UserCompanyAccessModel, UserCompanyAccessModel.company_id == CompanyModel.id)
             .where(UserCompanyAccessModel.user_id == user_id)
             .order_by(CompanyModel.legal_name)
@@ -253,14 +264,23 @@ class SqlAlchemyChatRepository:
             project_stmt = project_stmt.where((ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id))
         projects = self._session.execute(project_stmt).all()
 
-        result.extend(
-            ChannelInfo(
-                channel=ChannelRef(kind="company", id=cid),
-                name=name,
-                member_count=self._company_member_count(cid),
+        for cid, name, role in companies:
+            result.append(
+                ChannelInfo(
+                    channel=ChannelRef(kind="company", id=cid), name=name, member_count=self._company_member_count(cid)
+                )
             )
-            for cid, name in companies
-        )
+            # The admin channel is listed right after its company channel, only for that
+            # company's own admins (platform ops can still read/send once they know the
+            # key — see is_member/channel_exists — but the chip row is admins-only, D19).
+            if role == CompanyRole.ADMIN.value:
+                result.append(
+                    ChannelInfo(
+                        channel=ChannelRef(kind="admin", id=cid),
+                        name=name,
+                        member_count=len(self._admin_channel_member_ids(cid)),
+                    )
+                )
         result.extend(
             ChannelInfo(
                 channel=ChannelRef(kind="project", id=pid),
@@ -272,30 +292,31 @@ class SqlAlchemyChatRepository:
         return result
 
     def channel_exists(self, channel: ChannelRef) -> bool:
-        if channel.kind == "assistant":
-            # FEATURE_ASSISTANT is the pipeline's real kill switch (not just the channel
-            # listing / actions endpoint): once off, the assistant channel does not
-            # exist at all, so send/list/read/attachment all answer as they would for
-            # any unknown channel (404), and nothing ever reaches the AI pipeline.
-            if not self._assistant_enabled():
-                return False
-            return bool(self._session.execute(select(exists().where(UserModel.id == channel.id))).scalar())
-        model = CompanyModel if channel.kind == "company" else ProjectModel
+        model = CompanyModel if channel.kind in ("company", "admin") else ProjectModel
         return bool(self._session.execute(select(exists().where(model.id == channel.id))).scalar())
 
     def channel_name(self, channel: ChannelRef) -> str:
-        """Display name of the company / project behind the key ("" when it vanished)."""
-        if channel.kind == "assistant":
-            return "Assistant"
-        model = CompanyModel if channel.kind == "company" else ProjectModel
-        return self._session.execute(select(model.name).where(model.id == channel.id)).scalar() or ""
+        """Display name of the company / project behind the key ("" when it vanished).
+
+        The admin channel of a company shares its plain legal name — the apps label the
+        "Quản trị"/admin kind themselves from ``kind == "admin"``, not from the name.
+        """
+        if channel.kind == "project":
+            return self._session.execute(select(ProjectModel.name).where(ProjectModel.id == channel.id)).scalar() or ""
+        return (
+            self._session.execute(select(CompanyModel.legal_name).where(CompanyModel.id == channel.id)).scalar() or ""
+        )
 
     def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
-        if channel.kind == "assistant":
-            # The only member of a user's assistant conversation is that user — not even
-            # a platform-ops superadmin can read someone else's. FEATURE_ASSISTANT off
-            # means nobody is a member of any assistant channel (see channel_exists).
-            return self._assistant_enabled() and user_id == channel.id
+        if channel.kind == "admin":
+            if self._is_superadmin(user_id):
+                return True
+            role = self._session.execute(
+                select(UserCompanyAccessModel.role).where(
+                    UserCompanyAccessModel.user_id == user_id, UserCompanyAccessModel.company_id == channel.id
+                )
+            ).scalar()
+            return role == CompanyRole.ADMIN.value
         if channel.kind == "company":
             return (
                 self._session.execute(
@@ -313,10 +334,9 @@ class SqlAlchemyChatRepository:
         return self._is_superadmin(user_id)
 
     def list_members(self, channel: ChannelRef) -> list[MemberInfo]:
-        if channel.kind == "assistant":
-            names = self.display_names([channel.id])
-            return [MemberInfo(id=channel.id, name=names.get(channel.id, "?"))]
-        if channel.kind == "company":
+        if channel.kind == "admin":
+            ids = self._admin_channel_member_ids(channel.id)
+        elif channel.kind == "company":
             ids = list(
                 self._session.execute(
                     select(UserCompanyAccessModel.user_id).where(UserCompanyAccessModel.company_id == channel.id)

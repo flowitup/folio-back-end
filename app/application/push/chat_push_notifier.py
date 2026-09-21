@@ -133,7 +133,7 @@ class ChatPushNotifier:
             locale = self._dispatcher.locale
             channel_name = self._names.channel_name(channel)
             text = (preview or "").strip().replace("\n", " ")[:_MAX_PREVIEW] or _IMAGE_ONLY[locale]
-            title = _TEXT[locale][0].format(sender="Assistant", channel=channel_name)
+            title = _TEXT[locale][0].format(sender="Folio", channel=channel_name)
 
             last_reads = self._reads.last_reads_for_channel(channel)
             for user_id in due:

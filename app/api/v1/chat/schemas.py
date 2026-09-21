@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,15 +13,18 @@ class SendMessageBody(BaseModel):
     """JSON body of POST /chat/channels/<key>/messages (text-only messages).
 
     Messages with an image or a voice note use multipart/form-data instead: ``body`` text
-    part + ``file`` (+ optional ``lang`` form field).
+    part + ``file`` (+ optional ``lang``/``reply_to_id`` form fields).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     body: str = Field(min_length=1, max_length=4000)
-    # Only meaningful when the target channel is the caller's assistant conversation;
-    # ignored (and never persisted) for every other channel kind.
+    # Kept when the assistant dispatches so it replies in the right language, whatever
+    # the channel kind.
     lang: Literal["vi", "fr", "en"] | None = None
+    # Must name a message of this same channel (checked by the use case); a reply to an
+    # assistant-authored message dispatches even without an `@folio` mention (D18).
+    reply_to_id: UUID | None = None
 
 
 class ListMessagesQuery(BaseModel):
@@ -53,6 +57,7 @@ class MessageResponse(BaseModel):
     content_type: Literal["text", "photo", "card", "choice", "job_status"]
     payload: dict[str, Any] | None = None
     reply_to_id: str | None = None
+    mentions_assistant: bool = False
 
 
 class MemberResponse(BaseModel):
@@ -69,6 +74,8 @@ class MessagePageResponse(BaseModel):
 
 class ChannelResponse(BaseModel):
     key: str
+    # "company" (every member), "project" (project members) or "admin" (a company's
+    # admins + platform ops — confidential company/payroll data, apps label the kind).
     kind: str
     id: str
     name: str
