@@ -10,6 +10,7 @@ own "sender" the way a human-to-human push would).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -136,3 +137,32 @@ class AssistantMessenger:
             reply_to_id=reply_to_id,
             trace_id=trace_id,
         )
+
+    def update_job_status(
+        self,
+        message_id: UUID,
+        *,
+        state: str,
+        text: str,
+        progress: float | None = None,
+        terminal: bool = False,
+    ) -> None:
+        """Update a ``job_status`` message's payload in place (feature B's state machine
+        — queued -> running -> not_ready|blocked|done|failed|not_found). Pushes through
+        the notifier only when ``terminal`` — the plan's "job_status shows a spinner
+        while queued|running" only needs the app's 5s poll to see intermediate states.
+        """
+        message = self._messages.find_by_id(message_id)
+        if message is None:
+            return
+        payload = dict(message.payload or {})
+        payload["state"] = state
+        payload["text"] = text
+        payload["progress"] = progress
+        self._messages.update_payload(message_id, payload)
+        self._db.commit()
+        # After the commit: a push must never be able to roll back the update.
+        if terminal and self.notifier is not None:
+            self.notifier.message_sent_by_assistant(
+                channel=message.channel, preview=text, sent_at=datetime.now(timezone.utc)
+            )

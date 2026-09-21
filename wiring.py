@@ -449,6 +449,10 @@ class Container:
     assistant_material_feature: Optional[Any] = None  # MaterialFeature
     assistant_feature_handlers: Optional[Any] = None  # FeatureHandlers
 
+    # Feature B (phase 04) — invoice fetch via the browser worker container.
+    assistant_job_repo: Optional[Any] = None  # AssistantJobRepositoryPort (SqlAlchemyAssistantJobRepository)
+    assistant_invoice_fetch_feature: Optional[Any] = None  # InvoiceFetchFeature
+
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 

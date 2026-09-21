@@ -169,6 +169,57 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "fr": "Je m'en occupe, je te dis dès que j'ai la facture.",
         "en": "On it — I'll let you know as soon as I have the invoice.",
     },
+    "fetch_need_merchant": {
+        "vi": "Đây là hoá đơn của nhà cung cấp nào?",
+        "fr": "C'est une facture de quel fournisseur ?",
+        "en": "Which merchant is this invoice from?",
+    },
+    "fetch_need_amount": {
+        "vi": "Hoá đơn này số tiền TTC là bao nhiêu?",
+        "fr": "Il me manque le montant TTC de cette facture, tu peux me le donner ?",
+        "en": "I'm missing the total amount (incl. tax) — could you give it to me?",
+    },
+    "fetch_already_running": {
+        "vi": "Tôi đang tìm hoá đơn này rồi, chờ tôi một chút nhé.",
+        "fr": "Je suis déjà en train de chercher cette facture, patiente un peu.",
+        "en": "I'm already looking for this invoice, hang tight.",
+    },
+    "fetch_running": {
+        "vi": "Tôi đang tìm trên trang của nhà cung cấp…",
+        "fr": "Je cherche sur le site du fournisseur…",
+        "en": "Looking it up on the merchant's site…",
+    },
+    "fetch_done": {
+        "vi": "Đã lấy được hoá đơn!",
+        "fr": "Facture récupérée !",
+        "en": "Got the invoice!",
+    },
+    "fetch_not_ready": {
+        "vi": "Hoá đơn chưa có trên trang nhà cung cấp, tôi sẽ thử lại sau.",
+        "fr": "La facture n'est pas encore disponible côté fournisseur, je réessaierai plus tard.",
+        "en": "The invoice isn't available on the merchant's site yet, I'll retry later.",
+    },
+    "fetch_failed": {
+        "vi": "Tôi đã thử vài lần nhưng không lấy được hoá đơn này.",
+        "fr": "Je n'ai pas réussi à récupérer cette facture après plusieurs tentatives.",
+        "en": "I couldn't fetch this invoice after several attempts.",
+    },
+    "fetch_blocked": {
+        "vi": "Trang web yêu cầu xác minh, bạn gửi giúp tôi ảnh chụp hoá đơn nhé.",
+        "fr": "Le site demande une vérification, envoie-moi la photo du ticket à la place.",
+        "en": "The site is asking for a verification step — send me a photo of the receipt instead.",
+    },
+    "fetch_not_found_prompt": {
+        "vi": "Tôi không tìm thấy đúng hoá đơn, có phải một trong số này không?",
+        "fr": "Je n'ai pas trouvé la bonne facture, est-ce l'une de celles-ci ?",
+        "en": "I couldn't find the exact invoice — is it one of these?",
+    },
+    "fetch_none_option": {"vi": "Không phải cái nào cả", "fr": "Ce n'est aucune", "en": "None of these"},
+    "fetch_extract_failed": {
+        "vi": "Tôi tải được tệp nhưng không đọc được nội dung, vui lòng kiểm tra lại thủ công.",
+        "fr": "J'ai téléchargé le fichier mais je n'arrive pas à en lire le contenu, merci de vérifier manuellement.",
+        "en": "I downloaded the file but could not read its content, please check it manually.",
+    },
     "unknown_intent": {
         "vi": "Tôi chưa hiểu rõ yêu cầu, bạn có thể nói rõ hơn không?",
         "fr": "Je n'ai pas bien compris, tu peux préciser ?",

@@ -1717,14 +1717,20 @@ def _configure_di_container() -> None:
     # of phase 02's `DefaultFeatureHandlers` stand-in.
     # -----------------------------------------------------------------------
     from app.application.assistant.features import FeatureHandlers as _FeatureHandlers
+    from app.application.assistant.features.invoice_fetch import InvoiceFetchFeature as _InvoiceFetchFeature
     from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
     from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
     from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
         SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
     )
+    from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
+        SqlAlchemyAssistantJobRepository as _SqlAlchemyAssistantJobRepository,
+    )
 
     _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
     _c.assistant_import_repo = _assistant_import_repo
+    _assistant_job_repo = _SqlAlchemyAssistantJobRepository(db.session)
+    _c.assistant_job_repo = _assistant_job_repo
 
     if (
         _c.project_repository is not None
@@ -1772,8 +1778,21 @@ def _configure_di_container() -> None:
             fetch_image_usecase=_c.bibliotheque_fetch_image_from_url_usecase,
             upload_image_usecase=_c.bibliotheque_upload_image_usecase,
         )
+        _c.assistant_invoice_fetch_feature = _InvoiceFetchFeature(
+            vision=_c.assistant_vision_llm,
+            messages=_chat_repo,
+            storage=storage,
+            job_repo=_assistant_job_repo,
+            ticket=_c.assistant_ticket_feature,
+            company_access=_access_repo,
+            project_repo=_c.project_repository,
+            authz_reader=_c.authz_reader,
+            invoice_repo=_c.invoice_repository,
+        )
         _c.assistant_feature_handlers = _FeatureHandlers(
-            ticket=_c.assistant_ticket_feature, material=_c.assistant_material_feature
+            ticket=_c.assistant_ticket_feature,
+            material=_c.assistant_material_feature,
+            invoice_fetch=_c.assistant_invoice_fetch_feature,
         )
         _c.assistant_service = _AssistantService(
             message_repo=_chat_repo,

@@ -78,9 +78,16 @@ class Product(BaseModel):
 
 
 class FetchResult(BaseModel):
-    """What the browser-use worker reports back for a `fetch_invoice` job."""
+    """What the browser-use worker reports back for a `fetch_invoice` job.
 
-    status: Literal["done", "not_found", "not_ready", "blocked"]
+    "failed" is not something the agent itself ever reports (browser-use's structured
+    output schema only knows about the plan's 4 outcomes) — it is what
+    ``app.infrastructure.browser_worker.agent`` falls back to when the agent run itself
+    raised (missing dependency, crashed browser, unparseable output, ...), so the poll
+    loop always has a valid ``FetchResult`` to write back to ``assistant_jobs``.
+    """
+
+    status: Literal["done", "not_found", "not_ready", "blocked", "failed"]
     pdf_path: Optional[str] = None
     message: Optional[str] = None
 

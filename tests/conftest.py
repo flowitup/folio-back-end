@@ -1202,12 +1202,16 @@ def invitation_app():
         # the test SQLite DB, not a fake, matching phase 02's "no LLM for equipment" design.
         from app.application.assistant.equipment import EquipmentService as _EquipmentService
         from app.application.assistant.features import FeatureHandlers as _FeatureHandlers
+        from app.application.assistant.features.invoice_fetch import InvoiceFetchFeature as _InvoiceFetchFeature
         from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
         from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
         from app.application.assistant.router import Router as _Router
         from app.infrastructure.ai.cost import InMemoryCostLedger as _InMemoryCostLedger
         from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
             SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
+            SqlAlchemyAssistantJobRepository as _SqlAlchemyAssistantJobRepository,
         )
         from tests.fakes.ai import RecordingImageGen as _RecordingImageGen
         from tests.fakes.ai import RecordingLens as _RecordingLens
@@ -1231,6 +1235,8 @@ def invitation_app():
         _c.assistant_router = _Router(_assistant_decision_port)
         _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
         _c.assistant_import_repo = _assistant_import_repo
+        _assistant_job_repo = _SqlAlchemyAssistantJobRepository(db.session)
+        _c.assistant_job_repo = _assistant_job_repo
         if _c.project_repository is not None:
             _c.assistant_equipment_service = _EquipmentService(
                 item_repo=_c.inventory_item_repo,
@@ -1283,8 +1289,21 @@ def invitation_app():
                     fetch_image_usecase=_c.bibliotheque_fetch_image_from_url_usecase,
                     upload_image_usecase=_c.bibliotheque_upload_image_usecase,
                 )
+                _c.assistant_invoice_fetch_feature = _InvoiceFetchFeature(
+                    vision=_assistant_vision,
+                    messages=_chat_repo,
+                    storage=_chat_storage,
+                    job_repo=_assistant_job_repo,
+                    ticket=_c.assistant_ticket_feature,
+                    company_access=_c.user_company_access_repo,
+                    project_repo=_c.project_repository,
+                    authz_reader=_c.authz_reader,
+                    invoice_repo=_c.invoice_repository,
+                )
                 _c.assistant_feature_handlers = _FeatureHandlers(
-                    ticket=_c.assistant_ticket_feature, material=_c.assistant_material_feature
+                    ticket=_c.assistant_ticket_feature,
+                    material=_c.assistant_material_feature,
+                    invoice_fetch=_c.assistant_invoice_fetch_feature,
                 )
                 _feature_handlers = _c.assistant_feature_handlers
             _c.assistant_service = AssistantService(

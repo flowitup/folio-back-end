@@ -31,7 +31,7 @@ from uuid import UUID, uuid4
 from app.application.assistant import gate, reply
 from app.application.assistant.decide import TicketDecision, decide_ticket
 from app.application.assistant.exceptions import LlmOutputError
-from app.application.assistant.extract import extract_invoice, is_readable
+from app.application.assistant.extract import extract_invoice, is_readable, pdf_to_images
 from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import InvoiceImportRepositoryPort
 from app.application.assistant.messages import AssistantMessenger
@@ -256,6 +256,103 @@ class TicketFeature:
         )
 
     # ------------------------------------------------------------------
+    # Entry point — feature B's downloaded PDF (shares S2-S4 with run())
+    # ------------------------------------------------------------------
+
+    def run_bytes(
+        self,
+        *,
+        user_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        data: bytes,
+        content_type: str,
+        chat_hint: Optional[str],
+        source: str,
+        reply_to_id: Optional[UUID] = None,
+    ) -> None:
+        """``InvoiceFetchFeature.on_result``'s "done" path: a browser-downloaded PDF is
+        already a clean document — no scan step (plan: "the downloaded PDF is already
+        clean"). Reuses ``run()``'s exact S2-S4 pipeline; the PDF itself becomes the
+        invoice's ``original`` attachment (mime ``application/pdf``) and no second
+        (scan) attachment is created. ``chat_hint`` (the router's ``project_hint``) is
+        threaded into the S3 state so Jev sees it (plan section 3's priority order).
+        """
+        try:
+            images = pdf_to_images(data) if content_type == "application/pdf" else [data]
+            invoice_a = extract_invoice(self._vision, images)
+        except LlmOutputError:
+            messenger.post_text(
+                user_id, reply.render("fetch_extract_failed", lang), reply_to_id=reply_to_id, trace_id=trace_id
+            )
+            return
+        if not is_readable(invoice_a):
+            messenger.post_text(
+                user_id, reply.render("fetch_extract_failed", lang), reply_to_id=reply_to_id, trace_id=trace_id
+            )
+            return
+
+        filename = "facture.pdf" if content_type == "application/pdf" else "facture"
+        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
+        today = date.today()
+        ticket_day = _parse_date(invoice_a.date) or today
+
+        candidates = match_candidates(self._invoice_repo, self._import_repo, projects, invoice_a, ticket_day)
+        if candidates:
+            picked, attach_confidence = self._decide_attach(candidates, invoice_a)
+            if picked is not None and gate.attach_existing_allowed(attach_confidence):
+                project, existing = picked
+                self._attach_to_existing(
+                    user_id=user_id,
+                    message_id=reply_to_id,
+                    lang=lang,
+                    messenger=messenger,
+                    trace_id=trace_id,
+                    project=project,
+                    existing=existing,
+                    confidence=attach_confidence,
+                    photo_bytes=data,
+                    photo_mime=content_type,
+                    photo_filename=filename,
+                    scan_pdf=None,
+                    source=source,
+                )
+                return
+
+        workers_by_project = {
+            str(p.id): workers_on_site(self._labor_entry_repo, self._worker_repo, p.id, ticket_day) for p in projects
+        }
+        recent_by_project = {
+            str(p.id): recent_purchases(self._invoice_repo, p.id, invoice_a.merchant, today) for p in projects
+        }
+        dup_candidates = duplicate_candidates(
+            self._invoice_repo, projects, invoice_a.merchant, invoice_a.total_ttc, ticket_day
+        )
+        sane = amounts_sane(invoice_a)
+        ticket_state = build_ticket_state(
+            invoice_a, projects, workers_by_project, recent_by_project, dup_candidates, sane, chat_hint=chat_hint
+        )
+        decision = decide_ticket(self._decisions, ticket_state, projects, dup_candidates)
+
+        self._apply_gate(
+            user_id=user_id,
+            message_id=reply_to_id,
+            lang=lang,
+            messenger=messenger,
+            trace_id=trace_id,
+            invoice_a=invoice_a,
+            projects=projects,
+            decision=decision,
+            original_bytes=data,
+            original_mime=content_type,
+            original_filename=filename,
+            scan_bytes=None,
+            source=source,
+        )
+
+    # ------------------------------------------------------------------
     # C2 — scan generation
     # ------------------------------------------------------------------
 
@@ -341,7 +438,7 @@ class TicketFeature:
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -351,7 +448,8 @@ class TicketFeature:
         photo_bytes: bytes,
         photo_mime: str,
         photo_filename: str,
-        scan_pdf: bytes,
+        scan_pdf: Optional[bytes],
+        source: str = "ticket",
     ) -> None:
         original_attachment = self._upload_attachment_usecase.execute(
             invoice_id=existing.id,
@@ -361,23 +459,26 @@ class TicketFeature:
             fileobj=io.BytesIO(photo_bytes),
             uploaded_by=user_id,
         )
-        scan_attachment = self._upload_attachment_usecase.execute(
-            invoice_id=existing.id,
-            filename=f"scan-{existing.invoice_number}.pdf",
-            mime_type="application/pdf",
-            size_bytes=len(scan_pdf),
-            fileobj=io.BytesIO(scan_pdf),
-            uploaded_by=user_id,
-        )
+        scan_attachment_id: Optional[UUID] = None
+        if scan_pdf is not None:
+            scan_attachment = self._upload_attachment_usecase.execute(
+                invoice_id=existing.id,
+                filename=f"scan-{existing.invoice_number}.pdf",
+                mime_type="application/pdf",
+                size_bytes=len(scan_pdf),
+                fileobj=io.BytesIO(scan_pdf),
+                uploaded_by=user_id,
+            )
+            scan_attachment_id = scan_attachment.id
         existing_import = self._import_repo.find_by_invoice(existing.id)
         status = existing_import.status if existing_import is not None else "confirmed"
         self._import_repo.add_invoice_import(
             invoice_id=existing.id,
             status=status,
-            source="ticket",
+            source=source,
             ai_confidence=confidence,
             original_attachment_id=original_attachment.id,
-            scan_attachment_id=scan_attachment.id,
+            scan_attachment_id=scan_attachment_id,
             trace_id=trace_id,
         )
         messenger.post_text(
@@ -405,7 +506,7 @@ class TicketFeature:
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -415,7 +516,8 @@ class TicketFeature:
         original_bytes: bytes,
         original_mime: str,
         original_filename: str,
-        scan_bytes: bytes,
+        scan_bytes: Optional[bytes],
+        source: str = "ticket",
     ) -> None:
         if decision.duplicate_of is not None:
             dup_status = gate.duplicate_status(decision.duplicate_confidence)
@@ -437,6 +539,7 @@ class TicketFeature:
                     original_mime=original_mime,
                     original_filename=original_filename,
                     scan_bytes=scan_bytes,
+                    source=source,
                 )
                 return
         self._resolve_project_and_create(
@@ -452,12 +555,13 @@ class TicketFeature:
             original_mime=original_mime,
             original_filename=original_filename,
             scan_bytes=scan_bytes,
+            source=source,
         )
 
     def _post_duplicate_refused(
         self,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -483,7 +587,7 @@ class TicketFeature:
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -492,11 +596,12 @@ class TicketFeature:
         original_bytes: bytes,
         original_mime: str,
         original_filename: str,
-        scan_bytes: bytes,
+        scan_bytes: Optional[bytes],
+        source: str = "ticket",
     ) -> None:
         original_key, scan_key = self._store_pending(trace_id, original_bytes, original_mime, scan_bytes)
         base_payload = self._pending_payload(
-            invoice_a, decision, original_key, original_mime, original_filename, scan_key
+            invoice_a, decision, original_key, original_mime, original_filename, scan_key, source
         )
         confirm_payload = dict(base_payload)
         deny_payload = dict(base_payload)
@@ -520,7 +625,7 @@ class TicketFeature:
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -530,7 +635,8 @@ class TicketFeature:
         original_bytes: bytes,
         original_mime: str,
         original_filename: str,
-        scan_bytes: bytes,
+        scan_bytes: Optional[bytes],
+        source: str = "ticket",
     ) -> None:
         projects_by_id = {project.id: project for project in projects}
         flags = [] if gate.amounts_ok(decision.amounts_consistent) else ["amounts_to_check"]
@@ -556,6 +662,7 @@ class TicketFeature:
                     original_filename=original_filename,
                     scan_bytes=scan_bytes,
                     offer_correction=False,
+                    source=source,
                 )
                 return
             if not projects:
@@ -576,6 +683,7 @@ class TicketFeature:
                 original_mime=original_mime,
                 original_filename=original_filename,
                 scan_bytes=scan_bytes,
+                source=source,
             )
             return
 
@@ -598,13 +706,14 @@ class TicketFeature:
             scan_bytes=scan_bytes,
             offer_correction=(status == "to_confirm"),
             other_projects=[p for p in projects if p.id != target.id],
+            source=source,
         )
 
     def _post_pick_project_all(
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -614,11 +723,12 @@ class TicketFeature:
         original_bytes: bytes,
         original_mime: str,
         original_filename: str,
-        scan_bytes: bytes,
+        scan_bytes: Optional[bytes],
+        source: str = "ticket",
     ) -> None:
         original_key, scan_key = self._store_pending(trace_id, original_bytes, original_mime, scan_bytes)
         base_payload = self._pending_payload(
-            invoice_a, decision, original_key, original_mime, original_filename, scan_key
+            invoice_a, decision, original_key, original_mime, original_filename, scan_key, source
         )
         options = [
             {
@@ -636,7 +746,7 @@ class TicketFeature:
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -649,9 +759,10 @@ class TicketFeature:
         original_bytes: bytes,
         original_mime: str,
         original_filename: str,
-        scan_bytes: bytes,
+        scan_bytes: Optional[bytes],
         offer_correction: bool,
         other_projects: Optional[list[WritableProject]] = None,
+        source: str = "ticket",
     ) -> None:
         response = self._create_and_attach(
             user_id=user_id,
@@ -666,6 +777,7 @@ class TicketFeature:
             original_filename=original_filename,
             scan_bytes=scan_bytes,
             trace_id=trace_id,
+            source=source,
         )
         messenger.post_text(
             user_id,
@@ -713,8 +825,9 @@ class TicketFeature:
         original_bytes: bytes,
         original_mime: str,
         original_filename: str,
-        scan_bytes: bytes,
+        scan_bytes: Optional[bytes],
         trace_id: str,
+        source: str = "ticket",
     ) -> InvoiceResponse:
         response = self._create_invoice(user_id, project_id, invoice_a, trace_id)
         invoice_id = UUID(response.id)
@@ -726,23 +839,26 @@ class TicketFeature:
             fileobj=io.BytesIO(original_bytes),
             uploaded_by=user_id,
         )
-        scan_attachment = self._upload_attachment_usecase.execute(
-            invoice_id=invoice_id,
-            filename=f"scan-{response.invoice_number}.pdf",
-            mime_type="application/pdf",
-            size_bytes=len(scan_bytes),
-            fileobj=io.BytesIO(scan_bytes),
-            uploaded_by=user_id,
-        )
+        scan_attachment_id: Optional[UUID] = None
+        if scan_bytes is not None:
+            scan_attachment = self._upload_attachment_usecase.execute(
+                invoice_id=invoice_id,
+                filename=f"scan-{response.invoice_number}.pdf",
+                mime_type="application/pdf",
+                size_bytes=len(scan_bytes),
+                fileobj=io.BytesIO(scan_bytes),
+                uploaded_by=user_id,
+            )
+            scan_attachment_id = scan_attachment.id
         self._import_repo.add_invoice_import(
             invoice_id=invoice_id,
             status=status,
-            source="ticket",
+            source=source,
             ai_confidence=confidence,
             category=category,
             flags=flags,
             original_attachment_id=original_attachment.id,
-            scan_attachment_id=scan_attachment.id,
+            scan_attachment_id=scan_attachment_id,
             trace_id=trace_id,
         )
         return response
@@ -826,8 +942,9 @@ class TicketFeature:
         invoice_a = Invoice.model_validate(payload["invoice"])
         category = str(payload.get("category") or "autre")
         original_bytes = self._fetch_pending(str(payload["original_key"]))
-        scan_bytes = self._fetch_pending(str(payload["scan_key"]))
-        if original_bytes is None or scan_bytes is None:
+        scan_key = payload.get("scan_key")
+        scan_bytes = self._fetch_pending(str(scan_key)) if scan_key else None
+        if original_bytes is None or (scan_key and scan_bytes is None):
             messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
             return
         project = self._resolve_writable_project(user_id, project_id)
@@ -854,8 +971,9 @@ class TicketFeature:
             original_filename=str(payload.get("original_filename") or "ticket.jpg"),
             scan_bytes=scan_bytes,
             offer_correction=False,
+            source=str(payload.get("source") or "ticket"),
         )
-        self._cleanup_pending(str(payload["original_key"]), str(payload["scan_key"]))
+        self._cleanup_pending(str(payload["original_key"]), str(scan_key or ""))
 
     def _move_invoice(
         self,
@@ -922,7 +1040,7 @@ class TicketFeature:
         self._import_repo.add_invoice_import(
             invoice_id=new_invoice_id,
             status=status,
-            source="ticket",
+            source=prior_import.source if prior_import is not None else "ticket",
             ai_confidence=prior_import.ai_confidence if prior_import is not None else 0.0,
             category=prior_import.category if prior_import is not None else None,
             flags=prior_import.flags if prior_import is not None else [],
@@ -987,8 +1105,9 @@ class TicketFeature:
     ) -> None:
         invoice_a = Invoice.model_validate(payload["invoice"])
         original_bytes = self._fetch_pending(str(payload["original_key"]))
-        scan_bytes = self._fetch_pending(str(payload["scan_key"]))
-        if original_bytes is None or scan_bytes is None:
+        scan_key = payload.get("scan_key")
+        scan_bytes = self._fetch_pending(str(scan_key)) if scan_key else None
+        if original_bytes is None or (scan_key and scan_bytes is None):
             messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
             return
         company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
@@ -1016,8 +1135,9 @@ class TicketFeature:
             original_mime=str(payload.get("original_mime") or "image/jpeg"),
             original_filename=str(payload.get("original_filename") or "ticket.jpg"),
             scan_bytes=scan_bytes,
+            source=str(payload.get("source") or "ticket"),
         )
-        self._cleanup_pending(str(payload["original_key"]), str(payload["scan_key"]))
+        self._cleanup_pending(str(payload["original_key"]), str(scan_key or ""))
 
     # ------------------------------------------------------------------
     # Small helpers
@@ -1044,7 +1164,8 @@ class TicketFeature:
         original_key: str,
         original_mime: str,
         original_filename: str,
-        scan_key: str,
+        scan_key: Optional[str],
+        source: str = "ticket",
     ) -> dict[str, Any]:
         return {
             "invoice": invoice_a.model_dump(),
@@ -1057,15 +1178,18 @@ class TicketFeature:
             "original_mime": original_mime,
             "original_filename": original_filename,
             "scan_key": scan_key,
+            "source": source,
         }
 
     def _store_pending(
-        self, trace_id: str, original_bytes: bytes, original_mime: str, scan_bytes: bytes
-    ) -> tuple[str, str]:
+        self, trace_id: str, original_bytes: bytes, original_mime: str, scan_bytes: Optional[bytes]
+    ) -> tuple[str, Optional[str]]:
         prefix = f"assistant/pending/{trace_id}-{uuid4().hex[:8]}"
         original_key = f"{prefix}/original"
-        scan_key = f"{prefix}/scan.pdf"
         self._storage.put(original_key, io.BytesIO(original_bytes), content_type=original_mime)
+        if scan_bytes is None:
+            return original_key, None
+        scan_key = f"{prefix}/scan.pdf"
         self._storage.put(scan_key, io.BytesIO(scan_bytes), content_type="application/pdf")
         return original_key, scan_key
 

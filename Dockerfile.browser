@@ -1,0 +1,70 @@
+# Folio Assistant feature B — the ai-browser container.
+#
+# Layers a real Google Chrome install + Xvfb/x11vnc on top of Microsoft's Playwright
+# Python image (already carries the Chromium/browser runtime libraries browser-use's
+# CDP driver needs, even though the agent itself drives Google Chrome, not Playwright's
+# bundled Chromium — plan section 0's "hands: browser-use + real Google Chrome").
+#
+# browser-use is NOT in this project's pyproject.toml/uv.lock: 0.13.10 pins
+# openai==2.26.0/pydantic==2.13.5/httpx==0.28.1/google-genai==1.65.0, which would fight
+# the main backend's own pins. It is installed here, on top of the project, with a
+# plain `pip install` in its own image — the browser worker only needs browser-use +
+# DB + S3 + Redis, never the rest of the test suite or the main API process.
+FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
+
+WORKDIR /app
+
+# wget/gnupg: fetch + verify Google's apt signing key.
+# xvfb: virtual display so Chrome can run with headless=False (browser-use needs a real
+#   rendering surface, not Chrome's own headless mode, for reliable site behavior).
+# x11vnc: owner login-session mode only (docker/browser-entrypoint.sh, one-time manual
+#   merchant login — docs/assistant-merchant-login.md).
+# poppler-utils: pdf2image, the same S1 PDF -> image step the main backend uses to read
+#   a fetched invoice's first page(s).
+# tini: this image's ENTRYPOINT runs as the container's PID 1, and `xvfb-run -a`'s
+#   Xvfb-ready handshake is a SIGUSR1 signal from Xvfb to its parent shell — a well-known
+#   class of bug where that signal is silently dropped (or the shell never reaps
+#   Xvfb, or an unrelated zombie blocks it) when the wrapper shell itself is PID 1,
+#   hanging the container forever with Xvfb up but the poll loop never started (verified
+#   by hand: `docker exec <container> ps aux` showed only xvfb-run + Xvfb, no python,
+#   after several minutes). tini as PID 1 gives normal signal semantics to everything it
+#   execs, which is the standard fix.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget gnupg ca-certificates xvfb x11vnc poppler-utils tini \
+    && wget -q -O /tmp/google-chrome-key.pub https://dl.google.com/linux/linux_signing_key.pub \
+    && gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg /tmp/google-chrome-key.pub \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+        > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/* /tmp/google-chrome-key.pub
+
+# Project source — same set the main Dockerfile ships (app/reply.py's import chain
+# transitively reaches nearly every application-layer module, e.g.
+# invitations.create_invitation_usecase -> tasks.EmailPayload, so this cannot be
+# trimmed down to just app/ without a partial-import crash at runtime).
+COPY pyproject.toml .
+COPY app/ app/
+COPY config/ config/
+COPY stack/ stack/
+COPY outbox/ outbox/
+COPY migrations/ migrations/
+COPY scripts/ scripts/
+COPY wiring.py .
+COPY tasks.py .
+
+RUN pip install --no-cache-dir -e . \
+    && pip install --no-cache-dir "browser-use==0.13.10"
+
+# Non-root user; profile + downloads dirs it owns (docker-compose.yml mounts named
+# volumes at these exact paths — ai_browser_profile:/app/profile,
+# ai_browser_data:/app/data).
+RUN useradd --create-home --shell /bin/bash app \
+    && mkdir -p /app/profile /app/data/downloads \
+    && chown -R app:app /app
+
+COPY --chown=app:app docker/browser-entrypoint.sh /app/browser-entrypoint.sh
+RUN chmod +x /app/browser-entrypoint.sh
+
+USER app
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/browser-entrypoint.sh"]

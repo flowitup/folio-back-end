@@ -54,6 +54,7 @@ from app.infrastructure.database.models.assistant_imports import (
     AssistantMaterialImportModel,
     InvoiceAiImportModel,
 )
+from app.infrastructure.database.models.assistant_job import AssistantJobModel
 
 __all__ = [
     "Base",
@@ -105,4 +106,5 @@ __all__ = [
     "ChatPushMarkerModel",
     "InvoiceAiImportModel",
     "AssistantMaterialImportModel",
+    "AssistantJobModel",
 ]

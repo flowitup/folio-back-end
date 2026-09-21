@@ -189,10 +189,18 @@ def build_ticket_state(
     recent_by_project: dict[str, list[dict[str, Any]]],
     duplicates: list[DuplicateCandidate],
     sane: bool,
+    chat_hint: Optional[str] = None,
 ) -> dict[str, Any]:
-    """The plain-dict state ``decide.decide_ticket`` hands to Jev's ``system_one``."""
+    """The plain-dict state ``decide.decide_ticket`` hands to Jev's ``system_one``.
+
+    ``chat_hint`` (plan section 3's S3 priority: "chat_hint > reference_field >
+    delivery_address > proximité...") is only ever set by feature B — the project name
+    or hint the user's chat request already named ("... pour Arcueil"). Feature C's
+    photo flow has no such hint and always passes None.
+    """
     return {
         "invoice": invoice.model_dump(),
+        "chat_hint": chat_hint,
         "projects": [{"id": str(p.id), "name": p.name, "address": p.address} for p in projects],
         "workers_on_site_that_day": workers_by_project,
         "recent_purchases_from_merchant": recent_by_project,
