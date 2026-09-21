@@ -18,6 +18,8 @@ from uuid import UUID, uuid4
 
 import cv2
 import numpy as np
+import shutil
+
 import pytest
 
 from app.application.assistant.features.invoice_fetch import (
@@ -524,6 +526,7 @@ class TestOnResultNotFound:
         assert len(texts) >= 1
 
 
+@pytest.mark.skipif(shutil.which("pdfinfo") is None, reason="poppler-utils (pdfinfo) not installed")
 class TestOnResultDone:
     def test_runs_ticket_pipeline_and_creates_invoice(self, session) -> None:
         world = World(session)

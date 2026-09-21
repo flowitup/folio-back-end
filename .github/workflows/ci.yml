@@ -46,6 +46,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install poppler (pdf2image needs pdfinfo/pdftoppm)
+        # The assistant renders PDF pages for extraction; the prod image installs
+        # poppler-utils in its Dockerfile, so the tests need the same binary here.
+        timeout-minutes: 2
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+
       - name: Install uv
         # Replaces `curl … | sh` with the official action, SHA-pinned to v8.1.0.
         # Removes the supply-chain risk of an attacker-controlled install script.

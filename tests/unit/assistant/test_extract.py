@@ -13,6 +13,8 @@ from __future__ import annotations
 import io
 
 import img2pdf
+import shutil
+
 import pytest
 from PIL import Image
 
@@ -70,6 +72,7 @@ def test_is_readable_threshold() -> None:
     assert is_readable(_sample_invoice(readability=READABILITY_MIN - 0.01)) is False
 
 
+@pytest.mark.skipif(shutil.which("pdfinfo") is None, reason="poppler-utils (pdfinfo) not installed")
 def test_pdf_to_images_renders_at_least_one_jpeg_page() -> None:
     # A real single-page PDF built from a tiny in-memory image — exercises the real
     # pdf2image/poppler round trip, not a mock.
