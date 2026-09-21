@@ -313,6 +313,33 @@ class TestJobCreation:
         assert "cherche" in job_status.payload["text"].lower()
 
 
+class TestChannelRoundTrip:
+    """Phase 03's answer to phase 01/02's open question 2: the async `find_product` job
+    carries the originating channel, and `on_result` posts back into it."""
+
+    def test_job_carries_the_channel_key_and_on_result_posts_back_into_it(self, world: World) -> None:
+        channel = ChannelRef(kind="project", id=uuid4())
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+
+        world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            channel=channel,
+        )
+
+        job = world.job_repo.list_recent_for_user(world.user_id, limit=1)[0]
+        assert job.channel_key == channel.key
+
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/produit")])
+        posted = [m for m in world.last_replies() if m.channel == channel]
+        assert posted, "on_result should have posted into the job's originating channel"
+
+
 class TestConfirmed:
     def test_creates_the_product_and_posts_a_confirmed_card(self, world: World) -> None:
         message_id = world.post_photo()

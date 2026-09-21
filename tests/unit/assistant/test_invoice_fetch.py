@@ -315,9 +315,15 @@ class World:
         amount: Decimal = Decimal("79.54"),
         job_date: date = date(2026, 9, 10),
         reply_to: Optional[ChatMessage] = None,
+        channel_key: Optional[str] = None,
     ):
         job = self.job_repo.add(
-            user_id=self.user_id, merchant=merchant, amount_ttc=amount, date=job_date, project_hint=None
+            user_id=self.user_id,
+            merchant=merchant,
+            amount_ttc=amount,
+            date=job_date,
+            project_hint=None,
+            channel_key=channel_key,
         )
         status_message = self.messenger.post_job_status(
             self.user_id,
@@ -564,6 +570,64 @@ class TestOnResultDone:
         assert cards[0].payload["card"]["badge"] == "confirmed"
         invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2027, 1, 1))
         assert len(invoices) == 1
+
+
+class TestChannelRoundTrip:
+    """Phase 03's answer to phase 01/02's open question 2: `fetch_invoice`'s job carries
+    the originating channel, and `on_result` posts the final reply back into it."""
+
+    def test_fetch_invoice_stamps_channel_key_on_job_creation(self, session) -> None:
+        world = World(session)
+        channel = ChannelRef(kind="project", id=world.project_a.id)
+        message = world.post_user_message("va chercher la facture Leroy Merlin 79,54 e d'hier")
+        world.vision._json_answers = [AmountDate(amount_ttc=79.54, date="2026-09-20")]
+        decision = RouterDecision(intent="fetch_invoice", intent_confidence=0.95, merchant="leroymerlin")
+
+        world.feature.fetch_invoice(
+            user_id=world.user_id,
+            message_id=message.id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            decision=decision,
+            channel=channel,
+        )
+
+        job = world.job_repo.list_recent_for_user(world.user_id, limit=1)[0]
+        assert job.channel_key == channel.key
+
+    def test_on_result_posts_the_invoice_card_into_the_jobs_channel(self, session) -> None:
+        world = World(session)
+        channel = ChannelRef(kind="project", id=world.project_a.id)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(
+            amount=Decimal("79.54"), job_date=date(2026, 9, 10), reply_to=original, channel_key=channel.key
+        )
+
+        pdf_key = f"assistant/jobs/{job.id}.pdf"
+        world.storage.put(pdf_key, io.BytesIO(_pdf_bytes()), content_type="application/pdf")
+        world.job_repo.update_result(job.id, status="done", pdf_storage_key=pdf_key, result={"status": "done"})
+
+        from app.application.assistant.models import Invoice as AssistantInvoice
+        from app.application.assistant.ports import Decision
+
+        world.vision._json_answers = [
+            AssistantInvoice(merchant="Leroy Merlin", total_ttc=79.54, readability=0.9, date="2026-09-10")
+        ]
+        world.decisions._fixed = Decision(
+            choices={
+                "project": (str(world.project_a.id), 0.95, {}),
+                "category": ("materiaux", 0.9, {}),
+                "duplicate_of": ("none", 0.95, {}),
+            },
+            nouls={"amounts_consistent": 0.95},
+        )
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        cards = [m for m in world.messages.messages.values() if m.content_type == "card"]
+        assert len(cards) == 1
+        assert cards[0].channel == channel
 
 
 class TestHandleAction:

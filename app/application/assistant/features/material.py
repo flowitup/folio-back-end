@@ -62,6 +62,7 @@ from app.application.chat.ports import ChatAttachmentStoragePort
 from app.application.companies.ports import CompanyRepositoryPort, UserCompanyAccessRepositoryPort
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.library_product import LibraryProduct
+from app.domain.entities.chat_message import ChannelRef
 from app.domain.value_objects.supplier_slug import slugify
 
 logger = logging.getLogger(__name__)
@@ -173,12 +174,17 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
         project_hint: Optional[str] = None,
     ) -> str:
         photo = read_photo_bytes(self._messages, self._storage, message_id, user_id)
         if photo is None:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
         photo_bytes, _photo_filename, _photo_mime = photo
@@ -189,12 +195,20 @@ class MaterialFeature:
             )
         except LlmOutputError:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
         if not gate.identify_ok(ident.confidence):
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
 
@@ -207,14 +221,18 @@ class MaterialFeature:
         # on the second company's own otherwise-legitimate import).
         company_id = self._resolve_company(user_id, project_hint)
         if company_id is None:
-            return self._post_pick_company(user_id, message_id, lang, messenger, trace_id, ident, sha, message_id)
+            return self._post_pick_company(
+                user_id, message_id, lang, messenger, trace_id, ident, sha, message_id, channel=channel
+            )
 
         cached = self._material_imports.find_by_photo_hash(company_id, sha)
         if cached is not None:
-            self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
+            self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached, channel=channel)
             return "replied"
 
-        return self._continue_after_company(user_id, message_id, company_id, ident, sha, lang, messenger, trace_id)
+        return self._continue_after_company(
+            user_id, message_id, company_id, ident, sha, lang, messenger, trace_id, channel=channel
+        )
 
     # ------------------------------------------------------------------
     # Company resolution (plan item 5)
@@ -247,6 +265,7 @@ class MaterialFeature:
         ident: MaterialIdent,
         sha: str,
         photo_message_id: UUID,
+        channel: Optional[ChannelRef] = None,
     ) -> str:
         options = []
         for access in self._company_access.list_for_user(user_id):
@@ -266,10 +285,21 @@ class MaterialFeature:
                 }
             )
         if not options:
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+            )
             return "refused"
         messenger.post_choice(
-            user_id, reply.render("pick_company_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("pick_company_prompt", lang),
+            options,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=channel,
         )
         return "asked"
 
@@ -287,11 +317,12 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> str:
         if ident.reference:
             cached = self._material_imports.find_by_reference(company_id, ident.reference)
             if cached is not None:
-                self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
+                self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached, channel=channel)
                 return "replied"
 
         since = datetime.now(timezone.utc) - DEDUPE_WINDOW
@@ -300,7 +331,11 @@ class MaterialFeature:
         )
         if duplicate is not None:
             messenger.post_text(
-                user_id, reply.render("product_search_ack", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("product_search_ack", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
 
@@ -312,7 +347,14 @@ class MaterialFeature:
             "message_id": str(message_id),
             "lang": lang,
         }
-        job = self._job_repo.add(job_type="find_product", user_id=user_id, project_hint=None, lang=lang, params=params)
+        job = self._job_repo.add(
+            job_type="find_product",
+            user_id=user_id,
+            project_hint=None,
+            lang=lang,
+            params=params,
+            channel_key=channel.key if channel is not None else None,
+        )
         status_message = messenger.post_job_status(
             user_id,
             job_id=str(job.id),
@@ -320,6 +362,7 @@ class MaterialFeature:
             text=reply.render("product_search_ack", lang),
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=channel,
         )
         self._job_repo.set_status_message(job.id, status_message.id)
         return "queued"
@@ -333,6 +376,15 @@ class MaterialFeature:
         if job is None:
             logger.warning("assistant.material: job %s not found", job_id)
             return
+        # Post back into the channel the request actually came from (phase 03's answer
+        # to phase 01/02's open question 2) — falls back to `AssistantMessenger`'s own
+        # retired-channel default for a job created before this column existed.
+        channel: Optional[ChannelRef] = None
+        if job.channel_key:
+            try:
+                channel = ChannelRef.parse(job.channel_key)
+            except ValueError:
+                logger.warning("assistant.material: job %s has an unparsable channel_key", job.id)
         if not self._job_repo.mark_processed(job.id):
             # Guards against a duplicate reply/import if `process_product_search` is
             # ever invoked twice for the same job — same one-shot pattern as
@@ -394,6 +446,7 @@ class MaterialFeature:
                     lang,
                     messenger,
                     trace_id,
+                    channel=channel,
                 )
                 return
             logger.info(
@@ -419,6 +472,7 @@ class MaterialFeature:
                 lang,
                 messenger,
                 trace_id,
+                channel=channel,
             )
             return
 
@@ -427,7 +481,13 @@ class MaterialFeature:
         if reply_to_id is not None:
             failed_text = reply.render("product_search_failed", lang)
             messenger.update_job_status(reply_to_id, state="failed", text=failed_text, terminal=True)
-            messenger.post_text(job.user_id, failed_text, reply_to_id=reply_to_id, trace_id=trace_id)
+            messenger.post_text(
+                job.user_id,
+                failed_text,
+                reply_to_id=reply_to_id,
+                trace_id=trace_id,
+                channel=channel,
+            )
         self._import_photo_only(
             job.user_id,
             reply_to_id,
@@ -440,6 +500,7 @@ class MaterialFeature:
             lang,
             messenger,
             trace_id,
+            channel=channel,
         )
 
     # ------------------------------------------------------------------
@@ -500,6 +561,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> str:
         supplier_name = _SUPPLIER_NAME_BY_MERCHANT.get(candidate.merchant) or ident.brand or "Fournisseur non identifié"
         reference = candidate.reference or candidate.ean or f"AI-{sha[:8]}"
@@ -517,6 +579,7 @@ class MaterialFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=channel,
         )
         if product is None:
             return "refused"
@@ -530,7 +593,9 @@ class MaterialFeature:
             photo_sha256=sha,
             source_url=candidate.url,
         )
-        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, status, supplier_name)
+        self._reply_product(
+            user_id, message_id, lang, messenger, trace_id, product, status, supplier_name, channel=channel
+        )
         return "created"
 
     def _import_photo_only(
@@ -546,6 +611,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> str:
         supplier_name = ident.brand or "Fournisseur non identifié"
         reference = ident.reference or ident.ean or f"AI-{sha[:8]}"
@@ -563,6 +629,7 @@ class MaterialFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=channel,
         )
         if product is None:
             return "refused"
@@ -576,9 +643,15 @@ class MaterialFeature:
             source_url=None,
         )
         messenger.post_text(
-            user_id, reply.render("material_photo_only", lang), reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("material_photo_only", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=channel,
         )
-        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, "to_confirm", supplier_name)
+        self._reply_product(
+            user_id, message_id, lang, messenger, trace_id, product, "to_confirm", supplier_name, channel=channel
+        )
         return "created"
 
     def _get_or_create_product(
@@ -597,6 +670,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> Optional[LibraryProduct]:
         try:
             return self._create_product_usecase.execute(
@@ -613,11 +687,23 @@ class MaterialFeature:
         except ProductAlreadyExistsError:
             existing = self._find_existing_by_reference(company_id, supplier_name, reference)
             if existing is None:
-                messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+                messenger.post_text(
+                    user_id,
+                    reply.render("error", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                )
                 return None
             return existing
         except (CompanyAccessDeniedError, InsufficientPermissionError):
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+            )
             return None
 
     def _find_existing_by_reference(
@@ -672,14 +758,23 @@ class MaterialFeature:
         messenger: AssistantMessenger,
         trace_id: str,
         cached: MaterialImportRecord,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         product = self._product_repo.find_by_id(cached.product_id)
         if product is None:
-            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+            )
             return
         supplier = self._supplier_repo.find_by_id(product.supplier_id)
         supplier_name = supplier.name if supplier is not None else ""
-        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, cached.status, supplier_name)
+        self._reply_product(
+            user_id, message_id, lang, messenger, trace_id, product, cached.status, supplier_name, channel=channel
+        )
 
     def _reply_product(
         self,
@@ -691,14 +786,23 @@ class MaterialFeature:
         product: LibraryProduct,
         status: str,
         supplier_name: str,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         if status == "confirmed":
             messenger.post_text(
-                user_id, reply.render("material_found", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("material_found", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
         elif status == "to_confirm":
             messenger.post_text(
-                user_id, reply.render("material_to_confirm", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("material_to_confirm", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
         subtitle = f"{supplier_name} · {product.supplier_reference}" if supplier_name else product.supplier_reference
         thumbnail_url = (
@@ -714,6 +818,7 @@ class MaterialFeature:
             thumbnail_url=thumbnail_url,
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=channel,
         )
 
     # ------------------------------------------------------------------
@@ -730,6 +835,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> bool:
         """Returns True when this feature handled ``action``, False otherwise."""
         if action != "pick_company":
@@ -739,7 +845,13 @@ class MaterialFeature:
         # companies, but this is cheap insurance against a future caller of this method
         # skipping that guarantee.
         if company_id not in {access.company_id for access in self._company_access.list_for_user(user_id)}:
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+            )
             return True
         ident = MaterialIdent.model_validate(payload["ident"])
         sha = str(payload["sha256"])
@@ -747,10 +859,16 @@ class MaterialFeature:
         photo = read_photo_bytes(self._messages, self._storage, photo_message_id, user_id)
         if photo is None:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return True
-        self._continue_after_company(user_id, message_id, company_id, ident, sha, lang, messenger, trace_id)
+        self._continue_after_company(
+            user_id, message_id, company_id, ident, sha, lang, messenger, trace_id, channel=channel
+        )
         return True
 
 

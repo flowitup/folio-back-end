@@ -22,11 +22,13 @@ from app.application.assistant.models import ChannelScope, RouterDecision
 class FeatureHandlers:
     """Implements ``FeatureHandlersPort`` (structurally — no explicit inheritance needed).
 
-    ``scope`` is accepted on every method to satisfy that port's signature but not yet
-    forwarded to ticket/material/invoice-fetch: those three still reply through
-    ``AssistantMessenger``'s ``assistant:<user_id>`` fallback until phase 03/04 threads
-    ``ChannelScope`` all the way through their own reply sites (see ``messages.py``'s
-    module docstring).
+    ``scope.channel`` is forwarded to every ticket/material/invoice-fetch call (phase 04
+    item 2) so their replies land in the channel the request actually came from — company,
+    project or admin — instead of the retired ``assistant:<user_id>`` fallback. None of
+    the three ever posts a ``finance_company``/``payroll`` classified field (invoice/
+    material amounts are project spend, visible to every member per D19), so only channel
+    routing is threaded here; ``ChannelScope``-based redaction is not needed on their own
+    payloads.
     """
 
     def __init__(self, *, ticket: TicketFeature, material: MaterialFeature, invoice_fetch: InvoiceFetchFeature) -> None:
@@ -51,6 +53,7 @@ class FeatureHandlers:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=scope.channel,
             project_hint=project_hint,
         )
 
@@ -65,7 +68,12 @@ class FeatureHandlers:
         scope: ChannelScope,
     ) -> str:
         return self._ticket.run(
-            user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            messenger=messenger,
+            trace_id=trace_id,
+            channel=scope.channel,
         )
 
     def fetch_invoice(
@@ -80,7 +88,13 @@ class FeatureHandlers:
         scope: ChannelScope,
     ) -> str:
         return self._invoice_fetch.fetch_invoice(
-            user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id, decision=decision
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            messenger=messenger,
+            trace_id=trace_id,
+            decision=decision,
+            channel=scope.channel,
         )
 
     def handle_action(
@@ -103,6 +117,7 @@ class FeatureHandlers:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=scope.channel,
         ):
             return True
         if self._material.handle_action(
@@ -113,6 +128,7 @@ class FeatureHandlers:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=scope.channel,
         ):
             return True
         return self._invoice_fetch.handle_action(
@@ -123,6 +139,7 @@ class FeatureHandlers:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=scope.channel,
         )
 
 

@@ -43,7 +43,7 @@ from app.application.chat.ports import ChatAttachmentStoragePort
 from app.application.companies.ports import UserCompanyAccessRepositoryPort
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.projects.ports import IProjectRepository
-from app.domain.entities.chat_message import ChatMessage
+from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.domain.entities.invoice import Invoice as InvoiceEntity, InvoiceType
 
 logger = logging.getLogger(__name__)
@@ -194,12 +194,17 @@ class InvoiceFetchFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
         decision: RouterDecision,
     ) -> str:
         merchant = decision.merchant if decision.merchant in MERCHANTS else None
         if merchant is None:
             messenger.post_text(
-                user_id, reply.render("fetch_need_merchant", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_need_merchant", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
 
@@ -213,14 +218,22 @@ class InvoiceFetchFeature:
             )
         except LlmOutputError:
             messenger.post_text(
-                user_id, reply.render("fetch_need_amount", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_need_amount", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
 
         amount = _normalize_amount(parsed.amount_ttc)
         if amount is None:
             messenger.post_text(
-                user_id, reply.render("fetch_need_amount", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_need_amount", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
         ticket_date = _normalize_date(parsed.date, today) or today
@@ -232,7 +245,11 @@ class InvoiceFetchFeature:
         )
         if duplicate is not None:
             messenger.post_text(
-                user_id, reply.render("fetch_already_running", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_already_running", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "refused"
 
@@ -243,6 +260,7 @@ class InvoiceFetchFeature:
             date=ticket_date,
             project_hint=decision.project_hint,
             lang=lang,
+            channel_key=channel.key if channel is not None else None,
         )
         status_message = messenger.post_job_status(
             user_id,
@@ -251,6 +269,7 @@ class InvoiceFetchFeature:
             text=reply.render("fetch_ack", lang),
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=channel,
         )
         self._job_repo.set_status_message(job.id, status_message.id)
         return "replied"
@@ -264,16 +283,27 @@ class InvoiceFetchFeature:
         if job is None:
             logger.warning("assistant.fetch_invoice: job %s not found", job_id)
             return
+        # Post back into the channel the request actually came from (phase 03's answer
+        # to phase 01/02's open question 2) — falls back to `AssistantMessenger`'s own
+        # retired-channel default for a job created before this column existed.
+        channel: Optional[ChannelRef] = None
+        if job.channel_key:
+            try:
+                channel = ChannelRef.parse(job.channel_key)
+            except ValueError:
+                logger.warning("assistant.fetch_invoice: job %s has an unparsable channel_key", job.id)
         context = self._status_context(job)
         status = job.status
         if status == "done":
-            self._handle_done(job, context, messenger, trace_id)
+            self._handle_done(job, context, messenger, trace_id, channel=channel)
         elif status == "not_ready":
-            self._handle_not_ready(job, context, messenger, trace_id)
+            self._handle_not_ready(job, context, messenger, trace_id, channel=channel)
         elif status == "blocked":
-            self._handle_terminal_once(job, context, messenger, state="blocked", template="fetch_blocked")
+            self._handle_terminal_once(
+                job, context, messenger, state="blocked", template="fetch_blocked", channel=channel
+            )
         elif status == "not_found":
-            self._handle_not_found(job, context, messenger, trace_id)
+            self._handle_not_found(job, context, messenger, trace_id, channel=channel)
         else:  # pragma: no cover - defensive: the worker only ever writes the above
             logger.warning("assistant.fetch_invoice: job %s has unexpected status %s", job_id, status)
 
@@ -285,6 +315,7 @@ class InvoiceFetchFeature:
         *,
         state: str,
         template: str,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         """A one-shot terminal reply (the ``blocked`` outcome — no retry, no further
         state). Guarded by ``mark_processed`` the same way ``_handle_done`` is (review
@@ -296,7 +327,7 @@ class InvoiceFetchFeature:
         if not self._job_repo.mark_processed(job.id):
             logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
             return
-        self._finish(job, context, messenger, state=state, template=template)
+        self._finish(job, context, messenger, state=state, template=template, channel=channel)
 
     def _status_context(self, job: AssistantJobRecord) -> _StatusContext:
         original: Optional[ChatMessage] = None
@@ -309,7 +340,12 @@ class InvoiceFetchFeature:
         return _StatusContext(lang=lang, reply_to_id=job.status_message_id)
 
     def _handle_done(
-        self, job: AssistantJobRecord, context: _StatusContext, messenger: AssistantMessenger, trace_id: str
+        self,
+        job: AssistantJobRecord,
+        context: _StatusContext,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         if not self._job_repo.mark_processed(job.id):
             # Already processed (a second `process_fetched_invoice` invocation for the
@@ -320,14 +356,14 @@ class InvoiceFetchFeature:
             logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
             return
         if job.pdf_storage_key is None:
-            self._finish(job, context, messenger, state="failed", template="fetch_failed")
+            self._finish(job, context, messenger, state="failed", template="fetch_failed", channel=channel)
             return
         try:
             stream, _length = self._storage.get_stream(job.pdf_storage_key)
             data = stream.read()
         except Exception:
             logger.exception("assistant.fetch_invoice: failed to read PDF for job %s", job.id)
-            self._finish(job, context, messenger, state="failed", template="fetch_failed")
+            self._finish(job, context, messenger, state="failed", template="fetch_failed", channel=channel)
             return
         if job.status_message_id is not None:
             messenger.update_job_status(
@@ -338,6 +374,7 @@ class InvoiceFetchFeature:
             lang=context.lang,
             messenger=messenger,
             trace_id=trace_id,
+            channel=channel,
             data=data,
             content_type="application/pdf",
             chat_hint=job.project_hint,
@@ -346,7 +383,12 @@ class InvoiceFetchFeature:
         )
 
     def _handle_not_ready(
-        self, job: AssistantJobRecord, context: _StatusContext, messenger: AssistantMessenger, trace_id: str
+        self,
+        job: AssistantJobRecord,
+        context: _StatusContext,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         attempts = job.attempts + 1
         if attempts >= MAX_ATTEMPTS:
@@ -357,7 +399,7 @@ class InvoiceFetchFeature:
                 logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
                 return
             self._job_repo.update_status(job.id, status="failed")
-            self._finish(job, context, messenger, state="failed", template="fetch_failed")
+            self._finish(job, context, messenger, state="failed", template="fetch_failed", channel=channel)
             return
         run_after = datetime.now(timezone.utc) + NOT_READY_BACKOFF
         self._job_repo.update_status(job.id, status="queued", attempts=attempts, run_after=run_after)
@@ -370,7 +412,12 @@ class InvoiceFetchFeature:
             )
 
     def _handle_not_found(
-        self, job: AssistantJobRecord, context: _StatusContext, messenger: AssistantMessenger, trace_id: str
+        self,
+        job: AssistantJobRecord,
+        context: _StatusContext,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         # Terminal and one-shot (status stays "not_found" forever afterwards, unlike
         # not_ready) — guarded for the same reap-safety reason as _handle_terminal_once,
@@ -399,6 +446,7 @@ class InvoiceFetchFeature:
                 reply.render("fetch_not_found_prompt", context.lang),
                 reply_to_id=context.reply_to_id,
                 trace_id=trace_id,
+                channel=channel,
             )
             return
         options = [
@@ -418,6 +466,7 @@ class InvoiceFetchFeature:
             options,
             reply_to_id=context.reply_to_id,
             trace_id=trace_id,
+            channel=channel,
         )
 
     def _closest_purchases(
@@ -446,12 +495,13 @@ class InvoiceFetchFeature:
         *,
         state: str,
         template: str,
+        channel: Optional[ChannelRef] = None,
     ) -> None:
         text = reply.render(template, context.lang)
         if job.status_message_id is not None:
             messenger.update_job_status(job.status_message_id, state=state, text=text, terminal=True)
         else:  # pragma: no cover - every job created by fetch_invoice() has one
-            messenger.post_text(job.user_id, text, reply_to_id=context.reply_to_id)
+            messenger.post_text(job.user_id, text, reply_to_id=context.reply_to_id, channel=channel)
 
     # ------------------------------------------------------------------
     # Action taps: not_found's choice
@@ -467,6 +517,7 @@ class InvoiceFetchFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        channel: Optional[ChannelRef] = None,
     ) -> bool:
         if action == "fetch_pick_existing":
             invoice_id = payload.get("invoice_id")
@@ -492,11 +543,16 @@ class InvoiceFetchFeature:
                         extra={"invoice_number": invoice.invoice_number, "total_ttc": float(invoice.total_amount)},
                         reply_to_id=message_id,
                         trace_id=trace_id,
+                        channel=channel,
                     )
             return True
         if action == "fetch_none":
             messenger.post_text(
-                user_id, reply.render("fetch_none_of_these", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_none_of_these", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return True
         return False

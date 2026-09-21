@@ -453,6 +453,14 @@ class Container:
     assistant_job_repo: Optional[Any] = None  # AssistantJobRepositoryPort (SqlAlchemyAssistantJobRepository)
     assistant_invoice_fetch_feature: Optional[Any] = None  # InvoiceFetchFeature
 
+    # Phase 03 — confidential-class scope/redaction + supervision audit log.
+    assistant_audit_repo: Optional[Any] = None  # AssistantAuditPort (SqlAlchemyAssistantAuditRepository)
+
+    # Phase 04 — labor/tasks handlers on channels + admin-only finance/payroll answers.
+    assistant_labor_feature: Optional[Any] = None  # LaborFeature
+    assistant_tasks_feature: Optional[Any] = None  # TasksFeature
+    assistant_admin_answers: Optional[Any] = None  # AdminAnswersFeature
+
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 

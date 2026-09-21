@@ -1228,6 +1228,15 @@ def invitation_app():
         _c.assistant_import_repo = _assistant_import_repo
         _assistant_job_repo = _SqlAlchemyAssistantJobRepository(db.session)
         _c.assistant_job_repo = _assistant_job_repo
+
+        # Phase 03 — supervision audit log (D17 layer 4). Real SQLite-backed repo, same
+        # as every other assistant_* repository wired just above.
+        from app.infrastructure.database.repositories.sqlalchemy_assistant_audit_repository import (
+            SqlAlchemyAssistantAuditRepository as _SqlAlchemyAssistantAuditRepository,
+        )
+
+        _c.assistant_audit_repo = _SqlAlchemyAssistantAuditRepository(db.session)
+
         if _c.project_repository is not None:
             _c.assistant_equipment_service = _EquipmentService(
                 item_repo=_c.inventory_item_repo,
@@ -1298,6 +1307,23 @@ def invitation_app():
                     invoice_fetch=_c.assistant_invoice_fetch_feature,
                 )
                 _feature_handlers = _c.assistant_feature_handlers
+
+            # Phase 03/04 — `create_app()` above already built `assistant_labor_feature`/
+            # `assistant_tasks_feature`/`assistant_admin_answers`/`assistant_audit_repo`
+            # against the test app's real (SQLite-backed) repos; `assistant_tasks_feature`
+            # is rebuilt here with the scripted fake vision port instead (real DeepSeek
+            # elsewhere in this module would try a real network call otherwise) — same
+            # rationale as `assistant_service`/the AI provider ports just above.
+            if _c.assistant_tasks_feature is not None and _c.create_task_usecase is not None:
+                from app.application.assistant.features.tasks import TasksFeature as _TasksFeature
+
+                _c.assistant_tasks_feature = _TasksFeature(
+                    vision=_assistant_vision,
+                    project_repo=_c.project_repository,
+                    create_usecase=_c.create_task_usecase,
+                    list_usecase=_c.list_tasks_usecase,
+                )
+
             _c.assistant_service = AssistantService(
                 message_repo=_chat_repo,
                 messenger=_c.assistant_messenger,
@@ -1310,6 +1336,12 @@ def invitation_app():
                 rate_limiter=_c.assistant_rate_limiter,
                 project_company_reader=_c.assistant_project_company_reader,
                 feature_handlers=_feature_handlers,
+                decisions=_assistant_decision_port,
+                authz_reader=_c.authz_reader,
+                audit=_c.assistant_audit_repo,
+                labor_feature=_c.assistant_labor_feature,
+                tasks_feature=_c.assistant_tasks_feature,
+                admin_answers=_c.assistant_admin_answers,
             )
         test_app._assistant_vision = _assistant_vision
         test_app._assistant_decision_port = _assistant_decision_port
