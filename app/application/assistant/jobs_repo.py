@@ -31,16 +31,27 @@ JOB_STATUSES: tuple[str, ...] = ("queued", "running", "not_ready", "blocked", "d
 ACTIVE_JOB_STATUSES: tuple[str, ...] = ("queued", "running", "not_ready")
 
 
+#: Every ``assistant_jobs.type`` value this repository is asked to persist.
+JOB_TYPES: tuple[str, ...] = ("fetch_invoice", "find_product")
+
+
 @dataclass(frozen=True)
 class AssistantJobRecord:
-    """One row of ``assistant_jobs``."""
+    """One row of ``assistant_jobs``.
+
+    ``merchant``/``amount_ttc``/``date`` are ``fetch_invoice``-only (always set for that
+    type, always ``None`` for ``find_product``); ``params`` is the reverse — ``None`` for
+    ``fetch_invoice``, and for ``find_product`` holds the ``MaterialIdent`` dump, its
+    ``search_queries``, ``company_id``, ``photo_sha256`` and ``message_id`` (see
+    ``app.application.assistant.features.material``).
+    """
 
     id: UUID
     type: str
     user_id: UUID
-    merchant: str
-    amount_ttc: Decimal
-    date: date
+    merchant: Optional[str]
+    amount_ttc: Optional[Decimal]
+    date: Optional[date]
     project_hint: Optional[str]
     status: str
     attempts: int
@@ -52,6 +63,7 @@ class AssistantJobRecord:
     processed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    params: Optional[dict[str, Any]] = None
 
 
 class AssistantJobRepositoryPort(Protocol):
@@ -61,14 +73,21 @@ class AssistantJobRepositoryPort(Protocol):
         self,
         *,
         user_id: UUID,
-        merchant: str,
-        amount_ttc: Decimal,
-        date: date,
-        project_hint: Optional[str],
+        job_type: str = "fetch_invoice",
+        merchant: Optional[str] = None,
+        amount_ttc: Optional[Decimal] = None,
+        date: Optional[date] = None,
+        project_hint: Optional[str] = None,
         lang: Optional[str] = None,
+        params: Optional[dict[str, Any]] = None,
         status_message_id: Optional[UUID] = None,
     ) -> AssistantJobRecord:
-        """Insert a new ``fetch_invoice`` job, ``status="queued"``, ``run_after=now``."""
+        """Insert a new job, ``status="queued"``, ``run_after=now``.
+
+        ``job_type="fetch_invoice"`` (the default) requires ``merchant``/``amount_ttc``/
+        ``date``; ``job_type="find_product"`` requires ``params`` instead (see
+        ``AssistantJobRecord``'s docstring) and leaves the other three ``None``.
+        """
         ...
 
     def find_by_id(self, job_id: UUID) -> Optional[AssistantJobRecord]:
@@ -76,10 +95,22 @@ class AssistantJobRepositoryPort(Protocol):
         ...
 
     def find_duplicate(
-        self, *, user_id: UUID, merchant: str, amount_ttc: Decimal, date: date, since: datetime
+        self,
+        *,
+        user_id: UUID,
+        since: datetime,
+        job_type: str = "fetch_invoice",
+        merchant: Optional[str] = None,
+        amount_ttc: Optional[Decimal] = None,
+        date: Optional[date] = None,
+        photo_sha256: Optional[str] = None,
     ) -> Optional[AssistantJobRecord]:
-        """An active job (see ``ACTIVE_JOB_STATUSES``) for the same user/merchant/amount/
-        date created at or after ``since`` — the 24h dedupe window."""
+        """An active job (see ``ACTIVE_JOB_STATUSES``) created at or after ``since`` that
+        matches this request's dedupe key — the 24h dedupe window.
+
+        ``job_type="fetch_invoice"`` matches on ``merchant``/``amount_ttc``/``date``;
+        ``job_type="find_product"`` matches on ``photo_sha256`` (read out of ``params``).
+        """
         ...
 
     def set_status_message(self, job_id: UUID, status_message_id: UUID) -> None:
@@ -148,4 +179,4 @@ class AssistantJobRepositoryPort(Protocol):
         ...
 
 
-__all__ = ["AssistantJobRecord", "AssistantJobRepositoryPort", "JOB_STATUSES", "ACTIVE_JOB_STATUSES"]
+__all__ = ["AssistantJobRecord", "AssistantJobRepositoryPort", "JOB_STATUSES", "ACTIVE_JOB_STATUSES", "JOB_TYPES"]

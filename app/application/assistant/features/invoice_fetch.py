@@ -388,6 +388,10 @@ class InvoiceFetchFeature:
             )
         company_ids = [access.company_id for access in self._company_access.list_for_user(job.user_id)]
         projects = writable_projects(self._project_repo, self._authz_reader, job.user_id, company_ids)
+        # merchant/amount_ttc/date are nullable at the `assistant_jobs` table level only
+        # to accommodate `find_product` jobs (feature A) — every job this feature ever
+        # handles is a `fetch_invoice` one, which always sets all three.
+        assert job.merchant is not None and job.amount_ttc is not None and job.date is not None
         candidates = self._closest_purchases(projects, job.merchant, float(job.amount_ttc), job.date)
         if not candidates:
             messenger.post_text(

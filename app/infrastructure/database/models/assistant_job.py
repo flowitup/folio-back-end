@@ -30,7 +30,7 @@ def _utcnow() -> datetime:
 
 
 class AssistantJobModel(Base):
-    """One ``fetch_invoice`` job (currently the only ``type``)."""
+    """One ``fetch_invoice`` or ``find_product`` job (see ``jobs_repo.JOB_TYPES``)."""
 
     __tablename__ = "assistant_jobs"
 
@@ -39,9 +39,10 @@ class AssistantJobModel(Base):
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    merchant: Mapped[str] = mapped_column(String(32), nullable=False)
-    amount_ttc: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    date: Mapped[date] = mapped_column(Date(), nullable=False)
+    # fetch_invoice-only (always NULL for find_product, which uses `params` instead).
+    merchant: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    amount_ttc: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    date: Mapped[Optional[date]] = mapped_column(Date(), nullable=True)
     project_hint: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -56,6 +57,12 @@ class AssistantJobModel(Base):
     # payload — can still render the transient "running" job_status text correctly
     # instead of always French (review of phase 04, unresolved question 3).
     lang: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    # find_product-only: the MaterialIdent dump, search_queries, company_id,
+    # photo_sha256 and message_id (see app.application.assistant.features.material) —
+    # this job type has no fixed merchant/amount/date to key on, so everything the
+    # browser worker and on_result need travels here instead. Always NULL for
+    # fetch_invoice.
+    params: Mapped[Optional[dict[str, Any]]] = mapped_column(ResultJSON, nullable=True)
     # Set exactly once, atomically, right before `on_result`'s "done" branch runs the
     # create-invoice pipeline — guards against a duplicate invoice if
     # `process_fetched_invoice` is ever invoked twice for the same job (an RQ retry

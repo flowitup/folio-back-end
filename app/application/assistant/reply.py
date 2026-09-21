@@ -312,6 +312,22 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "fr": "Je pense reconnaître ce matériau, confirme si c'est correct.",
         "en": "I think this is the material below, please confirm.",
     },
+    "product_search_ack": {
+        "vi": "Tôi đang tìm sản phẩm này ở các nhà cung cấp, sẽ báo lại sớm.",
+        "fr": "Je cherche la fiche produit chez les fournisseurs, je te dis dès que j'ai quelque chose.",
+        "en": "I'm looking for this product's page at the merchants, I'll let you know shortly.",
+    },
+    "product_search_running": {
+        "vi": "Tôi đang tìm trên các trang nhà cung cấp…",
+        "fr": "Je cherche sur les sites des fournisseurs…",
+        "en": "Looking it up on the merchants' sites…",
+    },
+    "product_search_failed": {
+        "vi": "Tôi không truy cập được trang nhà cung cấp, đã lưu ảnh vào thư viện để bạn hoàn thiện sau.",
+        "fr": "Je n'ai pas pu accéder aux sites fournisseurs, j'ai enregistré la photo dans la bibliothèque pour "
+        "que tu la complètes plus tard.",
+        "en": "I could not reach the merchants' sites, I saved the photo in the library for you to complete later.",
+    },
     "material_photo_only": {
         "vi": "Tôi không tìm được sản phẩm phù hợp trên mạng, đã lưu ảnh vào thư viện để bạn hoàn thiện sau.",
         "fr": "Je n'ai pas trouvé ce produit en ligne, j'ai enregistré la photo dans la bibliothèque pour que tu "

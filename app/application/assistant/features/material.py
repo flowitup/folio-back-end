@@ -1,22 +1,27 @@
 """Feature A — material photo -> company product library.
 
-Pipeline (plan section 3/4):
+Pipeline (plan section 3/4, updated by owner decision D16 — no external web-search or
+reverse-image provider):
   A1 identify the photo (DeepSeek vision -> ``MaterialIdent``); confidence below
      ``gate.IDENTIFY_MIN`` asks for a clearer photo. Then a cache check: the same photo
      (sha256) or the same supplier reference in the caller's company short-circuits
-     straight to a card of the existing product — no web call, no write.
-  A2 Tavily search across the allow-listed merchant domains, one query at a time until
-     >= 3 hits or the queries run out.
-  A3 Jev picks the best hit (or 'none') from the search results.
-  A4 Tavily ``extract`` on the picked hit's URL + a text-only DeepSeek call -> ``Product``.
-  A5 create/reuse the ``LibraryProduct`` (supplier resolved from the hit's domain),
-     image from the hit's URL falling back to the user's own photo, then record
-     ``assistant_material_imports``.
+     straight to a card of the existing product — no browser job, no write.
+  A2 a ``find_product`` job is created on ``assistant_jobs`` (the same table/queue
+     feature B's ``fetch_invoice`` uses) and a ``job_status`` message is posted
+     ("Je cherche la fiche produit…"); the browser worker (``app.infrastructure.
+     browser_worker``, real Chrome in the ``ai-browser`` container, restricted to the
+     merchant domains below) runs the search out of band and reports back through
+     ``process_product_search`` -> ``on_result`` below.
+  A3 ``on_result``: Jev picks the best candidate (or "none") from the worker's
+     structured result.
+  A4 ``_create_from_candidate`` builds the ``Product``-shaped data straight from the
+     picked candidate's fields (no extra web call — the browser agent already read the
+     page): create/reuse the ``LibraryProduct``, image from the candidate's URL when it
+     is on an allow-listed merchant domain, falling back to the user's own photo
+     otherwise, then record ``assistant_material_imports``.
 
-SerpApi Lens (A3's low-confidence fallback in the plan) needs a PUBLIC image URL; a
-chat photo lives in private S3 storage, so this phase always skips it (logged) and goes
-straight to a photo-only import — the port is still accepted here so a later phase can
-wire a real public-URL path without changing this feature's constructor.
+No web-search API and no Google Lens fallback: the same agent that fetches invoices
+finds the product page, so there is no need for a second provider to identify one.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 from uuid import UUID
@@ -32,16 +38,15 @@ from app.application.assistant import gate, reply
 from app.application.assistant.exceptions import LlmOutputError
 from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import MaterialImportRecord, MaterialImportRepositoryPort
+from app.application.assistant.jobs_repo import AssistantJobRepositoryPort
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import MaterialIdent, Product
+from app.application.assistant.models import MaterialIdent, ProductCandidate, ProductSearchResult
 from app.application.assistant.ports import (
     ChoiceQuestion,
     DecisionPort,
-    LensPort,
     MessagePosterPort,
     NoulQuestion,
     VisionLlmPort,
-    WebSearchPort,
 )
 from app.application.authz.ports import AuthzReaderPort
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
@@ -70,51 +75,63 @@ IDENTIFY_SYSTEM_FR = (
 )
 _IDENTIFY_USER_TEXT = "Identifie ce matériau."
 
-PRODUCT_SYSTEM_FR = (
-    "Tu lis la fiche produit d'un fournisseur de matériaux de construction français. Réponds uniquement avec un "
-    "JSON aux champs : name, brand, reference, ean, price_ttc, unit, image_url, source_url. source_url doit "
-    "être recopié exactement depuis la ligne 'URL:' fournie. Champs absents → null. N'invente rien."
+#: Merchant domains the browser agent's product search is scoped to (plan section 4,
+#: feature A). Kept in lockstep with ``app.infrastructure.browser_worker.merchants.
+#: MERCHANT_DOMAINS``/``app.application.assistant.models.MERCHANTS`` (the same 7
+#: merchants), duplicated here (not imported from infrastructure) so this application
+#: module never depends on ``app.infrastructure``.
+_SUPPLIER_NAME_BY_MERCHANT: dict[str, str] = {
+    "leroymerlin": "Leroy Merlin",
+    "pointp": "Point P",
+    "castorama": "Castorama",
+    "bricodepot": "Brico Dépôt",
+    "gedimat": "Gedimat",
+    "technomat": "Technomat",
+    "manomano": "ManoMano",
+}
+MATERIAL_SEARCH_DOMAINS: tuple[str, ...] = (
+    "leroymerlin.fr",
+    "pointp.fr",
+    "castorama.fr",
+    "bricodepot.fr",
+    "gedimat.fr",
+    "technomat.fr",
+    "manomano.fr",
 )
 
-#: Merchant domains Tavily is scoped to (plan section 4, feature A / Tavily search).
-_SUPPLIER_BY_DOMAIN: dict[str, str] = {
-    "leroymerlin.fr": "Leroy Merlin",
-    "pointp.fr": "Point P",
-    "castorama.fr": "Castorama",
-    "bricodepot.fr": "Brico Dépôt",
-    "gedimat.fr": "Gedimat",
-    "technomat.fr": "Technomat",
-    "manomano.fr": "ManoMano",
-}
-MATERIAL_SEARCH_DOMAINS: tuple[str, ...] = tuple(_SUPPLIER_BY_DOMAIN)
-
-_MIN_HITS = 3
-_MAX_HITS = 6
 _UPLOADABLE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 
+#: Dedupe window for a `find_product` job: a second photo with the same sha256 while a
+#: search is already running for it reuses the in-flight job instead of starting a
+#: second one (mirrors feature B's `DEDUPE_WINDOW` in `features/invoice_fetch.py`).
+DEDUPE_WINDOW = timedelta(hours=24)
 
-def _supplier_name_for_url(url: str) -> Optional[str]:
+
+def is_merchant_url(url: str) -> bool:
+    """True when ``url``'s host is one of the allow-listed merchant domains (or a
+    subdomain of one) — gates whether a candidate's ``image_url`` may be fetched
+    server-side (``FetchProductImageFromUrlUseCase``) instead of falling back to the
+    user's own photo."""
     try:
         host = urlparse(url).netloc.lower()
     except ValueError:
-        return None
+        return False
     host = host[4:] if host.startswith("www.") else host
-    for domain, name in _SUPPLIER_BY_DOMAIN.items():
-        if host == domain or host.endswith("." + domain):
-            return name
-    return None
+    if not host:
+        return False
+    return any(host == domain or host.endswith("." + domain) for domain in MATERIAL_SEARCH_DOMAINS)
 
 
 class MaterialFeature:
-    """Implements feature A end to end: run() for a fresh photo, handle_action() for taps."""
+    """Implements feature A end to end: run() for a fresh photo, handle_action() for taps,
+    on_result() for the browser worker's ``find_product`` job outcome."""
 
     def __init__(
         self,
         *,
         vision: VisionLlmPort,
         decisions: DecisionPort,
-        web_search: WebSearchPort,
-        lens: LensPort,
+        job_repo: AssistantJobRepositoryPort,
         messages: MessagePosterPort,
         storage: ChatAttachmentStoragePort,
         company_access: UserCompanyAccessRepositoryPort,
@@ -130,8 +147,7 @@ class MaterialFeature:
     ) -> None:
         self._vision = vision
         self._decisions = decisions
-        self._web_search = web_search
-        self._lens = lens
+        self._job_repo = job_repo
         self._messages = messages
         self._storage = storage
         self._company_access = company_access
@@ -165,7 +181,7 @@ class MaterialFeature:
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
             )
             return "asked"
-        photo_bytes, photo_filename, photo_mime = photo
+        photo_bytes, _photo_filename, _photo_mime = photo
 
         try:
             ident = self._vision.chat_json(
@@ -198,19 +214,7 @@ class MaterialFeature:
             self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
             return "replied"
 
-        return self._continue_after_company(
-            user_id,
-            message_id,
-            company_id,
-            ident,
-            sha,
-            photo_bytes,
-            photo_filename,
-            photo_mime,
-            lang,
-            messenger,
-            trace_id,
-        )
+        return self._continue_after_company(user_id, message_id, company_id, ident, sha, lang, messenger, trace_id)
 
     # ------------------------------------------------------------------
     # Company resolution (plan item 5)
@@ -270,7 +274,7 @@ class MaterialFeature:
         return "asked"
 
     # ------------------------------------------------------------------
-    # A1 cache-by-reference, A2-A5
+    # A1 cache-by-reference, then A2 — start the browser product search
     # ------------------------------------------------------------------
 
     def _continue_after_company(
@@ -280,9 +284,6 @@ class MaterialFeature:
         company_id: UUID,
         ident: MaterialIdent,
         sha: str,
-        photo_bytes: bytes,
-        photo_filename: str,
-        photo_mime: str,
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -293,22 +294,122 @@ class MaterialFeature:
                 self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
                 return "replied"
 
-        hits = self._search(ident)
-        if hits:
-            pick_index, pick_confidence = self._pick(ident, hits)
-        else:
-            pick_index, pick_confidence = None, 0.0
-
-        if pick_index is None or gate.pick_status(pick_confidence) == "reject":
-            logger.info(
-                "assistant.material trace=%s: no confident web match (hits=%d); Lens needs a public image URL "
-                "chat photos do not have, skipping straight to a photo-only import",
-                trace_id,
-                len(hits),
+        since = datetime.now(timezone.utc) - DEDUPE_WINDOW
+        duplicate = self._job_repo.find_duplicate(
+            user_id=user_id, job_type="find_product", photo_sha256=sha, since=since
+        )
+        if duplicate is not None:
+            messenger.post_text(
+                user_id, reply.render("product_search_ack", lang), reply_to_id=message_id, trace_id=trace_id
             )
-            return self._import_photo_only(
-                user_id,
-                message_id,
+            return "asked"
+
+        params = {
+            "ident": ident.model_dump(),
+            "search_queries": ident.search_queries or [ident.name],
+            "company_id": str(company_id),
+            "photo_sha256": sha,
+            "message_id": str(message_id),
+            "lang": lang,
+        }
+        job = self._job_repo.add(job_type="find_product", user_id=user_id, project_hint=None, lang=lang, params=params)
+        status_message = messenger.post_job_status(
+            user_id,
+            job_id=str(job.id),
+            state="queued",
+            text=reply.render("product_search_ack", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+        )
+        self._job_repo.set_status_message(job.id, status_message.id)
+        return "queued"
+
+    # ------------------------------------------------------------------
+    # A3 — the browser worker's result (`process_product_search` RQ job)
+    # ------------------------------------------------------------------
+
+    def on_result(self, job_id: UUID, *, messenger: AssistantMessenger, trace_id: str) -> None:
+        job = self._job_repo.find_by_id(job_id)
+        if job is None:
+            logger.warning("assistant.material: job %s not found", job_id)
+            return
+        if not self._job_repo.mark_processed(job.id):
+            # Guards against a duplicate reply/import if `process_product_search` is
+            # ever invoked twice for the same job — same one-shot pattern as
+            # `InvoiceFetchFeature`'s `mark_processed` calls.
+            logger.info("assistant.material: job %s already processed, skipping", job.id)
+            return
+
+        params = job.params or {}
+        lang = job.lang or "fr"
+        reply_to_id = job.status_message_id
+        try:
+            ident = MaterialIdent.model_validate(params["ident"])
+            company_id = UUID(str(params["company_id"]))
+            sha = str(params["photo_sha256"])
+            photo_message_id = UUID(str(params["message_id"]))
+        except (KeyError, ValueError):
+            logger.error("assistant.material: job %s has malformed params, dropping", job.id)
+            if reply_to_id is not None:
+                messenger.update_job_status(
+                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True
+                )
+            return
+
+        photo = read_photo_bytes(self._messages, self._storage, photo_message_id, job.user_id)
+        if photo is None:
+            if reply_to_id is not None:
+                messenger.update_job_status(
+                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True
+                )
+            return
+        photo_bytes, photo_filename, photo_mime = photo
+
+        if job.status in ("done", "not_found"):
+            result = (
+                ProductSearchResult.model_validate(job.result or {})
+                if job.result
+                else ProductSearchResult(status="not_found", candidates=[])
+            )
+            candidates = result.candidates
+            pick_index, pick_confidence = self._pick_candidate(ident, candidates) if candidates else (None, 0.0)
+            if pick_index is not None and gate.pick_status(pick_confidence) != "reject":
+                candidate = candidates[pick_index]
+                status = gate.pick_status(pick_confidence)
+                if reply_to_id is not None:
+                    text = reply.render("material_found" if status == "confirmed" else "material_to_confirm", lang)
+                    messenger.update_job_status(reply_to_id, state="done", text=text, terminal=True)
+                self._create_from_candidate(
+                    job.user_id,
+                    reply_to_id,
+                    company_id,
+                    ident,
+                    sha,
+                    candidate,
+                    status,
+                    pick_confidence,
+                    photo_bytes,
+                    photo_filename,
+                    photo_mime,
+                    lang,
+                    messenger,
+                    trace_id,
+                )
+                return
+            logger.info(
+                "assistant.material trace=%s: no confident browser match (candidates=%d) for job %s, falling "
+                "back to a photo-only import",
+                trace_id,
+                len(candidates),
+                job.id,
+            )
+            if reply_to_id is not None:
+                messenger.update_job_status(
+                    reply_to_id, state="done", text=reply.render("material_photo_only", lang), terminal=True
+                )
+            self._import_photo_only(
+                job.user_id,
+                reply_to_id,
                 company_id,
                 ident,
                 sha,
@@ -319,20 +420,20 @@ class MaterialFeature:
                 messenger,
                 trace_id,
             )
+            return
 
-        hit = hits[pick_index]
-        status = gate.pick_status(pick_confidence)
-        product_data = self._extract_product(hit)
-        return self._create_from_hit(
-            user_id,
-            message_id,
+        # blocked / failed (or any other worker-reported status) — one extra template
+        # before falling back to the same photo-only import.
+        if reply_to_id is not None:
+            failed_text = reply.render("product_search_failed", lang)
+            messenger.update_job_status(reply_to_id, state="failed", text=failed_text, terminal=True)
+            messenger.post_text(job.user_id, failed_text, reply_to_id=reply_to_id, trace_id=trace_id)
+        self._import_photo_only(
+            job.user_id,
+            reply_to_id,
             company_id,
             ident,
             sha,
-            hit,
-            product_data,
-            status,
-            pick_confidence,
             photo_bytes,
             photo_filename,
             photo_mime,
@@ -342,40 +443,26 @@ class MaterialFeature:
         )
 
     # ------------------------------------------------------------------
-    # A2 — web search
+    # A3 — Jev pick over the browser worker's candidates
     # ------------------------------------------------------------------
 
-    def _search(self, ident: MaterialIdent) -> list[dict[str, Any]]:
-        queries = ident.search_queries or [ident.name]
-        hits: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
-        for query in queries:
-            if len(hits) >= _MIN_HITS:
-                break
-            result = self._web_search.search(
-                query, include_domains=list(MATERIAL_SEARCH_DOMAINS), include_images=True, max_results=_MAX_HITS
-            )
-            for item in result.get("results", []):
-                url = item.get("url")
-                if not url or url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                hits.append(item)
-        return hits[:_MAX_HITS]
-
-    # ------------------------------------------------------------------
-    # A3 — Jev pick
-    # ------------------------------------------------------------------
-
-    def _pick(self, ident: MaterialIdent, hits: list[dict[str, Any]]) -> tuple[Optional[int], float]:
+    def _pick_candidate(self, ident: MaterialIdent, candidates: list[ProductCandidate]) -> tuple[Optional[int], float]:
         criteria: dict[str, Optional[str]] = {"none": "aucun ne correspond au matériau identifié"}
-        for index, hit in enumerate(hits):
-            criteria[str(index)] = f"{hit.get('title', '')} — {hit.get('url', '')}"
+        for index, candidate in enumerate(candidates):
+            criteria[str(index)] = f"{candidate.title} — {candidate.url}"
         state = {
             "material": ident.model_dump(),
-            "hits": [
-                {"title": hit.get("title"), "url": hit.get("url"), "content": (hit.get("content") or "")[:500]}
-                for hit in hits
+            "candidates": [
+                {
+                    "title": c.title,
+                    "brand": c.brand,
+                    "reference": c.reference,
+                    "ean": c.ean,
+                    "price_ttc": c.price_ttc,
+                    "unit": c.unit,
+                    "url": c.url,
+                }
+                for c in candidates
             ],
         }
         questions: dict[str, ChoiceQuestion | NoulQuestion] = {
@@ -394,40 +481,17 @@ class MaterialFeature:
             return None, confidence
 
     # ------------------------------------------------------------------
-    # A4 — extract + text-only DeepSeek call
+    # A4 — create/reuse the product, image, import record
     # ------------------------------------------------------------------
 
-    def _extract_product(self, hit: dict[str, Any]) -> Product:
-        url = str(hit.get("url") or "")
-        extracted = self._web_search.extract([url], include_images=True)
-        results = extracted.get("results", [])
-        raw_content = str(results[0].get("raw_content") or "") if results else str(hit.get("content") or "")
-        images = results[0].get("images", []) if results else []
-        user_text = f"URL: {url}\n\nContenu:\n{raw_content[:8000]}"
-        try:
-            product = self._vision.chat_json(
-                system=PRODUCT_SYSTEM_FR, user_text=user_text, images=[], model_cls=Product
-            )
-        except LlmOutputError:
-            product = Product(name=str(hit.get("title") or "Produit"), source_url=url)
-        product.source_url = url
-        if not product.image_url and images:
-            product.image_url = str(images[0])
-        return product
-
-    # ------------------------------------------------------------------
-    # A5 — create/reuse the product, image, import record
-    # ------------------------------------------------------------------
-
-    def _create_from_hit(
+    def _create_from_candidate(
         self,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         company_id: UUID,
         ident: MaterialIdent,
         sha: str,
-        hit: dict[str, Any],
-        product_data: Product,
+        candidate: ProductCandidate,
         status: str,
         confidence: float,
         photo_bytes: bytes,
@@ -437,33 +501,34 @@ class MaterialFeature:
         messenger: AssistantMessenger,
         trace_id: str,
     ) -> str:
-        supplier_name = _supplier_name_for_url(str(hit.get("url") or "")) or ident.brand or "Fournisseur non identifié"
-        reference = product_data.reference or product_data.ean or f"AI-{sha[:8]}"
+        supplier_name = _SUPPLIER_NAME_BY_MERCHANT.get(candidate.merchant) or ident.brand or "Fournisseur non identifié"
+        reference = candidate.reference or candidate.ean or f"AI-{sha[:8]}"
         product = self._get_or_create_product(
             user_id=user_id,
             message_id=message_id,
             company_id=company_id,
-            name=product_data.name or ident.name,
+            name=candidate.title or ident.name,
             supplier_name=supplier_name,
             reference=reference,
             category=ident.category,
             description=ident.specs,
-            size=product_data.unit,
-            product_url=product_data.source_url,
+            size=candidate.unit,
+            product_url=candidate.url,
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
         )
         if product is None:
             return "refused"
-        self._attach_image(user_id, product.id, product_data.image_url, photo_bytes, photo_mime, photo_filename)
+        image_url = candidate.image_url if candidate.image_url and is_merchant_url(candidate.image_url) else None
+        self._attach_image(user_id, product.id, image_url, photo_bytes, photo_mime, photo_filename)
         self._material_imports.add_material_import(
             product_id=product.id,
             company_id=company_id,
             status=status,
             confidence=confidence,
             photo_sha256=sha,
-            source_url=product_data.source_url,
+            source_url=candidate.url,
         )
         self._reply_product(user_id, message_id, lang, messenger, trace_id, product, status, supplier_name)
         return "created"
@@ -471,7 +536,7 @@ class MaterialFeature:
     def _import_photo_only(
         self,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         company_id: UUID,
         ident: MaterialIdent,
         sha: str,
@@ -520,7 +585,7 @@ class MaterialFeature:
         self,
         *,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         company_id: UUID,
         name: str,
         supplier_name: str,
@@ -602,7 +667,7 @@ class MaterialFeature:
     def _reply_existing(
         self,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -619,7 +684,7 @@ class MaterialFeature:
     def _reply_product(
         self,
         user_id: UUID,
-        message_id: UUID,
+        message_id: Optional[UUID],
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
@@ -685,18 +750,8 @@ class MaterialFeature:
                 user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
             )
             return True
-        photo_bytes, photo_filename, photo_mime = photo
-        self._continue_after_company(
-            user_id,
-            message_id,
-            company_id,
-            ident,
-            sha,
-            photo_bytes,
-            photo_filename,
-            photo_mime,
-            lang,
-            messenger,
-            trace_id,
-        )
+        self._continue_after_company(user_id, message_id, company_id, ident, sha, lang, messenger, trace_id)
         return True
+
+
+__all__ = ["MaterialFeature", "is_merchant_url", "MATERIAL_SEARCH_DOMAINS", "DEDUPE_WINDOW"]

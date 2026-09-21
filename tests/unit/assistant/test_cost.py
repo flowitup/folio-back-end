@@ -68,9 +68,7 @@ def test_in_memory_cost_ledger_by_kind_breaks_down_every_provider() -> None:
     ledger.add("deepseek_vision", 0.05)
     ledger.add("deepseek_text", 0.01)
     ledger.add("jev", 0.00004)
-    ledger.add("tavily", 0.0)
     ledger.add("gemini", 0.04)
-    ledger.add("serpapi", 0.015)
     ledger.add("deepseek_browser", 0.02)
 
     by_kind = ledger.by_kind()
@@ -79,9 +77,7 @@ def test_in_memory_cost_ledger_by_kind_breaks_down_every_provider() -> None:
         "deepseek_vision": 0.05,
         "deepseek_text": 0.01,
         "jev": 0.00004,
-        "tavily": 0.0,
         "gemini": 0.04,
-        "serpapi": 0.015,
         "deepseek_browser": 0.02,
     }
     assert ledger.today_total() == sum(by_kind.values())
@@ -93,4 +89,4 @@ def test_in_memory_cost_ledger_by_kind_defaults_unseen_kinds_to_zero() -> None:
     by_kind = ledger.by_kind()
     assert by_kind["gemini"] == 0.04
     assert by_kind["jev"] == 0.0
-    assert by_kind["serpapi"] == 0.0
+    assert by_kind["deepseek_browser"] == 0.0

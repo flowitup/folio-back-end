@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.infrastructure.adapters.s3_attachment_storage import S3AttachmentStorage
 from app.infrastructure.ai.cost import RedisCostLedger
-from app.infrastructure.browser_worker.agent import run_fetch
+from app.infrastructure.browser_worker.agent import run_fetch, run_product_search
 from app.infrastructure.browser_worker.worker import QUEUE_NAME, run_forever
 from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
     SqlAlchemyAssistantJobRepository,
@@ -105,6 +105,7 @@ def main() -> None:
                 # identical at runtime — narrow, deliberate escape hatch.
                 queue=queue,  # type: ignore[arg-type]
                 job_runner=run_fetch,
+                product_search_runner=run_product_search,
                 chrome_path=chrome_path,
                 profile_dir=profile_dir,
                 downloads_dir=downloads_dir,

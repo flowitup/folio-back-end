@@ -96,3 +96,27 @@ def process_fetched_invoice(job_id: str) -> None:
         container.assistant_invoice_fetch_feature.on_result(
             UUID(job_id), messenger=container.assistant_messenger, trace_id=trace_id
         )
+
+
+def process_product_search(job_id: str) -> None:
+    """Feature A's ``on_result``: the ``ai-browser`` container reported a
+    ``find_product`` job's outcome (enqueued by ``app.infrastructure.browser_worker``,
+    same as ``process_fetched_invoice`` above — see that function's docstring)."""
+    import uuid as _uuid
+
+    from app import create_app
+    from wiring import get_container
+
+    app = create_app()
+    with app.app_context():
+        if not _assistant_enabled(app):
+            logger.info("assistant.jobs.process_product_search skipped (FEATURE_ASSISTANT off) job_id=%s", job_id)
+            return
+        container = get_container()
+        if container.assistant_material_feature is None or container.assistant_messenger is None:
+            logger.error("assistant material feature not wired; dropping job result %s", job_id)
+            return
+        trace_id = _uuid.uuid4().hex[:16]
+        container.assistant_material_feature.on_result(
+            UUID(job_id), messenger=container.assistant_messenger, trace_id=trace_id
+        )

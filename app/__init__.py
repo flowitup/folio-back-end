@@ -1621,16 +1621,10 @@ def _configure_di_container() -> None:
     from app.infrastructure.ai.jev_client import JevDecisionPort as _JevDecisionPort
     from app.infrastructure.ai.jev_client import NullDecisionPort as _NullDecisionPort
     from app.infrastructure.ai.rate_limit import RedisRateLimiter as _RedisRateLimiter
-    from app.infrastructure.ai.serpapi_client import NullLensPort as _NullLensPort
-    from app.infrastructure.ai.serpapi_client import SerpApiLens as _SerpApiLens
-    from app.infrastructure.ai.tavily_client import NullWebSearchPort as _NullWebSearchPort
-    from app.infrastructure.ai.tavily_client import TavilyWebSearch as _TavilyWebSearch
 
     _deepseek_key = current_app.config.get("DEEPSEEK_API_KEY", "")
     _typesafe_key = current_app.config.get("TYPESAFE_API_KEY", "")
-    _tavily_key = current_app.config.get("TAVILY_API_KEY", "")
     _gemini_key = current_app.config.get("GEMINI_API_KEY", "")
-    _serpapi_key = current_app.config.get("SERPAPI_API_KEY", "")
     _redis_url = current_app.config.get("REDIS_URL", "")
 
     _c.assistant_cost_ledger = _RedisCostLedger(
@@ -1643,13 +1637,9 @@ def _configure_di_container() -> None:
     _c.assistant_decision_port = (
         _JevDecisionPort(_typesafe_key, _c.assistant_cost_ledger) if _typesafe_key else _NullDecisionPort()
     )
-    _c.assistant_web_search = (
-        _TavilyWebSearch(_tavily_key, _c.assistant_cost_ledger) if _tavily_key else _NullWebSearchPort()
-    )
     _c.assistant_image_gen = (
         _GeminiImageGen(_gemini_key, _c.assistant_cost_ledger) if _gemini_key else _NullImageGenPort()
     )
-    _c.assistant_lens = _SerpApiLens(_serpapi_key, _c.assistant_cost_ledger) if _serpapi_key else _NullLensPort()
 
     _c.assistant_router = _Router(_c.assistant_decision_port)
     if _c.project_repository is not None:
@@ -1777,8 +1767,7 @@ def _configure_di_container() -> None:
         _c.assistant_material_feature = _MaterialFeature(
             vision=_c.assistant_vision_llm,
             decisions=_c.assistant_decision_port,
-            web_search=_c.assistant_web_search,
-            lens=_c.assistant_lens,
+            job_repo=_assistant_job_repo,
             messages=_chat_repo,
             storage=storage,
             company_access=_access_repo,

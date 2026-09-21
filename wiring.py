@@ -436,9 +436,7 @@ class Container:
     # Assistant AI providers (phase 02) — NullX adapters when the matching key is empty.
     assistant_vision_llm: Optional[Any] = None  # VisionLlmPort (DeepSeekVisionLlm | NullVisionLlm)
     assistant_decision_port: Optional[Any] = None  # DecisionPort (JevDecisionPort | NullDecisionPort)
-    assistant_web_search: Optional[Any] = None  # WebSearchPort (TavilyWebSearch | NullWebSearchPort)
     assistant_image_gen: Optional[Any] = None  # ImageGenPort (GeminiImageGen | NullImageGenPort)
-    assistant_lens: Optional[Any] = None  # LensPort (SerpApiLens | NullLensPort)
     assistant_cost_ledger: Optional[Any] = None  # CostLedgerPort (RedisCostLedger)
     assistant_rate_limiter: Optional[Any] = None  # RateLimiterPort (RedisRateLimiter)
     assistant_router: Optional[Any] = None  # Router (S0)

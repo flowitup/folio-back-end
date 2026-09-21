@@ -1,10 +1,19 @@
 """Unit tests for `app.application.assistant.features.material.MaterialFeature` (feature A).
 
-Uses REAL `SqlAlchemyBibliothequeSupplierRepository`/`SqlAlchemyBibliothequeProductRepository`
-and REAL `CreateProductUseCase`/`FetchProductImageFromUrlUseCase`/`UploadProductImageUseCase`
-against an in-memory SQLite DB (the `session` fixture) so "the product actually landed in
-the library with the right supplier/reference" is proven against real persistence.
-Company membership/permission and Tavily/SerpApi are simple in-memory fakes.
+Uses REAL `SqlAlchemyBibliothequeSupplierRepository`/`SqlAlchemyBibliothequeProductRepository`,
+`SqlAlchemyAssistantJobRepository` and REAL `CreateProductUseCase`/
+`FetchProductImageFromUrlUseCase`/`UploadProductImageUseCase` against an in-memory SQLite
+DB (the `session` fixture) so "the product actually landed in the library with the right
+supplier/reference" is proven against real persistence. Company membership/permission and
+DeepSeek/Jev are simple in-memory fakes.
+
+Owner decision D16 dropped the external web-search/reverse-image providers: feature A
+now finds the product with a
+`find_product` job on the same `assistant_jobs` table feature B uses, and `on_result`
+picks among the browser worker's `ProductCandidate` list — these tests drive that job
+lifecycle directly (create via `run()`, complete via `job_repo.update_result()` +
+`on_result()`), the same pattern `tests/unit/assistant/test_invoice_fetch.py` uses for
+feature B.
 """
 
 from __future__ import annotations
@@ -17,8 +26,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.application.assistant.features.material import MaterialFeature
+from app.application.assistant.jobs_repo import AssistantJobRecord
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import MaterialIdent, Product
+from app.application.assistant.models import MaterialIdent, ProductCandidate, ProductSearchResult
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
 from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
 from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
@@ -27,13 +37,16 @@ from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocum
 from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
     SqlAlchemyAssistantImportRepository,
 )
+from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
+    SqlAlchemyAssistantJobRepository,
+)
 from app.infrastructure.database.repositories.sqlalchemy_bibliotheque_product_repository import (
     SqlAlchemyBibliothequeProductRepository,
 )
 from app.infrastructure.database.repositories.sqlalchemy_bibliotheque_supplier_repository import (
     SqlAlchemyBibliothequeSupplierRepository,
 )
-from tests.fakes.ai import RecordingLens, RecordingWebSearch, ScriptedDecision, ScriptedVision
+from tests.fakes.ai import ScriptedDecision, ScriptedVision
 
 
 class FakeMembership:
@@ -127,11 +140,31 @@ class FakeAuthzReader:
         return None
 
 
+class RecordingFetchImage:
+    """Spy standing in for `FetchProductImageFromUrlUseCase` — proves `_attach_image`
+    only ever calls it for a merchant-hosted `image_url` (never for the user's own
+    photo fallback, and never when `is_merchant_url` rejected the candidate's URL)."""
+
+    def __init__(self, should_raise: bool = False) -> None:
+        self.calls: list[tuple[UUID, str]] = []
+        self._should_raise = should_raise
+
+    def execute(self, *, requester_id: UUID, product_id: UUID, url: str) -> None:
+        self.calls.append((product_id, url))
+        if self._should_raise:
+            raise RuntimeError("SSRF-allowlist rejected the URL")
+
+
 _PHOTO_BYTES = b"\xff\xd8\xff\xe0fake-jpeg-bytes-for-a-material-photo"
 
 
 class World:
-    def __init__(self, session, permission_checker: Optional[FakePermissionChecker] = None) -> None:
+    def __init__(
+        self,
+        session,
+        permission_checker: Optional[FakePermissionChecker] = None,
+        fetch_image_usecase: Optional[Any] = None,
+    ) -> None:
         self.session = session
         self.user_id = uuid4()
         self.company_id = uuid4()
@@ -140,13 +173,14 @@ class World:
         self.supplier_repo = SqlAlchemyBibliothequeSupplierRepository(session)
         self.product_repo = SqlAlchemyBibliothequeProductRepository(session)
         self.material_imports = SqlAlchemyAssistantImportRepository(session)
+        self.job_repo = SqlAlchemyAssistantJobRepository(session)
         self.image_storage = InMemoryDocumentStorage()
         self.membership = FakeMembership()
         self.permission_checker = permission_checker or FakePermissionChecker(allowed=True)
         self.create_product_usecase = CreateProductUseCase(
             self.supplier_repo, self.product_repo, self.membership, self.permission_checker, session
         )
-        self.fetch_image_usecase = FetchProductImageFromUrlUseCase(
+        self.fetch_image_usecase: Any = fetch_image_usecase or FetchProductImageFromUrlUseCase(
             self.product_repo, self.image_storage, self.membership, self.permission_checker, session
         )
         self.upload_image_usecase = UploadProductImageUseCase(
@@ -157,13 +191,10 @@ class World:
         self.storage = InMemoryDocumentStorage()
         self.vision = ScriptedVision(json_answers=[])
         self.decisions = ScriptedDecision()
-        self.web_search = RecordingWebSearch()
-        self.lens = RecordingLens()
         self.feature = MaterialFeature(
             vision=self.vision,
             decisions=self.decisions,
-            web_search=self.web_search,
-            lens=self.lens,
+            job_repo=self.job_repo,
             messages=self.messages,
             storage=self.storage,
             company_access=self.company_access,
@@ -195,6 +226,26 @@ class World:
     def last_replies(self) -> list[ChatMessage]:
         return sorted(self.messages.messages.values(), key=lambda m: m.created_at)
 
+    def start_search(self, message_id: UUID) -> AssistantJobRecord:
+        """Runs `feature.run()` (already scripted with an ident answer) through to job
+        creation, and returns the freshly created `find_product` job."""
+        outcome = self.feature.run(
+            user_id=self.user_id, message_id=message_id, lang="fr", messenger=self.messenger, trace_id="t1"
+        )
+        assert outcome == "queued"
+        jobs = self.job_repo.list_recent_for_user(self.user_id, limit=1)
+        assert jobs, "expected a find_product job to have been created"
+        return jobs[0]
+
+    def complete_search(
+        self, job: AssistantJobRecord, *, status: str = "done", candidates: Optional[list[ProductCandidate]] = None
+    ) -> None:
+        """Simulates the browser worker writing back a result, then runs `on_result()`
+        (the `process_product_search` RQ job's real behaviour)."""
+        result = ProductSearchResult(status=status, candidates=candidates or [])
+        self.job_repo.update_result(job.id, status=status, result=result.model_dump())
+        self.feature.on_result(job.id, messenger=self.messenger, trace_id="t2")
+
 
 @pytest.fixture
 def world(session) -> World:
@@ -213,22 +264,63 @@ def _ident(confidence: float = 0.9, reference: Optional[str] = None) -> Material
     )
 
 
-def _hit(url: str, title: str = "Perceuse Bosch 18V") -> dict[str, Any]:
-    return {"url": url, "title": title, "content": "Perceuse à percussion Bosch 18V, 2 batteries incluses."}
+def _candidate(
+    url: str,
+    *,
+    merchant: str = "leroymerlin",
+    title: str = "Perceuse Bosch 18V",
+    reference: Optional[str] = "GSB18V",
+    image_url: Optional[str] = None,
+) -> ProductCandidate:
+    return ProductCandidate(
+        url=url,
+        title=title,
+        merchant=merchant,
+        reference=reference,
+        brand="Bosch",
+        price_ttc=199.0,
+        image_url=image_url,
+    )
+
+
+def _pick_decision(label: str, confidence: float):
+    from app.application.assistant.ports import Decision
+
+    return Decision(choices={"pick": (label, confidence, {})}, nouls={})
+
+
+def _sha(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+class TestJobCreation:
+    def test_run_creates_a_find_product_job_and_posts_the_ack_template(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+
+        world.feature.run(
+            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+        )
+
+        jobs = world.job_repo.list_recent_for_user(world.user_id)
+        assert len(jobs) == 1
+        assert jobs[0].type == "find_product"
+        assert jobs[0].params["photo_sha256"] == _sha(_PHOTO_BYTES)
+        job_status = next(m for m in world.last_replies() if m.content_type == "job_status")
+        assert job_status.payload["state"] == "queued"
+        assert "cherche" in job_status.payload["text"].lower()
 
 
 class TestConfirmed:
     def test_creates_the_product_and_posts_a_confirmed_card(self, world: World) -> None:
         message_id = world.post_photo()
-        ident = _ident()
-        product = Product(name="Perceuse Bosch 18V", reference="GSB18V", source_url="https://www.leroymerlin.fr/p/1")
-        world.vision._json_answers = [ident, product]
-        world.web_search._search_result = {"results": [_hit("https://www.leroymerlin.fr/p/1")], "images": []}
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
         world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
 
-        world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
-        )
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/1")])
 
         products, total = world.product_repo.list(world.company_id)
         assert total == 1
@@ -246,15 +338,11 @@ class TestConfirmed:
 class TestToConfirm:
     def test_posts_a_to_confirm_card(self, world: World) -> None:
         message_id = world.post_photo()
-        ident = _ident()
-        product = Product(name="Perceuse Bosch 18V", reference="GSB18V", source_url="https://www.pointp.fr/p/2")
-        world.vision._json_answers = [ident, product]
-        world.web_search._search_result = {"results": [_hit("https://www.pointp.fr/p/2")], "images": []}
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
         world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.7)}
 
-        world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
-        )
+        world.complete_search(job, candidates=[_candidate("https://www.pointp.fr/p/2", merchant="pointp")])
 
         cached = world.material_imports.find_by_photo_hash(world.company_id, _sha(_PHOTO_BYTES))
         assert cached is not None
@@ -264,15 +352,12 @@ class TestToConfirm:
 
 
 class TestNoMatchImportsPhotoOnly:
-    def test_creates_a_photo_only_product_when_nothing_matches(self, world: World) -> None:
+    def test_creates_a_photo_only_product_when_there_are_no_candidates(self, world: World) -> None:
         message_id = world.post_photo()
-        ident = _ident()
-        world.vision._json_answers = [ident]
-        world.web_search._search_result = {"results": [], "images": []}
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
 
-        world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
-        )
+        world.complete_search(job, status="not_found", candidates=[])
 
         products, total = world.product_repo.list(world.company_id)
         assert total == 1
@@ -281,11 +366,44 @@ class TestNoMatchImportsPhotoOnly:
         assert cached is not None
         assert cached.status == "to_confirm"
         assert cached.source_url is None
-        assert world.lens.calls == []  # chat photos never have a public URL to send Lens
+        # No browser-agent failure — the neutral "photo only" template is used, not
+        # `product_search_failed`.
+        assert not any(
+            "fournisseurs" in (m.body or "") and "pas pu accéder" in (m.body or "") for m in world.last_replies()
+        )
+
+    def test_falls_back_to_photo_only_when_jev_rejects_every_candidate(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("none", 0.95)}
+
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/1")])
+
+        cached = world.material_imports.find_by_photo_hash(world.company_id, _sha(_PHOTO_BYTES))
+        assert cached is not None
+        assert cached.status == "to_confirm"
+        assert cached.source_url is None
+
+
+class TestBlockedOrFailed:
+    @pytest.mark.parametrize("status", ["blocked", "failed"])
+    def test_posts_the_failure_template_then_falls_back_to_photo_only(self, world: World, status: str) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+
+        world.complete_search(job, status=status, candidates=[])
+
+        cached = world.material_imports.find_by_photo_hash(world.company_id, _sha(_PHOTO_BYTES))
+        assert cached is not None
+        assert cached.status == "to_confirm"
+        texts = [m.body or "" for m in world.last_replies()]
+        assert any("fournisseurs" in t for t in texts)
 
 
 class TestCacheHitBySha:
-    def test_replies_with_the_existing_product_and_skips_the_web_search(self, world: World) -> None:
+    def test_replies_with_the_existing_product_and_never_starts_a_search(self, world: World) -> None:
         ident = _ident()
         world.vision._json_answers = [ident]
         existing = world.create_product_usecase.execute(
@@ -308,25 +426,90 @@ class TestCacheHitBySha:
             user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
         )
 
-        assert world.web_search.search_calls == []
+        assert world.job_repo.list_recent_for_user(world.user_id) == []
         card = next(m for m in world.last_replies() if m.content_type == "card")
         assert card.payload["card"]["id"] == str(existing.id)
         assert card.payload["card"]["badge"] == "confirmed"
+
+
+class TestDedupeByPhotoHash:
+    def test_a_second_photo_with_the_same_hash_reuses_the_in_flight_job(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        world.start_search(message_id)
+
+        second_message_id = world.post_photo()
+        outcome = world.feature.run(
+            user_id=world.user_id, message_id=second_message_id, lang="fr", messenger=world.messenger, trace_id="t3"
+        )
+
+        assert outcome == "asked"
+        assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
+
+
+class TestIdempotentOnResult:
+    def test_a_second_on_result_call_for_the_same_job_is_a_no_op(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/1")])
+
+        cards_before = [m for m in world.last_replies() if m.content_type == "card"]
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t4")
+        cards_after = [m for m in world.last_replies() if m.content_type == "card"]
+
+        assert len(cards_before) == 1
+        assert len(cards_after) == 1  # no duplicate card / no duplicate product
+        products, total = world.product_repo.list(world.company_id)
+        assert total == 1
+
+
+class TestImageFetchOnlyForMerchantDomain:
+    def test_a_merchant_hosted_image_url_is_fetched_server_side(self, session) -> None:
+        fetch_spy = RecordingFetchImage()
+        world = World(session, fetch_image_usecase=fetch_spy)
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        world.complete_search(
+            job,
+            candidates=[
+                _candidate("https://www.leroymerlin.fr/p/1", image_url="https://www.leroymerlin.fr/images/gsb18v.jpg")
+            ],
+        )
+
+        assert fetch_spy.calls and fetch_spy.calls[0][1] == "https://www.leroymerlin.fr/images/gsb18v.jpg"
+
+    def test_a_non_merchant_image_url_is_never_fetched_falls_back_to_the_user_photo(self, session) -> None:
+        fetch_spy = RecordingFetchImage()
+        world = World(session, fetch_image_usecase=fetch_spy)
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        world.complete_search(
+            job,
+            candidates=[_candidate("https://www.leroymerlin.fr/p/1", image_url="https://cdn.evil.example/gsb18v.jpg")],
+        )
+
+        assert fetch_spy.calls == []
+        products, _total = world.product_repo.list(world.company_id)
+        assert products[0].image_storage_key is not None  # fell back to the user's own photo upload
 
 
 class TestNoPermission:
     def test_posts_the_no_permission_template(self, session) -> None:
         world = World(session, permission_checker=FakePermissionChecker(allowed=False))
         message_id = world.post_photo()
-        ident = _ident()
-        product = Product(name="Perceuse Bosch 18V", reference="GSB18V", source_url="https://www.leroymerlin.fr/p/3")
-        world.vision._json_answers = [ident, product]
-        world.web_search._search_result = {"results": [_hit("https://www.leroymerlin.fr/p/3")], "images": []}
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
         world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
 
-        world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
-        )
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/3")])
 
         products, total = world.product_repo.list(world.company_id)
         assert total == 0
@@ -372,18 +555,6 @@ class TestLowConfidenceIdentification:
             user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
         )
 
-        assert world.web_search.search_calls == []
+        assert world.job_repo.list_recent_for_user(world.user_id) == []
         products, total = world.product_repo.list(world.company_id)
         assert total == 0
-
-
-def _pick_decision(label: str, confidence: float):
-    from app.application.assistant.ports import Decision
-
-    return Decision(choices={"pick": (label, confidence, {})}, nouls={})
-
-
-def _sha(data: bytes) -> str:
-    import hashlib
-
-    return hashlib.sha256(data).hexdigest()

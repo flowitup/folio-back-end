@@ -122,43 +122,11 @@ class VisionLlmPort(Protocol):
         ...
 
 
-class WebSearchPort(Protocol):
-    """Tavily — feature A material search."""
-
-    def search(
-        self,
-        query: str,
-        *,
-        include_domains: list[str] | None = None,
-        include_images: bool = True,
-        max_results: int = 6,
-    ) -> dict[str, Any]:
-        """``{"results": [{"url","title","content","score"}], "images": [...]}``."""
-        ...
-
-    def extract(self, urls: list[str], *, include_images: bool = True) -> dict[str, Any]:
-        """``{"results": [{"url","raw_content","images"}], "failed_results": [...]}``."""
-        ...
-
-
 class ImageGenPort(Protocol):
     """Gemini `gemini-2.5-flash-image` — feature C scan generation (SCAN_MODE=genai)."""
 
     def generate(self, image: bytes, prompt: str) -> bytes:
         """Return the generated image's raw bytes (first inline part of the response)."""
-        ...
-
-
-class LensPort(Protocol):
-    """SerpApi Google Lens — feature A fallback when Tavily/Jev pick nothing.
-
-    Needs a PUBLIC image URL (Google Lens fetches it server-side); chat photos live in
-    private S3 storage, so the feature layer (phase 03) decides whether/how to produce
-    one and simply skips Lens when it cannot.
-    """
-
-    def identify(self, image_url: str) -> list[dict[str, Any]]:
-        """Reverse-image hits, most relevant first."""
         ...
 
 
@@ -168,12 +136,12 @@ class CostLedgerPort(Protocol):
     def add(self, kind: str, usd: float) -> None:
         """Record a provider call's cost against today's total.
 
-        ``kind`` is one of ``deepseek_vision``/``deepseek_text``/``jev``/``tavily``/
-        ``gemini``/``serpapi``/``deepseek_browser`` — every adapter that spends money
-        calls this so ``today_total()`` (and ``by_kind()``) reflect the pipeline's real
-        spend, not just DeepSeek's. ``deepseek_browser`` is billed from a different
-        process (the ``ai-browser`` container, see ``app.infrastructure.browser_worker``)
-        against the same Redis-backed ledger, constructed there from ``REDIS_URL`` alone.
+        ``kind`` is one of ``deepseek_vision``/``deepseek_text``/``jev``/``gemini``/
+        ``deepseek_browser`` — every adapter that spends money calls this so
+        ``today_total()`` (and ``by_kind()``) reflect the pipeline's real spend, not just
+        DeepSeek's. ``deepseek_browser`` is billed from a different process (the
+        ``ai-browser`` container, see ``app.infrastructure.browser_worker``) against the
+        same Redis-backed ledger, constructed there from ``REDIS_URL`` alone.
         """
         ...
 

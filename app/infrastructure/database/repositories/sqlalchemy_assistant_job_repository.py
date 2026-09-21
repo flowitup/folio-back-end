@@ -1,7 +1,9 @@
-"""SQLAlchemy repository for ``assistant_jobs`` (feature B — invoice fetch).
+"""SQLAlchemy repository for ``assistant_jobs`` (feature B — invoice fetch — and feature A
+— browser-based product search).
 
 Constructed from a plain ``sqlalchemy.orm.Session`` — either Flask-SQLAlchemy's
-``db.session`` (web process, ``process_fetched_invoice`` RQ job) or a bare
+``db.session`` (web process, ``process_fetched_invoice``/``process_product_search`` RQ
+jobs) or a bare
 ``sessionmaker(bind=create_engine(DATABASE_URL))()`` (the ``ai-browser`` container,
 which has no Flask app context — see ``app.infrastructure.browser_worker``). Neither
 ``AssistantJobModel`` nor this module imports anything Flask-specific, which is what
@@ -45,7 +47,7 @@ def _to_entity(m: AssistantJobModel) -> AssistantJobRecord:
         type=m.type,
         user_id=m.user_id,
         merchant=m.merchant,
-        amount_ttc=Decimal(m.amount_ttc),
+        amount_ttc=Decimal(m.amount_ttc) if m.amount_ttc is not None else None,
         date=m.date,
         project_hint=m.project_hint,
         status=m.status,
@@ -58,6 +60,7 @@ def _to_entity(m: AssistantJobModel) -> AssistantJobRecord:
         processed_at=m.processed_at,
         created_at=m.created_at,
         updated_at=m.updated_at,
+        params=dict(m.params) if m.params else None,
     )
 
 
@@ -71,17 +74,23 @@ class SqlAlchemyAssistantJobRepository:
         self,
         *,
         user_id: UUID,
-        merchant: str,
-        amount_ttc: Decimal,
-        date: Any,
-        project_hint: Optional[str],
+        job_type: str = "fetch_invoice",
+        merchant: Optional[str] = None,
+        amount_ttc: Optional[Decimal] = None,
+        date: Optional[Any] = None,
+        project_hint: Optional[str] = None,
         lang: Optional[str] = None,
+        params: Optional[dict[str, Any]] = None,
         status_message_id: Optional[UUID] = None,
     ) -> AssistantJobRecord:
+        if job_type == "fetch_invoice" and (merchant is None or amount_ttc is None or date is None):
+            raise ValueError("fetch_invoice jobs require merchant, amount_ttc and date.")
+        if job_type == "find_product" and params is None:
+            raise ValueError("find_product jobs require params.")
         now = datetime.now(timezone.utc)
         model = AssistantJobModel(
             id=uuid4(),
-            type="fetch_invoice",
+            type=job_type,
             user_id=user_id,
             merchant=merchant,
             amount_ttc=amount_ttc,
@@ -94,6 +103,7 @@ class SqlAlchemyAssistantJobRepository:
             pdf_storage_key=None,
             status_message_id=status_message_id,
             lang=lang,
+            params=params,
             processed_at=None,
             created_at=now,
             updated_at=now,
@@ -107,13 +117,43 @@ class SqlAlchemyAssistantJobRepository:
         return _to_entity(model) if model is not None else None
 
     def find_duplicate(
-        self, *, user_id: UUID, merchant: str, amount_ttc: Decimal, date: Any, since: datetime
+        self,
+        *,
+        user_id: UUID,
+        since: datetime,
+        job_type: str = "fetch_invoice",
+        merchant: Optional[str] = None,
+        amount_ttc: Optional[Decimal] = None,
+        date: Optional[Any] = None,
+        photo_sha256: Optional[str] = None,
     ) -> Optional[AssistantJobRecord]:
+        if job_type == "find_product":
+            if photo_sha256 is None:
+                raise ValueError("find_duplicate for find_product jobs requires photo_sha256.")
+            candidates = (
+                self._session.execute(
+                    select(AssistantJobModel)
+                    .where(
+                        AssistantJobModel.user_id == user_id,
+                        AssistantJobModel.type == "find_product",
+                        AssistantJobModel.status.in_(ACTIVE_JOB_STATUSES),
+                        AssistantJobModel.created_at >= since,
+                    )
+                    .order_by(AssistantJobModel.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+            for candidate in candidates:
+                if (candidate.params or {}).get("photo_sha256") == photo_sha256:
+                    return _to_entity(candidate)
+            return None
         model = (
             self._session.execute(
                 select(AssistantJobModel)
                 .where(
                     AssistantJobModel.user_id == user_id,
+                    AssistantJobModel.type == job_type,
                     AssistantJobModel.merchant == merchant,
                     AssistantJobModel.amount_ttc == amount_ttc,
                     AssistantJobModel.date == date,
