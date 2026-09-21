@@ -334,6 +334,35 @@ class TestNoPermission:
         assert replies[-1].content_type == "text"
 
 
+class TestDefenseInDepthPickCompanyForeignCompany:
+    """C1's defense-in-depth layer (pass-2 review, previously untested): the primary
+    defense is `SubmitAssistantActionUseCase`'s stored-option equality check (`_post_
+    pick_company` only ever offers the caller's own companies), but `handle_action`
+    independently re-checks membership before touching anything else in the payload —
+    closing the "attach a product to a foreign company" IDOR even if a forged
+    `company_id` ever reached this far."""
+
+    def test_pick_company_refuses_a_company_the_user_is_not_a_member_of(self, world: World) -> None:
+        foreign_company_id = uuid4()  # never in world.company_access's list
+
+        handled = world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=uuid4(),
+            action="pick_company",
+            payload={"company_id": str(foreign_company_id)},
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+        )
+
+        assert handled is True
+        replies = world.last_replies()
+        assert len(replies) == 1
+        assert replies[0].content_type == "text"
+        products, total = world.product_repo.list(foreign_company_id)
+        assert total == 0
+
+
 class TestLowConfidenceIdentification:
     def test_asks_for_a_clearer_photo(self, world: World) -> None:
         message_id = world.post_photo()

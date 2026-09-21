@@ -130,5 +130,22 @@ class AssistantJobRepositoryPort(Protocol):
         """
         ...
 
+    def reap_unprocessed(self, now: datetime) -> list[UUID]:
+        """Ids of terminal-status jobs (``done``/``not_ready``/``not_found``/``blocked``/
+        ``failed``) whose ``processed_at`` is still NULL and whose ``updated_at`` is older
+        than ``_UNPROCESSED_REAP_AFTER`` — review finding NEW-H2: the browser worker's
+        ``update_result`` (terminal write, commits) and its ``queue.enqueue(...
+        process_fetched_invoice)`` are two separate steps; if the process dies or Redis
+        blips between them, the row is permanently `done`/`not_ready`/etc with nothing
+        left to ever call ``on_result`` for it — every ``mark_processed`` guard in
+        ``InvoiceFetchFeature`` exists so this method's caller can safely re-enqueue
+        ``process_fetched_invoice`` for a returned id without risking a duplicate reply
+        or a duplicate invoice.
+
+        Touches ``updated_at`` on every id it returns, so a returned job is not returned
+        again for another full window even if the immediate re-enqueue also fails.
+        """
+        ...
+
 
 __all__ = ["AssistantJobRecord", "AssistantJobRepositoryPort", "JOB_STATUSES", "ACTIVE_JOB_STATUSES"]

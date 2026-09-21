@@ -271,11 +271,32 @@ class InvoiceFetchFeature:
         elif status == "not_ready":
             self._handle_not_ready(job, context, messenger, trace_id)
         elif status == "blocked":
-            self._finish(job, context, messenger, state="blocked", template="fetch_blocked")
+            self._handle_terminal_once(job, context, messenger, state="blocked", template="fetch_blocked")
         elif status == "not_found":
             self._handle_not_found(job, context, messenger, trace_id)
         else:  # pragma: no cover - defensive: the worker only ever writes the above
             logger.warning("assistant.fetch_invoice: job %s has unexpected status %s", job_id, status)
+
+    def _handle_terminal_once(
+        self,
+        job: AssistantJobRecord,
+        context: _StatusContext,
+        messenger: AssistantMessenger,
+        *,
+        state: str,
+        template: str,
+    ) -> None:
+        """A one-shot terminal reply (the ``blocked`` outcome — no retry, no further
+        state). Guarded by ``mark_processed`` the same way ``_handle_done`` is (review
+        finding NEW-H2): the unprocessed-job reaper (``reap_unprocessed`` in the job
+        repository) re-enqueues ``process_fetched_invoice`` for any terminal row whose
+        ``processed_at`` never got set — without this guard, a job that already finished
+        normally the first time would get its "blocked" reply posted to the user a
+        second time 30 minutes later."""
+        if not self._job_repo.mark_processed(job.id):
+            logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
+            return
+        self._finish(job, context, messenger, state=state, template=template)
 
     def _status_context(self, job: AssistantJobRecord) -> _StatusContext:
         original: Optional[ChatMessage] = None
@@ -329,6 +350,12 @@ class InvoiceFetchFeature:
     ) -> None:
         attempts = job.attempts + 1
         if attempts >= MAX_ATTEMPTS:
+            # Terminal (no further retry, no further enqueue): guarded like every other
+            # one-shot outcome (review finding NEW-H2) so the reaper re-running this job
+            # after 30 idle minutes can never post "fetch failed" to the user twice.
+            if not self._job_repo.mark_processed(job.id):
+                logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
+                return
             self._job_repo.update_status(job.id, status="failed")
             self._finish(job, context, messenger, state="failed", template="fetch_failed")
             return
@@ -345,6 +372,13 @@ class InvoiceFetchFeature:
     def _handle_not_found(
         self, job: AssistantJobRecord, context: _StatusContext, messenger: AssistantMessenger, trace_id: str
     ) -> None:
+        # Terminal and one-shot (status stays "not_found" forever afterwards, unlike
+        # not_ready) — guarded for the same reap-safety reason as _handle_terminal_once,
+        # otherwise the "closest purchases" choice card would get reposted every time the
+        # reaper re-enqueues this job.
+        if not self._job_repo.mark_processed(job.id):
+            logger.info("assistant.fetch_invoice: job %s already processed, skipping", job.id)
+            return
         if job.status_message_id is not None:
             messenger.update_job_status(
                 job.status_message_id,

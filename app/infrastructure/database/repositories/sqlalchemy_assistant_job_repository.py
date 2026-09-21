@@ -27,6 +27,17 @@ from app.infrastructure.database.models.assistant_job import AssistantJobModel
 #: user's job_status message on "running" forever.
 _STUCK_RUNNING_AFTER = timedelta(minutes=30)
 
+#: The other half of H2 (review finding NEW-H2): a job whose worker-reported terminal
+#: status was written by `update_result` but whose `process_fetched_invoice` enqueue
+#: never happened (or never ran) is not `running` — `claim_next`'s reaper never sees it.
+#: `reap_unprocessed` uses the same window on `processed_at IS NULL` instead.
+_UNPROCESSED_REAP_AFTER = timedelta(minutes=30)
+
+#: Every status the browser worker can write via `update_result` that `on_result` treats
+#: as one-shot terminal-or-terminal-pending — see `InvoiceFetchFeature.on_result`. `queued`
+#: and `running` are deliberately excluded: those are covered by `claim_next`'s own reaper.
+_TERMINAL_UNPROCESSED_STATUSES = ("done", "not_ready", "not_found", "blocked", "failed")
+
 
 def _to_entity(m: AssistantJobModel) -> AssistantJobRecord:
     return AssistantJobRecord(
@@ -208,3 +219,21 @@ class SqlAlchemyAssistantJobRepository:
         )
         self._session.commit()
         return bool(result.rowcount)
+
+    def reap_unprocessed(self, now: datetime) -> list[UUID]:
+        stale_before = now - _UNPROCESSED_REAP_AFTER
+        ids = list(
+            self._session.execute(
+                select(AssistantJobModel.id).where(
+                    AssistantJobModel.status.in_(_TERMINAL_UNPROCESSED_STATUSES),
+                    AssistantJobModel.processed_at.is_(None),
+                    AssistantJobModel.updated_at < stale_before,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if ids:
+            self._session.execute(update(AssistantJobModel).where(AssistantJobModel.id.in_(ids)).values(updated_at=now))
+            self._session.commit()
+        return [UUID(str(i)) for i in ids]

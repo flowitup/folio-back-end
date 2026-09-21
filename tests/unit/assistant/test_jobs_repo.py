@@ -8,6 +8,9 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+from sqlalchemy import update
+
+from app.infrastructure.database.models.assistant_job import AssistantJobModel
 from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
     SqlAlchemyAssistantJobRepository,
 )
@@ -15,6 +18,13 @@ from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repositor
 
 def _repo(session) -> SqlAlchemyAssistantJobRepository:
     return SqlAlchemyAssistantJobRepository(session)
+
+
+def _set_updated_at(session, job_id, when: datetime) -> None:
+    """Test-only backdoor: every repo write stamps `updated_at = now()` itself, so
+    ageing a row for the reaper tests needs a direct column write."""
+    session.execute(update(AssistantJobModel).where(AssistantJobModel.id == job_id).values(updated_at=when))
+    session.commit()
 
 
 class TestAddAndFind:
@@ -217,3 +227,77 @@ class TestListRecentForUser:
 
         recent = repo.list_recent_for_user(mine.user_id)
         assert [j.id for j in recent] == [mine.id]
+
+
+class TestReapUnprocessed:
+    """Review finding NEW-H2: a job whose terminal status was written by
+    `update_result` but whose `process_fetched_invoice` enqueue never happened (Redis
+    blip, worker SIGKILL between the two calls) must not stay wedged forever."""
+
+    def test_reaps_a_stale_done_row_with_processed_at_still_null(self, session) -> None:
+        repo = _repo(session)
+        now = datetime.now(timezone.utc)
+        job = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        repo.update_result(job.id, status="done", result={"status": "done"})
+        _set_updated_at(session, job.id, now - timedelta(minutes=31))
+
+        reaped = repo.reap_unprocessed(now)
+
+        assert reaped == [job.id]
+
+    def test_reaped_row_is_not_returned_again_within_the_window(self, session) -> None:
+        repo = _repo(session)
+        now = datetime.now(timezone.utc)
+        job = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        repo.update_result(job.id, status="done", result={"status": "done"})
+        _set_updated_at(session, job.id, now - timedelta(minutes=31))
+
+        first = repo.reap_unprocessed(now)
+        second = repo.reap_unprocessed(now)
+
+        assert first == [job.id]
+        assert second == []  # the first call already bumped updated_at
+
+    def test_does_not_reap_a_fresh_terminal_row(self, session) -> None:
+        repo = _repo(session)
+        now = datetime.now(timezone.utc)
+        job = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        repo.update_result(job.id, status="done", result={"status": "done"})
+
+        assert repo.reap_unprocessed(now) == []
+
+    def test_does_not_reap_an_already_processed_row(self, session) -> None:
+        repo = _repo(session)
+        now = datetime.now(timezone.utc)
+        job = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        repo.update_result(job.id, status="done", result={"status": "done"})
+        assert repo.mark_processed(job.id) is True
+        _set_updated_at(session, job.id, now - timedelta(minutes=31))
+
+        assert repo.reap_unprocessed(now) == []
+
+    def test_does_not_reap_queued_or_running_jobs(self, session) -> None:
+        repo = _repo(session)
+
+        running_job = repo.add(
+            user_id=uuid4(), merchant="pointp", amount_ttc=Decimal("2"), date=date(2026, 1, 2), project_hint=None
+        )
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        claimed = repo.claim_next(now)
+        assert claimed is not None and claimed.id == running_job.id
+        _set_updated_at(session, running_job.id, now - timedelta(minutes=31))
+
+        queued = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        _set_updated_at(session, queued.id, now - timedelta(minutes=31))
+
+        assert repo.reap_unprocessed(now) == []

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, or_, select, text
+from sqlalchemy import bindparam, exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo
@@ -92,6 +93,58 @@ class SqlAlchemyChatRepository:
             return
         orm.payload = payload
         self._session.flush()
+
+    def answer_choice_if_unanswered(self, message_id: UUID, answered: str, answered_payload: dict[str, Any]) -> bool:
+        """Single conditional UPDATE — the only defense against two concurrent
+        ``POST /assistant/actions`` calls on the same choice message racing each other
+        (review finding NEW-H1): a plain read-modify-write (``find_by_id`` +
+        ``update_payload``) lets both requests read ``answered is None`` before either
+        commits, so both would dispatch and (on a ``set_project``/``not_duplicate``
+        choice) create two invoices from one receipt. The WHERE clause is evaluated by
+        the database against the row's *current* state, so only the first writer's
+        UPDATE can ever match; the second gets ``rowcount == 0`` and is told to raise
+        ``AssistantAlreadyAnsweredError`` instead of dispatching.
+
+        Postgres merges the two new keys into the existing JSONB without needing the
+        rest of the payload; SQLite (tests) uses the JSON1 ``json_set``/``json_extract``
+        functions to the same effect — both read the "not yet answered" predicate off
+        the row itself, not off a value read earlier in this process.
+        """
+        bind = self._session.get_bind()
+        is_postgres = bind is not None and bind.dialect.name == "postgresql"
+        answered_payload_json = json.dumps(answered_payload)
+        if is_postgres:
+            sql = (
+                "UPDATE chat_messages "
+                "SET payload = payload || jsonb_build_object("
+                "'answered', CAST(:answered AS text), "
+                "'answered_payload', CAST(:answered_payload AS jsonb)"
+                ") "
+                "WHERE id = :id AND (payload ->> 'answered') IS NULL"
+            )
+        else:
+            sql = (
+                "UPDATE chat_messages "
+                "SET payload = json_set("
+                "payload, '$.answered', :answered, '$.answered_payload', json(:answered_payload)"
+                ") "
+                "WHERE id = :id AND json_extract(payload, '$.answered') IS NULL"
+            )
+        # `id` must be bound with the column's own type: on SQLite, `ChatMessageOrm.id`
+        # (postgresql.UUID) stores a 32-char hex string with no dashes, which a plain
+        # `str(message_id)` (dashed) would never match — silently making every call
+        # here a no-op, the opposite of this method's purpose.
+        stmt = text(sql).bindparams(bindparam("id", type_=ChatMessageOrm.id.type))
+        result = self._session.execute(
+            stmt, {"id": message_id, "answered": answered, "answered_payload": answered_payload_json}
+        )
+        self._session.commit()
+        # `session.execute(text(...))`'s static return type is the generic `Result[Any]`
+        # (a `text()` clause could be a SELECT too) even though this one is an UPDATE, so
+        # mypy does not see `rowcount` — it is populated at runtime regardless of which
+        # `execute()` overload constructed the `CursorResult` (same as `mark_processed`'s
+        # `update()`-construct version elsewhere in this codebase).
+        return bool(result.rowcount)  # type: ignore[attr-defined]
 
     def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
         stmt = (

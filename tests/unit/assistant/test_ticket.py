@@ -461,6 +461,69 @@ class TestGenaiFallsBackToOpenCv:
         assert len(world.image_gen.calls) == 2
 
 
+class TestDefenseInDepthPendingKeyPrefix:
+    """C1's defense-in-depth layer (pass-2 review, previously untested): the primary
+    defense is `SubmitAssistantActionUseCase`'s stored-option equality check, but
+    `_fetch_pending`/`_cleanup_pending` independently refuse any storage key outside
+    `assistant/pending/` — a forged `original_key` pointing at another channel's photo
+    (or any other S3 key) must never be read or deleted through this path, even if a
+    future regression let a forged payload reach this far."""
+
+    def test_original_key_outside_the_pending_prefix_is_refused(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [Invoice(merchant="Point P", date="2026-09-10", total_ttc=50.0, readability=0.9)]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.75)}
+
+        world.feature.run(
+            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+        )
+        choice = next(m for m in world.last_replies() if m.content_type == "choice")
+        forged_payload = dict(choice.payload["options"][0]["payload"])
+        forged_payload["original_key"] = "chat/some-other-channels-photo"
+
+        world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=choice.id,
+            action="set_project",
+            payload=forged_payload,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t2",
+        )
+
+        assert (
+            world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31)) == []
+        )
+        # _fetch_pending refused the key -> original_bytes is None -> the generic error
+        # template, never a created/confirmed reply.
+        assert world.last_replies()[-1].content_type == "text"
+
+
+class TestDefenseInDepthConfirmDuplicateCrossProject:
+    """`confirm_duplicate` must never disclose (via its card) an invoice on a project the
+    caller cannot see, even if a forged `candidate_invoice_id` ever reached this handler."""
+
+    def test_refuses_to_disclose_an_invoice_on_a_foreign_project(self, world: World) -> None:
+        foreign_project_id = uuid4()  # never registered in world.project_repo
+        foreign = world.create_invoice_usecase.execute(
+            _create_request(foreign_project_id, world.user_id, "Foreign Corp", date(2026, 9, 1), 42.0)
+        )
+
+        world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=uuid4(),
+            action="confirm_duplicate",
+            payload={"candidate_invoice_id": str(foreign.id), "original_key": "", "scan_key": None},
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+        )
+
+        replies = world.last_replies()
+        assert not any(r.content_type == "card" for r in replies)
+        assert any(r.content_type == "text" for r in replies)
+
+
 def _create_request(project_id: UUID, user_id: UUID, merchant: str, issue_date: date, total_ttc: float):
     from app.application.invoice.create_invoice import CreateInvoiceRequest
     from app.domain.entities.invoice import InvoiceType

@@ -27,10 +27,14 @@ class RqAssistantDispatcher:
     (heavier, AI-dependency-laden) assistant pipeline module just to hand off a message.
 
     ``assistant_enabled`` is the same ``Config.assistant_enabled``-backed callable
-    injected into ``SqlAlchemyChatRepository`` — a second, independent kill switch: even
-    if something upstream ever enqueued a job while the flag is off (or a stale job sits
-    in the queue from before it was turned off), this never actually calls into the AI
-    pipeline while `FEATURE_ASSISTANT`/its keys are not configured.
+    injected into ``SqlAlchemyChatRepository`` — an independent kill switch checked at
+    *enqueue* time. It does not, by itself, stop a job that was already queued before the
+    flag was turned off: that job still gets picked up by an RQ worker regardless of what
+    this class does afterwards. The AI pipeline is protected at *consumption* time too —
+    every entry point in ``app.application.assistant.jobs`` (``handle_message``,
+    ``handle_action``, ``process_fetched_invoice``) re-checks the same three flags via
+    ``current_app.config`` before touching ``AssistantService``, so a stale queued job
+    still no-ops once a worker runs it.
     """
 
     def __init__(self, redis_url: str, assistant_enabled: Optional[Callable[[], bool]] = None) -> None:

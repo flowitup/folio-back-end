@@ -23,6 +23,14 @@ TAVILY_PER_CALL_USD = 0.0
 GEMINI_IMAGE_PER_CALL_USD = 0.04
 SERPAPI_PER_CALL_USD = 0.015
 
+#: Fallback for the browser agent (review finding NEW-H4) when browser-use's own
+#: `AgentHistoryList.usage.total_cost` comes back empty — an unrecognized model name in
+#: litellm's live pricing table (`deepseek-flash` may not be listed) or the pricing-data
+#: fetch itself failing both silently yield `total_cost == 0.0` rather than raising, so a
+#: per-step flat guess is the only fallback available. A rough estimate pending real
+#: traffic, like every other constant in this module — log actual numbers in M6.
+BROWSER_AGENT_STEP_ESTIMATE_USD = 0.02
+
 _PARIS = ZoneInfo("Europe/Paris")
 
 
@@ -47,8 +55,19 @@ def deepseek_cost_usd(usage: Any) -> float:
 
 #: Every kind an adapter can record — kept here (not just in each adapter module) so
 #: `scripts/assistant_costs.py` can print a stable, complete table even for a kind that
-#: spent nothing today.
-COST_KINDS: tuple[str, ...] = ("deepseek_vision", "deepseek_text", "jev", "tavily", "gemini", "serpapi")
+#: spent nothing today. `deepseek_browser` is the `ai-browser` container's own DeepSeek
+#: spend driving `browser-use` (review finding NEW-H4) — a separate kind from
+#: `deepseek_vision`/`deepseek_text` because it runs in a different process with no
+#: access to the OpenAI-style `usage` object those two bill from.
+COST_KINDS: tuple[str, ...] = (
+    "deepseek_vision",
+    "deepseek_text",
+    "jev",
+    "tavily",
+    "gemini",
+    "serpapi",
+    "deepseek_browser",
+)
 
 
 def _today_key() -> str:

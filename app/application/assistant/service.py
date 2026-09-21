@@ -725,20 +725,22 @@ class SubmitAssistantActionUseCase:
                 f"Message {reply_to_id} is not a choice in {actor_id}'s assistant conversation."
             )
         current_payload = dict(message.payload or {})
-        if current_payload.get("answered"):
-            raise AssistantAlreadyAnsweredError(f"Message {reply_to_id} was already answered.")
-
+        # A stale-read "already answered" check would be redundant with (and no safer
+        # than) the atomic transition below, so the only authority for that decision is
+        # answer_choice_if_unanswered's return value.
         stored_payload = _find_matching_option_payload(current_payload.get("options"), action, payload)
         if stored_payload is None:
             raise AssistantMessageNotFoundError(
                 f"'{action}' with this payload was never offered on message {reply_to_id}."
             )
 
-        current_payload["answered"] = action
-        current_payload["answered_payload"] = stored_payload
-        self._messages.update_payload(reply_to_id, current_payload)
-        self._db.commit()
-        # After the commit: a dispatch failure must never be able to roll back the answer.
+        # Atomic transition (NEW-H1): two concurrent submissions of the same choice race
+        # to flip "answered" via a single conditional UPDATE evaluated against the row's
+        # current state, not a value either request read earlier — only one can win, and
+        # it commits inside this call. See answer_choice_if_unanswered's docstring.
+        if not self._messages.answer_choice_if_unanswered(reply_to_id, action, stored_payload):
+            raise AssistantAlreadyAnsweredError(f"Message {reply_to_id} was already answered.")
+        # After that commit: a dispatch failure must never be able to roll back the answer.
         # Dispatch the STORED payload, never the client's — see the class docstring.
         self._dispatcher.action_received(
             user_id=actor_id, message_id=reply_to_id, action=action, payload=stored_payload

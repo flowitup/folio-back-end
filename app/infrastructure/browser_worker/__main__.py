@@ -21,6 +21,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.infrastructure.adapters.s3_attachment_storage import S3AttachmentStorage
+from app.infrastructure.ai.cost import RedisCostLedger
 from app.infrastructure.browser_worker.agent import run_fetch
 from app.infrastructure.browser_worker.worker import QUEUE_NAME, run_forever
 from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
@@ -42,6 +43,13 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _assistant_enabled() -> bool:
+    """The container-side ``FEATURE_ASSISTANT`` kill switch (review finding NEW-H3):
+    read fresh on every call (``run_forever`` calls this every poll), the same "1" string
+    convention as ``config.Config.FEATURE_ASSISTANT``."""
+    return os.environ.get("FEATURE_ASSISTANT", "0") == "1"
+
+
 def main() -> None:
     database_url = _require_env("DATABASE_URL")
     engine = create_engine(database_url, pool_pre_ping=True)
@@ -55,7 +63,13 @@ def main() -> None:
         bucket=_require_env("S3_BUCKET"),
         region=_env("S3_REGION", "us-east-1"),
     )
-    queue = Queue(QUEUE_NAME, connection=Redis.from_url(_require_env("REDIS_URL")))
+    redis_url = _require_env("REDIS_URL")
+    queue = Queue(QUEUE_NAME, connection=Redis.from_url(redis_url))
+    # Review finding NEW-H4: the browser agent's own DeepSeek spend was previously
+    # invisible to ASSISTANT_DAILY_COST_CAP_USD entirely — built from REDIS_URL alone
+    # (no Flask app/DI container in this process, see the package docstring), same
+    # Redis-backed daily counter the web process's adapters bill against.
+    cost_ledger = RedisCostLedger(redis_url, float(_env("ASSISTANT_DAILY_COST_CAP_USD", "5")))
 
     chrome_path = _env("BROWSER_CHROME_PATH", "/usr/bin/google-chrome")
     profile_dir = _env("BROWSER_PROFILE_DIR", "/app/profile")
@@ -97,6 +111,8 @@ def main() -> None:
                 deepseek_api_key=deepseek_api_key,
                 offpeak_only=offpeak_only,
                 stop_event=stop_event,
+                assistant_enabled=_assistant_enabled,
+                cost_ledger=cost_ledger,
             )
         )
     finally:

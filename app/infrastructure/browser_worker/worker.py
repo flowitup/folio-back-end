@@ -12,14 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Protocol
+from datetime import datetime, timedelta, timezone
+from typing import Any, Awaitable, Callable, Optional, Protocol
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from app.application.assistant import reply
 from app.application.assistant.jobs_repo import AssistantJobRecord, AssistantJobRepositoryPort
+from app.application.assistant.ports import CostLedgerPort
 from app.infrastructure.browser_worker.agent import FetchOutcome
 from app.infrastructure.database.models.chat_message import ChatMessageOrm
 
@@ -31,6 +32,11 @@ _PARIS_TZ = ZoneInfo("Europe/Paris")
 _OFFPEAK_START_HOUR = 12
 #: How long the loop sleeps between polls when there was nothing to claim.
 IDLE_SLEEP_SECONDS = 10.0
+#: How often the "idling, FEATURE_ASSISTANT is off" line is logged while disabled — the
+#: loop itself still polls every `IDLE_SLEEP_SECONDS`, this only throttles the log line
+#: (review finding NEW-H3: the kill switch is real, but should not spam the container's
+#: logs every ten seconds for however long the flag stays off).
+DISABLED_LOG_INTERVAL = timedelta(minutes=5)
 #: The RQ queue the browser container enqueues `process_fetched_invoice` onto — same
 #: queue name the web process's `RqAssistantDispatcher` uses, consumed by the shared
 #: `stack.queue.rq_worker` container (already listening on "assistant").
@@ -75,6 +81,26 @@ def _update_status_message(session: Session, job: AssistantJobRecord, *, state: 
     session.commit()
 
 
+def _reap_unprocessed(job_repo: AssistantJobRepositoryPort, queue: QueueLike, now: datetime) -> None:
+    """The other half of the H2 fix (review finding NEW-H2): re-enqueue
+    ``process_fetched_invoice`` for any terminal job whose own enqueue never happened
+    (or never ran) after ``update_result`` committed. Run once per idle poll — the same
+    cadence ``run_once`` already uses to check for new work, no separate scheduler — so a
+    wedged job recovers within one ``IDLE_SLEEP_SECONDS`` of the 30-minute window closing
+    instead of sitting forever with its user-facing job_status message stuck.
+
+    A queue failure here is logged and swallowed exactly like a claimed job's own
+    enqueue failure (``run_forever``'s outer ``except Exception``) — reaping is a
+    best-effort recovery path, never something that should crash the poll loop.
+    """
+    for job_id in job_repo.reap_unprocessed(now):
+        try:
+            queue.enqueue("app.application.assistant.jobs.process_fetched_invoice", str(job_id))
+            logger.info("browser_worker: reaped unprocessed job %s, re-enqueued", job_id)
+        except Exception:
+            logger.exception("browser_worker: failed to re-enqueue reaped job %s", job_id)
+
+
 async def run_once(
     *,
     session: Session,
@@ -88,14 +114,22 @@ async def run_once(
     deepseek_api_key: str,
     offpeak_only: bool,
     now: datetime,
+    cost_ledger: Optional[CostLedgerPort] = None,
 ) -> bool:
     """Claims and processes at most one job. Returns True when a job was claimed
     (whatever its outcome), False when there was nothing to do (or it is not off-peak
-    yet) — the caller uses this to decide whether to sleep."""
+    yet) — the caller uses this to decide whether to sleep.
+
+    ``cost_ledger`` (review finding NEW-H4) is forwarded to ``job_runner`` so the browser
+    agent's own DeepSeek spend gets billed — ``None`` (the default) only in the smoke
+    test's direct ``run_fetch`` calls; the real container always constructs one from
+    ``REDIS_URL`` (see ``__main__.py``).
+    """
     if offpeak_only and not is_offpeak(now):
         return False
     job = job_repo.claim_next(now)
     if job is None:
+        _reap_unprocessed(job_repo, queue, now)
         return False
 
     logger.info(
@@ -114,6 +148,7 @@ async def run_once(
         profile_dir=profile_dir,
         downloads_dir=downloads_dir,
         deepseek_api_key=deepseek_api_key,
+        cost_ledger=cost_ledger,
     )
 
     pdf_key = None
@@ -151,12 +186,33 @@ async def run_forever(
     deepseek_api_key: str,
     offpeak_only: bool,
     stop_event: asyncio.Event,
+    assistant_enabled: Callable[[], bool] = lambda: True,
+    cost_ledger: Optional[CostLedgerPort] = None,
 ) -> None:
     """SIGTERM-safe poll loop: ``stop_event`` is checked between jobs, never mid-job —
     the caller (``__main__.py``) sets it from a signal handler, letting the current job
-    (if any) finish cleanly before the process exits."""
+    (if any) finish cleanly before the process exits.
+
+    ``assistant_enabled`` is the container-side half of the ``FEATURE_ASSISTANT`` kill
+    switch (review finding NEW-H3): re-read on every iteration (unlike the web process,
+    this container never restarts on a config change) so flipping the flag off stops the
+    poller claiming any *new* job — ``job_repo.claim_next`` is never even called while
+    disabled. It does not interrupt a job already in flight; ``run_once`` only ever
+    claims one job before returning.
+    """
+    last_disabled_log: Optional[datetime] = None
     while not stop_event.is_set():
         now = datetime.now(timezone.utc)
+        if not assistant_enabled():
+            if last_disabled_log is None or now - last_disabled_log >= DISABLED_LOG_INTERVAL:
+                logger.info("browser_worker: FEATURE_ASSISTANT is off, idling (claiming no jobs)")
+                last_disabled_log = now
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=IDLE_SLEEP_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            continue
+        last_disabled_log = None
         try:
             processed = await run_once(
                 session=session,
@@ -170,6 +226,7 @@ async def run_forever(
                 deepseek_api_key=deepseek_api_key,
                 offpeak_only=offpeak_only,
                 now=now,
+                cost_ledger=cost_ledger,
             )
         except Exception:
             # A DB blip, an S3 error, an `rq` enqueue failure, or anything else raised
@@ -187,4 +244,4 @@ async def run_forever(
                 pass
 
 
-__all__ = ["run_once", "run_forever", "is_offpeak", "QUEUE_NAME", "IDLE_SLEEP_SECONDS"]
+__all__ = ["run_once", "run_forever", "is_offpeak", "QUEUE_NAME", "IDLE_SLEEP_SECONDS", "DISABLED_LOG_INTERVAL"]

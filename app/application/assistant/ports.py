@@ -45,6 +45,13 @@ class MessagePosterPort(Protocol):
 
     def update_payload(self, message_id: UUID, payload: dict[str, Any]) -> None: ...
 
+    def answer_choice_if_unanswered(self, message_id: UUID, answered: str, answered_payload: dict[str, Any]) -> bool:
+        """Atomically set ``payload["answered"]``/``["answered_payload"]`` — a single
+        conditional UPDATE that only writes when the message is not already answered.
+        Returns False (no write happened) when it is, so two concurrent submissions of
+        the same choice can never both dispatch."""
+        ...
+
     def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
         """Last ``limit`` text messages of a channel, oldest first (S0 chat history)."""
         ...
@@ -162,9 +169,11 @@ class CostLedgerPort(Protocol):
         """Record a provider call's cost against today's total.
 
         ``kind`` is one of ``deepseek_vision``/``deepseek_text``/``jev``/``tavily``/
-        ``gemini``/``serpapi`` — every adapter that spends money calls this so
-        ``today_total()`` (and ``by_kind()``) reflect the pipeline's real spend, not just
-        DeepSeek's.
+        ``gemini``/``serpapi``/``deepseek_browser`` — every adapter that spends money
+        calls this so ``today_total()`` (and ``by_kind()``) reflect the pipeline's real
+        spend, not just DeepSeek's. ``deepseek_browser`` is billed from a different
+        process (the ``ai-browser`` container, see ``app.infrastructure.browser_worker``)
+        against the same Redis-backed ledger, constructed there from ``REDIS_URL`` alone.
         """
         ...
 

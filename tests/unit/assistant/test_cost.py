@@ -71,6 +71,7 @@ def test_in_memory_cost_ledger_by_kind_breaks_down_every_provider() -> None:
     ledger.add("tavily", 0.0)
     ledger.add("gemini", 0.04)
     ledger.add("serpapi", 0.015)
+    ledger.add("deepseek_browser", 0.02)
 
     by_kind = ledger.by_kind()
 
@@ -81,6 +82,7 @@ def test_in_memory_cost_ledger_by_kind_breaks_down_every_provider() -> None:
         "tavily": 0.0,
         "gemini": 0.04,
         "serpapi": 0.015,
+        "deepseek_browser": 0.02,
     }
     assert ledger.today_total() == sum(by_kind.values())
 

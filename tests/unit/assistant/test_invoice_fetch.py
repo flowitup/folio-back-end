@@ -598,6 +598,42 @@ class TestHandleAction:
         assert cards[0].payload["card"]["id"] == response.id
         assert cards[0].payload["card"]["project_id"] == str(world.project_a.id)
 
+    def test_fetch_pick_existing_refuses_to_disclose_an_invoice_on_a_foreign_project(self, session) -> None:
+        """C1's defense-in-depth layer (pass-2 review, previously untested): the primary
+        defense is `SubmitAssistantActionUseCase`'s stored-option equality check, but
+        this handler independently re-checks that the invoice is on a project the caller
+        can actually see before ever posting its card — closing the disclosure even if a
+        forged `invoice_id` ever reached this far."""
+        world = World(session)
+        from app.application.invoice.create_invoice import CreateInvoiceRequest
+        from app.domain.entities.invoice import InvoiceType
+
+        foreign_project_id = uuid4()  # never registered in world.project_repo
+        foreign = world.create_invoice_usecase.execute(
+            CreateInvoiceRequest(
+                project_id=foreign_project_id,
+                created_by=uuid4(),
+                type=InvoiceType.MATERIALS_SERVICES,
+                issue_date=date(2026, 9, 9),
+                recipient_name="Foreign Corp",
+                recipient_address="Elsewhere",
+                items=[{"description": "x", "quantity": 1, "unit_price": 10.0, "vat_rate": 20.0}],
+            )
+        )
+
+        handled = world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=uuid4(),
+            action="fetch_pick_existing",
+            payload={"invoice_id": foreign.id},
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t",
+        )
+
+        assert handled is True
+        assert [m for m in world.messages.messages.values() if m.content_type == "card"] == []
+
     def test_fetch_none_asks_for_the_ticket_photo(self, session) -> None:
         world = World(session)
         choice_message_id = uuid4()

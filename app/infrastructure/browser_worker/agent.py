@@ -15,10 +15,12 @@ import glob
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from app.application.assistant.jobs_repo import AssistantJobRecord
 from app.application.assistant.models import FetchResult
+from app.application.assistant.ports import CostLedgerPort
+from app.infrastructure.ai.cost import BROWSER_AGENT_STEP_ESTIMATE_USD
 from app.infrastructure.browser_worker.merchants import build_allowed_domains, build_task
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,9 @@ MAX_STEPS = 40
 #: role table: "Hands: browser-use + real Google Chrome" driven by the same DeepSeek).
 _LLM_MODEL = "deepseek-flash"
 _LLM_BASE_URL = "https://api.deepseek.com"
+#: The kind this container's own DeepSeek spend is billed under (review finding NEW-H4)
+#: — see `app.infrastructure.ai.cost.COST_KINDS`.
+COST_KIND = "deepseek_browser"
 
 
 @dataclass(frozen=True)
@@ -57,11 +62,21 @@ async def run_fetch(
     profile_dir: str,
     downloads_dir: str,
     deepseek_api_key: str,
+    cost_ledger: Optional[CostLedgerPort] = None,
 ) -> FetchOutcome:
     """Runs one browser-use agent session for ``job``. Never raises: every failure mode
     (missing dependency, agent exception, unparseable structured output) is caught and
     reported as a ``FetchResult(status="failed", ...)`` outcome — the caller (the poll
-    loop) always has something to write back to ``assistant_jobs``."""
+    loop) always has something to write back to ``assistant_jobs``.
+
+    ``cost_ledger`` (review finding NEW-H4): before this fix, the single most
+    token-hungry call in the whole pipeline (a vision-enabled ``browser-use`` agent loop,
+    up to ``MAX_STEPS`` turns) ran in a container with no ``CostLedgerPort`` at all, so
+    ``ASSISTANT_DAILY_COST_CAP_USD`` under-counted the true daily spend by construction.
+    ``None`` (the default, kept for the standalone smoke test in
+    ``test_agent_integration.py``) skips billing entirely rather than failing the job —
+    a missing ledger must never block a fetch that otherwise succeeded.
+    """
     before = set(glob.glob(os.path.join(downloads_dir, "*.pdf")))
     try:
         from browser_use import Agent, Browser, ChatOpenAI
@@ -96,9 +111,39 @@ async def run_fetch(
         logger.exception("browser_worker: agent run failed for job %s", job.id)
         return FetchOutcome(result=FetchResult(status="failed", message=str(exc)), pdf_path=None)
 
+    if cost_ledger is not None:
+        try:
+            cost_ledger.add(COST_KIND, _browser_agent_cost_usd(history))
+        except Exception:
+            # A ledger write failing (Redis blip) must never turn an otherwise-successful
+            # fetch into a failed job — under-billing one run is far cheaper than losing
+            # the invoice the user is waiting for.
+            logger.exception("browser_worker: failed to bill the cost ledger for job %s", job.id)
+
     pdf_path = _newest_pdf(downloads_dir, before)
     result = _extract_result(history, has_pdf=pdf_path is not None)
     return FetchOutcome(result=result, pdf_path=pdf_path)
+
+
+def _browser_agent_cost_usd(history: Any) -> float:
+    """USD spent by one ``agent.run()`` call (review finding NEW-H4).
+
+    Prefers browser-use's own accounting (``history.usage.total_cost`` — real token
+    counts priced against litellm's live pricing table, populated by
+    ``token_cost_service.get_usage_summary()`` once ``run()`` returns). Falls back to a
+    flat per-step estimate when that comes back empty: an unrecognized model name in
+    litellm's pricing table (``deepseek-flash`` may not be listed there) or the
+    pricing-data fetch itself failing both silently yield ``total_cost == 0.0`` rather
+    than raising, so a zero real cost and a zero unknown-pricing cost are
+    indistinguishable from here — treating a reported zero as "unavailable" is the safer
+    of the two ways to be wrong (it never under-bills a real run to $0).
+    """
+    usage = getattr(history, "usage", None)
+    total_cost = getattr(usage, "total_cost", None) if usage is not None else None
+    if total_cost:
+        return float(total_cost)
+    steps = len(history) if hasattr(history, "__len__") else 0
+    return steps * BROWSER_AGENT_STEP_ESTIMATE_USD
 
 
 def _extract_result(history: object, *, has_pdf: bool) -> FetchResult:
