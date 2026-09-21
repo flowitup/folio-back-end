@@ -31,7 +31,7 @@ class FakeMessageRepo:
     def update_payload(self, message_id: UUID, payload: dict) -> None:  # pragma: no cover - unused here
         raise NotImplementedError
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:  # pragma: no cover
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:  # pragma: no cover
         return []
 
 

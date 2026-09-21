@@ -441,6 +441,7 @@ class Container:
     assistant_rate_limiter: Optional[Any] = None  # RateLimiterPort (RedisRateLimiter)
     assistant_router: Optional[Any] = None  # Router (S0)
     assistant_equipment_service: Optional[Any] = None  # EquipmentService
+    assistant_project_company_reader: Optional[Any] = None  # ProjectCompanyReaderPort (ProjectCompanyReader)
 
     # Feature C / feature A (phase 03) — ticket-to-invoice and material-to-library.
     assistant_import_repo: Optional[Any] = None  # SqlAlchemyAssistantImportRepository

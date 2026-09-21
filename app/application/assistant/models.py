@@ -7,9 +7,13 @@ Kept dependency-free of any provider SDK — only pydantic.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.domain.entities.chat_message import ChannelRef
 
 # ---------------------------------------------------------------------------
 # S1 extraction (Feature B/C: invoices and receipts)
@@ -169,3 +173,36 @@ class RouterDecision(BaseModel):
     project_hint: Optional[str] = None
     project_hint_confidence: float = 0.0
     is_write: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Channel scope (phase 02: dispatch now happens in company/project/admin channels,
+# never just a private per-user conversation)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChannelScope:
+    """Who is asking, and from where — threaded from ``AssistantService`` down to
+    ``FeatureHandlersPort`` so a feature can eventually (phase 03/04) redact confidential
+    classes and tool access by audience. Handlers may ignore it until then.
+
+    ``company_id`` is the channel's own id for ``"company"``/``"admin"`` kinds, and the
+    owning company of the project for a ``"project"`` channel (resolved via
+    ``ProjectCompanyReaderPort`` — ``None`` when the project has no company yet).
+    """
+
+    kind: str
+    company_id: Optional[UUID]
+    project_id: Optional[UUID]
+    is_admin_channel: bool
+    asker_id: UUID
+
+    @property
+    def channel(self) -> ChannelRef:
+        """The ``ChannelRef`` this scope was resolved from — where replies belong."""
+        if self.kind == "project":
+            assert self.project_id is not None, "a project scope always carries its project_id"
+            return ChannelRef(kind="project", id=self.project_id)
+        assert self.company_id is not None, "a company/admin scope always carries its company_id"
+        return ChannelRef(kind=self.kind, id=self.company_id)

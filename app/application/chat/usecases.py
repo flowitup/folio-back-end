@@ -24,6 +24,7 @@ from app.application.chat.exceptions import (
     ChatMessageNotFoundError,
     EmptyMessageError,
     NotChannelMemberError,
+    ReplyTargetNotInChannelError,
     UnsupportedAttachmentTypeError,
 )
 from app.application.chat.ports import (
@@ -33,7 +34,7 @@ from app.application.chat.ports import (
     ChatReadRepositoryPort,
     TransactionalSessionPort,
 )
-from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
+from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage, mentions_assistant_token
 
 ALLOWED_IMAGE_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
 # Voice notes: an AAC/m4a recording reaches us under whichever spelling the recording device
@@ -119,7 +120,7 @@ class ListMessagesUseCase:
         messages = self._messages.list_for_channel(channel, before, page_size)
         names = self._directory.display_names([m.sender_id for m in messages if m.sender_id is not None])
         items = [
-            MessageDto.from_entity(m, names.get(m.sender_id, "?") if m.sender_id is not None else "Assistant")
+            MessageDto.from_entity(m, names.get(m.sender_id, "?") if m.sender_id is not None else "Folio")
             for m in messages
         ]
         reads = self._reads.last_reads_for_channel(channel)
@@ -161,20 +162,35 @@ class SendMessageUseCase:
         body: str | None,
         attachment: tuple[str, str, bytes] | None = None,
         lang: str | None = None,
+        reply_to_id: UUID | None = None,
     ) -> MessageDto:
         """``attachment`` is ``(filename, content_type, data)``.
 
-        ``lang`` (vi|fr|en) is only kept when the target channel is the caller's
-        assistant conversation, where it is stored on the message payload as
-        ``{"lang": lang}`` so the assistant replies in the right language; it is
-        silently dropped for every other channel kind.
+        ``lang`` (vi|fr|en), when given, is stored on the message payload as
+        ``{"lang": lang}`` so a dispatched assistant reply answers in the right language,
+        whatever the channel kind.
+
+        ``reply_to_id``, when given, must name a message of this same channel (else
+        ``ReplyTargetNotInChannelError``); it is what lets a reply to an assistant
+        message dispatch even without an ``@folio`` mention (D18) — see
+        ``mentions_assistant`` below.
+
+        The message dispatches to the assistant pipeline only when its body/caption
+        mentions ``@folio`` or it replies to an assistant-authored message — never for
+        any other message, in any channel kind.
 
         Raises:
             ChatChannelNotFoundError, NotChannelMemberError, EmptyMessageError,
-            UnsupportedAttachmentTypeError, AttachmentTooLargeError.
+            UnsupportedAttachmentTypeError, AttachmentTooLargeError, ReplyTargetNotInChannelError.
         """
         channel = _parse_channel(channel_key)
         _require_member(self._directory, actor_id, channel)
+
+        reply_target: ChatMessage | None = None
+        if reply_to_id is not None:
+            reply_target = self._messages.find_by_id(reply_to_id)
+            if reply_target is None or reply_target.channel != channel:
+                raise ReplyTargetNotInChannelError("reply_to_id not in this channel")
 
         stored: ChatAttachment | None = None
         if attachment is not None:
@@ -190,10 +206,20 @@ class SendMessageUseCase:
                 size_bytes=len(data),
             )
 
-        payload = {"lang": lang} if lang and channel.kind == "assistant" else None
+        mentions = bool(body and mentions_assistant_token(body))
+        if not mentions and reply_target is not None and reply_target.sender_type == "assistant":
+            mentions = True
+
+        payload = {"lang": lang} if lang else None
         try:
             message = ChatMessage.create(
-                channel=channel, sender_id=actor_id, body=body, attachment=stored, payload=payload
+                channel=channel,
+                sender_id=actor_id,
+                body=body,
+                attachment=stored,
+                payload=payload,
+                reply_to_id=reply_to_id,
+                mentions_assistant=mentions,
             )
         except ValueError as exc:
             raise EmptyMessageError(str(exc)) from exc
@@ -217,6 +243,7 @@ class SendMessageUseCase:
                 content_type=message.content_type,
                 payload=message.payload,
                 reply_to_id=message.reply_to_id,
+                mentions_assistant=message.mentions_assistant,
                 ai_trace_id=message.ai_trace_id,
             )
 
@@ -233,7 +260,7 @@ class SendMessageUseCase:
                 preview=message.body,
                 sent_at=message.created_at,
             )
-        if self.assistant_dispatcher is not None and channel.kind == "assistant" and message.sender_type == "user":
+        if self.assistant_dispatcher is not None and message.mentions_assistant and message.sender_type == "user":
             self.assistant_dispatcher.message_received(user_id=actor_id, message_id=message.id)
         names = self._directory.display_names([actor_id])
         return MessageDto.from_entity(message, names.get(actor_id, "?"))

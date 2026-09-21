@@ -151,14 +151,48 @@ def test_post_card_thumbnail_url_and_project_id_and_extra_round_trip() -> None:
 
 def test_post_choice_fallback_numbers_the_options() -> None:
     messenger, _, _ = _messenger()
+    user_id = uuid4()
     options = [
         {"label": "Confirmer", "action": "confirm", "payload": {}},
         {"label": "Annuler", "action": "cancel", "payload": {}},
     ]
-    message = messenger.post_choice(uuid4(), "Confirmer le matériau ?", options)
+    message = messenger.post_choice(user_id, "Confirmer le matériau ?", options)
     assert message.content_type == "choice"
-    assert message.payload == {"prompt": "Confirmer le matériau ?", "options": options, "answered": None}
+    assert message.payload == {
+        "prompt": "Confirmer le matériau ?",
+        "options": options,
+        "answered": None,
+        "addressed_to": str(user_id),
+    }
     assert message.body == "Confirmer le matériau ?\n1. Confirmer\n2. Annuler"
+
+
+def test_post_choice_addressed_to_defaults_to_user_id() -> None:
+    messenger, _, _ = _messenger()
+    user_id = uuid4()
+    message = messenger.post_choice(user_id, "OK ?", [{"label": "Oui", "action": "yes", "payload": {}}])
+    assert message.payload["addressed_to"] == str(user_id)
+
+
+def test_post_choice_addressed_to_can_be_overridden() -> None:
+    """The asker (`user_id`, first arg) may differ from who the choice is addressed to
+    — e.g. a company-channel choice the assistant asked on behalf of someone else."""
+    messenger, _, _ = _messenger()
+    user_id = uuid4()
+    asker_id = uuid4()
+    message = messenger.post_choice(
+        user_id, "OK ?", [{"label": "Oui", "action": "yes", "payload": {}}], addressed_to=asker_id
+    )
+    assert message.payload["addressed_to"] == str(asker_id)
+
+
+def test_post_text_targets_the_given_channel_instead_of_the_assistant_fallback() -> None:
+    from app.domain.entities.chat_message import ChannelRef
+
+    messenger, _, _ = _messenger()
+    channel = ChannelRef(kind="company", id=uuid4())
+    message = messenger.post_text(uuid4(), "Bonjour l'équipe", channel=channel)
+    assert message.channel == channel
 
 
 def test_post_job_status_fallback_is_the_status_text() -> None:

@@ -23,7 +23,11 @@ from app.api.openapi import openapi_doc
 from app.api.v1.assistant import assistant_bp
 from app.api.v1.assistant.schemas import ActionAcceptedResponse, SubmitActionBody
 from app.api.v1.chat.routes import assistant_enabled
-from app.application.assistant.exceptions import AssistantAlreadyAnsweredError, AssistantMessageNotFoundError
+from app.application.assistant.exceptions import (
+    AssistantAlreadyAnsweredError,
+    AssistantMessageNotFoundError,
+    AssistantNotAddressedError,
+)
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -62,6 +66,8 @@ def submit_action() -> Any:
         )
     except AssistantMessageNotFoundError:
         return _err(404, "NotFound", "Message not found in your assistant conversation")
+    except AssistantNotAddressedError:
+        return _err(403, "NotAddressed", "This choice was not addressed to you")
     except AssistantAlreadyAnsweredError:
         return _err(409, "AlreadyAnswered", "This choice has already been answered")
     except Exception:

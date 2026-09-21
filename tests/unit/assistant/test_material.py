@@ -119,7 +119,7 @@ class FakeMessageRepo:
             ai_trace_id=message.ai_trace_id,
         )
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
         return []
 
 

@@ -1,11 +1,19 @@
-"""AssistantMessenger — posts assistant-authored replies into a user's assistant channel.
+"""AssistantMessenger — posts assistant-authored replies into a chat channel.
 
 Every post builds a ``ChatMessage.assistant(...)`` with a plain-text ``body`` fallback (so
 the web widget and an older app build that does not understand a ``content_type`` still
 show something useful), persists it through the chat message repository, commits, and
-then — best-effort — pushes the owner through the chat push notifier's assistant-safe
+then — best-effort — pushes the channel through the chat push notifier's assistant-safe
 path (``ChatPushNotifier.message_sent_by_assistant``, which does not exclude the message's
 own "sender" the way a human-to-human push would).
+
+Every ``post_*`` method takes an explicit ``channel`` — the message's own channel
+(company/project/admin) when called from ``AssistantService``, which always knows it.
+When omitted it falls back to the retired ``assistant:<user_id>`` channel: every existing
+call site inside ``app.application.assistant.features`` (ticket/material/invoice-fetch —
+phase 03/04's job to make channel-aware) still compiles and runs unchanged, but a reply
+posted that way lands in a channel nobody can read any more until that phase threads
+``ChannelScope`` all the way through those features' own reply sites.
 """
 
 from __future__ import annotations
@@ -71,10 +79,11 @@ class AssistantMessenger:
         body: str,
         reply_to_id: UUID | None,
         trace_id: str | None,
+        channel: ChannelRef | None,
     ) -> ChatMessage:
-        channel = ChannelRef(kind="assistant", id=user_id)
+        target = channel if channel is not None else ChannelRef(kind="assistant", id=user_id)
         message = ChatMessage.assistant(
-            channel=channel,
+            channel=target,
             content_type=content_type,
             payload=payload,
             body=body,
@@ -85,14 +94,26 @@ class AssistantMessenger:
         self._db.commit()
         # After the commit: a push must never be able to roll back the message.
         if self.notifier is not None:
-            self.notifier.message_sent_by_assistant(channel=channel, preview=message.body, sent_at=message.created_at)
+            self.notifier.message_sent_by_assistant(channel=target, preview=message.body, sent_at=message.created_at)
         return message
 
     def post_text(
-        self, user_id: UUID, body: str, *, reply_to_id: UUID | None = None, trace_id: str | None = None
+        self,
+        user_id: UUID,
+        body: str,
+        *,
+        reply_to_id: UUID | None = None,
+        trace_id: str | None = None,
+        channel: ChannelRef | None = None,
     ) -> ChatMessage:
         return self._post(
-            user_id=user_id, content_type="text", payload=None, body=body, reply_to_id=reply_to_id, trace_id=trace_id
+            user_id=user_id,
+            content_type="text",
+            payload=None,
+            body=body,
+            reply_to_id=reply_to_id,
+            trace_id=trace_id,
+            channel=channel,
         )
 
     def post_card(
@@ -109,6 +130,7 @@ class AssistantMessenger:
         extra: dict[str, Any] | None = None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
+        channel: ChannelRef | None = None,
     ) -> ChatMessage:
         """Builds the ``card`` content-type's wire contract itself — callers pass typed
         fields, never a raw dict, so every card the assistant posts is shaped identically
@@ -138,6 +160,7 @@ class AssistantMessenger:
             body=_card_fallback(card),
             reply_to_id=reply_to_id,
             trace_id=trace_id,
+            channel=channel,
         )
 
     def post_choice(
@@ -148,8 +171,18 @@ class AssistantMessenger:
         *,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
+        channel: ChannelRef | None = None,
+        addressed_to: UUID | None = None,
     ) -> ChatMessage:
-        payload = {"prompt": prompt, "options": options, "answered": None}
+        """``addressed_to`` (the asker) defaults to ``user_id`` — every current caller
+        already passes the asker's id there, so this is free for them. Only the person
+        it names may answer the choice (``SubmitAssistantActionUseCase``)."""
+        payload = {
+            "prompt": prompt,
+            "options": options,
+            "answered": None,
+            "addressed_to": str(addressed_to if addressed_to is not None else user_id),
+        }
         return self._post(
             user_id=user_id,
             content_type="choice",
@@ -157,6 +190,7 @@ class AssistantMessenger:
             body=_choice_fallback(prompt, options),
             reply_to_id=reply_to_id,
             trace_id=trace_id,
+            channel=channel,
         )
 
     def post_job_status(
@@ -169,6 +203,7 @@ class AssistantMessenger:
         progress: float | None = None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
+        channel: ChannelRef | None = None,
     ) -> ChatMessage:
         payload = {"job_id": job_id, "state": state, "text": text, "progress": progress}
         return self._post(
@@ -178,6 +213,7 @@ class AssistantMessenger:
             body=text,
             reply_to_id=reply_to_id,
             trace_id=trace_id,
+            channel=channel,
         )
 
     def update_job_status(

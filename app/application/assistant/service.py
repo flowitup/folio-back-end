@@ -21,24 +21,27 @@ from app.application.assistant.exceptions import (
     AssistantAlreadyAnsweredError,
     AssistantError,
     AssistantMessageNotFoundError,
+    AssistantNotAddressedError,
     ProviderNotConfiguredError,
 )
 from app.application.assistant.gate import intent_status, is_write_allowed
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import INTENTS, RouterDecision
+from app.application.assistant.models import INTENTS, ChannelScope, RouterDecision
 from app.application.assistant.ports import (
     AssistantDispatcherPort,
     CostLedgerPort,
     MessagePosterPort,
+    ProjectCompanyReaderPort,
     RateLimiterPort,
     VisionLlmPort,
 )
 from app.application.assistant.router import Router
 from app.application.assistant import reply
+from app.application.chat.ports import ChatDirectoryPort
 from app.application.companies.ports import UserCompanyAccessRepositoryPort
 from app.application.invitations.ports import TransactionalSessionPort
 from app.application.projects.ports import IProjectRepository
-from app.domain.entities.chat_message import ChannelRef, ChatMessage
+from app.domain.entities.chat_message import ChannelRef, ChatMessage, strip_assistant_mention
 
 logger = logging.getLogger(__name__)
 
@@ -64,19 +67,29 @@ class FeatureHandlersPort(Protocol):
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
         """The user sent (or picked "material" for) a photo — feature A.
 
         ``project_hint`` (the router's S0 ``project_hint``, when the caption named a
         project) lets the caller resolve the company via ``project.company_id`` instead
-        of always asking ``pick_company``. Returns the outcome for the structured log
-        line (``replied``/``asked``/``created``/``refused``/``error``).
+        of always asking ``pick_company``. ``scope`` is the channel this dispatch came
+        from — phase 03/04 use it for redaction/tool access; ignored for now. Returns the
+        outcome for the structured log line (``replied``/``asked``/``created``/
+        ``refused``/``error``).
         """
         ...
 
     def import_ticket(
-        self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        scope: ChannelScope,
     ) -> str:
         """The user sent (or picked "receipt" for) a photo — feature C. Returns the
         outcome for the structured log line."""
@@ -91,6 +104,7 @@ class FeatureHandlersPort(Protocol):
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
+        scope: ChannelScope,
     ) -> str:
         """The user asked to go fetch an invoice from a merchant site — feature B.
         Returns the outcome for the structured log line."""
@@ -106,6 +120,7 @@ class FeatureHandlersPort(Protocol):
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         """A choice tap not already handled by ``AssistantService`` itself (equipment,
         ``clarify_intent``): feature C/A own e.g. ``set_project``, ``confirm_duplicate``,
@@ -127,15 +142,35 @@ class DefaultFeatureHandlers:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
-        messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+        )
         return "replied"
 
     def import_ticket(
-        self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        scope: ChannelScope,
     ) -> str:
-        messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+        )
         return "replied"
 
     def fetch_invoice(
@@ -147,8 +182,15 @@ class DefaultFeatureHandlers:
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
+        scope: ChannelScope,
     ) -> str:
-        messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+        )
         return "replied"
 
     def handle_action(
@@ -161,6 +203,7 @@ class DefaultFeatureHandlers:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         return False
 
@@ -203,6 +246,7 @@ class AssistantService:
         vision: VisionLlmPort,
         cost_ledger: CostLedgerPort,
         rate_limiter: RateLimiterPort,
+        project_company_reader: ProjectCompanyReaderPort,
         feature_handlers: Optional[FeatureHandlersPort] = None,
     ) -> None:
         self._messages = message_repo
@@ -214,6 +258,7 @@ class AssistantService:
         self._vision = vision
         self._cost_ledger = cost_ledger
         self._rate_limiter = rate_limiter
+        self._project_company_reader = project_company_reader
         self._features = feature_handlers or DefaultFeatureHandlers()
 
     # ------------------------------------------------------------------
@@ -229,27 +274,44 @@ class AssistantService:
         lang_hint = (original.payload or {}).get("lang") if original.payload else None
         return reply.detect_lang(original.body or "", lang_hint)
 
+    def _resolve_scope(self, channel: ChannelRef, asker_id: UUID) -> ChannelScope:
+        """Builds the ``ChannelScope`` a dispatch came from — a company/admin channel's
+        id IS the company id; a project channel's company is looked up (a project with no
+        company yet resolves to ``None``, same as everywhere else in the codebase)."""
+        if channel.kind == "project":
+            company_id = self._project_company_reader.project_company_id(channel.id)
+            return ChannelScope(
+                kind="project", company_id=company_id, project_id=channel.id, is_admin_channel=False, asker_id=asker_id
+            )
+        if channel.kind == "admin":
+            return ChannelScope(
+                kind="admin", company_id=channel.id, project_id=None, is_admin_channel=True, asker_id=asker_id
+            )
+        return ChannelScope(
+            kind="company", company_id=channel.id, project_id=None, is_admin_channel=False, asker_id=asker_id
+        )
+
     # ------------------------------------------------------------------
     # S0 -> dispatch
     # ------------------------------------------------------------------
 
     def handle_message(self, *, user_id: UUID, message_id: UUID) -> None:
         message = self._messages.find_by_id(message_id)
-        if message is None or message.channel != ChannelRef(kind="assistant", id=user_id):
+        if message is None or message.sender_id != user_id:
             # Defense in depth: the RQ dispatcher only ever enqueues a message it just
-            # saw a user post in their own assistant channel, but this is the same
-            # "verify inside the use-case, don't trust the caller" discipline every
-            # other handler in this file follows — never act on a message from a
-            # channel `user_id` does not own.
-            logger.warning(
-                "assistant handle_message: message %s not found in %s's assistant channel", message_id, user_id
-            )
+            # saw `user_id` themselves send (see `SendMessageUseCase`), but this is the
+            # same "verify inside the use-case, don't trust the caller" discipline every
+            # other handler in this file follows — never act on a message someone else
+            # sent, in any channel.
+            logger.warning("assistant handle_message: message %s was not sent by %s", message_id, user_id)
             return
 
+        channel = message.channel
+        scope = self._resolve_scope(channel, user_id)
         trace_id = uuid4().hex[:16]
         start = time.monotonic()
         lang = self._lang_for_original(message)
-        message_text = (message.body or "").strip()
+        message_text = strip_assistant_mention((message.body or "").strip())
         intent = "n/a"
         intent_confidence = 0.0
         provider_calls = 0
@@ -260,30 +322,46 @@ class AssistantService:
             if self._cost_ledger.over_cap():
                 outcome = "refused"
                 self._messenger.post_text(
-                    user_id, reply.render("quota_exceeded", lang), reply_to_id=message.id, trace_id=trace_id
+                    user_id,
+                    reply.render("quota_exceeded", lang),
+                    reply_to_id=message.id,
+                    trace_id=trace_id,
+                    channel=channel,
                 )
                 return
 
             if not self._rate_limiter.allow(user_id):
                 outcome = "refused"
                 self._messenger.post_text(
-                    user_id, reply.render("rate_limited", lang), reply_to_id=message.id, trace_id=trace_id
+                    user_id,
+                    reply.render("rate_limited", lang),
+                    reply_to_id=message.id,
+                    trace_id=trace_id,
+                    channel=channel,
                 )
                 return
 
             has_photo = message.content_type == "photo"
             if has_photo and not message_text:
                 outcome = "asked"
-                self._post_photo_ask_kind(user_id, message.id, lang, trace_id)
+                self._post_photo_ask_kind(user_id, message.id, lang, trace_id, channel)
+                return
+            if not has_photo and not message_text:
+                # A message that is only "@folio" (or a bare reply to the assistant with
+                # nothing else typed) strips down to nothing to route on — answer the
+                # free greeting template instead of asking the router to make sense of
+                # an empty string.
+                outcome = "replied"
+                self._messenger.post_text(
+                    user_id, reply.render("greeting", lang), reply_to_id=message.id, trace_id=trace_id, channel=channel
+                )
                 return
 
             company_ids = self._company_ids(user_id)
             projects = self._projects.list_for_user_and_companies(user_id, company_ids)
             project_names = [p.name for p in projects]
             history = [
-                m.body
-                for m in self._messages.list_recent_text(ChannelRef(kind="assistant", id=user_id), limit=10)
-                if m.id != message.id and m.body
+                m.body for m in self._messages.list_recent_addressed(channel, limit=10) if m.id != message.id and m.body
             ]
 
             decision = self._router.route(message_text, has_photo, project_names, history)
@@ -293,7 +371,7 @@ class AssistantService:
 
             if intent_status(intent_confidence) != "confirmed":
                 outcome = "asked"
-                self._post_clarify_intent(user_id, message.id, decision, lang, trace_id)
+                self._post_clarify_intent(user_id, message.id, decision, lang, trace_id, channel)
                 return
 
             extra_calls, outcome = self._dispatch(
@@ -304,17 +382,25 @@ class AssistantService:
                 lang=lang,
                 trace_id=trace_id,
                 company_ids=company_ids,
+                channel=channel,
+                scope=scope,
             )
             provider_calls += extra_calls
         except ProviderNotConfiguredError:
             outcome = "refused"
             self._messenger.post_text(
-                user_id, reply.render("not_configured", lang), reply_to_id=message.id, trace_id=trace_id
+                user_id,
+                reply.render("not_configured", lang),
+                reply_to_id=message.id,
+                trace_id=trace_id,
+                channel=channel,
             )
         except Exception:
             outcome = "error"
             logger.exception("assistant.request trace=%s user=%s failed", trace_id, user_id)
-            self._messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message.id, trace_id=trace_id)
+            self._messenger.post_text(
+                user_id, reply.render("error", lang), reply_to_id=message.id, trace_id=trace_id, channel=channel
+            )
         finally:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             cost_usd = max(self._cost_ledger.today_total() - cost_before, 0.0)
@@ -342,6 +428,8 @@ class AssistantService:
         lang: str,
         trace_id: str,
         company_ids: list[UUID],
+        channel: ChannelRef,
+        scope: ChannelScope,
     ) -> tuple[int, str]:
         """Returns (extra provider calls made, outcome) — both feed the request log line."""
         intent = decision.intent
@@ -351,7 +439,7 @@ class AssistantService:
                 text = reply.render("equipment_not_found", lang)
             else:
                 text = reply.render_equipment_found(result.hits, lang, more=max(result.total - len(result.hits), 0))
-            self._messenger.post_text(user_id, text, reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_text(user_id, text, reply_to_id=message_id, trace_id=trace_id, channel=channel)
             return 0, "replied"
         if intent == "move_equipment":
             outcome = self._dispatch_move_search(
@@ -363,16 +451,17 @@ class AssistantService:
                 lang=lang,
                 trace_id=trace_id,
                 company_ids=company_ids,
+                channel=channel,
             )
             return 0, outcome
         if intent in ("question", "chit_chat"):
             if reply.is_trivial_greeting(message_text):
                 self._messenger.post_text(
-                    user_id, reply.render("greeting", lang), reply_to_id=message_id, trace_id=trace_id
+                    user_id, reply.render("greeting", lang), reply_to_id=message_id, trace_id=trace_id, channel=channel
                 )
                 return 0, "replied"
             answer = reply.chit_chat_reply(self._vision, lang, message_text)
-            self._messenger.post_text(user_id, answer, reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_text(user_id, answer, reply_to_id=message_id, trace_id=trace_id, channel=channel)
             return 1, "replied"
         if intent == "identify_material":
             outcome = self._features.identify_material(
@@ -381,12 +470,18 @@ class AssistantService:
                 lang=lang,
                 messenger=self._messenger,
                 trace_id=trace_id,
+                scope=scope,
                 project_hint=decision.project_hint,
             )
             return 0, outcome
         if intent == "import_ticket":
             outcome = self._features.import_ticket(
-                user_id=user_id, message_id=message_id, lang=lang, messenger=self._messenger, trace_id=trace_id
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+                scope=scope,
             )
             return 0, outcome
         if intent == "fetch_invoice":
@@ -397,10 +492,11 @@ class AssistantService:
                 messenger=self._messenger,
                 trace_id=trace_id,
                 decision=decision,
+                scope=scope,
             )
             return 0, outcome
         self._messenger.post_text(
-            user_id, reply.render("unknown_intent", lang), reply_to_id=message_id, trace_id=trace_id
+            user_id, reply.render("unknown_intent", lang), reply_to_id=message_id, trace_id=trace_id, channel=channel
         )
         return 0, "replied"
 
@@ -408,7 +504,9 @@ class AssistantService:
     # Clarifying / choice replies
     # ------------------------------------------------------------------
 
-    def _post_photo_ask_kind(self, user_id: UUID, message_id: UUID, lang: str, trace_id: str) -> None:
+    def _post_photo_ask_kind(
+        self, user_id: UUID, message_id: UUID, lang: str, trace_id: str, channel: ChannelRef
+    ) -> None:
         prompt = reply.render("photo_ask_kind_prompt", lang)
         options = [
             {
@@ -422,10 +520,12 @@ class AssistantService:
                 "payload": {"message_id": str(message_id)},
             },
         ]
-        self._messenger.post_choice(user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id)
+        self._messenger.post_choice(
+            user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel
+        )
 
     def _post_clarify_intent(
-        self, user_id: UUID, message_id: UUID, decision: RouterDecision, lang: str, trace_id: str
+        self, user_id: UUID, message_id: UUID, decision: RouterDecision, lang: str, trace_id: str, channel: ChannelRef
     ) -> None:
         ranked = sorted(decision.intent_probabilities.items(), key=lambda item: item[1], reverse=True)
         top_two = ranked[:2] or [(decision.intent, decision.intent_confidence)]
@@ -438,7 +538,12 @@ class AssistantService:
             for name, _confidence in top_two
         ]
         self._messenger.post_choice(
-            user_id, reply.render("clarify_intent_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("clarify_intent_prompt", lang),
+            options,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=channel,
         )
 
     # ------------------------------------------------------------------
@@ -456,6 +561,7 @@ class AssistantService:
         lang: str,
         trace_id: str,
         company_ids: list[UUID],
+        channel: ChannelRef,
     ) -> str:
         outcome = self._equipment.move(
             user_id=user_id,
@@ -464,7 +570,7 @@ class AssistantService:
             project_hint=project_hint,
             is_write_confirmed=is_write_confirmed,
         )
-        return self._reply_move_outcome(user_id, message_id, outcome, project_hint, lang, trace_id)
+        return self._reply_move_outcome(user_id, message_id, outcome, project_hint, lang, trace_id, channel)
 
     def _reply_move_outcome(
         self,
@@ -474,10 +580,15 @@ class AssistantService:
         project_hint: Optional[str],
         lang: str,
         trace_id: str,
+        channel: ChannelRef,
     ) -> str:
         if outcome.status == "not_found":
             self._messenger.post_text(
-                user_id, reply.render("equipment_not_found", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("equipment_not_found", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "replied"
         elif outcome.status == "ambiguous_item":
@@ -491,6 +602,7 @@ class AssistantService:
                 options,
                 reply_to_id=message_id,
                 trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
         elif outcome.status == "ambiguous_project":
@@ -511,6 +623,7 @@ class AssistantService:
                 options,
                 reply_to_id=message_id,
                 trace_id=trace_id,
+                channel=channel,
             )
             return "asked"
         elif outcome.status == "confirm":
@@ -530,7 +643,9 @@ class AssistantService:
                     "payload": {},
                 },
             ]
-            self._messenger.post_choice(user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_choice(
+                user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel
+            )
             return "asked"
         elif outcome.status == "moved":
             item = outcome.item
@@ -541,11 +656,16 @@ class AssistantService:
                 reply.render("equipment_moved", lang, name=item.name, project=outcome.project_name),
                 reply_to_id=message_id,
                 trace_id=trace_id,
+                channel=channel,
             )
             return "replied"
         elif outcome.status == "denied":
             self._messenger.post_text(
-                user_id, reply.render("equipment_move_denied", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("equipment_move_denied", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return "refused"
         else:  # pragma: no cover - defensive, every status above is exhaustive
@@ -557,15 +677,19 @@ class AssistantService:
 
     def handle_action(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
         choice_message = self._messages.find_by_id(message_id)
-        if choice_message is None or choice_message.channel != ChannelRef(kind="assistant", id=user_id):
+        if (
+            choice_message is None
+            or choice_message.content_type != "choice"
+            or str((choice_message.payload or {}).get("addressed_to")) != str(user_id)
+        ):
             # Defense in depth — see the identical check in handle_message(). By the
             # time this runs, `SubmitAssistantActionUseCase` has already verified the
-            # choice belongs to `user_id`'s channel, but this handler must never trust
-            # that on its own.
-            logger.warning(
-                "assistant handle_action: message %s not found in %s's assistant channel", message_id, user_id
-            )
+            # caller is a member of the choice's channel AND is its addressee, but this
+            # handler must never trust that on its own.
+            logger.warning("assistant handle_action: message %s is not a choice addressed to %s", message_id, user_id)
             return
+        channel = choice_message.channel
+        scope = self._resolve_scope(channel, user_id)
         original = (
             self._messages.find_by_id(choice_message.reply_to_id) if choice_message.reply_to_id is not None else None
         )
@@ -574,18 +698,26 @@ class AssistantService:
 
         if self._cost_ledger.over_cap():
             self._messenger.post_text(
-                user_id, reply.render("quota_exceeded", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("quota_exceeded", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return
         if not self._rate_limiter.allow(user_id):
             self._messenger.post_text(
-                user_id, reply.render("rate_limited", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("rate_limited", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
             return
 
         try:
             if action == "clarify_intent":
-                self._handle_clarify_intent(user_id, payload, lang, trace_id)
+                self._handle_clarify_intent(user_id, payload, lang, trace_id, channel, scope)
             elif action == "import_ticket":
                 self._features.import_ticket(
                     user_id=user_id,
@@ -593,6 +725,7 @@ class AssistantService:
                     lang=lang,
                     messenger=self._messenger,
                     trace_id=trace_id,
+                    scope=scope,
                 )
             elif action == "identify_material":
                 self._features.identify_material(
@@ -601,6 +734,7 @@ class AssistantService:
                     lang=lang,
                     messenger=self._messenger,
                     trace_id=trace_id,
+                    scope=scope,
                 )
             elif action == "move_equipment_pick":
                 outcome = self._equipment.move_item(
@@ -609,7 +743,9 @@ class AssistantService:
                     project_hint=payload.get("project_hint"),
                     is_write_confirmed=True,  # an explicit tap on a named tool is itself the write confirmation
                 )
-                self._reply_move_outcome(user_id, message_id, outcome, payload.get("project_hint"), lang, trace_id)
+                self._reply_move_outcome(
+                    user_id, message_id, outcome, payload.get("project_hint"), lang, trace_id, channel
+                )
             elif action == "move_equipment_set_project":
                 outcome = self._equipment.move_item(
                     user_id=user_id,
@@ -617,7 +753,9 @@ class AssistantService:
                     project_hint=payload.get("project_name"),
                     is_write_confirmed=True,  # an explicit tap on a named project is itself the write confirmation
                 )
-                self._reply_move_outcome(user_id, message_id, outcome, payload.get("project_name"), lang, trace_id)
+                self._reply_move_outcome(
+                    user_id, message_id, outcome, payload.get("project_name"), lang, trace_id, channel
+                )
             elif action == "move_equipment_confirm":
                 outcome = self._equipment.move_by_item_id(
                     user_id=user_id,
@@ -625,7 +763,7 @@ class AssistantService:
                     project_id=_uuid_from_payload(payload, "project_id"),
                     is_write_confirmed=True,
                 )
-                self._reply_move_outcome(user_id, message_id, outcome, None, lang, trace_id)
+                self._reply_move_outcome(user_id, message_id, outcome, None, lang, trace_id, channel)
             elif action == "move_equipment_cancel":
                 # The tap already disabled the choice (SubmitAssistantActionUseCase marks
                 # `payload.answered`); nothing more to say.
@@ -638,29 +776,47 @@ class AssistantService:
                 lang=lang,
                 messenger=self._messenger,
                 trace_id=trace_id,
+                scope=scope,
             ):
                 logger.info("assistant handle_action: unrecognised action=%s message=%s", action, message_id)
                 self._messenger.post_text(
-                    user_id, reply.render("unknown_action", lang), reply_to_id=message_id, trace_id=trace_id
+                    user_id,
+                    reply.render("unknown_action", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
                 )
         except ProviderNotConfiguredError:
             self._messenger.post_text(
-                user_id, reply.render("not_configured", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("not_configured", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
             )
         except Exception:
             logger.exception("assistant.action trace=%s user=%s action=%s failed", trace_id, user_id, action)
-            self._messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_text(
+                user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id, channel=channel
+            )
 
-    def _handle_clarify_intent(self, user_id: UUID, payload: dict[str, Any], lang: str, trace_id: str) -> None:
+    def _handle_clarify_intent(
+        self,
+        user_id: UUID,
+        payload: dict[str, Any],
+        lang: str,
+        trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
+    ) -> None:
         intent = payload.get("intent")
         if intent not in INTENTS:
             return
         original_message_id = _uuid_from_payload(payload, "message_id")
         message = self._messages.find_by_id(original_message_id)
         # Defense in depth (see handle_message's identical check) — never launder
-        # another channel's message body through DeepSeek into this caller's assistant
-        # conversation.
-        if message is None or message.channel != ChannelRef(kind="assistant", id=user_id):
+        # another channel's message body through DeepSeek into this caller's conversation.
+        if message is None or message.sender_id != user_id:
             return
         company_ids = self._company_ids(user_id)
         # An explicitly clarified intent carries no merchant/project/write signal of its
@@ -669,11 +825,13 @@ class AssistantService:
         self._dispatch(
             user_id=user_id,
             message_id=message.id,
-            message_text=(message.body or "").strip(),
+            message_text=strip_assistant_mention((message.body or "").strip()),
             decision=decision,
             lang=lang,
             trace_id=trace_id,
             company_ids=company_ids,
+            channel=channel,
+            scope=scope,
         )
 
 
@@ -701,30 +859,33 @@ class SubmitAssistantActionUseCase:
     (``AssistantService.handle_action``) then only ever sees a payload this server
     authored, never one the client invented. The app always resubmits an option
     unmodified, so this is fully backward compatible.
+
+    A choice now lives in a shared channel (company/project/admin), so being a channel
+    member is not enough to answer it: only the person it was addressed to
+    (``payload["addressed_to"]``, set by ``AssistantMessenger.post_choice``) may tap it —
+    anyone else, member or not, gets ``AssistantNotAddressedError`` (403 NotAddressed).
     """
 
     def __init__(
         self,
         message_repo: MessagePosterPort,
+        directory: ChatDirectoryPort,
         db_session: TransactionalSessionPort,
         dispatcher: AssistantDispatcherPort,
     ) -> None:
         self._messages = message_repo
+        self._directory = directory
         self._db = db_session
         self._dispatcher = dispatcher
 
     def execute(self, *, actor_id: UUID, action: str, payload: dict[str, Any], reply_to_id: UUID) -> None:
         message = self._messages.find_by_id(reply_to_id)
-        if (
-            message is None
-            or message.channel.kind != "assistant"
-            or message.channel.id != actor_id
-            or message.content_type != "choice"
-        ):
-            raise AssistantMessageNotFoundError(
-                f"Message {reply_to_id} is not a choice in {actor_id}'s assistant conversation."
-            )
+        if message is None or message.content_type != "choice":
+            raise AssistantMessageNotFoundError(f"Message {reply_to_id} is not a choice message.")
         current_payload = dict(message.payload or {})
+        addressed_to = current_payload.get("addressed_to")
+        if not self._directory.is_member(actor_id, message.channel) or str(actor_id) != str(addressed_to):
+            raise AssistantNotAddressedError(f"Message {reply_to_id} was not addressed to {actor_id}.")
         # A stale-read "already answered" check would be redundant with (and no safer
         # than) the atomic transition below, so the only authority for that decision is
         # answer_choice_if_unanswered's return value.

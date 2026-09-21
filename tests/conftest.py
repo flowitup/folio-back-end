@@ -1151,16 +1151,7 @@ def invitation_app():
             SendMessageUseCase as _SendChatMessageUC,
         )
 
-        from config import assistant_flags_enabled as _assistant_flags_enabled
-
-        _chat_repo = SqlAlchemyChatRepository(
-            db.session,
-            assistant_enabled=lambda: _assistant_flags_enabled(
-                test_app.config.get("FEATURE_ASSISTANT"),
-                test_app.config.get("DEEPSEEK_API_KEY"),
-                test_app.config.get("TYPESAFE_API_KEY"),
-            ),
-        )
+        _chat_repo = SqlAlchemyChatRepository(db.session)
         _chat_storage = InMemoryDocumentStorage()
         _c.chat_repo = _chat_repo
         _c.list_chat_channels_usecase = _ListChatChannelsUC(_chat_repo, _chat_repo, _chat_repo)
@@ -1190,7 +1181,9 @@ def invitation_app():
         _assistant_dispatcher = RecordingAssistantDispatcher()
         _c.assistant_dispatcher = _assistant_dispatcher
         _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
-        _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _assistant_dispatcher)
+        _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(
+            _chat_repo, _chat_repo, db.session, _assistant_dispatcher
+        )
         _c.send_chat_message_usecase.assistant_dispatcher = _assistant_dispatcher
         test_app._assistant_dispatcher = _assistant_dispatcher
 
@@ -1206,6 +1199,7 @@ def invitation_app():
         from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
         from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
         from app.application.assistant.router import Router as _Router
+        from app.infrastructure.adapters.project_company_reader import ProjectCompanyReader as _ProjectCompanyReader
         from app.infrastructure.ai.cost import InMemoryCostLedger as _InMemoryCostLedger
         from app.infrastructure.ai.rate_limit import InMemoryRateLimiter as _InMemoryRateLimiter
         from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
@@ -1229,6 +1223,7 @@ def invitation_app():
         )
         _c.assistant_rate_limiter = _InMemoryRateLimiter()
         _c.assistant_router = _Router(_assistant_decision_port)
+        _c.assistant_project_company_reader = _ProjectCompanyReader(db.session)
         _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
         _c.assistant_import_repo = _assistant_import_repo
         _assistant_job_repo = _SqlAlchemyAssistantJobRepository(db.session)
@@ -1313,6 +1308,7 @@ def invitation_app():
                 vision=_assistant_vision,
                 cost_ledger=_c.assistant_cost_ledger,
                 rate_limiter=_c.assistant_rate_limiter,
+                project_company_reader=_c.assistant_project_company_reader,
                 feature_handlers=_feature_handlers,
             )
         test_app._assistant_vision = _assistant_vision

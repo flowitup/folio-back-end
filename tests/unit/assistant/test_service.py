@@ -16,7 +16,7 @@ import pytest
 
 from app.application.assistant.equipment import EquipmentService
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import RouterDecision
+from app.application.assistant.models import ChannelScope, RouterDecision
 from app.application.assistant.ports import Decision
 from app.application.assistant.router import Router
 from app.application.assistant.service import AssistantService, DefaultFeatureHandlers
@@ -53,8 +53,12 @@ class FakeMessageRepo:
         current = self.messages[message_id]
         self.messages[message_id] = replace(current, payload=payload)
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
-        items = [m for m in self.messages.values() if m.channel == channel and m.content_type == "text"]
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        items = [
+            m
+            for m in self.messages.values()
+            if m.channel == channel and (m.mentions_assistant or m.sender_type == "assistant")
+        ]
         items.sort(key=lambda m: m.created_at)
         return items[-limit:]
 
@@ -109,18 +113,24 @@ class FakeProjectCompanyReader:
         return self._owners.get(project_id)
 
 
-def _user_message(channel: ChannelRef, body: Optional[str] = "bonjour", photo: bool = False) -> ChatMessage:
+def _user_message(
+    channel: ChannelRef, sender_id: UUID, body: Optional[str] = "bonjour", photo: bool = False
+) -> ChatMessage:
+    """``sender_id`` must equal the ``user_id`` a test then passes to ``handle_message``/
+    ``handle_action`` — the service's own defense-in-depth check requires it."""
     attachment = (
         ChatAttachment(storage_key="k", filename="p.jpg", content_type="image/jpeg", size_bytes=1) if photo else None
     )
-    return ChatMessage.create(channel=channel, sender_id=uuid4(), body=body, attachment=attachment)
+    return ChatMessage.create(
+        channel=channel, sender_id=sender_id, body=body, attachment=attachment, mentions_assistant=True
+    )
 
 
 @pytest.fixture
 def world(session):
     company_id = uuid4()
     user_id = uuid4()
-    channel = ChannelRef(kind="assistant", id=user_id)
+    channel = ChannelRef(kind="company", id=company_id)
     project = Project(id=uuid4(), name="Villa Arcueil", owner_id=company_id, created_at=datetime.now(timezone.utc))
 
     item_repo = SqlAlchemyInventoryItemRepository(session)
@@ -139,10 +149,11 @@ def world(session):
     session.commit()
 
     project_repo = FakeProjectRepo([project])
+    project_company_reader = FakeProjectCompanyReader({project.id: company_id})
     update_item_usecase = UpdateInventoryItemUseCase(
         item_repo=item_repo,
         warehouse_repo=warehouse_repo,
-        project_reader=FakeProjectCompanyReader({project.id: company_id}),
+        project_reader=project_company_reader,
         membership_reader=FakeMembership(),
         permission_checker=FakeChecker(),
         db_session=session,
@@ -172,6 +183,7 @@ def world(session):
             vision=vision,
             cost_ledger=cost_ledger,
             rate_limiter=rate_limiter,
+            project_company_reader=project_company_reader,
         )
 
     return {
@@ -213,7 +225,7 @@ def _last_message(world) -> ChatMessage:
 
 
 def test_find_equipment_never_calls_the_vision_port(world) -> None:
-    message = _user_message(world["channel"], body="Où est la perceuse ?")
+    message = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("find_equipment")))
 
@@ -227,7 +239,7 @@ def test_find_equipment_never_calls_the_vision_port(world) -> None:
 
 
 def test_move_equipment_never_calls_the_vision_port(world) -> None:
-    message = _user_message(world["channel"], body="Déplace la perceuse vers Villa Arcueil")
+    message = _user_message(world["channel"], world["user_id"], body="Déplace la perceuse vers Villa Arcueil")
     world["message_repo"].add(message)
     decision = _fixed_decision("move_equipment", is_write=0.95, project_hint="Villa Arcueil")
     service = world["build_service"](ScriptedDecision(fixed=decision))
@@ -247,7 +259,7 @@ def test_move_equipment_never_calls_the_vision_port(world) -> None:
 
 def test_over_cost_cap_answers_quota_template_and_calls_no_provider(world) -> None:
     world["cost_ledger"].add("deepseek", 100.0)  # blow well past the 5 USD cap
-    message = _user_message(world["channel"], body="Où est la perceuse ?")
+    message = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(message)
     decision_port = ScriptedDecision(fixed=_fixed_decision("find_equipment"))
     service = world["build_service"](decision_port)
@@ -266,7 +278,7 @@ def test_over_cost_cap_answers_quota_template_and_calls_no_provider(world) -> No
 
 
 def test_router_not_configured_answers_the_not_configured_template(world) -> None:
-    message = _user_message(world["channel"], body="Où est la perceuse ?")
+    message = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(raise_not_configured=True))
 
@@ -282,7 +294,7 @@ def test_router_not_configured_answers_the_not_configured_template(world) -> Non
 
 
 def test_trivial_greeting_skips_the_vision_port(world) -> None:
-    message = _user_message(world["channel"], body="Bonjour")
+    message = _user_message(world["channel"], world["user_id"], body="Bonjour")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("chit_chat")))
 
@@ -297,7 +309,7 @@ def test_trivial_greeting_skips_the_vision_port(world) -> None:
 
 
 def test_non_trivial_chit_chat_calls_deepseek_text(world) -> None:
-    message = _user_message(world["channel"], body="Raconte-moi une blague sur le chantier")
+    message = _user_message(world["channel"], world["user_id"], body="Raconte-moi une blague sur le chantier")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("chit_chat")))
 
@@ -314,7 +326,7 @@ def test_non_trivial_chit_chat_calls_deepseek_text(world) -> None:
 
 
 def test_photo_without_text_posts_the_ask_kind_choice(world) -> None:
-    message = _user_message(world["channel"], body=None, photo=True)
+    message = _user_message(world["channel"], world["user_id"], body=None, photo=True)
     world["message_repo"].add(message)
     decision_port = ScriptedDecision(fixed=_fixed_decision("chit_chat"))
     service = world["build_service"](decision_port)
@@ -334,7 +346,7 @@ def test_photo_without_text_posts_the_ask_kind_choice(world) -> None:
 
 
 def test_low_confidence_intent_asks_a_clarifying_choice(world) -> None:
-    message = _user_message(world["channel"], body="un truc chelou")
+    message = _user_message(world["channel"], world["user_id"], body="un truc chelou")
     world["message_repo"].add(message)
     low_confidence = Decision(
         choices={
@@ -355,7 +367,7 @@ def test_low_confidence_intent_asks_a_clarifying_choice(world) -> None:
 
 
 def test_clarify_intent_action_redispatches_with_the_chosen_intent(world) -> None:
-    original = _user_message(world["channel"], body="Où est la perceuse ?")
+    original = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(original)
     choice = world["messenger"].post_choice(
         world["user_id"],
@@ -390,7 +402,7 @@ def test_clarify_intent_action_redispatches_with_the_chosen_intent(world) -> Non
 @pytest.mark.parametrize("intent", ["identify_material", "import_ticket", "fetch_invoice"])
 def test_unimplemented_feature_intents_answer_not_available_yet(world, intent: str) -> None:
     body = "Peu importe, fais ce que tu veux"  # unambiguously French ("fais", "que", "tu")
-    message = _user_message(world["channel"], body=body)
+    message = _user_message(world["channel"], world["user_id"], body=body)
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision(intent)))
 
@@ -404,23 +416,31 @@ def test_default_feature_handlers_matches_the_protocol_signature() -> None:
     handlers = DefaultFeatureHandlers()
     message_repo = FakeMessageRepo()
     messenger = AssistantMessenger(message_repo, FakeSession())
-    channel = ChannelRef(kind="assistant", id=uuid4())
-    original = _user_message(channel)
+    channel = ChannelRef(kind="company", id=uuid4())
+    asker_id = uuid4()
+    scope = ChannelScope(
+        kind="company", company_id=channel.id, project_id=None, is_admin_channel=False, asker_id=asker_id
+    )
+    original = _user_message(channel, asker_id)
     message_repo.add(original)
 
     handlers.identify_material(
-        user_id=channel.id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t1"
+        user_id=asker_id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t1", scope=scope
     )
-    handlers.import_ticket(user_id=channel.id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t2")
+    handlers.import_ticket(
+        user_id=asker_id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t2", scope=scope
+    )
     handlers.fetch_invoice(
-        user_id=channel.id,
+        user_id=asker_id,
         message_id=original.id,
         lang="fr",
         messenger=messenger,
         trace_id="t3",
         decision=RouterDecision(intent="fetch_invoice", intent_confidence=1.0),
+        scope=scope,
     )
     assert len(message_repo.messages) == 4  # original + 3 replies
+    assert all(m.channel == channel for m in message_repo.messages.values())
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +449,7 @@ def test_default_feature_handlers_matches_the_protocol_signature() -> None:
 
 
 def test_move_equipment_confirm_action_executes_the_move(world) -> None:
-    original = _user_message(world["channel"], body="Déplace la perceuse")
+    original = _user_message(world["channel"], world["user_id"], body="Déplace la perceuse")
     world["message_repo"].add(original)
     choice = world["messenger"].post_choice(
         world["user_id"],
@@ -457,7 +477,7 @@ def test_move_equipment_confirm_action_executes_the_move(world) -> None:
 
 
 def test_move_equipment_cancel_action_posts_nothing(world) -> None:
-    original = _user_message(world["channel"], body="Déplace la perceuse")
+    original = _user_message(world["channel"], world["user_id"], body="Déplace la perceuse")
     world["message_repo"].add(original)
     choice = world["messenger"].post_choice(
         world["user_id"],

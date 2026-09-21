@@ -466,7 +466,7 @@ def _configure_di_container() -> None:
             current_app.config.get("TYPESAFE_API_KEY"),
         )
 
-    _chat_repo = SqlAlchemyChatRepository(db.session, assistant_enabled=_assistant_enabled_fn)
+    _chat_repo = SqlAlchemyChatRepository(db.session)
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
@@ -487,7 +487,9 @@ def _configure_di_container() -> None:
         current_app.config.get("REDIS_URL", ""), assistant_enabled=_assistant_enabled_fn
     )
     _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
-    _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _c.assistant_dispatcher)
+    _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(
+        _chat_repo, _chat_repo, db.session, _c.assistant_dispatcher
+    )
     _c.send_chat_message_usecase.assistant_dispatcher = _c.assistant_dispatcher
 
     # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio | gateway).
@@ -1545,6 +1547,7 @@ def _configure_di_container() -> None:
 
     _c.inventory_warehouse_repo = _inventory_warehouse_repo
     _c.inventory_item_repo = _inventory_item_repo
+    _c.assistant_project_company_reader = _inventory_project_reader
     _c.inventory_list_warehouses_usecase = _ListWarehousesUC(
         warehouse_repo=_inventory_warehouse_repo,
         membership_reader=_biblio_membership_reader,
@@ -1660,6 +1663,7 @@ def _configure_di_container() -> None:
                 vision=_c.assistant_vision_llm,
                 cost_ledger=_c.assistant_cost_ledger,
                 rate_limiter=_c.assistant_rate_limiter,
+                project_company_reader=_inventory_project_reader,
             )
 
     # -----------------------------------------------------------------------
@@ -1807,6 +1811,7 @@ def _configure_di_container() -> None:
             vision=_c.assistant_vision_llm,
             cost_ledger=_c.assistant_cost_ledger,
             rate_limiter=_c.assistant_rate_limiter,
+            project_company_reader=_inventory_project_reader,
             feature_handlers=_c.assistant_feature_handlers,
         )
 

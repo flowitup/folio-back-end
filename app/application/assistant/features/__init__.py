@@ -16,11 +16,18 @@ from app.application.assistant.features.invoice_fetch import InvoiceFetchFeature
 from app.application.assistant.features.material import MaterialFeature
 from app.application.assistant.features.ticket import TicketFeature
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import RouterDecision
+from app.application.assistant.models import ChannelScope, RouterDecision
 
 
 class FeatureHandlers:
-    """Implements ``FeatureHandlersPort`` (structurally — no explicit inheritance needed)."""
+    """Implements ``FeatureHandlersPort`` (structurally — no explicit inheritance needed).
+
+    ``scope`` is accepted on every method to satisfy that port's signature but not yet
+    forwarded to ticket/material/invoice-fetch: those three still reply through
+    ``AssistantMessenger``'s ``assistant:<user_id>`` fallback until phase 03/04 threads
+    ``ChannelScope`` all the way through their own reply sites (see ``messages.py``'s
+    module docstring).
+    """
 
     def __init__(self, *, ticket: TicketFeature, material: MaterialFeature, invoice_fetch: InvoiceFetchFeature) -> None:
         self._ticket = ticket
@@ -35,6 +42,7 @@ class FeatureHandlers:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
         return self._material.run(
@@ -47,7 +55,14 @@ class FeatureHandlers:
         )
 
     def import_ticket(
-        self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        scope: ChannelScope,
     ) -> str:
         return self._ticket.run(
             user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id
@@ -62,6 +77,7 @@ class FeatureHandlers:
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
+        scope: ChannelScope,
     ) -> str:
         return self._invoice_fetch.fetch_invoice(
             user_id=user_id, message_id=message_id, lang=lang, messenger=messenger, trace_id=trace_id, decision=decision
@@ -77,6 +93,7 @@ class FeatureHandlers:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         if self._ticket.handle_action(
             user_id=user_id,

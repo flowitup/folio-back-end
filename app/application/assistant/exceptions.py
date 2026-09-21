@@ -8,11 +8,17 @@ class AssistantError(Exception):
 
 
 class AssistantMessageNotFoundError(AssistantError):
-    """``reply_to_id`` is unknown, not a choice, or not in the caller's assistant channel."""
+    """``reply_to_id`` is unknown, not a choice, or the submitted action/payload does not
+    byte-for-byte match one of the choice's own stored options."""
 
 
 class AssistantAlreadyAnsweredError(AssistantError):
     """The choice this action replies to has already been answered."""
+
+
+class AssistantNotAddressedError(AssistantError):
+    """The caller is not a member of the choice's channel, or the choice was not
+    addressed to them (``payload["addressed_to"]``) — only the asker may answer."""
 
 
 class ProviderNotConfiguredError(AssistantError):
