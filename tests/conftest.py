@@ -109,6 +109,11 @@ def invitation_app():
         RATELIMIT_ENABLED = False
         RATELIMIT_STORAGE_URI = "memory://"
         FEATURE_CHAT = True
+        # On by default so most chat/assistant tests see the feature live; a test that
+        # needs it off flips these on invitation_app.config, same as FEATURE_CHAT above.
+        FEATURE_ASSISTANT = True
+        DEEPSEEK_API_KEY = "test-deepseek-key"
+        TYPESAFE_API_KEY = "test-typesafe-key"
 
     test_app = create_app(InviteTestConfig)
 
@@ -1146,7 +1151,16 @@ def invitation_app():
             SendMessageUseCase as _SendChatMessageUC,
         )
 
-        _chat_repo = SqlAlchemyChatRepository(db.session)
+        from config import assistant_flags_enabled as _assistant_flags_enabled
+
+        _chat_repo = SqlAlchemyChatRepository(
+            db.session,
+            assistant_enabled=lambda: _assistant_flags_enabled(
+                test_app.config.get("FEATURE_ASSISTANT"),
+                test_app.config.get("DEEPSEEK_API_KEY"),
+                test_app.config.get("TYPESAFE_API_KEY"),
+            ),
+        )
         _chat_storage = InMemoryDocumentStorage()
         _c.chat_repo = _chat_repo
         _c.list_chat_channels_usecase = _ListChatChannelsUC(_chat_repo, _chat_repo, _chat_repo)
@@ -1154,6 +1168,165 @@ def invitation_app():
         _c.send_chat_message_usecase = _SendChatMessageUC(_chat_repo, _chat_repo, _chat_repo, _chat_storage, db.session)
         _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
         _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)
+
+        # ------------------------------------------------------------------
+        # Wire the assistant bounded context — an in-memory recorder stands in for the
+        # RQ dispatcher so tests can assert "dispatched" without a real Redis/worker.
+        # ------------------------------------------------------------------
+        from app.application.assistant.messages import AssistantMessenger
+        from app.application.assistant.service import AssistantService, SubmitAssistantActionUseCase
+
+        class RecordingAssistantDispatcher:
+            def __init__(self) -> None:
+                self.messages_received: list[tuple] = []
+                self.actions_received: list[tuple] = []
+
+            def message_received(self, *, user_id, message_id) -> None:
+                self.messages_received.append((user_id, message_id))
+
+            def action_received(self, *, user_id, message_id, action, payload) -> None:
+                self.actions_received.append((user_id, message_id, action, payload))
+
+        _assistant_dispatcher = RecordingAssistantDispatcher()
+        _c.assistant_dispatcher = _assistant_dispatcher
+        _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
+        _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _assistant_dispatcher)
+        _c.send_chat_message_usecase.assistant_dispatcher = _assistant_dispatcher
+        test_app._assistant_dispatcher = _assistant_dispatcher
+
+        # AssistantService itself is rebuilt with fake AI provider ports (never the real
+        # DeepSeek/Jev clients `_configure_di_container()` built from InviteTestConfig's
+        # placeholder API keys) so no test can accidentally reach a real network call.
+        # The equipment lookup keeps the REAL inventory/company/project repositories
+        # `_configure_di_container()` already wired above — equipment answers come from
+        # the test SQLite DB, not a fake, matching phase 02's "no LLM for equipment" design.
+        from app.application.assistant.equipment import EquipmentService as _EquipmentService
+        from app.application.assistant.features import FeatureHandlers as _FeatureHandlers
+        from app.application.assistant.features.invoice_fetch import InvoiceFetchFeature as _InvoiceFetchFeature
+        from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
+        from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
+        from app.application.assistant.router import Router as _Router
+        from app.infrastructure.ai.cost import InMemoryCostLedger as _InMemoryCostLedger
+        from app.infrastructure.ai.rate_limit import InMemoryRateLimiter as _InMemoryRateLimiter
+        from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
+            SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
+        )
+        from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
+            SqlAlchemyAssistantJobRepository as _SqlAlchemyAssistantJobRepository,
+        )
+        from tests.fakes.ai import RecordingImageGen as _RecordingImageGen
+        from tests.fakes.ai import RecordingLens as _RecordingLens
+        from tests.fakes.ai import RecordingWebSearch as _RecordingWebSearch
+        from tests.fakes.ai import ScriptedDecision as _ScriptedDecision
+        from tests.fakes.ai import ScriptedVision as _ScriptedVision
+
+        _assistant_decision_port = _ScriptedDecision()
+        _assistant_vision = _ScriptedVision(text_answers=["(scripted chit-chat reply)"])
+        _assistant_web_search = _RecordingWebSearch()
+        _assistant_image_gen = _RecordingImageGen()
+        _assistant_lens = _RecordingLens()
+        _c.assistant_decision_port = _assistant_decision_port
+        _c.assistant_vision_llm = _assistant_vision
+        _c.assistant_web_search = _assistant_web_search
+        _c.assistant_image_gen = _assistant_image_gen
+        _c.assistant_lens = _assistant_lens
+        _c.assistant_cost_ledger = _InMemoryCostLedger(
+            daily_cap_usd=float(test_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
+        )
+        _c.assistant_rate_limiter = _InMemoryRateLimiter()
+        _c.assistant_router = _Router(_assistant_decision_port)
+        _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
+        _c.assistant_import_repo = _assistant_import_repo
+        _assistant_job_repo = _SqlAlchemyAssistantJobRepository(db.session)
+        _c.assistant_job_repo = _assistant_job_repo
+        if _c.project_repository is not None:
+            _c.assistant_equipment_service = _EquipmentService(
+                item_repo=_c.inventory_item_repo,
+                warehouse_repo=_c.inventory_warehouse_repo,
+                project_repo=_c.project_repository,
+                update_item_usecase=_c.inventory_update_item_usecase,
+            )
+            _feature_handlers = None
+            if (
+                _c.invoice_repository is not None
+                and _c.invoice_attachment_repository is not None
+                and _c.upload_attachment_usecase is not None
+                and _c.create_invoice_usecase is not None
+                and _c.delete_invoice_usecase is not None
+                and _c.worker_repository is not None
+                and _c.labor_entry_repository is not None
+            ):
+                _c.assistant_ticket_feature = _TicketFeature(
+                    vision=_assistant_vision,
+                    decisions=_assistant_decision_port,
+                    image_gen=_assistant_image_gen,
+                    scan_mode=test_app.config.get("SCAN_MODE", "genai"),
+                    messages=_chat_repo,
+                    storage=_chat_storage,
+                    company_access=_c.user_company_access_repo,
+                    project_repo=_c.project_repository,
+                    authz_reader=_c.authz_reader,
+                    invoice_repo=_c.invoice_repository,
+                    attachment_repo=_c.invoice_attachment_repository,
+                    worker_repo=_c.worker_repository,
+                    labor_entry_repo=_c.labor_entry_repository,
+                    import_repo=_assistant_import_repo,
+                    create_invoice_usecase=_c.create_invoice_usecase,
+                    delete_invoice_usecase=_c.delete_invoice_usecase,
+                    upload_attachment_usecase=_c.upload_attachment_usecase,
+                )
+                _c.assistant_material_feature = _MaterialFeature(
+                    vision=_assistant_vision,
+                    decisions=_assistant_decision_port,
+                    web_search=_assistant_web_search,
+                    lens=_assistant_lens,
+                    messages=_chat_repo,
+                    storage=_chat_storage,
+                    company_access=_c.user_company_access_repo,
+                    company_repo=_c.company_repo,
+                    project_repo=_c.project_repository,
+                    authz_reader=_c.authz_reader,
+                    product_repo=_c.bibliotheque_product_repo,
+                    supplier_repo=_c.bibliotheque_supplier_repo,
+                    material_imports=_assistant_import_repo,
+                    create_product_usecase=_c.bibliotheque_create_product_usecase,
+                    fetch_image_usecase=_c.bibliotheque_fetch_image_from_url_usecase,
+                    upload_image_usecase=_c.bibliotheque_upload_image_usecase,
+                )
+                _c.assistant_invoice_fetch_feature = _InvoiceFetchFeature(
+                    vision=_assistant_vision,
+                    messages=_chat_repo,
+                    storage=_chat_storage,
+                    job_repo=_assistant_job_repo,
+                    ticket=_c.assistant_ticket_feature,
+                    company_access=_c.user_company_access_repo,
+                    project_repo=_c.project_repository,
+                    authz_reader=_c.authz_reader,
+                    invoice_repo=_c.invoice_repository,
+                )
+                _c.assistant_feature_handlers = _FeatureHandlers(
+                    ticket=_c.assistant_ticket_feature,
+                    material=_c.assistant_material_feature,
+                    invoice_fetch=_c.assistant_invoice_fetch_feature,
+                )
+                _feature_handlers = _c.assistant_feature_handlers
+            _c.assistant_service = AssistantService(
+                message_repo=_chat_repo,
+                messenger=_c.assistant_messenger,
+                router=_c.assistant_router,
+                equipment=_c.assistant_equipment_service,
+                company_access_repo=_c.user_company_access_repo,
+                project_repo=_c.project_repository,
+                vision=_assistant_vision,
+                cost_ledger=_c.assistant_cost_ledger,
+                rate_limiter=_c.assistant_rate_limiter,
+                feature_handlers=_feature_handlers,
+            )
+        test_app._assistant_vision = _assistant_vision
+        test_app._assistant_decision_port = _assistant_decision_port
+        test_app._assistant_web_search = _assistant_web_search
+        test_app._assistant_image_gen = _assistant_image_gen
+        test_app._assistant_lens = _assistant_lens
 
         # ------------------------------------------------------------------
         # Sign in with a phone number + SMS code — recording sender, no SMS leaves the test.

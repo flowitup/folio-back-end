@@ -170,6 +170,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.notes import notes_bp
     from app.api.v1.api_keys import api_keys_bp
     from app.api.v1.chat import chat_bp
+    from app.api.v1.assistant import assistant_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.push import push_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
@@ -196,6 +197,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
     app.register_blueprint(api_keys_bp, url_prefix="/api/v1")
     app.register_blueprint(chat_bp, url_prefix="/api/v1")
+    app.register_blueprint(assistant_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(push_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
@@ -455,13 +457,38 @@ def _configure_di_container() -> None:
         SendMessageUseCase as _SendChatMessageUseCase,
     )
 
-    _chat_repo = SqlAlchemyChatRepository(db.session)
+    from config import assistant_flags_enabled as _assistant_flags_enabled
+
+    def _assistant_enabled_fn() -> bool:
+        return _assistant_flags_enabled(
+            current_app.config.get("FEATURE_ASSISTANT"),
+            current_app.config.get("DEEPSEEK_API_KEY"),
+            current_app.config.get("TYPESAFE_API_KEY"),
+        )
+
+    _chat_repo = SqlAlchemyChatRepository(db.session, assistant_enabled=_assistant_enabled_fn)
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
+
+    # Wire the assistant conversation transport (Folio Assistant, FEATURE_ASSISTANT).
+    # AssistantService itself (the DeepSeek/Jev pipeline) is wired further down, once the
+    # companies and inventory bounded contexts it reuses (equipment lookup) exist — see
+    # "Assistant AI pipeline DI wiring" below. The chat push notifier is attached later
+    # (with the rest of the push stack), same as send_chat_message_usecase.notifier above.
+    from app.application.assistant.messages import AssistantMessenger
+    from app.application.assistant.service import SubmitAssistantActionUseCase
+    from app.infrastructure.adapters.rq_assistant_dispatcher import RqAssistantDispatcher
+
+    _c.assistant_dispatcher = RqAssistantDispatcher(
+        current_app.config.get("REDIS_URL", ""), assistant_enabled=_assistant_enabled_fn
+    )
+    _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
+    _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _c.assistant_dispatcher)
+    _c.send_chat_message_usecase.assistant_dispatcher = _c.assistant_dispatcher
 
     # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio | gateway).
     from app.application.usecases.otp_login import (
@@ -533,7 +560,7 @@ def _configure_di_container() -> None:
     )
     _c.chat_push_marker_repository = SQLAlchemyChatPushMarkerRepository(db.session)
     if _c.send_chat_message_usecase is not None:
-        _c.send_chat_message_usecase.notifier = ChatPushNotifier(
+        _chat_push_notifier = ChatPushNotifier(
             dispatcher=_c.push_dispatcher,
             directory=_chat_repo,
             markers=_c.chat_push_marker_repository,
@@ -541,6 +568,9 @@ def _configure_di_container() -> None:
             messages=_chat_repo,
             names=_chat_repo,
         )
+        _c.send_chat_message_usecase.notifier = _chat_push_notifier
+        if _c.assistant_messenger is not None:
+            _c.assistant_messenger.notifier = _chat_push_notifier
 
     if _c.project_repository is not None:
         _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)
@@ -1570,6 +1600,79 @@ def _configure_di_container() -> None:
     )
 
     # -----------------------------------------------------------------------
+    # Assistant AI pipeline DI wiring (phase 02: providers, router, equipment).
+    #
+    # Reuses the companies (_access_repo) and inventory (_inventory_item_repo,
+    # _inventory_warehouse_repo, inventory_update_item_usecase) wiring above, so this
+    # block has to run after both — hence living here rather than next to
+    # assistant_messenger/assistant_dispatcher earlier in this function. A NullX adapter
+    # stands in for every provider whose API key is empty: a deployment that turned
+    # FEATURE_ASSISTANT on before configuring every key answers the "not configured"
+    # template (ProviderNotConfiguredError) instead of crashing.
+    # -----------------------------------------------------------------------
+    from app.application.assistant.equipment import EquipmentService as _EquipmentService
+    from app.application.assistant.router import Router as _Router
+    from app.application.assistant.service import AssistantService as _AssistantService
+    from app.infrastructure.ai.cost import RedisCostLedger as _RedisCostLedger
+    from app.infrastructure.ai.deepseek_client import DeepSeekVisionLlm as _DeepSeekVisionLlm
+    from app.infrastructure.ai.deepseek_client import NullVisionLlm as _NullVisionLlm
+    from app.infrastructure.ai.gemini_client import GeminiImageGen as _GeminiImageGen
+    from app.infrastructure.ai.gemini_client import NullImageGenPort as _NullImageGenPort
+    from app.infrastructure.ai.jev_client import JevDecisionPort as _JevDecisionPort
+    from app.infrastructure.ai.jev_client import NullDecisionPort as _NullDecisionPort
+    from app.infrastructure.ai.rate_limit import RedisRateLimiter as _RedisRateLimiter
+    from app.infrastructure.ai.serpapi_client import NullLensPort as _NullLensPort
+    from app.infrastructure.ai.serpapi_client import SerpApiLens as _SerpApiLens
+    from app.infrastructure.ai.tavily_client import NullWebSearchPort as _NullWebSearchPort
+    from app.infrastructure.ai.tavily_client import TavilyWebSearch as _TavilyWebSearch
+
+    _deepseek_key = current_app.config.get("DEEPSEEK_API_KEY", "")
+    _typesafe_key = current_app.config.get("TYPESAFE_API_KEY", "")
+    _tavily_key = current_app.config.get("TAVILY_API_KEY", "")
+    _gemini_key = current_app.config.get("GEMINI_API_KEY", "")
+    _serpapi_key = current_app.config.get("SERPAPI_API_KEY", "")
+    _redis_url = current_app.config.get("REDIS_URL", "")
+
+    _c.assistant_cost_ledger = _RedisCostLedger(
+        _redis_url, float(current_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
+    )
+    _c.assistant_rate_limiter = _RedisRateLimiter(_redis_url)
+    _c.assistant_vision_llm = (
+        _DeepSeekVisionLlm(_deepseek_key, _c.assistant_cost_ledger) if _deepseek_key else _NullVisionLlm()
+    )
+    _c.assistant_decision_port = (
+        _JevDecisionPort(_typesafe_key, _c.assistant_cost_ledger) if _typesafe_key else _NullDecisionPort()
+    )
+    _c.assistant_web_search = (
+        _TavilyWebSearch(_tavily_key, _c.assistant_cost_ledger) if _tavily_key else _NullWebSearchPort()
+    )
+    _c.assistant_image_gen = (
+        _GeminiImageGen(_gemini_key, _c.assistant_cost_ledger) if _gemini_key else _NullImageGenPort()
+    )
+    _c.assistant_lens = _SerpApiLens(_serpapi_key, _c.assistant_cost_ledger) if _serpapi_key else _NullLensPort()
+
+    _c.assistant_router = _Router(_c.assistant_decision_port)
+    if _c.project_repository is not None:
+        _c.assistant_equipment_service = _EquipmentService(
+            item_repo=_inventory_item_repo,
+            warehouse_repo=_inventory_warehouse_repo,
+            project_repo=_c.project_repository,
+            update_item_usecase=_c.inventory_update_item_usecase,
+        )
+        if _c.assistant_messenger is not None:
+            _c.assistant_service = _AssistantService(
+                message_repo=_chat_repo,
+                messenger=_c.assistant_messenger,
+                router=_c.assistant_router,
+                equipment=_c.assistant_equipment_service,
+                company_access_repo=_access_repo,
+                project_repo=_c.project_repository,
+                vision=_c.assistant_vision_llm,
+                cost_ledger=_c.assistant_cost_ledger,
+                rate_limiter=_c.assistant_rate_limiter,
+            )
+
+    # -----------------------------------------------------------------------
     # Labor write use-cases — single construction point.
     # -----------------------------------------------------------------------
     from app.application.labor.log_attendance import LogAttendanceUseCase as _LogAttendUC
@@ -1615,6 +1718,107 @@ def _configure_di_container() -> None:
             invoice_repo=_c.invoice_repository,
             payment_method_repo=_pm,
             worker_reader=_worker_reader,
+        )
+
+    # -----------------------------------------------------------------------
+    # Feature C (ticket -> scan -> invoice) and feature A (material photo -> library)
+    # (phase 03). Reuses the invoice write use-cases just above, the bibliotheque
+    # use-cases wired earlier in this function, and the assistant AI provider ports
+    # from the "Assistant AI pipeline DI wiring" block above — hence living after all
+    # three. Rebuilds `_c.assistant_service` with the real `FeatureHandlers` in place
+    # of phase 02's `DefaultFeatureHandlers` stand-in.
+    # -----------------------------------------------------------------------
+    from app.application.assistant.features import FeatureHandlers as _FeatureHandlers
+    from app.application.assistant.features.invoice_fetch import InvoiceFetchFeature as _InvoiceFetchFeature
+    from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
+    from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
+    from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
+        SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
+    )
+    from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
+        SqlAlchemyAssistantJobRepository as _SqlAlchemyAssistantJobRepository,
+    )
+
+    _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
+    _c.assistant_import_repo = _assistant_import_repo
+    _assistant_job_repo = _SqlAlchemyAssistantJobRepository(db.session)
+    _c.assistant_job_repo = _assistant_job_repo
+
+    if (
+        _c.project_repository is not None
+        and _c.invoice_repository is not None
+        and _c.invoice_attachment_repository is not None
+        and _c.upload_attachment_usecase is not None
+        and _c.create_invoice_usecase is not None
+        and _c.delete_invoice_usecase is not None
+        and _c.worker_repository is not None
+        and _c.labor_entry_repository is not None
+        and _c.assistant_messenger is not None
+    ):
+        _c.assistant_ticket_feature = _TicketFeature(
+            vision=_c.assistant_vision_llm,
+            decisions=_c.assistant_decision_port,
+            image_gen=_c.assistant_image_gen,
+            scan_mode=current_app.config.get("SCAN_MODE", "genai"),
+            messages=_chat_repo,
+            storage=storage,
+            company_access=_access_repo,
+            project_repo=_c.project_repository,
+            authz_reader=_c.authz_reader,
+            invoice_repo=_c.invoice_repository,
+            attachment_repo=_c.invoice_attachment_repository,
+            worker_repo=_c.worker_repository,
+            labor_entry_repo=_c.labor_entry_repository,
+            import_repo=_assistant_import_repo,
+            create_invoice_usecase=_c.create_invoice_usecase,
+            delete_invoice_usecase=_c.delete_invoice_usecase,
+            upload_attachment_usecase=_c.upload_attachment_usecase,
+        )
+        _c.assistant_material_feature = _MaterialFeature(
+            vision=_c.assistant_vision_llm,
+            decisions=_c.assistant_decision_port,
+            web_search=_c.assistant_web_search,
+            lens=_c.assistant_lens,
+            messages=_chat_repo,
+            storage=storage,
+            company_access=_access_repo,
+            company_repo=_c.company_repo,
+            project_repo=_c.project_repository,
+            authz_reader=_c.authz_reader,
+            product_repo=_c.bibliotheque_product_repo,
+            supplier_repo=_c.bibliotheque_supplier_repo,
+            material_imports=_assistant_import_repo,
+            create_product_usecase=_c.bibliotheque_create_product_usecase,
+            fetch_image_usecase=_c.bibliotheque_fetch_image_from_url_usecase,
+            upload_image_usecase=_c.bibliotheque_upload_image_usecase,
+        )
+        _c.assistant_invoice_fetch_feature = _InvoiceFetchFeature(
+            vision=_c.assistant_vision_llm,
+            messages=_chat_repo,
+            storage=storage,
+            job_repo=_assistant_job_repo,
+            ticket=_c.assistant_ticket_feature,
+            company_access=_access_repo,
+            project_repo=_c.project_repository,
+            authz_reader=_c.authz_reader,
+            invoice_repo=_c.invoice_repository,
+        )
+        _c.assistant_feature_handlers = _FeatureHandlers(
+            ticket=_c.assistant_ticket_feature,
+            material=_c.assistant_material_feature,
+            invoice_fetch=_c.assistant_invoice_fetch_feature,
+        )
+        _c.assistant_service = _AssistantService(
+            message_repo=_chat_repo,
+            messenger=_c.assistant_messenger,
+            router=_c.assistant_router,
+            equipment=_c.assistant_equipment_service,
+            company_access_repo=_access_repo,
+            project_repo=_c.project_repository,
+            vision=_c.assistant_vision_llm,
+            cost_ledger=_c.assistant_cost_ledger,
+            rate_limiter=_c.assistant_rate_limiter,
+            feature_handlers=_c.assistant_feature_handlers,
         )
 
     # -----------------------------------------------------------------------

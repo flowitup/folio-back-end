@@ -29,6 +29,14 @@ dependencies = [
     "python-slugify>=8.0",
     "httpx>=0.27",
     "pillow>=10",
+    "openai>=2.0",
+    "typesafe-sdk>=0.7",
+    "tavily-python>=0.7",
+    "google-genai>=1.0",
+    "pdf2image>=1.17",
+    "img2pdf>=0.6",
+    "opencv-python-headless>=4.10",
+    "numpy>=2",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +67,12 @@ target-version = "py312"
 python_version = "3.12"
 strict = true
 
+# Third-party SDKs with no bundled type stubs / py.typed marker. Scoped to these
+# modules only — strict mode stays on everywhere else.
+[[tool.mypy.overrides]]
+module = ["typesafe_sdk.*", "tavily.*", "pdf2image.*", "img2pdf.*", "cv2.*", "browser_use.*"]
+ignore_missing_imports = true
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
@@ -71,4 +85,5 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "requires_postgres: needs TEST_DATABASE_URL pointing at a real Postgres",
+    "requires_browser: needs BROWSER_TESTS=1 and a real browser-use + Chrome + merchant login",
 ]

@@ -28,7 +28,8 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # ffmpeg: extract poster frames from uploaded project videos
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# poppler-utils: pdf2image (Folio Assistant S1 extraction of a fetched/uploaded PDF page)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

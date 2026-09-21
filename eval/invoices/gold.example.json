@@ -1,0 +1,14 @@
+{
+  "receipt-01.jpg": {
+    "total_ttc": 79.54,
+    "invoice_number": "F-2026-0001",
+    "date": "2026-09-10",
+    "merchant": "Leroy Merlin"
+  },
+  "receipt-02.pdf": {
+    "total_ttc": 128.90,
+    "invoice_number": "PP-882145",
+    "date": "2026-08-22",
+    "merchant": "Point P"
+  }
+}

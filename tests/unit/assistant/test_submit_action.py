@@ -1,0 +1,140 @@
+"""Unit tests for `SubmitAssistantActionUseCase` — the atomic choice-answer transition
+(review finding NEW-H1). The API-level `test_already_answered_409` in
+`tests/api/test_assistant_endpoints.py` already proves the sequential case (submit,
+submit again -> 409); this module proves the concurrent case a sequential test cannot
+reach: a second writer whose conditional UPDATE is evaluated against the row's *current*
+state, not against whatever it read earlier.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timezone
+from typing import Any, Optional
+from uuid import UUID, uuid4
+
+import pytest
+
+from app.application.assistant.exceptions import AssistantAlreadyAnsweredError
+from app.application.assistant.service import SubmitAssistantActionUseCase
+from app.domain.entities.chat_message import ChannelRef, ChatMessage
+
+
+class FakeMessageRepo:
+    """In-memory double for `MessagePosterPort` whose `answer_choice_if_unanswered`
+    mirrors the real repository's atomicity contract: it decides purely from the
+    *current* stored payload, never from a value the caller read earlier."""
+
+    def __init__(self) -> None:
+        self.messages: dict[UUID, ChatMessage] = {}
+        # When set, the next `find_by_id` for this message id also answers the message
+        # (as a concurrent request would, between this read and our own write) before
+        # returning the stale snapshot the caller already has a reference to.
+        self._race_on_next_read: Optional[UUID] = None
+
+    def add(self, message: ChatMessage) -> None:
+        self.messages[message.id] = message
+
+    def find_by_id(self, message_id: UUID) -> Optional[ChatMessage]:
+        message = self.messages.get(message_id)
+        if self._race_on_next_read == message_id:
+            self._race_on_next_read = None
+            # A concurrent submission "wins" the race right here, after this read has
+            # already captured its (now stale) snapshot.
+            assert self.answer_choice_if_unanswered(message_id, "cancel", {})
+        return message
+
+    def update_payload(self, message_id: UUID, payload: dict[str, Any]) -> None:
+        current = self.messages[message_id]
+        self.messages[message_id] = replace(current, payload=payload)
+
+    def answer_choice_if_unanswered(self, message_id: UUID, answered: str, answered_payload: dict[str, Any]) -> bool:
+        current = self.messages[message_id]
+        current_payload = dict(current.payload or {})
+        if current_payload.get("answered"):
+            return False
+        current_payload["answered"] = answered
+        current_payload["answered_payload"] = answered_payload
+        self.messages[message_id] = replace(current, payload=current_payload)
+        return True
+
+    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        return []
+
+
+class FakeSession:
+    def commit(self) -> None:
+        pass
+
+
+class FakeDispatcher:
+    def __init__(self) -> None:
+        self.actions_received: list[tuple[UUID, UUID, str, dict[str, Any]]] = []
+
+    def message_received(self, *, user_id: UUID, message_id: UUID) -> None:  # pragma: no cover - unused here
+        pass
+
+    def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
+        self.actions_received.append((user_id, message_id, action, payload))
+
+
+def _choice_message(user_id: UUID) -> ChatMessage:
+    return ChatMessage(
+        id=uuid4(),
+        channel=ChannelRef(kind="assistant", id=user_id),
+        sender_id=None,
+        body="Confirmer ?",
+        attachment=None,
+        created_at=datetime.now(timezone.utc),
+        sender_type="assistant",
+        content_type="choice",
+        payload={
+            "options": [
+                {"label": "Confirmer", "action": "confirm", "payload": {}},
+                {"label": "Annuler", "action": "cancel", "payload": {}},
+            ]
+        },
+    )
+
+
+def test_two_sequential_submits_second_raises_already_answered() -> None:
+    user_id = uuid4()
+    repo = FakeMessageRepo()
+    message = _choice_message(user_id)
+    repo.add(message)
+    dispatcher = FakeDispatcher()
+    use_case = SubmitAssistantActionUseCase(repo, FakeSession(), dispatcher)
+
+    use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
+    with pytest.raises(AssistantAlreadyAnsweredError):
+        use_case.execute(actor_id=user_id, action="cancel", payload={}, reply_to_id=message.id)
+
+    assert len(dispatcher.actions_received) == 1
+    assert dispatcher.actions_received[0] == (user_id, message.id, "confirm", {})
+
+
+def test_lost_update_race_between_read_and_write_never_double_dispatches() -> None:
+    """A naive read-then-write ("read payload, check answered, then write") would let
+    this race dispatch twice: `execute`'s own read happens before the concurrent
+    request answers the message, so a stale-read check alone would not catch it. The
+    atomic `answer_choice_if_unanswered` call must still refuse, because it is
+    evaluated against the row's state at write time, not at read time."""
+    user_id = uuid4()
+    repo = FakeMessageRepo()
+    message = _choice_message(user_id)
+    repo.add(message)
+    dispatcher = FakeDispatcher()
+    use_case = SubmitAssistantActionUseCase(repo, FakeSession(), dispatcher)
+
+    # Arm the race: the instant `execute` performs its own `find_by_id` read, a
+    # concurrent request answers the message first (simulating another process's
+    # winning UPDATE landing between our read and our own write).
+    repo._race_on_next_read = message.id
+
+    with pytest.raises(AssistantAlreadyAnsweredError):
+        use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
+
+    # The racer's own answer (simulated inline above) already claimed the message —
+    # our request must never dispatch on top of it.
+    assert len(dispatcher.actions_received) == 0
+    assert repo.messages[message.id].payload["answered"] == "cancel"

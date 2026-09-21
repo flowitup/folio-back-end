@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Callable, Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import bindparam, exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo
@@ -31,8 +32,12 @@ def _naive_utc(value: datetime) -> datetime:
 class SqlAlchemyChatRepository:
     """Implements ChatMessageRepositoryPort, ChatReadRepositoryPort and ChatDirectoryPort."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, assistant_enabled: Optional[Callable[[], bool]] = None) -> None:
         self._session = session
+        # Whether to list "assistant:<user_id>" in list_channels_for_user. Defaults closed
+        # so a repository built outside an app context (a script, a unit test) never
+        # fabricates the channel.
+        self._assistant_enabled: Callable[[], bool] = assistant_enabled or (lambda: False)
 
     # ------------------------------------------------------------------
     # ChatMessageRepositoryPort
@@ -56,13 +61,16 @@ class SqlAlchemyChatRepository:
         return [row.to_entity() for row in reversed(rows)]
 
     def count_since(self, channel: ChannelRef, since: Optional[datetime], exclude_sender: UUID) -> int:
+        # An assistant-authored row has sender_id NULL; in SQL `NULL != x` is NULL (not
+        # true), so a plain != would silently drop every assistant reply from unread
+        # counts. or_() makes a NULL sender always count as "someone else".
         stmt = (
             select(func.count())
             .select_from(ChatMessageOrm)
             .where(
                 ChatMessageOrm.channel_kind == channel.kind,
                 ChatMessageOrm.channel_id == channel.id,
-                ChatMessageOrm.sender_id != exclude_sender,
+                or_(ChatMessageOrm.sender_id.is_(None), ChatMessageOrm.sender_id != exclude_sender),
             )
         )
         if since is not None:
@@ -78,6 +86,79 @@ class SqlAlchemyChatRepository:
         if value is None:
             return None
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    def update_payload(self, message_id: UUID, payload: dict[str, Any]) -> None:
+        orm = self._session.get(ChatMessageOrm, message_id)
+        if orm is None:
+            return
+        orm.payload = payload
+        self._session.flush()
+
+    def answer_choice_if_unanswered(self, message_id: UUID, answered: str, answered_payload: dict[str, Any]) -> bool:
+        """Single conditional UPDATE — the only defense against two concurrent
+        ``POST /assistant/actions`` calls on the same choice message racing each other
+        (review finding NEW-H1): a plain read-modify-write (``find_by_id`` +
+        ``update_payload``) lets both requests read ``answered is None`` before either
+        commits, so both would dispatch and (on a ``set_project``/``not_duplicate``
+        choice) create two invoices from one receipt. The WHERE clause is evaluated by
+        the database against the row's *current* state, so only the first writer's
+        UPDATE can ever match; the second gets ``rowcount == 0`` and is told to raise
+        ``AssistantAlreadyAnsweredError`` instead of dispatching.
+
+        Postgres merges the two new keys into the existing JSONB without needing the
+        rest of the payload; SQLite (tests) uses the JSON1 ``json_set``/``json_extract``
+        functions to the same effect — both read the "not yet answered" predicate off
+        the row itself, not off a value read earlier in this process.
+        """
+        bind = self._session.get_bind()
+        is_postgres = bind is not None and bind.dialect.name == "postgresql"
+        answered_payload_json = json.dumps(answered_payload)
+        if is_postgres:
+            sql = (
+                "UPDATE chat_messages "
+                "SET payload = payload || jsonb_build_object("
+                "'answered', CAST(:answered AS text), "
+                "'answered_payload', CAST(:answered_payload AS jsonb)"
+                ") "
+                "WHERE id = :id AND (payload ->> 'answered') IS NULL"
+            )
+        else:
+            sql = (
+                "UPDATE chat_messages "
+                "SET payload = json_set("
+                "payload, '$.answered', :answered, '$.answered_payload', json(:answered_payload)"
+                ") "
+                "WHERE id = :id AND json_extract(payload, '$.answered') IS NULL"
+            )
+        # `id` must be bound with the column's own type: on SQLite, `ChatMessageOrm.id`
+        # (postgresql.UUID) stores a 32-char hex string with no dashes, which a plain
+        # `str(message_id)` (dashed) would never match — silently making every call
+        # here a no-op, the opposite of this method's purpose.
+        stmt = text(sql).bindparams(bindparam("id", type_=ChatMessageOrm.id.type))
+        result = self._session.execute(
+            stmt, {"id": message_id, "answered": answered, "answered_payload": answered_payload_json}
+        )
+        self._session.commit()
+        # `session.execute(text(...))`'s static return type is the generic `Result[Any]`
+        # (a `text()` clause could be a SELECT too) even though this one is an UPDATE, so
+        # mypy does not see `rowcount` — it is populated at runtime regardless of which
+        # `execute()` overload constructed the `CursorResult` (same as `mark_processed`'s
+        # `update()`-construct version elsewhere in this codebase).
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        stmt = (
+            select(ChatMessageOrm)
+            .where(
+                ChatMessageOrm.channel_kind == channel.kind,
+                ChatMessageOrm.channel_id == channel.id,
+                ChatMessageOrm.content_type == "text",
+            )
+            .order_by(ChatMessageOrm.created_at.desc())
+            .limit(limit)
+        )
+        rows = self._session.execute(stmt).scalars().all()
+        return [row.to_entity() for row in reversed(rows)]
 
     # ------------------------------------------------------------------
     # ChatReadRepositoryPort
@@ -155,6 +236,11 @@ class SqlAlchemyChatRepository:
         return ids
 
     def list_channels_for_user(self, user_id: UUID) -> list[ChannelInfo]:
+        result: list[ChannelInfo] = []
+        if self._assistant_enabled():
+            result.append(
+                ChannelInfo(channel=ChannelRef(kind="assistant", id=user_id), name="Assistant", member_count=1)
+            )
         companies = self._session.execute(
             select(CompanyModel.id, CompanyModel.legal_name)
             .join(UserCompanyAccessModel, UserCompanyAccessModel.company_id == CompanyModel.id)
@@ -167,14 +253,14 @@ class SqlAlchemyChatRepository:
             project_stmt = project_stmt.where((ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id))
         projects = self._session.execute(project_stmt).all()
 
-        result = [
+        result.extend(
             ChannelInfo(
                 channel=ChannelRef(kind="company", id=cid),
                 name=name,
                 member_count=self._company_member_count(cid),
             )
             for cid, name in companies
-        ]
+        )
         result.extend(
             ChannelInfo(
                 channel=ChannelRef(kind="project", id=pid),
@@ -186,15 +272,30 @@ class SqlAlchemyChatRepository:
         return result
 
     def channel_exists(self, channel: ChannelRef) -> bool:
+        if channel.kind == "assistant":
+            # FEATURE_ASSISTANT is the pipeline's real kill switch (not just the channel
+            # listing / actions endpoint): once off, the assistant channel does not
+            # exist at all, so send/list/read/attachment all answer as they would for
+            # any unknown channel (404), and nothing ever reaches the AI pipeline.
+            if not self._assistant_enabled():
+                return False
+            return bool(self._session.execute(select(exists().where(UserModel.id == channel.id))).scalar())
         model = CompanyModel if channel.kind == "company" else ProjectModel
         return bool(self._session.execute(select(exists().where(model.id == channel.id))).scalar())
 
     def channel_name(self, channel: ChannelRef) -> str:
         """Display name of the company / project behind the key ("" when it vanished)."""
+        if channel.kind == "assistant":
+            return "Assistant"
         model = CompanyModel if channel.kind == "company" else ProjectModel
         return self._session.execute(select(model.name).where(model.id == channel.id)).scalar() or ""
 
     def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
+        if channel.kind == "assistant":
+            # The only member of a user's assistant conversation is that user — not even
+            # a platform-ops superadmin can read someone else's. FEATURE_ASSISTANT off
+            # means nobody is a member of any assistant channel (see channel_exists).
+            return self._assistant_enabled() and user_id == channel.id
         if channel.kind == "company":
             return (
                 self._session.execute(
@@ -212,6 +313,9 @@ class SqlAlchemyChatRepository:
         return self._is_superadmin(user_id)
 
     def list_members(self, channel: ChannelRef) -> list[MemberInfo]:
+        if channel.kind == "assistant":
+            names = self.display_names([channel.id])
+            return [MemberInfo(id=channel.id, name=names.get(channel.id, "?"))]
         if channel.kind == "company":
             ids = list(
                 self._session.execute(

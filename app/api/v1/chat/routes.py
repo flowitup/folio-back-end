@@ -39,6 +39,7 @@ from app.application.chat.exceptions import (
 )
 from app.application.chat.usecases import MAX_ATTACHMENT_BYTES
 from app.infrastructure.rate_limiter import limiter
+from config import assistant_flags_enabled
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,19 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 
 def chat_enabled() -> bool:
     return bool(current_app.config.get("FEATURE_CHAT"))
+
+
+def assistant_enabled() -> bool:
+    """True once FEATURE_ASSISTANT is on and both core API keys are configured.
+
+    Mirrors ``Config.assistant_enabled()``; this variant reads ``current_app.config``
+    because that dict holds plain values copied from the config class, not a live
+    Config instance.
+    """
+    cfg = current_app.config
+    return assistant_flags_enabled(
+        cfg.get("FEATURE_ASSISTANT"), cfg.get("DEEPSEEK_API_KEY"), cfg.get("TYPESAFE_API_KEY")
+    )
 
 
 def require_chat_feature(func: F) -> F:
@@ -88,7 +102,7 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
     return {
         "id": str(dto.id),
         "channel_key": dto.channel_key,
-        "sender_id": str(dto.sender_id),
+        "sender_id": str(dto.sender_id) if dto.sender_id is not None else None,
         "sender_name": dto.sender_name,
         "body": dto.body,
         "attachment": (
@@ -103,6 +117,10 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
         ),
         "created_at": _iso(dto.created_at),
         "mine": dto.sender_id == actor_id,
+        "sender_type": dto.sender_type,
+        "content_type": dto.content_type,
+        "payload": dto.payload,
+        "reply_to_id": str(dto.reply_to_id) if dto.reply_to_id is not None else None,
     }
 
 
@@ -115,7 +133,7 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
 @openapi_doc(summary="Feature flags of this deployment", responses={200: FeaturesResponse}, tags=["features"])
 @jwt_required()  # type: ignore[untyped-decorator]
 def get_features() -> Any:
-    return jsonify({"chat": chat_enabled()}), 200
+    return jsonify({"chat": chat_enabled(), "assistant": assistant_enabled()}), 200
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +234,7 @@ def list_messages(channel_key: str) -> Any:
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def send_message(channel_key: str) -> Any:
     attachment: tuple[str, str, bytes] | None = None
+    lang: str | None = None
     if request.files:
         upload = request.files.get("file")
         if upload is None or not upload.filename:
@@ -227,6 +246,11 @@ def send_message(channel_key: str) -> Any:
             return _err(413, "AttachmentTooLarge", f"Attachment exceeds {MAX_ATTACHMENT_BYTES} bytes")
         attachment = (upload.filename, upload.mimetype or "application/octet-stream", upload.stream.read())
         body: str | None = (request.form.get("body") or "").strip() or None
+        raw_lang = (request.form.get("lang") or "").strip() or None
+        if raw_lang is not None:
+            if raw_lang not in ("vi", "fr", "en"):
+                return _err(422, "ValidationError", "Invalid input: lang must be one of vi, fr, en")
+            lang = raw_lang
     else:
         try:
             parsed = SendMessageBody.model_validate(request.get_json(silent=True) or {})
@@ -234,6 +258,7 @@ def send_message(channel_key: str) -> Any:
             fields = safe_validation_fields(exc)
             return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
         body = parsed.body
+        lang = parsed.lang
 
     actor_id = UUID(get_jwt_identity())
     container = get_container()
@@ -241,7 +266,7 @@ def send_message(channel_key: str) -> Any:
         raise RuntimeError("send_chat_message_usecase not wired in container")
     try:
         dto = container.send_chat_message_usecase.execute(
-            actor_id=actor_id, channel_key=channel_key, body=body, attachment=attachment
+            actor_id=actor_id, channel_key=channel_key, body=body, attachment=attachment, lang=lang
         )
     except ChatChannelNotFoundError:
         return _err(404, "NotFound", "Channel not found")

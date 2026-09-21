@@ -35,7 +35,7 @@ def run_worker(queues: list[str] | None = None) -> None:
         queues: List of queue names to listen on (default: ["default"])
     """
     if queues is None:
-        queues = ["default", "emails", "outbox"]
+        queues = ["default", "emails", "outbox", "assistant"]
 
     redis_conn = get_redis_connection()
 

@@ -7,15 +7,20 @@ so there is no channel table and no FK on ``channel_id``.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
 from app.infrastructure.database.models.base import Base
+
+# JSONB on Postgres, generic JSON elsewhere (SQLite for tests) — same pattern as
+# invoices/billing_document/task.
+PayloadJSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 class ChatMessageOrm(Base):
@@ -25,14 +30,22 @@ class ChatMessageOrm(Base):
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     channel_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     channel_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
-    sender_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    # NULL = assistant-authored (see sender_type).
+    sender_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attachment_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attachment_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     attachment_content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     attachment_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sender_type: Mapped[str] = mapped_column(String(16), nullable=False, default="user", server_default="user")
+    content_type: Mapped[str] = mapped_column(String(16), nullable=False, default="text", server_default="text")
+    payload: Mapped[Optional[dict[str, Any]]] = mapped_column(PayloadJSON, nullable=True)
+    reply_to_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    ai_trace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
@@ -56,6 +69,11 @@ class ChatMessageOrm(Base):
             body=self.body,
             attachment=attachment,
             created_at=created,
+            sender_type=self.sender_type,
+            content_type=self.content_type,
+            payload=self.payload,
+            reply_to_id=self.reply_to_id,
+            ai_trace_id=self.ai_trace_id,
         )
 
     @classmethod
@@ -71,6 +89,11 @@ class ChatMessageOrm(Base):
             attachment_filename=att.filename if att else None,
             attachment_content_type=att.content_type if att else None,
             attachment_size_bytes=att.size_bytes if att else None,
+            sender_type=message.sender_type,
+            content_type=message.content_type,
+            payload=message.payload,
+            reply_to_id=message.reply_to_id,
+            ai_trace_id=message.ai_trace_id,
             created_at=message.created_at,
         )
 

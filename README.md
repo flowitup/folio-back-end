@@ -99,6 +99,48 @@ A full template lives in `.env.example`.
 
 ---
 
+## Assistant (AI layer)
+
+Folio Assistant is a pinned per-user AI conversation inside team chat: identify a
+material photo, import a ticket/receipt into an invoice, fetch an invoice from a
+merchant's website, find/move inventory, and answer chantier questions. It ships **dark**
+until both the feature flag and the two core provider keys are set.
+
+| Variable | What it controls |
+|---|---|
+| `FEATURE_ASSISTANT` | Master switch. Off (default) hard-404s the `assistant:<user>` channel and its actions endpoint — a real kill switch, not just a UI toggle. |
+| `DEEPSEEK_API_KEY` | Vision + chat text (photo reading, scan generation verification, chit-chat). Required, with `TYPESAFE_API_KEY`, for the assistant to be considered "enabled". |
+| `TYPESAFE_API_KEY` | Jev (TypeSafe AI) — every routing/gating decision (`system_one`), never free text. |
+| `TAVILY_API_KEY` | Web search across the allow-listed merchant domains (material identification). |
+| `GEMINI_API_KEY` | Scan generation when `SCAN_MODE=genai` (a clean redraw of a receipt photo). |
+| `SERPAPI_API_KEY` | Google Lens reverse-image fallback (wired, not yet reachable from any flow). |
+| `SCAN_MODE` | `genai` (Gemini redraw + faithfulness check, falls back automatically) or `opencv` (perspective-correct + threshold, no extra API call). |
+| `JOB_OFFPEAK_ONLY` | Restrict the browser-worker's merchant-site jobs to after noon Europe/Paris (owner runbook). |
+| `ASSISTANT_DAILY_COST_CAP_USD` | Daily USD spend cap across every provider; once reached, the pipeline answers a quota template instead of calling anything. A rolling per-user hourly rate limit (30 runs/hour) applies independently. |
+| `BROWSER_WORKER_CHROME_PATH` / `_PROFILE_DIR` / `_DOWNLOADS_DIR` | The `ai-browser` container's Chrome binary and persisted profile/downloads paths. |
+
+Every provider adapter degrades to a "not configured" reply when its key is empty — a
+half-configured deployment stays dark instead of 500ing.
+
+Invoice-fetch jobs run on the shared RQ `assistant` queue (`stack.queue.rq_worker`) plus
+a dedicated **`ai-browser`** container (`Dockerfile.browser`, `docker/browser-entrypoint.sh`)
+that polls `assistant_jobs` directly with plain SQL — it never boots the Flask app. Run
+`docker/browser-entrypoint.sh login-session` once to sign into each merchant site
+manually (noVNC/SSH-tunnel only, see [`../docs/assistant-merchant-login.md`](../docs/assistant-merchant-login.md)); the container's
+poll-loop mode never logs in itself (hard rule: read-only browsing of already-authenticated
+sessions).
+
+Accuracy against a hand-labelled gold set (S1 invoice extraction, A1 material ID):
+
+```bash
+uv run python -m scripts.ai_eval.run_eval --invoices eval/invoices --materials eval/materials
+```
+
+See `eval/README.md` for the gold format — this repo ships no real invoices/photos, only
+the harness and an example gold file.
+
+---
+
 ## What's inside the API
 
 The API exposes a small, predictable set of endpoints under `/api/v1/`:

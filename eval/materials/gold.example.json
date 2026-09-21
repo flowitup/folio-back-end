@@ -1,0 +1,12 @@
+{
+  "material-01.jpg": {
+    "brand": "Bosch",
+    "reference": "GSB18V",
+    "name_contains": "perceuse"
+  },
+  "material-02.jpg": {
+    "brand": "Placo",
+    "reference": "BA13",
+    "name_contains": "plaque"
+  }
+}
