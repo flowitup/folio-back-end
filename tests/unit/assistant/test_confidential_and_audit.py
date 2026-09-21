@@ -108,6 +108,7 @@ class LeakDecisionPort:
         ("ask_project_income", "budget"),
         ("ask_salary", "salaire"),
         ("ask_own_salary", "salaire"),
+        ("ask_unpaid_invoices", "budget"),
     ],
 )
 def test_confidential_intent_refused_outside_admin_channel(world, intent, template_fragment) -> None:  # noqa: F811

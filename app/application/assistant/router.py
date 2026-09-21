@@ -43,6 +43,7 @@ _INTENT_CRITERIA: dict[str, str | None] = {
         "en: open tasks this week)"
     ),
     "ask_audit": "qui a demandé quoi cette semaine à l'assistant (admin uniquement)",
+    "ask_unpaid_invoices": "factures clients impayées ou en retard, devis/factures non réglés (admin uniquement)",
 }
 if set(_INTENT_CRITERIA) != set(INTENTS):
     raise RuntimeError("_INTENT_CRITERIA and INTENTS have drifted apart.")

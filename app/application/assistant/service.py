@@ -261,6 +261,7 @@ _FEATURE_BY_INTENT: dict[str, str] = {
     "create_task": "tasks",
     "ask_tasks": "tasks",
     "ask_audit": "chat",
+    "ask_unpaid_invoices": "finance",
 }
 
 
@@ -751,6 +752,31 @@ class AssistantService:
                 scope=scope,
                 audit_ctx=audit_ctx,
             )
+        if intent == "ask_unpaid_invoices":
+            # Client billing amounts are a finance_company class: admin channel only.
+            if not scope.is_admin_channel or self._admin_answers is None:
+                audit_ctx.refused_reason = "scope"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("refuse_finance", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
+                )
+                return 0, "refused"
+            audit_ctx.tools.append("BillingDocumentRepository")
+            company_ids = [scope.company_id] if scope.company_id is not None else self._company_ids(user_id)
+            outcome = self._admin_answers.ask_unpaid_invoices(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+                projects=self._projects.list_for_user_and_companies(user_id, company_ids),
+            )
+            return 0, outcome
         if intent == "ask_audit":
             if not scope.is_admin_channel or self._admin_answers is None:
                 audit_ctx.refused_reason = "scope"

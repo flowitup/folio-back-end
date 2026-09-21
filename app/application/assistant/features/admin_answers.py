@@ -82,7 +82,9 @@ class AdminAnswersFeature:
         released_total = company_released + personal_released
         spent_total = company_spent + personal_spent
         budget = project.budget if project is not None else None
-        remaining: Optional[float] = float(budget) - float(released_total) if budget is not None else None
+        # Same definition as the app's home card ("còn lại để chi"): what has been released
+        # and not yet spent. The budget is reported on its own line.
+        remaining: Optional[float] = float(released_total) - float(spent_total)
         text = reply.render(
             "project_income_summary",
             lang,

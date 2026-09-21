@@ -170,6 +170,7 @@ INTENTS: tuple[str, ...] = (
     "ask_tasks",
     # Phase 03/04 — admin-channel supervision ("who asked what this week").
     "ask_audit",
+    "ask_unpaid_invoices",
 )
 
 #: Merchants Jev is asked to recognise for `fetch_invoice` (S0 `merchant` question).

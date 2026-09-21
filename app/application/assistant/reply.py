@@ -557,6 +557,11 @@ INTENT_LABELS: dict[str, dict[str, str]] = {
     "create_task": {"vi": "Tạo công việc", "fr": "Créer une tâche", "en": "Create a task"},
     "ask_tasks": {"vi": "Công việc mở", "fr": "Tâches ouvertes", "en": "Open tasks"},
     "ask_audit": {"vi": "Ai đã hỏi gì", "fr": "Qui a demandé quoi", "en": "Who asked what"},
+    "ask_unpaid_invoices": {
+        "vi": "Hoá đơn khách chưa thanh toán",
+        "fr": "Factures clients impayées",
+        "en": "Unpaid client invoices",
+    },
 }
 if set(INTENT_LABELS) != set(INTENTS):
     raise RuntimeError("INTENT_LABELS and INTENTS have drifted apart.")
