@@ -1190,10 +1190,49 @@ def invitation_app():
         _assistant_dispatcher = RecordingAssistantDispatcher()
         _c.assistant_dispatcher = _assistant_dispatcher
         _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
-        _c.assistant_service = AssistantService(_chat_repo, _c.assistant_messenger)
         _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _assistant_dispatcher)
         _c.send_chat_message_usecase.assistant_dispatcher = _assistant_dispatcher
         test_app._assistant_dispatcher = _assistant_dispatcher
+
+        # AssistantService itself is rebuilt with fake AI provider ports (never the real
+        # DeepSeek/Jev clients `_configure_di_container()` built from InviteTestConfig's
+        # placeholder API keys) so no test can accidentally reach a real network call.
+        # The equipment lookup keeps the REAL inventory/company/project repositories
+        # `_configure_di_container()` already wired above — equipment answers come from
+        # the test SQLite DB, not a fake, matching phase 02's "no LLM for equipment" design.
+        from app.application.assistant.equipment import EquipmentService as _EquipmentService
+        from app.application.assistant.router import Router as _Router
+        from app.infrastructure.ai.cost import InMemoryCostLedger as _InMemoryCostLedger
+        from tests.fakes.ai import ScriptedDecision as _ScriptedDecision
+        from tests.fakes.ai import ScriptedVision as _ScriptedVision
+
+        _assistant_decision_port = _ScriptedDecision()
+        _assistant_vision = _ScriptedVision(text_answers=["(scripted chit-chat reply)"])
+        _c.assistant_decision_port = _assistant_decision_port
+        _c.assistant_vision_llm = _assistant_vision
+        _c.assistant_cost_ledger = _InMemoryCostLedger(
+            daily_cap_usd=float(test_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
+        )
+        _c.assistant_router = _Router(_assistant_decision_port)
+        if _c.project_repository is not None:
+            _c.assistant_equipment_service = _EquipmentService(
+                item_repo=_c.inventory_item_repo,
+                warehouse_repo=_c.inventory_warehouse_repo,
+                project_repo=_c.project_repository,
+                update_item_usecase=_c.inventory_update_item_usecase,
+            )
+            _c.assistant_service = AssistantService(
+                message_repo=_chat_repo,
+                messenger=_c.assistant_messenger,
+                router=_c.assistant_router,
+                equipment=_c.assistant_equipment_service,
+                company_access_repo=_c.user_company_access_repo,
+                project_repo=_c.project_repository,
+                vision=_assistant_vision,
+                cost_ledger=_c.assistant_cost_ledger,
+            )
+        test_app._assistant_vision = _assistant_vision
+        test_app._assistant_decision_port = _assistant_decision_port
 
         # ------------------------------------------------------------------
         # Sign in with a phone number + SMS code — recording sender, no SMS leaves the test.

@@ -474,16 +474,17 @@ def _configure_di_container() -> None:
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
 
-    # Wire the assistant bounded context (Folio Assistant conversation, FEATURE_ASSISTANT).
-    # The chat push notifier is attached later (with the rest of the push stack), same as
-    # send_chat_message_usecase.notifier above.
+    # Wire the assistant conversation transport (Folio Assistant, FEATURE_ASSISTANT).
+    # AssistantService itself (the DeepSeek/Jev pipeline) is wired further down, once the
+    # companies and inventory bounded contexts it reuses (equipment lookup) exist — see
+    # "Assistant AI pipeline DI wiring" below. The chat push notifier is attached later
+    # (with the rest of the push stack), same as send_chat_message_usecase.notifier above.
     from app.application.assistant.messages import AssistantMessenger
-    from app.application.assistant.service import AssistantService, SubmitAssistantActionUseCase
+    from app.application.assistant.service import SubmitAssistantActionUseCase
     from app.infrastructure.adapters.rq_assistant_dispatcher import RqAssistantDispatcher
 
     _c.assistant_dispatcher = RqAssistantDispatcher(current_app.config.get("REDIS_URL", ""))
     _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
-    _c.assistant_service = AssistantService(_chat_repo, _c.assistant_messenger)
     _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _c.assistant_dispatcher)
     _c.send_chat_message_usecase.assistant_dispatcher = _c.assistant_dispatcher
 
@@ -1595,6 +1596,69 @@ def _configure_di_container() -> None:
         permission_checker=_biblio_permission_checker,
         db_session=db.session,
     )
+
+    # -----------------------------------------------------------------------
+    # Assistant AI pipeline DI wiring (phase 02: providers, router, equipment).
+    #
+    # Reuses the companies (_access_repo) and inventory (_inventory_item_repo,
+    # _inventory_warehouse_repo, inventory_update_item_usecase) wiring above, so this
+    # block has to run after both — hence living here rather than next to
+    # assistant_messenger/assistant_dispatcher earlier in this function. A NullX adapter
+    # stands in for every provider whose API key is empty: a deployment that turned
+    # FEATURE_ASSISTANT on before configuring every key answers the "not configured"
+    # template (ProviderNotConfiguredError) instead of crashing.
+    # -----------------------------------------------------------------------
+    from app.application.assistant.equipment import EquipmentService as _EquipmentService
+    from app.application.assistant.router import Router as _Router
+    from app.application.assistant.service import AssistantService as _AssistantService
+    from app.infrastructure.ai.cost import RedisCostLedger as _RedisCostLedger
+    from app.infrastructure.ai.deepseek_client import DeepSeekVisionLlm as _DeepSeekVisionLlm
+    from app.infrastructure.ai.deepseek_client import NullVisionLlm as _NullVisionLlm
+    from app.infrastructure.ai.gemini_client import GeminiImageGen as _GeminiImageGen
+    from app.infrastructure.ai.gemini_client import NullImageGenPort as _NullImageGenPort
+    from app.infrastructure.ai.jev_client import JevDecisionPort as _JevDecisionPort
+    from app.infrastructure.ai.jev_client import NullDecisionPort as _NullDecisionPort
+    from app.infrastructure.ai.serpapi_client import NullLensPort as _NullLensPort
+    from app.infrastructure.ai.serpapi_client import SerpApiLens as _SerpApiLens
+    from app.infrastructure.ai.tavily_client import NullWebSearchPort as _NullWebSearchPort
+    from app.infrastructure.ai.tavily_client import TavilyWebSearch as _TavilyWebSearch
+
+    _deepseek_key = current_app.config.get("DEEPSEEK_API_KEY", "")
+    _typesafe_key = current_app.config.get("TYPESAFE_API_KEY", "")
+    _tavily_key = current_app.config.get("TAVILY_API_KEY", "")
+    _gemini_key = current_app.config.get("GEMINI_API_KEY", "")
+    _serpapi_key = current_app.config.get("SERPAPI_API_KEY", "")
+
+    _c.assistant_cost_ledger = _RedisCostLedger(
+        current_app.config.get("REDIS_URL", ""), float(current_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
+    )
+    _c.assistant_vision_llm = (
+        _DeepSeekVisionLlm(_deepseek_key, _c.assistant_cost_ledger) if _deepseek_key else _NullVisionLlm()
+    )
+    _c.assistant_decision_port = _JevDecisionPort(_typesafe_key) if _typesafe_key else _NullDecisionPort()
+    _c.assistant_web_search = _TavilyWebSearch(_tavily_key) if _tavily_key else _NullWebSearchPort()
+    _c.assistant_image_gen = _GeminiImageGen(_gemini_key) if _gemini_key else _NullImageGenPort()
+    _c.assistant_lens = _SerpApiLens(_serpapi_key) if _serpapi_key else _NullLensPort()
+
+    _c.assistant_router = _Router(_c.assistant_decision_port)
+    if _c.project_repository is not None:
+        _c.assistant_equipment_service = _EquipmentService(
+            item_repo=_inventory_item_repo,
+            warehouse_repo=_inventory_warehouse_repo,
+            project_repo=_c.project_repository,
+            update_item_usecase=_c.inventory_update_item_usecase,
+        )
+        if _c.assistant_messenger is not None:
+            _c.assistant_service = _AssistantService(
+                message_repo=_chat_repo,
+                messenger=_c.assistant_messenger,
+                router=_c.assistant_router,
+                equipment=_c.assistant_equipment_service,
+                company_access_repo=_access_repo,
+                project_repo=_c.project_repository,
+                vision=_c.assistant_vision_llm,
+                cost_ledger=_c.assistant_cost_ledger,
+            )
 
     # -----------------------------------------------------------------------
     # Labor write use-cases — single construction point.

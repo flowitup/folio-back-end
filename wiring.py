@@ -433,6 +433,16 @@ class Container:
     assistant_service: Optional[Any] = None  # AssistantService (called by the RQ jobs)
     submit_assistant_action_usecase: Optional[Any] = None
 
+    # Assistant AI providers (phase 02) — NullX adapters when the matching key is empty.
+    assistant_vision_llm: Optional[Any] = None  # VisionLlmPort (DeepSeekVisionLlm | NullVisionLlm)
+    assistant_decision_port: Optional[Any] = None  # DecisionPort (JevDecisionPort | NullDecisionPort)
+    assistant_web_search: Optional[Any] = None  # WebSearchPort (TavilyWebSearch | NullWebSearchPort)
+    assistant_image_gen: Optional[Any] = None  # ImageGenPort (GeminiImageGen | NullImageGenPort)
+    assistant_lens: Optional[Any] = None  # LensPort (SerpApiLens | NullLensPort)
+    assistant_cost_ledger: Optional[Any] = None  # CostLedgerPort (RedisCostLedger)
+    assistant_router: Optional[Any] = None  # Router (S0)
+    assistant_equipment_service: Optional[Any] = None  # EquipmentService
+
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 
