@@ -8,12 +8,16 @@ path (``ChatPushNotifier.message_sent_by_assistant``, which does not exclude the
 own "sender" the way a human-to-human push would).
 
 Every ``post_*`` method takes an explicit ``channel`` — the message's own channel
-(company/project/admin) when called from ``AssistantService``, which always knows it.
-When omitted it falls back to the retired ``assistant:<user_id>`` channel: every existing
-call site inside ``app.application.assistant.features`` (ticket/material/invoice-fetch —
-phase 03/04's job to make channel-aware) still compiles and runs unchanged, but a reply
-posted that way lands in a channel nobody can read any more until that phase threads
-``ChannelScope`` all the way through those features' own reply sites.
+(company/project/admin) when called from ``AssistantService`` or a feature under
+``app.application.assistant.features`` (ticket/material/invoice-fetch/labor/tasks/
+admin-answers), all of which are channel-aware since phase 03/04. ``channel`` omitted
+falls back to the retired ``assistant:<user_id>`` channel — kept only so an internal
+caller with no channel context (none remain in production code) still compiles.
+
+Every ``post_*`` method also takes an optional ``scope`` — when given, ``_post`` runs
+the payload through ``app.application.assistant.scope.redact`` before persisting it
+(D17 layer 1): a card/choice/job_status built for a non-admin channel never carries a
+``finance_company``/``payroll`` classified field, whichever feature posted it.
 """
 
 from __future__ import annotations
@@ -23,7 +27,9 @@ from typing import Any, Optional
 from uuid import UUID
 
 from app.application.assistant.exceptions import AssistantError
+from app.application.assistant.models import ChannelScope
 from app.application.assistant.ports import MessagePosterPort
+from app.application.assistant.scope import redact
 from app.application.invitations.ports import TransactionalSessionPort
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 
@@ -80,12 +86,16 @@ class AssistantMessenger:
         reply_to_id: UUID | None,
         trace_id: str | None,
         channel: ChannelRef | None,
+        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         target = channel if channel is not None else ChannelRef(kind="assistant", id=user_id)
+        # D17 layer 1: strip every confidential-class field the scope does not allow
+        # before the message is ever built/persisted — the ONE place every card/choice/
+        # job_status payload passes through, whichever feature/service call site posted it.
         message = ChatMessage.assistant(
             channel=target,
             content_type=content_type,
-            payload=payload,
+            payload=redact(scope, payload),
             body=body,
             reply_to_id=reply_to_id,
             trace_id=trace_id,
@@ -105,6 +115,7 @@ class AssistantMessenger:
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
+        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         return self._post(
             user_id=user_id,
@@ -114,6 +125,7 @@ class AssistantMessenger:
             reply_to_id=reply_to_id,
             trace_id=trace_id,
             channel=channel,
+            scope=scope,
         )
 
     def post_card(
@@ -131,6 +143,7 @@ class AssistantMessenger:
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
+        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         """Builds the ``card`` content-type's wire contract itself — callers pass typed
         fields, never a raw dict, so every card the assistant posts is shaped identically
@@ -161,6 +174,7 @@ class AssistantMessenger:
             reply_to_id=reply_to_id,
             trace_id=trace_id,
             channel=channel,
+            scope=scope,
         )
 
     def post_choice(
@@ -173,6 +187,7 @@ class AssistantMessenger:
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
         addressed_to: UUID | None = None,
+        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         """``addressed_to`` (the asker) defaults to ``user_id`` — every current caller
         already passes the asker's id there, so this is free for them. Only the person
@@ -191,6 +206,7 @@ class AssistantMessenger:
             reply_to_id=reply_to_id,
             trace_id=trace_id,
             channel=channel,
+            scope=scope,
         )
 
     def post_job_status(
@@ -204,6 +220,7 @@ class AssistantMessenger:
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
+        scope: ChannelScope | None = None,
     ) -> ChatMessage:
         payload = {"job_id": job_id, "state": state, "text": text, "progress": progress}
         return self._post(
@@ -214,6 +231,7 @@ class AssistantMessenger:
             reply_to_id=reply_to_id,
             trace_id=trace_id,
             channel=channel,
+            scope=scope,
         )
 
     def update_job_status(

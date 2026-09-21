@@ -371,6 +371,17 @@ class TestAdminChannel:
         resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
         assert resp.status_code == 404
 
+    def test_platform_ops_sees_the_admin_channel_in_the_chip_row(self, inv_client, superadmin_token, invitation_app):
+        """Phase 03's answer to phase 01/02's open question 1: ops oversees every
+        company, not just the ones it happens to hold a `user_company_access` row for."""
+        key = self._admin_key(invitation_app._test_company_id)
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(superadmin_token)).get_json()["items"]
+        admin_channel = next(c for c in items if c["key"] == key)
+        assert admin_channel["kind"] == "admin"
+        # Ops is not itself a member of the company, so the company channel is absent —
+        # only its admin channel is listed.
+        assert f"company:{invitation_app._test_company_id}" not in [c["key"] for c in items]
+
 
 class TestFolioReplies:
     """`AssistantMessenger` posting into a shared channel — sender name, unread counts,

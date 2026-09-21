@@ -41,6 +41,11 @@ PICK_ASK_LOW = 0.60
 # Jev confidence to run unconfirmed; otherwise show a confirm/cancel choice.
 IS_WRITE = 0.80
 
+# D17 layer 3 — output guard: a free-text DeepSeek reply in a non-admin channel is
+# replaced by the refusal template once Jev's "does this disclose income/budget/pay?"
+# Noul reaches this confidence.
+OUTPUT_GUARD_LEAK = 0.50
+
 
 def intent_status(confidence: float) -> str:
     """ "confirmed" (dispatch straight to the intent) or "to_confirm" (ask)."""
@@ -96,3 +101,8 @@ def pick_status(confidence: float) -> str:
 
 def is_write_allowed(confidence: float) -> bool:
     return confidence >= IS_WRITE
+
+
+def output_guard_triggered(confidence: float) -> bool:
+    """True once Jev's "discloses income/budget/pay" Noul reaches ``OUTPUT_GUARD_LEAK``."""
+    return confidence >= OUTPUT_GUARD_LEAK

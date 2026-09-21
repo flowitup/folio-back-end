@@ -252,6 +252,7 @@ class SqlAlchemyChatRepository:
 
     def list_channels_for_user(self, user_id: UUID) -> list[ChannelInfo]:
         result: list[ChannelInfo] = []
+        is_ops = self._is_superadmin(user_id)
         companies = self._session.execute(
             select(CompanyModel.id, CompanyModel.legal_name, UserCompanyAccessModel.role)
             .join(UserCompanyAccessModel, UserCompanyAccessModel.company_id == CompanyModel.id)
@@ -259,21 +260,41 @@ class SqlAlchemyChatRepository:
             .order_by(CompanyModel.legal_name)
         ).all()
         project_stmt = select(ProjectModel.id, ProjectModel.name).order_by(ProjectModel.name)
-        if not self._is_superadmin(user_id):
+        if not is_ops:
             visible = self._membership_project_ids(user_id)
             project_stmt = project_stmt.where((ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id))
         projects = self._session.execute(project_stmt).all()
 
+        admin_channel_company_ids: set[UUID] = set()
         for cid, name, role in companies:
             result.append(
                 ChannelInfo(
                     channel=ChannelRef(kind="company", id=cid), name=name, member_count=self._company_member_count(cid)
                 )
             )
-            # The admin channel is listed right after its company channel, only for that
-            # company's own admins (platform ops can still read/send once they know the
-            # key — see is_member/channel_exists — but the chip row is admins-only, D19).
-            if role == CompanyRole.ADMIN.value:
+            # The admin channel is listed right after its company channel, for that
+            # company's own admins AND for platform ops (phase 01/02's open question 1,
+            # answered: ops oversees every company, not just the ones it happens to hold
+            # a `user_company_access` row for).
+            if role == CompanyRole.ADMIN.value or is_ops:
+                result.append(
+                    ChannelInfo(
+                        channel=ChannelRef(kind="admin", id=cid),
+                        name=name,
+                        member_count=len(self._admin_channel_member_ids(cid)),
+                    )
+                )
+                admin_channel_company_ids.add(cid)
+        if is_ops:
+            # Ops may have no `user_company_access` row at all for a company (never
+            # having joined it) — still list that company's admin channel, without also
+            # listing its (member-only) company channel, which ops is not shown for.
+            other_companies = self._session.execute(
+                select(CompanyModel.id, CompanyModel.legal_name)
+                .where(CompanyModel.id.notin_(admin_channel_company_ids))
+                .order_by(CompanyModel.legal_name)
+            ).all()
+            for cid, name in other_companies:
                 result.append(
                     ChannelInfo(
                         channel=ChannelRef(kind="admin", id=cid),

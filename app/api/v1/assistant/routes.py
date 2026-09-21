@@ -10,7 +10,8 @@ dispatched by ``SendMessageUseCase.assistant_dispatcher`` (a sent message) or by
 from __future__ import annotations
 
 import logging
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 from uuid import UUID
 
 from flask import Response, jsonify, request
@@ -20,8 +21,9 @@ from pydantic import ValidationError
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.validation_error import safe_validation_fields
 from app.api.openapi import openapi_doc
+from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.assistant import assistant_bp
-from app.api.v1.assistant.schemas import ActionAcceptedResponse, SubmitActionBody
+from app.api.v1.assistant.schemas import ActionAcceptedResponse, AssistantAuditListResponse, SubmitActionBody
 from app.api.v1.chat.routes import assistant_enabled
 from app.application.assistant.exceptions import (
     AssistantAlreadyAnsweredError,
@@ -36,6 +38,16 @@ logger = logging.getLogger(__name__)
 
 def _err(code: int, error: str, message: str) -> tuple[Response, int]:
     return jsonify({"error": error, "message": message}), code
+
+
+def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 @assistant_bp.post("/assistant/actions")
@@ -74,3 +86,70 @@ def submit_action() -> Any:
         logger.exception("submit_action unexpected error")
         return _err(500, "InternalError", "An unexpected error occurred.")
     return jsonify({"accepted": True}), 202
+
+
+@assistant_bp.get("/assistant/audit")
+@openapi_doc(
+    summary="List the assistant's supervision log for a company (admin only)",
+    responses={200: AssistantAuditListResponse},
+    tags=["assistant"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+def get_audit() -> Any:
+    """D17 layer 4: one row per handled mention, readable by a company admin of
+    ``company_id`` or platform ops — the admin channel's own "who asked what" answer and
+    the web supervision page share this endpoint."""
+    if not assistant_enabled():
+        return _err(404, "FeatureDisabled", "The assistant is not enabled on this server.")
+    company_id_raw = request.args.get("company_id")
+    if not company_id_raw:
+        return _err(422, "ValidationError", "company_id is required")
+    try:
+        company_id = UUID(company_id_raw)
+    except ValueError:
+        return _err(422, "ValidationError", "company_id must be a UUID")
+
+    caller_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.assistant_audit_repo is None or container.authz_reader is None or container.chat_repo is None:
+        raise RuntimeError("assistant audit dependencies not wired in container")
+
+    if not is_platform_ops() and container.authz_reader.company_role_for(caller_id, company_id) != "admin":
+        return _err(403, "Forbidden", "Only a company admin or platform ops may read the audit log.")
+
+    user_id_raw = request.args.get("user_id")
+    try:
+        user_id = UUID(user_id_raw) if user_id_raw else None
+    except ValueError:
+        return _err(422, "ValidationError", "user_id must be a UUID")
+    limit_raw = request.args.get("limit")
+    try:
+        limit = min(int(limit_raw), 200) if limit_raw else 200
+    except ValueError:
+        return _err(422, "ValidationError", "limit must be an integer")
+
+    rows = container.assistant_audit_repo.list_for_company(
+        company_id,
+        from_=_parse_datetime(request.args.get("from")),
+        to=_parse_datetime(request.args.get("to")),
+        user_id=user_id,
+        limit=limit,
+    )
+    names = container.chat_repo.display_names([row.user_id for row in rows if row.user_id is not None])
+    items = [
+        {
+            "id": str(row.id),
+            "created_at": row.created_at.isoformat(),
+            "channel_key": row.channel_key,
+            "user_id": str(row.user_id) if row.user_id is not None else None,
+            "user_name": names.get(row.user_id, "?") if row.user_id is not None else "?",
+            "intent": row.intent,
+            "feature": row.feature,
+            "outcome": row.outcome,
+            "refused_reason": row.refused_reason,
+            "cost_usd": float(row.cost_usd),
+            "trace_id": row.trace_id,
+        }
+        for row in rows
+    ]
+    return jsonify({"items": items})

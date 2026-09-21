@@ -64,6 +64,9 @@ class AssistantJobRecord:
     created_at: datetime
     updated_at: datetime
     params: Optional[dict[str, Any]] = None
+    #: The originating channel key (``"company:<uuid>"``/``"project:<uuid>"``/
+    #: ``"admin:<uuid>"``) — ``None`` for jobs created before phase 03.
+    channel_key: Optional[str] = None
 
 
 class AssistantJobRepositoryPort(Protocol):
@@ -81,12 +84,16 @@ class AssistantJobRepositoryPort(Protocol):
         lang: Optional[str] = None,
         params: Optional[dict[str, Any]] = None,
         status_message_id: Optional[UUID] = None,
+        channel_key: Optional[str] = None,
     ) -> AssistantJobRecord:
         """Insert a new job, ``status="queued"``, ``run_after=now``.
 
         ``job_type="fetch_invoice"`` (the default) requires ``merchant``/``amount_ttc``/
         ``date``; ``job_type="find_product"`` requires ``params`` instead (see
         ``AssistantJobRecord``'s docstring) and leaves the other three ``None``.
+        ``channel_key`` is the originating channel (``scope.channel.key``) — ``on_result``
+        posts its reply back there instead of the retired ``assistant:<user_id>``
+        fallback (phase 03).
         """
         ...
 

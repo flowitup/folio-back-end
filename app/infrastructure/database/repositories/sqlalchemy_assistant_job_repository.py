@@ -61,6 +61,7 @@ def _to_entity(m: AssistantJobModel) -> AssistantJobRecord:
         created_at=m.created_at,
         updated_at=m.updated_at,
         params=dict(m.params) if m.params else None,
+        channel_key=m.channel_key,
     )
 
 
@@ -82,6 +83,7 @@ class SqlAlchemyAssistantJobRepository:
         lang: Optional[str] = None,
         params: Optional[dict[str, Any]] = None,
         status_message_id: Optional[UUID] = None,
+        channel_key: Optional[str] = None,
     ) -> AssistantJobRecord:
         if job_type == "fetch_invoice" and (merchant is None or amount_ttc is None or date is None):
             raise ValueError("fetch_invoice jobs require merchant, amount_ttc and date.")
@@ -107,6 +109,7 @@ class SqlAlchemyAssistantJobRepository:
             processed_at=None,
             created_at=now,
             updated_at=now,
+            channel_key=channel_key,
         )
         self._session.add(model)
         self._session.commit()

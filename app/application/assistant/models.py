@@ -7,12 +7,13 @@ Kept dependency-free of any provider SDK — only pydantic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.application.assistant.scope import allowed_classes_for
 from app.domain.entities.chat_message import ChannelRef
 
 # ---------------------------------------------------------------------------
@@ -132,10 +133,22 @@ class AmountDate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Phase 04 — tasks handler (catalogue 3.1: create a task from a chat utterance)
+# ---------------------------------------------------------------------------
+
+
+class TaskDraft(BaseModel):
+    """Title/due date parsed by DeepSeek out of a "create a task" chat utterance."""
+
+    title: Optional[str] = None
+    due_date: Optional[str] = None  # YYYY-MM-DD
+
+
+# ---------------------------------------------------------------------------
 # Router (S0)
 # ---------------------------------------------------------------------------
 
-#: The seven intents Router.route() can return — shared by router.py and reply.py
+#: The intents Router.route() can return — shared by router.py and reply.py
 #: (clarifying-choice labels) so the two never drift apart.
 INTENTS: tuple[str, ...] = (
     "identify_material",
@@ -145,6 +158,18 @@ INTENTS: tuple[str, ...] = (
     "move_equipment",
     "question",
     "chit_chat",
+    # Phase 03 — confidential-class questions (D17): refused outside the admin channel.
+    "ask_project_income",
+    "ask_salary",
+    "ask_own_salary",
+    # Phase 04 — labor/tasks handlers on channels (catalogue 2.1-2.3, 3.1-3.2).
+    "ask_roster",
+    "log_attendance",
+    "validate_attendance",
+    "create_task",
+    "ask_tasks",
+    # Phase 03/04 — admin-channel supervision ("who asked what this week").
+    "ask_audit",
 )
 
 #: Merchants Jev is asked to recognise for `fetch_invoice` (S0 `merchant` question).
@@ -184,12 +209,16 @@ class RouterDecision(BaseModel):
 @dataclass(frozen=True)
 class ChannelScope:
     """Who is asking, and from where — threaded from ``AssistantService`` down to
-    ``FeatureHandlersPort`` so a feature can eventually (phase 03/04) redact confidential
-    classes and tool access by audience. Handlers may ignore it until then.
+    ``FeatureHandlersPort`` so a feature can redact confidential classes and gate tool
+    access by audience (D17).
 
     ``company_id`` is the channel's own id for ``"company"``/``"admin"`` kinds, and the
     owning company of the project for a ``"project"`` channel (resolved via
     ``ProjectCompanyReaderPort`` — ``None`` when the project has no company yet).
+
+    ``allowed_classes`` is always computed from ``is_admin_channel`` (never passed by a
+    caller) — every confidential class (``finance_company``, ``payroll``) in an admin
+    channel, none otherwise. See ``app.application.assistant.scope``.
     """
 
     kind: str
@@ -197,6 +226,10 @@ class ChannelScope:
     project_id: Optional[UUID]
     is_admin_channel: bool
     asker_id: UUID
+    allowed_classes: frozenset[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed_classes", allowed_classes_for(self.is_admin_channel))
 
     @property
     def channel(self) -> ChannelRef:

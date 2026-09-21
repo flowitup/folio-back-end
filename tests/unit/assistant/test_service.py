@@ -172,8 +172,11 @@ def world(session):
     cost_ledger = InMemoryCostLedger(daily_cap_usd=5.0)
     rate_limiter = InMemoryRateLimiter()
 
-    def build_service(decision_port) -> AssistantService:
-        return AssistantService(
+    def build_service(decision_port, **overrides: Any) -> AssistantService:
+        """``**overrides`` lets a test wire phase 03/04's optional dependencies
+        (``decisions``, ``authz_reader``, ``audit``, ``labor_feature``, ``tasks_feature``,
+        ``admin_answers``) without touching every other test's call site."""
+        kwargs: dict[str, Any] = dict(
             message_repo=message_repo,
             messenger=messenger,
             router=Router(decision_port),
@@ -185,6 +188,8 @@ def world(session):
             rate_limiter=rate_limiter,
             project_company_reader=project_company_reader,
         )
+        kwargs.update(overrides)
+        return AssistantService(**kwargs)
 
     return {
         "message_repo": message_repo,
