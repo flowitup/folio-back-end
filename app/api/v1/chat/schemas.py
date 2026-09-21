@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,12 +12,15 @@ class SendMessageBody(BaseModel):
     """JSON body of POST /chat/channels/<key>/messages (text-only messages).
 
     Messages with an image or a voice note use multipart/form-data instead: ``body`` text
-    part + ``file``.
+    part + ``file`` (+ optional ``lang`` form field).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     body: str = Field(min_length=1, max_length=4000)
+    # Only meaningful when the target channel is the caller's assistant conversation;
+    # ignored (and never persisted) for every other channel kind.
+    lang: Literal["vi", "fr", "en"] | None = None
 
 
 class ListMessagesQuery(BaseModel):
@@ -38,12 +42,17 @@ class AttachmentResponse(BaseModel):
 class MessageResponse(BaseModel):
     id: str
     channel_key: str
-    sender_id: str
+    # None for an assistant-authored message.
+    sender_id: str | None
     sender_name: str
     body: str | None
     attachment: AttachmentResponse | None
     created_at: str
     mine: bool
+    sender_type: Literal["user", "assistant", "system"]
+    content_type: Literal["text", "photo", "card", "choice", "job_status"]
+    payload: dict[str, Any] | None = None
+    reply_to_id: str | None = None
 
 
 class MemberResponse(BaseModel):
@@ -76,3 +85,4 @@ class FeaturesResponse(BaseModel):
     """Feature flags of this deployment, as seen by the apps."""
 
     chat: bool
+    assistant: bool

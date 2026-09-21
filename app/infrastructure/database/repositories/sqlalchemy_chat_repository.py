@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Callable, Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo
@@ -31,8 +31,12 @@ def _naive_utc(value: datetime) -> datetime:
 class SqlAlchemyChatRepository:
     """Implements ChatMessageRepositoryPort, ChatReadRepositoryPort and ChatDirectoryPort."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, assistant_enabled: Optional[Callable[[], bool]] = None) -> None:
         self._session = session
+        # Whether to list "assistant:<user_id>" in list_channels_for_user. Defaults closed
+        # so a repository built outside an app context (a script, a unit test) never
+        # fabricates the channel.
+        self._assistant_enabled: Callable[[], bool] = assistant_enabled or (lambda: False)
 
     # ------------------------------------------------------------------
     # ChatMessageRepositoryPort
@@ -56,13 +60,16 @@ class SqlAlchemyChatRepository:
         return [row.to_entity() for row in reversed(rows)]
 
     def count_since(self, channel: ChannelRef, since: Optional[datetime], exclude_sender: UUID) -> int:
+        # An assistant-authored row has sender_id NULL; in SQL `NULL != x` is NULL (not
+        # true), so a plain != would silently drop every assistant reply from unread
+        # counts. or_() makes a NULL sender always count as "someone else".
         stmt = (
             select(func.count())
             .select_from(ChatMessageOrm)
             .where(
                 ChatMessageOrm.channel_kind == channel.kind,
                 ChatMessageOrm.channel_id == channel.id,
-                ChatMessageOrm.sender_id != exclude_sender,
+                or_(ChatMessageOrm.sender_id.is_(None), ChatMessageOrm.sender_id != exclude_sender),
             )
         )
         if since is not None:
@@ -78,6 +85,27 @@ class SqlAlchemyChatRepository:
         if value is None:
             return None
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    def update_payload(self, message_id: UUID, payload: dict[str, Any]) -> None:
+        orm = self._session.get(ChatMessageOrm, message_id)
+        if orm is None:
+            return
+        orm.payload = payload
+        self._session.flush()
+
+    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        stmt = (
+            select(ChatMessageOrm)
+            .where(
+                ChatMessageOrm.channel_kind == channel.kind,
+                ChatMessageOrm.channel_id == channel.id,
+                ChatMessageOrm.content_type == "text",
+            )
+            .order_by(ChatMessageOrm.created_at.desc())
+            .limit(limit)
+        )
+        rows = self._session.execute(stmt).scalars().all()
+        return [row.to_entity() for row in reversed(rows)]
 
     # ------------------------------------------------------------------
     # ChatReadRepositoryPort
@@ -155,6 +183,11 @@ class SqlAlchemyChatRepository:
         return ids
 
     def list_channels_for_user(self, user_id: UUID) -> list[ChannelInfo]:
+        result: list[ChannelInfo] = []
+        if self._assistant_enabled():
+            result.append(
+                ChannelInfo(channel=ChannelRef(kind="assistant", id=user_id), name="Assistant", member_count=1)
+            )
         companies = self._session.execute(
             select(CompanyModel.id, CompanyModel.legal_name)
             .join(UserCompanyAccessModel, UserCompanyAccessModel.company_id == CompanyModel.id)
@@ -167,14 +200,14 @@ class SqlAlchemyChatRepository:
             project_stmt = project_stmt.where((ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id))
         projects = self._session.execute(project_stmt).all()
 
-        result = [
+        result.extend(
             ChannelInfo(
                 channel=ChannelRef(kind="company", id=cid),
                 name=name,
                 member_count=self._company_member_count(cid),
             )
             for cid, name in companies
-        ]
+        )
         result.extend(
             ChannelInfo(
                 channel=ChannelRef(kind="project", id=pid),
@@ -186,15 +219,23 @@ class SqlAlchemyChatRepository:
         return result
 
     def channel_exists(self, channel: ChannelRef) -> bool:
+        if channel.kind == "assistant":
+            return bool(self._session.execute(select(exists().where(UserModel.id == channel.id))).scalar())
         model = CompanyModel if channel.kind == "company" else ProjectModel
         return bool(self._session.execute(select(exists().where(model.id == channel.id))).scalar())
 
     def channel_name(self, channel: ChannelRef) -> str:
         """Display name of the company / project behind the key ("" when it vanished)."""
+        if channel.kind == "assistant":
+            return "Assistant"
         model = CompanyModel if channel.kind == "company" else ProjectModel
         return self._session.execute(select(model.name).where(model.id == channel.id)).scalar() or ""
 
     def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
+        if channel.kind == "assistant":
+            # The only member of a user's assistant conversation is that user — not even
+            # a platform-ops superadmin can read someone else's.
+            return user_id == channel.id
         if channel.kind == "company":
             return (
                 self._session.execute(
@@ -212,6 +253,9 @@ class SqlAlchemyChatRepository:
         return self._is_superadmin(user_id)
 
     def list_members(self, channel: ChannelRef) -> list[MemberInfo]:
+        if channel.kind == "assistant":
+            names = self.display_names([channel.id])
+            return [MemberInfo(id=channel.id, name=names.get(channel.id, "?"))]
         if channel.kind == "company":
             ids = list(
                 self._session.execute(

@@ -170,6 +170,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.notes import notes_bp
     from app.api.v1.api_keys import api_keys_bp
     from app.api.v1.chat import chat_bp
+    from app.api.v1.assistant import assistant_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.push import push_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
@@ -196,6 +197,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(notes_bp, url_prefix="/api/v1")
     app.register_blueprint(api_keys_bp, url_prefix="/api/v1")
     app.register_blueprint(chat_bp, url_prefix="/api/v1")
+    app.register_blueprint(assistant_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(push_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
@@ -455,13 +457,35 @@ def _configure_di_container() -> None:
         SendMessageUseCase as _SendChatMessageUseCase,
     )
 
-    _chat_repo = SqlAlchemyChatRepository(db.session)
+    from config import assistant_flags_enabled as _assistant_flags_enabled
+
+    _chat_repo = SqlAlchemyChatRepository(
+        db.session,
+        assistant_enabled=lambda: _assistant_flags_enabled(
+            current_app.config.get("FEATURE_ASSISTANT"),
+            current_app.config.get("DEEPSEEK_API_KEY"),
+            current_app.config.get("TYPESAFE_API_KEY"),
+        ),
+    )
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
+
+    # Wire the assistant bounded context (Folio Assistant conversation, FEATURE_ASSISTANT).
+    # The chat push notifier is attached later (with the rest of the push stack), same as
+    # send_chat_message_usecase.notifier above.
+    from app.application.assistant.messages import AssistantMessenger
+    from app.application.assistant.service import AssistantService, SubmitAssistantActionUseCase
+    from app.infrastructure.adapters.rq_assistant_dispatcher import RqAssistantDispatcher
+
+    _c.assistant_dispatcher = RqAssistantDispatcher(current_app.config.get("REDIS_URL", ""))
+    _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
+    _c.assistant_service = AssistantService(_chat_repo, _c.assistant_messenger)
+    _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _c.assistant_dispatcher)
+    _c.send_chat_message_usecase.assistant_dispatcher = _c.assistant_dispatcher
 
     # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio | gateway).
     from app.application.usecases.otp_login import (
@@ -533,7 +557,7 @@ def _configure_di_container() -> None:
     )
     _c.chat_push_marker_repository = SQLAlchemyChatPushMarkerRepository(db.session)
     if _c.send_chat_message_usecase is not None:
-        _c.send_chat_message_usecase.notifier = ChatPushNotifier(
+        _chat_push_notifier = ChatPushNotifier(
             dispatcher=_c.push_dispatcher,
             directory=_chat_repo,
             markers=_c.chat_push_marker_repository,
@@ -541,6 +565,9 @@ def _configure_di_container() -> None:
             messages=_chat_repo,
             names=_chat_repo,
         )
+        _c.send_chat_message_usecase.notifier = _chat_push_notifier
+        if _c.assistant_messenger is not None:
+            _c.assistant_messenger.notifier = _chat_push_notifier
 
     if _c.project_repository is not None:
         _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)

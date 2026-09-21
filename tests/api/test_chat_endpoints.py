@@ -46,7 +46,7 @@ class TestFeatures:
     def test_features_reports_chat_flag(self, inv_client, member_token):
         resp = inv_client.get("/api/v1/features", headers=_auth(member_token))
         assert resp.status_code == 200
-        assert resp.get_json() == {"chat": True}
+        assert resp.get_json() == {"chat": True, "assistant": True}
 
     def test_features_requires_auth(self, inv_client):
         assert inv_client.get("/api/v1/features").status_code == 401
@@ -57,9 +57,20 @@ class TestFeatures:
             resp = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token))
             assert resp.status_code == 404
             assert resp.get_json()["error"] == "FeatureDisabled"
-            assert inv_client.get("/api/v1/features", headers=_auth(member_token)).get_json() == {"chat": False}
+            assert inv_client.get("/api/v1/features", headers=_auth(member_token)).get_json() == {
+                "chat": False,
+                "assistant": True,
+            }
         finally:
             invitation_app.config["FEATURE_CHAT"] = True
+
+    def test_features_reports_assistant_off_without_both_keys(self, inv_client, member_token, invitation_app):
+        invitation_app.config["TYPESAFE_API_KEY"] = ""
+        try:
+            resp = inv_client.get("/api/v1/features", headers=_auth(member_token))
+            assert resp.get_json() == {"chat": True, "assistant": False}
+        finally:
+            invitation_app.config["TYPESAFE_API_KEY"] = "test-typesafe-key"
 
 
 class TestChannels:
@@ -78,9 +89,12 @@ class TestChannels:
 
     def test_company_channel_listed_first(self, inv_client, member_token, company_channel):
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        assert items[0]["key"] == company_channel
-        assert items[0]["name"] == "AVN Construction"
-        assert items[0]["member_count"] == 2
+        # The assistant conversation (when enabled) is pinned ahead of every other kind;
+        # the company channel is first among the rest.
+        assert items[0]["kind"] == "assistant"
+        assert items[1]["key"] == company_channel
+        assert items[1]["name"] == "AVN Construction"
+        assert items[1]["member_count"] == 2
 
     def test_outsider_sees_no_project_channel(self, inv_client, outsider_token, invitation_app):
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(outsider_token)).get_json()["items"]
@@ -273,3 +287,95 @@ class TestAttachments:
             inv_client.get(f"/api/v1/chat/messages/{uuid.uuid4()}/attachment", headers=_auth(member_token)).status_code
             == 404
         )
+
+
+class TestAssistantChannel:
+    """The pinned assistant:<user_id> channel, listed only when the feature is on."""
+
+    def _assistant_key(self, app, user_id: str) -> str:
+        return f"assistant:{user_id}"
+
+    def test_listed_first_when_enabled(self, inv_client, member_token, invitation_app):
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        assert items[0]["key"] == self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        assert items[0]["kind"] == "assistant"
+        assert items[0]["name"] == "Assistant"
+        assert items[0]["member_count"] == 1
+
+    def test_not_listed_when_disabled(self, inv_client, member_token, invitation_app):
+        invitation_app.config["FEATURE_ASSISTANT"] = False
+        try:
+            items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+            assert "assistant" not in [c["kind"] for c in items]
+        finally:
+            invitation_app.config["FEATURE_ASSISTANT"] = True
+
+    def test_send_and_list_own_assistant_messages(self, inv_client, member_token, invitation_app):
+        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            json={"body": "bonjour", "lang": "fr"},
+            headers=_auth(member_token),
+        )
+        assert sent.status_code == 201, sent.get_json()
+        data = sent.get_json()
+        assert data["mine"] is True
+        assert data["sender_type"] == "user"
+        assert data["content_type"] == "text"
+        assert data["payload"] == {"lang": "fr"}
+
+        # lang is dropped outside the assistant channel.
+        project_key = _project_key(invitation_app)
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{project_key}/messages",
+            json={"body": "hi", "lang": "vi"},
+            headers=_auth(member_token),
+        )
+        assert resp.get_json()["payload"] is None
+
+    def test_dispatcher_called_after_commit(self, inv_client, member_token, invitation_app):
+        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        invitation_app._assistant_dispatcher.messages_received.clear()
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "salut"}, headers=_auth(member_token)
+        )
+        assert sent.status_code == 201
+        message_id = uuid.UUID(sent.get_json()["id"])
+        user_id = uuid.UUID(invitation_app._test_member_user_id)
+        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
+
+    def test_other_user_cannot_read_someone_elses_assistant_channel(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        member_key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        resp = inv_client.get(f"/api/v1/chat/channels/{member_key}/messages", headers=_auth(admin_token))
+        assert resp.status_code == 403
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{member_key}/messages", json={"body": "hi"}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 403
+
+    def test_unread_count_includes_assistant_reply(self, inv_client, member_token, invitation_app):
+        from wiring import get_container
+
+        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        # Sending resets the sender's own read marker, so post the assistant reply directly
+        # (as the RQ job would) without a further user message in between.
+        with invitation_app.app_context():
+            get_container().assistant_messenger.post_text(uuid.UUID(invitation_app._test_member_user_id), "Bonjour !")
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        assistant_channel = next(c for c in items if c["key"] == key)
+        assert assistant_channel["unread_count"] == 1
+
+    def test_assistant_reply_has_null_sender_and_assistant_name(self, inv_client, member_token, invitation_app):
+        from wiring import get_container
+
+        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        with invitation_app.app_context():
+            get_container().assistant_messenger.post_text(uuid.UUID(invitation_app._test_member_user_id), "Salut !")
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
+        reply = page["items"][-1]
+        assert reply["sender_id"] is None
+        assert reply["sender_name"] == "Assistant"
+        assert reply["sender_type"] == "assistant"
+        assert reply["mine"] is False

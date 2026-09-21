@@ -16,6 +16,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def assistant_flags_enabled(feature_flag: object, deepseek_key: object, typesafe_key: object) -> bool:
+    """Single source of truth for whether the assistant conversation is live.
+
+    Used both by ``Config.assistant_enabled()`` (Config instance) and by
+    ``app.api.v1.chat.routes.assistant_enabled()`` (reads ``current_app.config``, which
+    only holds plain values copied from the class, not a live Config instance).
+    """
+    return bool(feature_flag) and bool(deepseek_key) and bool(typesafe_key)
+
+
 def get_env(key: str, default: Optional[str] = None, required: bool = False) -> str:
     """
     Get an environment variable with optional default and required validation.
@@ -114,6 +124,27 @@ class Config:
     # Off → chat endpoints answer 404 and the apps hide the chat button.
     FEATURE_CHAT: bool = get_env("FEATURE_CHAT", default="0") == "1"
 
+    # Folio Assistant: the pinned per-user AI conversation inside team chat. The flag
+    # alone is not enough to go live — the deployment also needs the two core API keys
+    # configured, so a deployment that turned the flag on before adding keys stays dark
+    # instead of 500ing on first use (see assistant_enabled()).
+    FEATURE_ASSISTANT: bool = get_env("FEATURE_ASSISTANT", default="0") == "1"
+    DEEPSEEK_API_KEY: str = get_env("DEEPSEEK_API_KEY", default="")
+    TYPESAFE_API_KEY: str = get_env("TYPESAFE_API_KEY", default="")
+    TAVILY_API_KEY: str = get_env("TAVILY_API_KEY", default="")
+    GEMINI_API_KEY: str = get_env("GEMINI_API_KEY", default="")
+    SERPAPI_API_KEY: str = get_env("SERPAPI_API_KEY", default="")
+    # How the assistant turns a scanned receipt into a clean PDF: "genai" (Gemini image
+    # generation) or "opencv" (perspective-correct + threshold, no API call).
+    SCAN_MODE: str = get_env("SCAN_MODE", default="genai")
+    # Restrict the browser-worker's merchant-site jobs to off-peak hours (owner runbook).
+    JOB_OFFPEAK_ONLY: bool = get_env("JOB_OFFPEAK_ONLY", default="0") == "1"
+    ASSISTANT_DAILY_COST_CAP_USD: float = float(get_env("ASSISTANT_DAILY_COST_CAP_USD", default="5"))
+    # browser-use / real Chrome, used by the separate ai-browser container (phase 03).
+    BROWSER_WORKER_CHROME_PATH: str = get_env("BROWSER_WORKER_CHROME_PATH", default="")
+    BROWSER_WORKER_PROFILE_DIR: str = get_env("BROWSER_WORKER_PROFILE_DIR", default="")
+    BROWSER_WORKER_DOWNLOADS_DIR: str = get_env("BROWSER_WORKER_DOWNLOADS_DIR", default="")
+
     # Sign in with a phone number + SMS code. "log" writes the code to the API log (dev/test);
     # "twilio" sends it through Twilio Programmable Messaging; "gateway" posts it to an
     # "SMS Gateway for Android" endpoint (sms-gate.app API, HTTP Basic auth) so it leaves from a real SIM.
@@ -170,6 +201,12 @@ class Config:
             raise ValueError("OTP_REVIEWER_PHONE and OTP_REVIEWER_CODE must be set together")
         if self.OTP_REVIEWER_CODE and not (self.OTP_REVIEWER_CODE.isdigit() and len(self.OTP_REVIEWER_CODE) == 6):
             raise ValueError("OTP_REVIEWER_CODE must be a 6-digit string")
+        if self.SCAN_MODE not in ("genai", "opencv"):
+            raise ValueError("SCAN_MODE must be 'genai' or 'opencv'")
+
+    def assistant_enabled(self) -> bool:
+        """True once FEATURE_ASSISTANT is on and both core API keys are configured."""
+        return assistant_flags_enabled(self.FEATURE_ASSISTANT, self.DEEPSEEK_API_KEY, self.TYPESAFE_API_KEY)
 
 
 class DevelopmentConfig(Config):

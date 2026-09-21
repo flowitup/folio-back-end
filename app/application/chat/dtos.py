@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from app.domain.entities.chat_message import ChatMessage
@@ -39,11 +40,15 @@ class AttachmentDto:
 class MessageDto:
     id: UUID
     channel_key: str
-    sender_id: UUID
+    sender_id: UUID | None
     sender_name: str
     body: str | None
     attachment: AttachmentDto | None
     created_at: datetime
+    sender_type: str = "user"
+    content_type: str = "text"
+    payload: dict[str, Any] | None = None
+    reply_to_id: UUID | None = None
 
     @classmethod
     def from_entity(cls, message: ChatMessage, sender_name: str) -> MessageDto:
@@ -51,7 +56,8 @@ class MessageDto:
             id=message.id,
             channel_key=message.channel.key,
             sender_id=message.sender_id,
-            sender_name=sender_name,
+            # An assistant-authored message has no sender to look up a display name for.
+            sender_name="Assistant" if message.sender_id is None else sender_name,
             body=message.body,
             attachment=(
                 AttachmentDto(
@@ -63,6 +69,10 @@ class MessageDto:
                 else None
             ),
             created_at=message.created_at,
+            sender_type=message.sender_type,
+            content_type=message.content_type,
+            payload=message.payload,
+            reply_to_id=message.reply_to_id,
         )
 
 

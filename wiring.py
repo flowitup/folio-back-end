@@ -427,6 +427,12 @@ class Container:
     mark_chat_channel_read_usecase: Optional[Any] = None
     get_chat_attachment_usecase: Optional[Any] = None
 
+    # Assistant (Folio Assistant conversation, FEATURE_ASSISTANT)
+    assistant_dispatcher: Optional[Any] = None  # AssistantDispatcherPort (RqAssistantDispatcher in prod)
+    assistant_messenger: Optional[Any] = None  # AssistantMessenger
+    assistant_service: Optional[Any] = None  # AssistantService (called by the RQ jobs)
+    submit_assistant_action_usecase: Optional[Any] = None
+
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 

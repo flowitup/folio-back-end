@@ -109,6 +109,11 @@ def invitation_app():
         RATELIMIT_ENABLED = False
         RATELIMIT_STORAGE_URI = "memory://"
         FEATURE_CHAT = True
+        # On by default so most chat/assistant tests see the feature live; a test that
+        # needs it off flips these on invitation_app.config, same as FEATURE_CHAT above.
+        FEATURE_ASSISTANT = True
+        DEEPSEEK_API_KEY = "test-deepseek-key"
+        TYPESAFE_API_KEY = "test-typesafe-key"
 
     test_app = create_app(InviteTestConfig)
 
@@ -1146,7 +1151,16 @@ def invitation_app():
             SendMessageUseCase as _SendChatMessageUC,
         )
 
-        _chat_repo = SqlAlchemyChatRepository(db.session)
+        from config import assistant_flags_enabled as _assistant_flags_enabled
+
+        _chat_repo = SqlAlchemyChatRepository(
+            db.session,
+            assistant_enabled=lambda: _assistant_flags_enabled(
+                test_app.config.get("FEATURE_ASSISTANT"),
+                test_app.config.get("DEEPSEEK_API_KEY"),
+                test_app.config.get("TYPESAFE_API_KEY"),
+            ),
+        )
         _chat_storage = InMemoryDocumentStorage()
         _c.chat_repo = _chat_repo
         _c.list_chat_channels_usecase = _ListChatChannelsUC(_chat_repo, _chat_repo, _chat_repo)
@@ -1154,6 +1168,32 @@ def invitation_app():
         _c.send_chat_message_usecase = _SendChatMessageUC(_chat_repo, _chat_repo, _chat_repo, _chat_storage, db.session)
         _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
         _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)
+
+        # ------------------------------------------------------------------
+        # Wire the assistant bounded context — an in-memory recorder stands in for the
+        # RQ dispatcher so tests can assert "dispatched" without a real Redis/worker.
+        # ------------------------------------------------------------------
+        from app.application.assistant.messages import AssistantMessenger
+        from app.application.assistant.service import AssistantService, SubmitAssistantActionUseCase
+
+        class RecordingAssistantDispatcher:
+            def __init__(self) -> None:
+                self.messages_received: list[tuple] = []
+                self.actions_received: list[tuple] = []
+
+            def message_received(self, *, user_id, message_id) -> None:
+                self.messages_received.append((user_id, message_id))
+
+            def action_received(self, *, user_id, message_id, action, payload) -> None:
+                self.actions_received.append((user_id, message_id, action, payload))
+
+        _assistant_dispatcher = RecordingAssistantDispatcher()
+        _c.assistant_dispatcher = _assistant_dispatcher
+        _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
+        _c.assistant_service = AssistantService(_chat_repo, _c.assistant_messenger)
+        _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _assistant_dispatcher)
+        _c.send_chat_message_usecase.assistant_dispatcher = _assistant_dispatcher
+        test_app._assistant_dispatcher = _assistant_dispatcher
 
         # ------------------------------------------------------------------
         # Sign in with a phone number + SMS code — recording sender, no SMS leaves the test.
