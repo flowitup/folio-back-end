@@ -184,6 +184,89 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "fr": "Tu veux faire quoi ?",
         "en": "What would you like to do?",
     },
+    "retake_photo": {
+        "vi": "Ảnh không đủ rõ để đọc, bạn chụp lại giúp tôi nhé?",
+        "fr": "La photo n'est pas assez lisible, tu peux la reprendre ?",
+        "en": "The photo is not clear enough to read, could you retake it?",
+    },
+    "photo_unreadable": {
+        "vi": "Tôi không nhận diện được vật liệu trong ảnh này, bạn chụp lại rõ hơn nhé?",
+        "fr": "Je n'arrive pas à identifier ce matériau sur cette photo, tu peux en reprendre une plus nette ?",
+        "en": "I could not identify the material in this photo, could you retake a clearer one?",
+    },
+    "duplicate_refused": {
+        "vi": "Có vẻ hoá đơn này đã được nhập rồi, tôi không tạo bản mới.",
+        "fr": "Ce ticket ressemble à une facture déjà enregistrée, je ne crée pas de doublon.",
+        "en": "This looks like an invoice already recorded, I am not creating a duplicate.",
+    },
+    "duplicate_check_prompt": {
+        "vi": "Hoá đơn này có trùng với hoá đơn đã có không?",
+        "fr": "Ce ticket est-il le même que cette facture déjà enregistrée ?",
+        "en": "Is this receipt the same as this already-recorded invoice?",
+    },
+    "duplicate_check_confirm": {"vi": "Đúng, trùng", "fr": "Oui, c'est la même", "en": "Yes, it's the same"},
+    "duplicate_check_deny": {"vi": "Không, khác", "fr": "Non, c'est différent", "en": "No, it's different"},
+    "pick_project_prompt": {
+        "vi": "Hoá đơn này thuộc công trình nào?",
+        "fr": "Ce ticket appartient à quel chantier ?",
+        "en": "Which project does this receipt belong to?",
+    },
+    "pick_project_none": {
+        "vi": "Bạn chưa có công trình nào để ghi hoá đơn.",
+        "fr": "Tu n'as aucun chantier sur lequel enregistrer ce ticket.",
+        "en": "You have no project available to record this receipt on.",
+    },
+    "pick_company_prompt": {
+        "vi": "Vật liệu này thuộc công ty nào?",
+        "fr": "Ce matériau appartient à quelle entreprise ?",
+        "en": "Which company does this material belong to?",
+    },
+    "invoice_created": {
+        "vi": "Đã tạo hoá đơn {number} cho {project}.",
+        "fr": "Facture {number} créée pour {project}.",
+        "en": "Invoice {number} created for {project}.",
+    },
+    "invoice_attached": {
+        "vi": "Đã đính kèm bản scan vào hoá đơn {number}.",
+        "fr": "Scan ajouté à la facture {number}.",
+        "en": "Scan attached to invoice {number}.",
+    },
+    "amounts_to_check": {
+        "vi": "Lưu ý: các số tiền trên hoá đơn này cần kiểm tra lại.",
+        "fr": "Attention : les montants de cette facture méritent une vérification.",
+        "en": "Note: the amounts on this invoice are worth double-checking.",
+    },
+    "material_found": {
+        "vi": "Đã thêm vào thư viện vật liệu.",
+        "fr": "Ajouté à la bibliothèque de matériaux.",
+        "en": "Added to the material library.",
+    },
+    "material_to_confirm": {
+        "vi": "Tôi khá chắc đây là vật liệu này, bạn xác nhận giúp nhé.",
+        "fr": "Je pense reconnaître ce matériau, confirme si c'est correct.",
+        "en": "I think this is the material below, please confirm.",
+    },
+    "material_photo_only": {
+        "vi": "Tôi không tìm được sản phẩm phù hợp trên mạng, đã lưu ảnh vào thư viện để bạn hoàn thiện sau.",
+        "fr": "Je n'ai pas trouvé ce produit en ligne, j'ai enregistré la photo dans la bibliothèque pour que tu "
+        "la complètes plus tard.",
+        "en": "I could not find this product online, I saved the photo in the library for you to complete later.",
+    },
+    "no_permission": {
+        "vi": "Bạn không có quyền thực hiện thao tác này.",
+        "fr": "Tu n'as pas le droit d'effectuer cette action.",
+        "en": "You do not have permission to perform this action.",
+    },
+    "unknown_action": {
+        "vi": "Tôi không hiểu yêu cầu này.",
+        "fr": "Je ne comprends pas cette action.",
+        "en": "I do not understand this action.",
+    },
+    "scan_fallback_note": {
+        "vi": "(scan bằng chế độ dự phòng)",
+        "fr": "(scan généré en mode de secours)",
+        "en": "(scan generated in fallback mode)",
+    },
 }
 
 #: Human-readable label per intent, per language — used by the "clarify the top-2

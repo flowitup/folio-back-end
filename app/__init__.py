@@ -1709,6 +1709,85 @@ def _configure_di_container() -> None:
         )
 
     # -----------------------------------------------------------------------
+    # Feature C (ticket -> scan -> invoice) and feature A (material photo -> library)
+    # (phase 03). Reuses the invoice write use-cases just above, the bibliotheque
+    # use-cases wired earlier in this function, and the assistant AI provider ports
+    # from the "Assistant AI pipeline DI wiring" block above — hence living after all
+    # three. Rebuilds `_c.assistant_service` with the real `FeatureHandlers` in place
+    # of phase 02's `DefaultFeatureHandlers` stand-in.
+    # -----------------------------------------------------------------------
+    from app.application.assistant.features import FeatureHandlers as _FeatureHandlers
+    from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
+    from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
+    from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
+        SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
+    )
+
+    _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
+    _c.assistant_import_repo = _assistant_import_repo
+
+    if (
+        _c.project_repository is not None
+        and _c.invoice_repository is not None
+        and _c.invoice_attachment_repository is not None
+        and _c.upload_attachment_usecase is not None
+        and _c.create_invoice_usecase is not None
+        and _c.delete_invoice_usecase is not None
+        and _c.worker_repository is not None
+        and _c.labor_entry_repository is not None
+        and _c.assistant_messenger is not None
+    ):
+        _c.assistant_ticket_feature = _TicketFeature(
+            vision=_c.assistant_vision_llm,
+            decisions=_c.assistant_decision_port,
+            image_gen=_c.assistant_image_gen,
+            scan_mode=current_app.config.get("SCAN_MODE", "genai"),
+            messages=_chat_repo,
+            storage=storage,
+            company_access=_access_repo,
+            project_repo=_c.project_repository,
+            authz_reader=_c.authz_reader,
+            invoice_repo=_c.invoice_repository,
+            attachment_repo=_c.invoice_attachment_repository,
+            worker_repo=_c.worker_repository,
+            labor_entry_repo=_c.labor_entry_repository,
+            import_repo=_assistant_import_repo,
+            create_invoice_usecase=_c.create_invoice_usecase,
+            delete_invoice_usecase=_c.delete_invoice_usecase,
+            upload_attachment_usecase=_c.upload_attachment_usecase,
+        )
+        _c.assistant_material_feature = _MaterialFeature(
+            vision=_c.assistant_vision_llm,
+            decisions=_c.assistant_decision_port,
+            web_search=_c.assistant_web_search,
+            lens=_c.assistant_lens,
+            messages=_chat_repo,
+            storage=storage,
+            company_access=_access_repo,
+            company_repo=_c.company_repo,
+            product_repo=_c.bibliotheque_product_repo,
+            supplier_repo=_c.bibliotheque_supplier_repo,
+            material_imports=_assistant_import_repo,
+            create_product_usecase=_c.bibliotheque_create_product_usecase,
+            fetch_image_usecase=_c.bibliotheque_fetch_image_from_url_usecase,
+            upload_image_usecase=_c.bibliotheque_upload_image_usecase,
+        )
+        _c.assistant_feature_handlers = _FeatureHandlers(
+            ticket=_c.assistant_ticket_feature, material=_c.assistant_material_feature
+        )
+        _c.assistant_service = _AssistantService(
+            message_repo=_chat_repo,
+            messenger=_c.assistant_messenger,
+            router=_c.assistant_router,
+            equipment=_c.assistant_equipment_service,
+            company_access_repo=_access_repo,
+            project_repo=_c.project_repository,
+            vision=_c.assistant_vision_llm,
+            cost_ledger=_c.assistant_cost_ledger,
+            feature_handlers=_c.assistant_feature_handlers,
+        )
+
+    # -----------------------------------------------------------------------
     # Worker rate-change repo + use-cases (effective-dated pay-rate timeline)
     # CRITICAL: any use-case added here MUST also appear in the invitation_app
     # fixture in tests/conftest.py or the fixture will drift from prod wiring.

@@ -97,6 +97,7 @@ class TestSubmitAction:
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         choice_message = next(m for m in page["items"] if m["id"] == choice_id)
         assert choice_message["payload"]["answered"] == "confirm"
+        assert choice_message["payload"]["answered_payload"] == {"note": "ok"}
 
         user_id = uuid.UUID(invitation_app._test_member_user_id)
         message_id = uuid.UUID(choice_id)

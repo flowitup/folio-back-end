@@ -13,6 +13,9 @@ INTENT_AUTO = 0.70
 # S1 extraction: below this, ask the user to retake the photo.
 READABILITY_MIN = 0.50
 
+# Feature A material identification (A1, phase 03): below this, ask for a clearer photo.
+IDENTIFY_MIN = 0.50
+
 # S3 duplicate_of (feature B/C, phase 03/04).
 DUP_ASK_LOW = 0.60
 DUP_REJECT = 0.85
@@ -46,6 +49,10 @@ def intent_status(confidence: float) -> str:
 
 def readability_ok(readability: float) -> bool:
     return readability >= READABILITY_MIN
+
+
+def identify_ok(confidence: float) -> bool:
+    return confidence >= IDENTIFY_MIN
 
 
 def duplicate_status(confidence: float) -> str:

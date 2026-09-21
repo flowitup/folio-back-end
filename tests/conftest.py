@@ -1201,19 +1201,36 @@ def invitation_app():
         # `_configure_di_container()` already wired above — equipment answers come from
         # the test SQLite DB, not a fake, matching phase 02's "no LLM for equipment" design.
         from app.application.assistant.equipment import EquipmentService as _EquipmentService
+        from app.application.assistant.features import FeatureHandlers as _FeatureHandlers
+        from app.application.assistant.features.material import MaterialFeature as _MaterialFeature
+        from app.application.assistant.features.ticket import TicketFeature as _TicketFeature
         from app.application.assistant.router import Router as _Router
         from app.infrastructure.ai.cost import InMemoryCostLedger as _InMemoryCostLedger
+        from app.infrastructure.database.repositories.sqlalchemy_assistant_import_repository import (
+            SqlAlchemyAssistantImportRepository as _SqlAlchemyAssistantImportRepository,
+        )
+        from tests.fakes.ai import RecordingImageGen as _RecordingImageGen
+        from tests.fakes.ai import RecordingLens as _RecordingLens
+        from tests.fakes.ai import RecordingWebSearch as _RecordingWebSearch
         from tests.fakes.ai import ScriptedDecision as _ScriptedDecision
         from tests.fakes.ai import ScriptedVision as _ScriptedVision
 
         _assistant_decision_port = _ScriptedDecision()
         _assistant_vision = _ScriptedVision(text_answers=["(scripted chit-chat reply)"])
+        _assistant_web_search = _RecordingWebSearch()
+        _assistant_image_gen = _RecordingImageGen()
+        _assistant_lens = _RecordingLens()
         _c.assistant_decision_port = _assistant_decision_port
         _c.assistant_vision_llm = _assistant_vision
+        _c.assistant_web_search = _assistant_web_search
+        _c.assistant_image_gen = _assistant_image_gen
+        _c.assistant_lens = _assistant_lens
         _c.assistant_cost_ledger = _InMemoryCostLedger(
             daily_cap_usd=float(test_app.config.get("ASSISTANT_DAILY_COST_CAP_USD", 5))
         )
         _c.assistant_router = _Router(_assistant_decision_port)
+        _assistant_import_repo = _SqlAlchemyAssistantImportRepository(db.session)
+        _c.assistant_import_repo = _assistant_import_repo
         if _c.project_repository is not None:
             _c.assistant_equipment_service = _EquipmentService(
                 item_repo=_c.inventory_item_repo,
@@ -1221,6 +1238,55 @@ def invitation_app():
                 project_repo=_c.project_repository,
                 update_item_usecase=_c.inventory_update_item_usecase,
             )
+            _feature_handlers = None
+            if (
+                _c.invoice_repository is not None
+                and _c.invoice_attachment_repository is not None
+                and _c.upload_attachment_usecase is not None
+                and _c.create_invoice_usecase is not None
+                and _c.delete_invoice_usecase is not None
+                and _c.worker_repository is not None
+                and _c.labor_entry_repository is not None
+            ):
+                _c.assistant_ticket_feature = _TicketFeature(
+                    vision=_assistant_vision,
+                    decisions=_assistant_decision_port,
+                    image_gen=_assistant_image_gen,
+                    scan_mode=test_app.config.get("SCAN_MODE", "genai"),
+                    messages=_chat_repo,
+                    storage=_chat_storage,
+                    company_access=_c.user_company_access_repo,
+                    project_repo=_c.project_repository,
+                    authz_reader=_c.authz_reader,
+                    invoice_repo=_c.invoice_repository,
+                    attachment_repo=_c.invoice_attachment_repository,
+                    worker_repo=_c.worker_repository,
+                    labor_entry_repo=_c.labor_entry_repository,
+                    import_repo=_assistant_import_repo,
+                    create_invoice_usecase=_c.create_invoice_usecase,
+                    delete_invoice_usecase=_c.delete_invoice_usecase,
+                    upload_attachment_usecase=_c.upload_attachment_usecase,
+                )
+                _c.assistant_material_feature = _MaterialFeature(
+                    vision=_assistant_vision,
+                    decisions=_assistant_decision_port,
+                    web_search=_assistant_web_search,
+                    lens=_assistant_lens,
+                    messages=_chat_repo,
+                    storage=_chat_storage,
+                    company_access=_c.user_company_access_repo,
+                    company_repo=_c.company_repo,
+                    product_repo=_c.bibliotheque_product_repo,
+                    supplier_repo=_c.bibliotheque_supplier_repo,
+                    material_imports=_assistant_import_repo,
+                    create_product_usecase=_c.bibliotheque_create_product_usecase,
+                    fetch_image_usecase=_c.bibliotheque_fetch_image_from_url_usecase,
+                    upload_image_usecase=_c.bibliotheque_upload_image_usecase,
+                )
+                _c.assistant_feature_handlers = _FeatureHandlers(
+                    ticket=_c.assistant_ticket_feature, material=_c.assistant_material_feature
+                )
+                _feature_handlers = _c.assistant_feature_handlers
             _c.assistant_service = AssistantService(
                 message_repo=_chat_repo,
                 messenger=_c.assistant_messenger,
@@ -1230,9 +1296,13 @@ def invitation_app():
                 project_repo=_c.project_repository,
                 vision=_assistant_vision,
                 cost_ledger=_c.assistant_cost_ledger,
+                feature_handlers=_feature_handlers,
             )
         test_app._assistant_vision = _assistant_vision
         test_app._assistant_decision_port = _assistant_decision_port
+        test_app._assistant_web_search = _assistant_web_search
+        test_app._assistant_image_gen = _assistant_image_gen
+        test_app._assistant_lens = _assistant_lens
 
         # ------------------------------------------------------------------
         # Sign in with a phone number + SMS code — recording sender, no SMS leaves the test.

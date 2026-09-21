@@ -443,6 +443,12 @@ class Container:
     assistant_router: Optional[Any] = None  # Router (S0)
     assistant_equipment_service: Optional[Any] = None  # EquipmentService
 
+    # Feature C / feature A (phase 03) — ticket-to-invoice and material-to-library.
+    assistant_import_repo: Optional[Any] = None  # SqlAlchemyAssistantImportRepository
+    assistant_ticket_feature: Optional[Any] = None  # TicketFeature
+    assistant_material_feature: Optional[Any] = None  # MaterialFeature
+    assistant_feature_handlers: Optional[Any] = None  # FeatureHandlers
+
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 

@@ -75,6 +75,25 @@ class FeatureHandlersPort(Protocol):
         """The user asked to go fetch an invoice from a merchant site — feature B."""
         ...
 
+    def handle_action(
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        action: str,
+        payload: dict[str, Any],
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+    ) -> bool:
+        """A choice tap not already handled by ``AssistantService`` itself (equipment,
+        ``clarify_intent``): feature C/A own e.g. ``set_project``, ``confirm_duplicate``,
+        ``not_duplicate``, ``pick_company``. Returns True when handled (a reply was
+        posted), False when no feature recognised ``action`` — the caller then posts the
+        "unknown_action" template.
+        """
+        ...
+
 
 class DefaultFeatureHandlers:
     """Phase 02's stand-in: every hook posts "not available yet" and nothing else."""
@@ -100,6 +119,19 @@ class DefaultFeatureHandlers:
         decision: RouterDecision,
     ) -> None:
         messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+
+    def handle_action(
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        action: str,
+        payload: dict[str, Any],
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+    ) -> bool:
+        return False
 
 
 def _equipment_option(hit: EquipmentHit, action: str, extra_payload: dict[str, Any]) -> dict[str, Any]:
@@ -493,8 +525,19 @@ class AssistantService:
                 # The tap already disabled the choice (SubmitAssistantActionUseCase marks
                 # `payload.answered`); nothing more to say.
                 pass
-            else:
+            elif not self._features.handle_action(
+                user_id=user_id,
+                message_id=message_id,
+                action=action,
+                payload=payload,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+            ):
                 logger.info("assistant handle_action: unrecognised action=%s message=%s", action, message_id)
+                self._messenger.post_text(
+                    user_id, reply.render("unknown_action", lang), reply_to_id=message_id, trace_id=trace_id
+                )
         except ProviderNotConfiguredError:
             self._messenger.post_text(
                 user_id, reply.render("not_configured", lang), reply_to_id=message_id, trace_id=trace_id
@@ -538,8 +581,11 @@ def _uuid_from_payload(payload: dict[str, Any], key: str, default: Optional[UUID
 class SubmitAssistantActionUseCase:
     """``POST /api/v1/assistant/actions``: the caller answers a choice message.
 
-    Marks the choice ``payload.answered`` and hands off to the dispatcher; the pipeline
-    itself (``AssistantService.handle_action``) runs out of band.
+    Marks the choice ``payload.answered`` (and ``payload.answered_payload``, the exact
+    option payload the app sent — needed to tell WHICH option was tapped when several
+    options on the same choice share one ``action`` name, e.g. two ``set_project``
+    buttons) and hands off to the dispatcher; the pipeline itself
+    (``AssistantService.handle_action``) runs out of band.
     """
 
     def __init__(
@@ -567,6 +613,7 @@ class SubmitAssistantActionUseCase:
         if current_payload.get("answered"):
             raise AssistantAlreadyAnsweredError(f"Message {reply_to_id} was already answered.")
         current_payload["answered"] = action
+        current_payload["answered_payload"] = payload
         self._messages.update_payload(reply_to_id, current_payload)
         self._db.commit()
         # After the commit: a dispatch failure must never be able to roll back the answer.

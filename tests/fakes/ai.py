@@ -109,15 +109,23 @@ class ScriptedDecision:
     `state["message"]`/`state["has_photo"]` to stand in for what Jev would infer — used
     by the 30-utterance router test. Pass `fixed` to always return one specific
     `Decision` instead (used by tests that only care about plumbing, not routing).
+
+    A single pipeline run can make more than one `decide()` call with different
+    question sets (feature C: `attach_to`, then `faithful`/`worst_diff`, then the S3
+    `project`/`category`/`duplicate_of`/`amounts_consistent` call) — `by_question_keys`
+    dispatches on the exact set of question names asked so each call gets its own
+    scripted `Decision` instead of everything collapsing onto one `fixed` answer.
     """
 
     def __init__(
         self,
         fixed: Optional[Decision] = None,
+        by_question_keys: Optional[dict[frozenset[str], Decision]] = None,
         intent_guesser: Optional[Callable[[str, bool], tuple[str, float]]] = None,
         raise_not_configured: bool = False,
     ) -> None:
         self._fixed = fixed
+        self._by_question_keys = by_question_keys
         self._intent_guesser = intent_guesser or _guess_intent
         self._raise_not_configured = raise_not_configured
         self.calls: list[dict[str, Any]] = []
@@ -126,6 +134,10 @@ class ScriptedDecision:
         self.calls.append(state)
         if self._raise_not_configured:
             raise ProviderNotConfiguredError("TYPESAFE_API_KEY is not configured.")
+        if self._by_question_keys is not None:
+            match = self._by_question_keys.get(frozenset(questions.keys()))
+            if match is not None:
+                return match
         if self._fixed is not None:
             return self._fixed
         intent, confidence = self._intent_guesser(str(state.get("message", "")), bool(state.get("has_photo")))

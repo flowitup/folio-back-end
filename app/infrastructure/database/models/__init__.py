@@ -50,6 +50,10 @@ from app.infrastructure.database.models.worker_rate_change import WorkerRateChan
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
 from app.infrastructure.database.models.api_key import ApiKeyOrm
+from app.infrastructure.database.models.assistant_imports import (
+    AssistantMaterialImportModel,
+    InvoiceAiImportModel,
+)
 
 __all__ = [
     "Base",
@@ -99,4 +103,6 @@ __all__ = [
     "ApiKeyOrm",
     "NotificationPreferenceModel",
     "ChatPushMarkerModel",
+    "InvoiceAiImportModel",
+    "AssistantMaterialImportModel",
 ]
