@@ -256,6 +256,7 @@ class AssistantMessenger:
         *,
         state: str,
         text: str,
+        scope: ChannelScope | None,
         progress: float | None = None,
         terminal: bool = False,
     ) -> None:
@@ -263,6 +264,12 @@ class AssistantMessenger:
         — queued -> running -> not_ready|blocked|done|failed|not_found). Pushes through
         the notifier only when ``terminal`` — the plan's "job_status shows a spinner
         while queued|running" only needs the app's 5s poll to see intermediate states.
+
+        ``scope`` is required (NEW-L2) so this goes through ``redact()`` the same as
+        every ``post_*`` above — the module docstring's "the ONE place every card/
+        choice/job_status payload passes through" previously had this one hole. Inert
+        today (every caller passes a fixed template ``text`` with no classified field),
+        but a future caller can no longer bypass D17 layer 1 by accident.
         """
         message = self._messages.find_by_id(message_id)
         if message is None:
@@ -271,10 +278,14 @@ class AssistantMessenger:
         payload["state"] = state
         payload["text"] = text
         payload["progress"] = progress
-        self._messages.update_payload(message_id, payload)
+        redacted_payload = redact(scope, payload)
+        assert redacted_payload is not None  # `payload` is always a dict here
+        self._messages.update_payload(message_id, redacted_payload)
         self._db.commit()
         # After the commit: a push must never be able to roll back the update.
         if terminal and self.notifier is not None:
             self.notifier.message_sent_by_assistant(
-                channel=message.channel, preview=text, sent_at=datetime.now(timezone.utc)
+                channel=message.channel,
+                preview=str(redacted_payload.get("text", text)),
+                sent_at=datetime.now(timezone.utc),
             )

@@ -45,6 +45,7 @@ from app.application.assistant.ports import (
     VisionLlmPort,
 )
 from app.application.assistant.scanify import scanify, to_pdf
+from app.application.assistant.scope import channel_company_ids
 from app.application.assistant.state import (
     WritableProject,
     amounts_sane,
@@ -252,7 +253,7 @@ class TicketFeature:
             )
             return "asked"
 
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
         today = date.today()
         ticket_day = _parse_date(invoice_a.date) or today
@@ -362,7 +363,7 @@ class TicketFeature:
             return "asked"
 
         filename = "facture.pdf" if content_type == "application/pdf" else "facture"
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
         today = date.today()
         ticket_day = _parse_date(invoice_a.date) or today
@@ -1125,7 +1126,7 @@ class TicketFeature:
                 scope=scope,
             )
             return
-        project = self._resolve_writable_project(user_id, project_id)
+        project = self._resolve_writable_project(user_id, project_id, scope)
         if project is None:
             messenger.post_text(
                 user_id,
@@ -1177,7 +1178,9 @@ class TicketFeature:
             # closes the "any invoice's details disclosed" IDOR even if a forged
             # `candidate_invoice_id` ever reached this far (defense in depth: the
             # SubmitAssistantActionUseCase fix already stops a forged one from arriving).
-            writable = self._resolve_writable_project(user_id, existing.project_id) if existing is not None else None
+            writable = (
+                self._resolve_writable_project(user_id, existing.project_id, scope) if existing is not None else None
+            )
             if existing is not None and writable is not None:
                 card = self._invoice_card(
                     invoice_id=existing.id,
@@ -1231,7 +1234,7 @@ class TicketFeature:
                 scope=scope,
             )
             return
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
         project_id_raw = payload.get("project_id")
         decision = TicketDecision(
@@ -1266,8 +1269,10 @@ class TicketFeature:
     # Small helpers
     # ------------------------------------------------------------------
 
-    def _resolve_writable_project(self, user_id: UUID, project_id: UUID) -> Optional[WritableProject]:
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+    def _resolve_writable_project(
+        self, user_id: UUID, project_id: UUID, scope: ChannelScope
+    ) -> Optional[WritableProject]:
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         for project in writable_projects(self._project_repo, self._authz_reader, user_id, company_ids):
             if project.id == project_id:
                 return project

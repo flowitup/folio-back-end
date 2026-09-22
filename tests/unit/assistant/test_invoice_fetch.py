@@ -108,6 +108,15 @@ class FakeProjectRepo:
 
 
 class FakeAuthzReader:
+    """``project_company_id`` defaults to the constructor's ``company_id`` for every
+    project (every project in this file's ``World`` belongs to ``World.company_id`` by
+    default), with per-project overrides for a NEW-H1 test that needs a project rowed
+    to a different, foreign company — mirrors ``test_ticket.py``'s fake."""
+
+    def __init__(self, company_id: Optional[UUID] = None, project_companies: Optional[dict[UUID, UUID]] = None) -> None:
+        self._company_id = company_id or uuid4()
+        self._project_companies = project_companies or {}
+
     def company_role_for(self, user_id: UUID, company_id: UUID) -> Optional[str]:
         return "manager"
 
@@ -115,7 +124,7 @@ class FakeAuthzReader:
         return True
 
     def project_company_id(self, project_id: UUID) -> Optional[UUID]:
-        return uuid4()
+        return self._project_companies.get(project_id, self._company_id)
 
     def project_exists(self, project_id: UUID) -> bool:
         return True
@@ -145,11 +154,11 @@ class _Access:
 
 
 class FakeCompanyAccessRepo:
-    def __init__(self, company_id: UUID) -> None:
-        self._company_id = company_id
+    def __init__(self, *company_ids: UUID) -> None:
+        self._company_ids = list(company_ids)
 
     def list_for_user(self, user_id: UUID) -> list[_Access]:
-        return [_Access(company_id=self._company_id)]
+        return [_Access(company_id=cid) for cid in self._company_ids]
 
 
 class FakeLaborEntryRepo:
@@ -236,7 +245,7 @@ class World:
         self.company_id = uuid4()
         self.project_a = _project("Villa Arcueil")
         self.project_repo = FakeProjectRepo([self.project_a])
-        self.authz_reader = FakeAuthzReader()
+        self.authz_reader = FakeAuthzReader(self.company_id)
         self.company_access = FakeCompanyAccessRepo(self.company_id)
         self.labor_entry_repo = FakeLaborEntryRepo()
         self.worker_repo = FakeWorkerRepo()
@@ -563,6 +572,50 @@ class TestOnResultNotFound:
         assert any(opt["action"] == "fetch_pick_existing" for opt in options)
         assert any(opt["action"] == "fetch_none" for opt in options)
 
+    def test_never_offers_a_purchase_on_a_foreign_companys_project(self, session) -> None:
+        """NEW-H1: `_closest_purchases` must never search a project of a company OTHER
+        than the job's own channel — even when the asker also belongs to that company
+        and has a matching purchase already recorded there. `on_result` rebuilds its
+        scope from the job's stored `channel_key` (M1), so the company bound must
+        survive that round trip too."""
+        world = World(session)
+        foreign_company_id = uuid4()
+        foreign_project = _project("Chantier Confidentiel")
+        world.project_repo = FakeProjectRepo([world.project_a, foreign_project])
+        world.authz_reader = FakeAuthzReader(
+            world.company_id, project_companies={foreign_project.id: foreign_company_id}
+        )
+        world.company_access = FakeCompanyAccessRepo(world.company_id, foreign_company_id)
+        world.feature._project_repo = world.project_repo
+        world.feature._authz_reader = world.authz_reader
+        world.feature._company_access = world.company_access
+
+        from app.application.invoice.create_invoice import CreateInvoiceRequest
+        from app.domain.entities.invoice import InvoiceType
+
+        world.create_invoice_usecase.execute(
+            CreateInvoiceRequest(
+                project_id=foreign_project.id,
+                created_by=world.user_id,
+                type=InvoiceType.MATERIALS_SERVICES,
+                issue_date=date(2026, 9, 9),
+                recipient_name="Leroy Merlin",
+                recipient_address="Elsewhere",
+                items=[{"description": "x", "quantity": 1, "unit_price": 66.67, "vat_rate": 20.0}],
+            )
+        )
+        original = world.post_user_message("va chercher la facture Leroy Merlin 80e")
+        job = world.create_job(amount=Decimal("80.00"), job_date=date(2026, 9, 10), reply_to=original)
+        world.job_repo.update_result(job.id, status="not_found", result={"status": "not_found"})
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        choices = [m for m in world.messages.messages.values() if m.content_type == "choice"]
+        assert choices == []
+        for message in world.messages.messages.values():
+            assert "Confidentiel" not in (message.body or "")
+            assert message.payload is None or "Confidentiel" not in str(message.payload)
+
     def test_no_candidates_falls_back_to_text(self, session) -> None:
         world = World(session)
         original = world.post_user_message("va chercher la facture Leroy Merlin 999e")
@@ -737,6 +790,53 @@ class TestHandleAction:
                 recipient_name="Foreign Corp",
                 recipient_address="Elsewhere",
                 items=[{"description": "x", "quantity": 1, "unit_price": 10.0, "vat_rate": 20.0}],
+            )
+        )
+
+        handled = world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=uuid4(),
+            action="fetch_pick_existing",
+            payload={"invoice_id": foreign.id},
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t",
+            scope=world.default_scope(),
+        )
+
+        assert handled is True
+        assert [m for m in world.messages.messages.values() if m.content_type == "card"] == []
+
+    def test_fetch_pick_existing_refuses_an_invoice_on_a_writable_project_of_a_different_company(self, session) -> None:
+        """NEW-H1: unlike the forged/never-registered case above, this project genuinely
+        exists and the asker genuinely belongs to its company — but NOT the channel this
+        tap came from. `writable_projects` must bound to the channel's own company, not
+        every company the asker belongs to, or this card would disclose another
+        tenant's invoice."""
+        world = World(session)
+        foreign_company_id = uuid4()
+        foreign_project = _project("Chantier Confidentiel")
+        world.project_repo = FakeProjectRepo([world.project_a, foreign_project])
+        world.authz_reader = FakeAuthzReader(
+            world.company_id, project_companies={foreign_project.id: foreign_company_id}
+        )
+        world.company_access = FakeCompanyAccessRepo(world.company_id, foreign_company_id)
+        world.feature._project_repo = world.project_repo
+        world.feature._authz_reader = world.authz_reader
+        world.feature._company_access = world.company_access
+
+        from app.application.invoice.create_invoice import CreateInvoiceRequest
+        from app.domain.entities.invoice import InvoiceType
+
+        foreign = world.create_invoice_usecase.execute(
+            CreateInvoiceRequest(
+                project_id=foreign_project.id,
+                created_by=world.user_id,
+                type=InvoiceType.MATERIALS_SERVICES,
+                issue_date=date(2026, 9, 9),
+                recipient_name="Leroy Merlin",
+                recipient_address="Elsewhere",
+                items=[{"description": "x", "quantity": 1, "unit_price": 66.67, "vat_rate": 20.0}],
             )
         )
 

@@ -70,6 +70,14 @@ def accessible_projects(
     if company_id is not None:
         candidates = [p for p in candidates if authz_reader.project_company_id(p.id) == company_id]
 
+    # NEW-M1: prime the per-request cache in three queries total instead of the
+    # ~3-per-candidate the `has_permission` loop below would otherwise issue against
+    # the authz reader — same `getattr` opt-in `GET /projects` already uses, since not
+    # every `AuthzReaderPort` implementation (e.g. a test fake) offers this method.
+    preload = getattr(authz_reader, "preload_for_projects", None)
+    if preload is not None:
+        preload(user_id, [p.id for p in candidates])
+
     return [
         p
         for p in candidates

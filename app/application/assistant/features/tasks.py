@@ -169,7 +169,7 @@ class TasksFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
-    ) -> None:
+    ) -> str:
         project_id = UUID(str(payload["project_id"]))
         # Re-checked right before the write (not just when the confirm choice was
         # offered): a role change between the offer and the tap must not let a stale
@@ -183,7 +183,7 @@ class TasksFeature:
                 channel=scope.channel,
                 scope=scope,
             )
-            return
+            return "refused"
         title = str(payload["title"])
         due_date = _parse_due_date(payload.get("due_date"))
         task = self._create_usecase.execute(
@@ -197,6 +197,7 @@ class TasksFeature:
             channel=scope.channel,
             scope=scope,
         )
+        return "answered"
 
     # ------------------------------------------------------------------
     # 3.2 — open tasks this week (read-only)

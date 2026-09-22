@@ -50,6 +50,7 @@ from app.application.assistant.ports import (
 )
 from app.application.assistant.project_resolution import resolve_project
 from app.application.assistant.router import Router
+from app.application.assistant.scope import channel_company_ids
 from app.application.assistant import reply
 from app.application.authz.ports import AuthzReaderPort
 from app.application.chat.ports import ChatDirectoryPort
@@ -107,12 +108,14 @@ class FeatureHandlersPort(Protocol):
     ) -> str:
         """The user sent (or picked "material" for) a photo — feature A.
 
-        ``project_hint`` (the router's S0 ``project_hint``, when the caption named a
-        project) lets the caller resolve the company via ``project.company_id`` instead
-        of always asking ``pick_company``. ``scope`` is the channel this dispatch came
-        from — phase 03/04 use it for redaction/tool access; ignored for now. Returns the
-        outcome for the structured log line (``replied``/``asked``/``created``/
-        ``refused``/``error``).
+        ``project_hint`` is accepted for backward compatibility but no longer used to
+        resolve the company (Q1/NEW-H1): the company is always the channel's own
+        (``scope.company_id``) — cross-company disambiguation by project name is
+        retired, since it could hand a photo taken in company A's channel to company B.
+        ``pick_company`` is only ever offered for a channel with no company at all.
+        ``scope`` is the channel this dispatch came from — used for redaction/tool
+        access and to bound the company. Returns the outcome for the structured log line
+        (``replied``/``asked``/``created``/``refused``/``error``).
         """
         ...
 
@@ -342,14 +345,15 @@ class AssistantService:
     def _channel_company_ids(self, scope: ChannelScope, user_id: UUID) -> list[UUID]:
         """Company ids the router/equipment lookups may search — the channel's OWN
         company only (H2), intersected with the asker's real memberships so a channel
-        member who somehow lost their company-access row still gets nothing. Every
-        company the asker happens to also belong to elsewhere must never leak into a
-        company/project/admin channel's search results or into the router's project-name
-        state sent to the provider — that was the cross-tenant disclosure the review
-        found in ``find_equipment``/``move_equipment`` and the S0 router context."""
-        if scope.company_id is None:
-            return []
-        return [c for c in self._company_ids(user_id) if c == scope.company_id]
+        member who somehow lost their company-access row still gets nothing (platform
+        ops excepted — Q3: bounded to the channel without needing a membership row of
+        their own). Every company the asker happens to also belong to elsewhere must
+        never leak into a company/project/admin channel's search results or into the
+        router's project-name state sent to the provider — that was the cross-tenant
+        disclosure the review found in ``find_equipment``/``move_equipment`` and the S0
+        router context. Delegates to the shared ``channel_company_ids`` (``scope.py``) so
+        ticket/material/invoice-fetch (NEW-H1) apply the exact same rule."""
+        return channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
 
     def _lang_for_original(self, original: Optional[ChatMessage]) -> str:
         if original is None:
@@ -1352,7 +1356,7 @@ class AssistantService:
                     outcome = "error"
                 else:
                     audit_ctx.tools.append("BulkLogAttendanceUseCase")
-                    self._labor.confirm_bulk_attendance(
+                    outcome = self._labor.confirm_bulk_attendance(
                         scope=scope,
                         payload=payload,
                         user_id=user_id,
@@ -1361,6 +1365,7 @@ class AssistantService:
                         messenger=self._messenger,
                         trace_id=trace_id,
                     )
+                    self._note_permission_refusal(audit_ctx, outcome)
             elif action == "cancel_bulk_attendance":
                 pass
             elif action == "confirm_validate_attendance":
@@ -1368,7 +1373,7 @@ class AssistantService:
                     outcome = "error"
                 else:
                     audit_ctx.tools.append("ValidateAttendanceUseCase")
-                    self._labor.confirm_validate_attendance(
+                    outcome = self._labor.confirm_validate_attendance(
                         scope=scope,
                         payload=payload,
                         user_id=user_id,
@@ -1377,12 +1382,13 @@ class AssistantService:
                         messenger=self._messenger,
                         trace_id=trace_id,
                     )
+                    self._note_permission_refusal(audit_ctx, outcome)
             elif action == "confirm_create_task":
                 if self._tasks is None:
                     outcome = "error"
                 else:
                     audit_ctx.tools.append("CreateTaskUseCase")
-                    self._tasks.confirm_create_task(
+                    outcome = self._tasks.confirm_create_task(
                         scope=scope,
                         payload=payload,
                         user_id=user_id,
@@ -1391,6 +1397,7 @@ class AssistantService:
                         messenger=self._messenger,
                         trace_id=trace_id,
                     )
+                    self._note_permission_refusal(audit_ctx, outcome)
             elif action == "cancel_create_task":
                 pass
             elif not self._features.handle_action(

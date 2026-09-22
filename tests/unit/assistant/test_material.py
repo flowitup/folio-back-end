@@ -139,6 +139,9 @@ class FakeAuthzReader:
     def project_company_id(self, project_id: UUID) -> Optional[UUID]:
         return None
 
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        return False
+
 
 class RecordingFetchImage:
     """Spy standing in for `FetchProductImageFromUrlUseCase` — proves `_attach_image`
@@ -639,6 +642,26 @@ class TestDefenseInDepthPickCompanyForeignCompany:
         assert replies[0].content_type == "text"
         products, total = world.product_repo.list(foreign_company_id)
         assert total == 0
+
+
+class TestChannelBoundCompanyResolution:
+    """NEW-H1: `_resolve_company` must resolve to the channel's own company (Q1), never
+    to another company the asker also belongs to — the same cross-tenant enumeration
+    fixed for equipment/router (H2) also let this feature start a `find_product` job,
+    and later post its result, under a foreign tenant's `company_id`."""
+
+    def test_never_resolves_to_a_foreign_company_the_asker_also_belongs_to(self, world: World) -> None:
+        other_company_id = uuid4()
+        # The asker belongs to BOTH world.company_id (the channel's own) and a second
+        # company — mirrors a real multi-company user (same setup as H2's equipment test).
+        world.feature._company_access = FakeCompanyAccessRepo([world.company_id, other_company_id])
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+
+        job = world.start_search(message_id)
+
+        assert job.params["company_id"] == str(world.company_id)
+        assert job.params["company_id"] != str(other_company_id)
 
 
 class TestLowConfidenceIdentification:

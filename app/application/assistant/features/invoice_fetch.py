@@ -37,6 +37,7 @@ from app.application.assistant.jobs_repo import AssistantJobRecord, AssistantJob
 from app.application.assistant.messages import AssistantMessenger
 from app.application.assistant.models import MERCHANTS, AmountDate, ChannelScope, RouterDecision
 from app.application.assistant.ports import MessagePosterPort, VisionLlmPort
+from app.application.assistant.scope import channel_company_ids
 from app.application.assistant.state import WritableProject, writable_projects
 from app.application.authz.ports import AuthzReaderPort
 from app.application.chat.ports import ChatAttachmentStoragePort
@@ -381,7 +382,11 @@ class InvoiceFetchFeature:
             return
         if job.status_message_id is not None:
             messenger.update_job_status(
-                job.status_message_id, state="done", text=reply.render("fetch_done", context.lang), terminal=True
+                job.status_message_id,
+                state="done",
+                text=reply.render("fetch_done", context.lang),
+                terminal=True,
+                scope=scope,
             )
         self._ticket.run_bytes(
             user_id=job.user_id,
@@ -423,6 +428,7 @@ class InvoiceFetchFeature:
                 state="queued",
                 text=reply.render("fetch_not_ready", context.lang),
                 terminal=False,
+                scope=scope,
             )
 
     def _handle_not_found(
@@ -446,8 +452,9 @@ class InvoiceFetchFeature:
                 state="not_found",
                 text=reply.render("fetch_not_found_prompt", context.lang),
                 terminal=True,
+                scope=scope,
             )
-        company_ids = [access.company_id for access in self._company_access.list_for_user(job.user_id)]
+        company_ids = channel_company_ids(scope, job.user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, job.user_id, company_ids)
         # merchant/amount_ttc/date are nullable at the `assistant_jobs` table level only
         # to accommodate `find_product` jobs (feature A) — every job this feature ever
@@ -515,7 +522,7 @@ class InvoiceFetchFeature:
     ) -> None:
         text = reply.render(template, context.lang)
         if job.status_message_id is not None:
-            messenger.update_job_status(job.status_message_id, state=state, text=text, terminal=True)
+            messenger.update_job_status(job.status_message_id, state=state, text=text, terminal=True, scope=scope)
         else:  # pragma: no cover - every job created by fetch_invoice() has one
             messenger.post_text(job.user_id, text, reply_to_id=context.reply_to_id, channel=scope.channel, scope=scope)
 
@@ -543,7 +550,7 @@ class InvoiceFetchFeature:
                 # closes the "any invoice's details disclosed" IDOR even if a forged
                 # `invoice_id` ever reached this far (defense in depth: the
                 # SubmitAssistantActionUseCase stored-option check already stops one).
-                company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+                company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
                 projects_by_id = {
                     p.id: p for p in writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
                 }

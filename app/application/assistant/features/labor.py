@@ -236,7 +236,7 @@ class LaborFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
-    ) -> None:
+    ) -> str:
         project_id = UUID(str(payload["project_id"]))
         if not _worker_permitted(self._authz_reader, user_id, project_id):
             messenger.post_text(
@@ -247,7 +247,7 @@ class LaborFeature:
                 channel=scope.channel,
                 scope=scope,
             )
-            return
+            return "refused"
         worker_ids = [UUID(str(w)) for w in payload.get("worker_ids", [])]
         day = date.fromisoformat(str(payload["date"]))
         request = BulkLogAttendanceRequest(
@@ -266,7 +266,7 @@ class LaborFeature:
                 channel=scope.channel,
                 scope=scope,
             )
-            return
+            return "error"
         messenger.post_text(
             user_id,
             reply.render(
@@ -277,6 +277,7 @@ class LaborFeature:
             channel=scope.channel,
             scope=scope,
         )
+        return "answered"
 
     # ------------------------------------------------------------------
     # 2.3 — validate pending self-logged days
@@ -358,12 +359,14 @@ class LaborFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
-    ) -> None:
+    ) -> str:
         entry_ids = [UUID(str(e)) for e in payload.get("entry_ids", [])]
         project_ids = [UUID(str(p)) for p in payload.get("project_ids", [])]
         validated = 0
+        any_permission_denied = False
         for entry_id, project_id in zip(entry_ids, project_ids):
             if not _worker_permitted(self._authz_reader, user_id, project_id):
+                any_permission_denied = True
                 continue
             try:
                 self._validate_usecase.execute(
@@ -380,6 +383,12 @@ class LaborFeature:
             channel=scope.channel,
             scope=scope,
         )
+        # NEW-L1: a fully stale tap — every entry re-checked and denied by
+        # `_worker_permitted` since the choice was offered — must be audited as refused,
+        # not as a successful "0 journée(s) validée(s)" answer.
+        if validated == 0 and entry_ids and any_permission_denied:
+            return "refused"
+        return "answered"
 
 
 __all__ = ["LaborFeature", "MANAGE_LABOR_PERMISSION"]

@@ -69,7 +69,7 @@ def _require_datetime(param: str, value: Optional[str]) -> Optional[datetime]:
 #: `submit_action`'s rate limit below so a company admin cannot hammer this DB-heavy,
 #: otherwise-cheap-to-call endpoint.
 _AUDIT_LIMIT_MIN = 1
-_AUDIT_LIMIT_MAX = 500
+_AUDIT_LIMIT_MAX = 200
 _AUDIT_LIMIT_DEFAULT = 200
 
 

@@ -23,10 +23,13 @@ redaction.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
+from uuid import UUID
 
 if TYPE_CHECKING:
     from app.application.assistant.models import ChannelScope
+    from app.application.authz.ports import AuthzReaderPort
+    from app.application.companies.ports import UserCompanyAccessRepositoryPort
 
 #: `finance_company` — released funds, budget, remaining, income, billing amounts/status.
 #: Deliberately excludes `total_ht`/`total_ttc`/`total_amount`: those are a SUPPLIER
@@ -114,6 +117,33 @@ def allowed_classes_for(is_admin_channel: bool) -> frozenset[str]:
     return CONFIDENTIAL_CLASSES if is_admin_channel else frozenset()
 
 
+def channel_company_ids(
+    scope: "ChannelScope",
+    user_id: UUID,
+    company_access: "UserCompanyAccessRepositoryPort",
+    authz_reader: "Optional[AuthzReaderPort]" = None,
+) -> list[UUID]:
+    """Company ids a channel dispatch may search or act on — the channel's OWN company
+    only, never any other company the asker also happens to belong to. Shared by
+    ``AssistantService`` (router/equipment/S0 state) and the ticket/material/
+    invoice-fetch features (NEW-H1): every one of them used to enumerate the asker's
+    full ``UserCompanyAccessRepositoryPort.list_for_user`` and could offer, act on, or
+    push another tenant's project/company/invoice into a channel scoped to just one.
+
+    A channel with no company (``scope.company_id is None``) always returns ``[]`` —
+    there is nothing to bound to. Platform ops are bounded by the channel the same way,
+    but without needing a ``user_company_access`` row of their own — an ops user often
+    has none. Every other caller is intersected with real memberships, so a channel
+    member who somehow lost their company-access row still gets nothing (fail-closed).
+    """
+    if scope.company_id is None:
+        return []
+    if authz_reader is not None and authz_reader.is_platform_ops(user_id):
+        return [scope.company_id]
+    memberships = {access.company_id for access in company_access.list_for_user(user_id)}
+    return [scope.company_id] if scope.company_id in memberships else []
+
+
 def _blocked_field_names(allowed_classes: frozenset[str]) -> frozenset[str]:
     names: set[str] = set()
     for class_name, fields in CLASS_FIELDS.items():
@@ -164,5 +194,6 @@ __all__ = [
     "FINANCE_COMPANY_FIELDS",
     "PAYROLL_FIELDS",
     "allowed_classes_for",
+    "channel_company_ids",
     "redact",
 ]

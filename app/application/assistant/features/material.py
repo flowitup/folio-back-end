@@ -48,6 +48,7 @@ from app.application.assistant.ports import (
     NoulQuestion,
     VisionLlmPort,
 )
+from app.application.assistant.scope import channel_company_ids
 from app.application.authz.ports import AuthzReaderPort
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
 from app.application.bibliotheque.exceptions import (
@@ -177,6 +178,10 @@ class MaterialFeature:
         scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
+        # `project_hint` is kept for `FeatureHandlersPort.identify_material` interface
+        # parity but is otherwise unused: `_resolve_company` now always resolves to the
+        # channel's own company (Q1), so there is no cross-company ambiguity left for a
+        # project-name hint to break.
         photo = read_photo_bytes(self._messages, self._storage, message_id, user_id)
         if photo is None:
             messenger.post_text(
@@ -222,7 +227,7 @@ class MaterialFeature:
         # companies photographing the same product could leak each other's product
         # card (and the DB's `(company_id, photo_sha256)` unique constraint would raise
         # on the second company's own otherwise-legitimate import).
-        company_id = self._resolve_company(user_id, project_hint)
+        company_id = self._resolve_company(user_id, scope)
         if company_id is None:
             return self._post_pick_company(
                 user_id, message_id, lang, messenger, trace_id, ident, sha, message_id, scope=scope
@@ -241,22 +246,16 @@ class MaterialFeature:
     # Company resolution (plan item 5)
     # ------------------------------------------------------------------
 
-    def _resolve_company(self, user_id: UUID, project_hint: Optional[str] = None) -> Optional[UUID]:
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
-        needle = (project_hint or "").strip().lower()
-        if needle:
-            visible = self._project_repo.list_for_user_and_companies(user_id, company_ids)
-            matches = [p for p in visible if p.name.strip().lower() == needle]
-            if not matches:
-                matches = [p for p in visible if needle in p.name.strip().lower()]
-            if len(matches) == 1:
-                hinted_company_id = self._authz_reader.project_company_id(matches[0].id)
-                if hinted_company_id is not None:
-                    return hinted_company_id
-        unique_company_ids = set(company_ids)
-        if len(unique_company_ids) == 1:
-            return next(iter(unique_company_ids))
-        return None
+    def _resolve_company(self, user_id: UUID, scope: ChannelScope) -> Optional[UUID]:
+        """The channel's own company — Q1: no cross-company company picking. A company/
+        project/admin channel always pins its own company, so there is nothing left to
+        disambiguate by matching ``project_hint`` against every company's projects (the
+        old behaviour, which could hand a company-A asker's photo to company B just
+        because the caption named a B project by the same/similar name). Returns
+        ``None`` only when the channel itself has no company — the caller then falls
+        back to ``_post_pick_company``, bounded to the asker's own memberships."""
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
+        return company_ids[0] if company_ids else None
 
     def _post_pick_company(
         self,
@@ -422,7 +421,7 @@ class MaterialFeature:
             logger.error("assistant.material: job %s has malformed params, dropping", job.id)
             if reply_to_id is not None:
                 messenger.update_job_status(
-                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True
+                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True, scope=scope
                 )
             return
 
@@ -430,7 +429,7 @@ class MaterialFeature:
         if photo is None:
             if reply_to_id is not None:
                 messenger.update_job_status(
-                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True
+                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True, scope=scope
                 )
             return
         photo_bytes, photo_filename, photo_mime = photo
@@ -448,7 +447,7 @@ class MaterialFeature:
                 status = gate.pick_status(pick_confidence)
                 if reply_to_id is not None:
                     text = reply.render("material_found" if status == "confirmed" else "material_to_confirm", lang)
-                    messenger.update_job_status(reply_to_id, state="done", text=text, terminal=True)
+                    messenger.update_job_status(reply_to_id, state="done", text=text, terminal=True, scope=scope)
                 self._create_from_candidate(
                     job.user_id,
                     reply_to_id,
@@ -476,7 +475,11 @@ class MaterialFeature:
             )
             if reply_to_id is not None:
                 messenger.update_job_status(
-                    reply_to_id, state="done", text=reply.render("material_photo_only", lang), terminal=True
+                    reply_to_id,
+                    state="done",
+                    text=reply.render("material_photo_only", lang),
+                    terminal=True,
+                    scope=scope,
                 )
             self._import_photo_only(
                 job.user_id,
@@ -498,7 +501,7 @@ class MaterialFeature:
         # before falling back to the same photo-only import.
         if reply_to_id is not None:
             failed_text = reply.render("product_search_failed", lang)
-            messenger.update_job_status(reply_to_id, state="failed", text=failed_text, terminal=True)
+            messenger.update_job_status(reply_to_id, state="failed", text=failed_text, terminal=True, scope=scope)
             messenger.post_text(
                 job.user_id,
                 failed_text,
