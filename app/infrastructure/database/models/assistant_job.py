@@ -57,6 +57,12 @@ class AssistantJobModel(Base):
     # payload — can still render the transient "running" job_status text correctly
     # instead of always French (review of phase 04, unresolved question 3).
     lang: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    # The originating chat channel (``"company:<uuid>"`` / ``"project:<uuid>"`` /
+    # ``"admin:<uuid>"``) — set by every ``add()`` call since phase 03 so `on_result`
+    # posts its reply back into the channel the request actually came from, instead of
+    # the retired `assistant:<user_id>` fallback. NULL on jobs created before this
+    # column existed.
+    channel_key: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     # find_product-only: the MaterialIdent dump, search_queries, company_id,
     # photo_sha256 and message_id (see app.application.assistant.features.material) —
     # this job type has no fixed merchant/amount/date to key on, so everything the

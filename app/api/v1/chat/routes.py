@@ -35,6 +35,7 @@ from app.application.chat.exceptions import (
     ChatMessageNotFoundError,
     EmptyMessageError,
     NotChannelMemberError,
+    ReplyTargetNotInChannelError,
     UnsupportedAttachmentTypeError,
 )
 from app.application.chat.usecases import MAX_ATTACHMENT_BYTES
@@ -121,6 +122,7 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
         "content_type": dto.content_type,
         "payload": dto.payload,
         "reply_to_id": str(dto.reply_to_id) if dto.reply_to_id is not None else None,
+        "mentions_assistant": dto.mentions_assistant,
     }
 
 
@@ -235,6 +237,7 @@ def list_messages(channel_key: str) -> Any:
 def send_message(channel_key: str) -> Any:
     attachment: tuple[str, str, bytes] | None = None
     lang: str | None = None
+    reply_to_id: UUID | None = None
     if request.files:
         upload = request.files.get("file")
         if upload is None or not upload.filename:
@@ -251,6 +254,12 @@ def send_message(channel_key: str) -> Any:
             if raw_lang not in ("vi", "fr", "en"):
                 return _err(422, "ValidationError", "Invalid input: lang must be one of vi, fr, en")
             lang = raw_lang
+        raw_reply_to = (request.form.get("reply_to_id") or "").strip() or None
+        if raw_reply_to is not None:
+            try:
+                reply_to_id = UUID(raw_reply_to)
+            except ValueError:
+                return _err(422, "ValidationError", "Invalid input: reply_to_id must be a UUID")
     else:
         try:
             parsed = SendMessageBody.model_validate(request.get_json(silent=True) or {})
@@ -259,6 +268,7 @@ def send_message(channel_key: str) -> Any:
             return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
         body = parsed.body
         lang = parsed.lang
+        reply_to_id = parsed.reply_to_id
 
     actor_id = UUID(get_jwt_identity())
     container = get_container()
@@ -266,12 +276,19 @@ def send_message(channel_key: str) -> Any:
         raise RuntimeError("send_chat_message_usecase not wired in container")
     try:
         dto = container.send_chat_message_usecase.execute(
-            actor_id=actor_id, channel_key=channel_key, body=body, attachment=attachment, lang=lang
+            actor_id=actor_id,
+            channel_key=channel_key,
+            body=body,
+            attachment=attachment,
+            lang=lang,
+            reply_to_id=reply_to_id,
         )
     except ChatChannelNotFoundError:
         return _err(404, "NotFound", "Channel not found")
     except NotChannelMemberError:
         return _err(403, "Forbidden", "Not a member of this channel")
+    except ReplyTargetNotInChannelError as exc:
+        return _err(400, "BadRequest", str(exc))
     except EmptyMessageError as exc:
         return _err(400, "BadRequest", str(exc))
     except UnsupportedAttachmentTypeError as exc:

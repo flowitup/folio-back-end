@@ -16,8 +16,8 @@ import pytest
 
 from app.application.assistant.equipment import EquipmentService
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import RouterDecision
-from app.application.assistant.ports import Decision
+from app.application.assistant.models import ChannelScope, RouterDecision
+from app.application.assistant.ports import Decision, NoulQuestion
 from app.application.assistant.router import Router
 from app.application.assistant.service import AssistantService, DefaultFeatureHandlers
 from app.application.inventory.item_usecases import UpdateInventoryItemUseCase
@@ -53,8 +53,12 @@ class FakeMessageRepo:
         current = self.messages[message_id]
         self.messages[message_id] = replace(current, payload=payload)
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
-        items = [m for m in self.messages.values() if m.channel == channel and m.content_type == "text"]
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        items = [
+            m
+            for m in self.messages.values()
+            if m.channel == channel and (m.mentions_assistant or m.sender_type == "assistant")
+        ]
         items.sort(key=lambda m: m.created_at)
         return items[-limit:]
 
@@ -101,6 +105,16 @@ class FakeChecker:
         return True
 
 
+class _SafeOutputGuardDecisions:
+    """A ``DecisionPort`` that answers every Noul question with 0.0 — wired wherever a
+    test wants a non-admin chit-chat reply to actually go through the M4 output guard
+    instead of being refused for having no ``DecisionPort`` at all."""
+
+    def decide(self, state: dict, questions: dict) -> Decision:
+        nouls = {name: 0.0 for name, q in questions.items() if isinstance(q, NoulQuestion)}
+        return Decision(choices={}, nouls=nouls)
+
+
 class FakeProjectCompanyReader:
     def __init__(self, owners: dict[UUID, UUID]) -> None:
         self._owners = owners
@@ -109,18 +123,24 @@ class FakeProjectCompanyReader:
         return self._owners.get(project_id)
 
 
-def _user_message(channel: ChannelRef, body: Optional[str] = "bonjour", photo: bool = False) -> ChatMessage:
+def _user_message(
+    channel: ChannelRef, sender_id: UUID, body: Optional[str] = "bonjour", photo: bool = False
+) -> ChatMessage:
+    """``sender_id`` must equal the ``user_id`` a test then passes to ``handle_message``/
+    ``handle_action`` — the service's own defense-in-depth check requires it."""
     attachment = (
         ChatAttachment(storage_key="k", filename="p.jpg", content_type="image/jpeg", size_bytes=1) if photo else None
     )
-    return ChatMessage.create(channel=channel, sender_id=uuid4(), body=body, attachment=attachment)
+    return ChatMessage.create(
+        channel=channel, sender_id=sender_id, body=body, attachment=attachment, mentions_assistant=True
+    )
 
 
 @pytest.fixture
 def world(session):
     company_id = uuid4()
     user_id = uuid4()
-    channel = ChannelRef(kind="assistant", id=user_id)
+    channel = ChannelRef(kind="company", id=company_id)
     project = Project(id=uuid4(), name="Villa Arcueil", owner_id=company_id, created_at=datetime.now(timezone.utc))
 
     item_repo = SqlAlchemyInventoryItemRepository(session)
@@ -139,10 +159,11 @@ def world(session):
     session.commit()
 
     project_repo = FakeProjectRepo([project])
+    project_company_reader = FakeProjectCompanyReader({project.id: company_id})
     update_item_usecase = UpdateInventoryItemUseCase(
         item_repo=item_repo,
         warehouse_repo=warehouse_repo,
-        project_reader=FakeProjectCompanyReader({project.id: company_id}),
+        project_reader=project_company_reader,
         membership_reader=FakeMembership(),
         permission_checker=FakeChecker(),
         db_session=session,
@@ -161,8 +182,11 @@ def world(session):
     cost_ledger = InMemoryCostLedger(daily_cap_usd=5.0)
     rate_limiter = InMemoryRateLimiter()
 
-    def build_service(decision_port) -> AssistantService:
-        return AssistantService(
+    def build_service(decision_port, **overrides: Any) -> AssistantService:
+        """``**overrides`` lets a test wire phase 03/04's optional dependencies
+        (``decisions``, ``authz_reader``, ``audit``, ``labor_feature``, ``tasks_feature``,
+        ``admin_answers``) without touching every other test's call site."""
+        kwargs: dict[str, Any] = dict(
             message_repo=message_repo,
             messenger=messenger,
             router=Router(decision_port),
@@ -172,7 +196,10 @@ def world(session):
             vision=vision,
             cost_ledger=cost_ledger,
             rate_limiter=rate_limiter,
+            project_company_reader=project_company_reader,
         )
+        kwargs.update(overrides)
+        return AssistantService(**kwargs)
 
     return {
         "message_repo": message_repo,
@@ -213,7 +240,7 @@ def _last_message(world) -> ChatMessage:
 
 
 def test_find_equipment_never_calls_the_vision_port(world) -> None:
-    message = _user_message(world["channel"], body="Où est la perceuse ?")
+    message = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("find_equipment")))
 
@@ -227,7 +254,7 @@ def test_find_equipment_never_calls_the_vision_port(world) -> None:
 
 
 def test_move_equipment_never_calls_the_vision_port(world) -> None:
-    message = _user_message(world["channel"], body="Déplace la perceuse vers Villa Arcueil")
+    message = _user_message(world["channel"], world["user_id"], body="Déplace la perceuse vers Villa Arcueil")
     world["message_repo"].add(message)
     decision = _fixed_decision("move_equipment", is_write=0.95, project_hint="Villa Arcueil")
     service = world["build_service"](ScriptedDecision(fixed=decision))
@@ -241,13 +268,51 @@ def test_move_equipment_never_calls_the_vision_port(world) -> None:
 
 
 # ---------------------------------------------------------------------------
+# H2 — equipment search never crosses the channel's own tenant boundary
+# ---------------------------------------------------------------------------
+
+
+def test_find_equipment_never_leaks_another_company_the_asker_belongs_to(world, session) -> None:
+    """H2: a user who belongs to two companies must never have the OTHER company's
+    inventory disclosed into a channel that belongs to just one of them."""
+    other_company_id = uuid4()
+    item_repo = SqlAlchemyInventoryItemRepository(session)
+    warehouse_repo = SqlAlchemyInventoryWarehouseRepository(session)
+    other_warehouse = warehouse_repo.add(Warehouse.create(company_id=other_company_id, name="Autre entrepôt"))
+    item_repo.add(
+        InventoryItem.create(
+            company_id=other_company_id,
+            name="Grue mobile",
+            quantity=1,
+            condition="working",
+            location_type="warehouse",
+            warehouse_id=other_warehouse.id,
+        )
+    )
+    session.commit()
+
+    message = _user_message(world["channel"], world["user_id"], body="Où est la grue mobile ?")
+    world["message_repo"].add(message)
+    # The asker belongs to BOTH companies (mirrors a real multi-company user).
+    service = world["build_service"](
+        ScriptedDecision(fixed=_fixed_decision("find_equipment")),
+        company_access_repo=FakeCompanyAccessRepo([world["company_id"], other_company_id]),
+    )
+
+    service.handle_message(user_id=world["user_id"], message_id=message.id)
+
+    reply = _last_message(world)
+    assert "Grue mobile" not in (reply.body or "")
+
+
+# ---------------------------------------------------------------------------
 # Cost cap
 # ---------------------------------------------------------------------------
 
 
 def test_over_cost_cap_answers_quota_template_and_calls_no_provider(world) -> None:
     world["cost_ledger"].add("deepseek", 100.0)  # blow well past the 5 USD cap
-    message = _user_message(world["channel"], body="Où est la perceuse ?")
+    message = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(message)
     decision_port = ScriptedDecision(fixed=_fixed_decision("find_equipment"))
     service = world["build_service"](decision_port)
@@ -266,7 +331,7 @@ def test_over_cost_cap_answers_quota_template_and_calls_no_provider(world) -> No
 
 
 def test_router_not_configured_answers_the_not_configured_template(world) -> None:
-    message = _user_message(world["channel"], body="Où est la perceuse ?")
+    message = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(raise_not_configured=True))
 
@@ -282,7 +347,7 @@ def test_router_not_configured_answers_the_not_configured_template(world) -> Non
 
 
 def test_trivial_greeting_skips_the_vision_port(world) -> None:
-    message = _user_message(world["channel"], body="Bonjour")
+    message = _user_message(world["channel"], world["user_id"], body="Bonjour")
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("chit_chat")))
 
@@ -297,9 +362,14 @@ def test_trivial_greeting_skips_the_vision_port(world) -> None:
 
 
 def test_non_trivial_chit_chat_calls_deepseek_text(world) -> None:
-    message = _user_message(world["channel"], body="Raconte-moi une blague sur le chantier")
+    """M4: the output guard now fails CLOSED outside the admin channel when no
+    ``DecisionPort`` is wired, so this test (which wants the reply to go through) wires
+    a harmless one instead of leaving it unwired."""
+    message = _user_message(world["channel"], world["user_id"], body="Raconte-moi une blague sur le chantier")
     world["message_repo"].add(message)
-    service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("chit_chat")))
+    service = world["build_service"](
+        ScriptedDecision(fixed=_fixed_decision("chit_chat")), decisions=_SafeOutputGuardDecisions()
+    )
 
     service.handle_message(user_id=world["user_id"], message_id=message.id)
 
@@ -314,7 +384,7 @@ def test_non_trivial_chit_chat_calls_deepseek_text(world) -> None:
 
 
 def test_photo_without_text_posts_the_ask_kind_choice(world) -> None:
-    message = _user_message(world["channel"], body=None, photo=True)
+    message = _user_message(world["channel"], world["user_id"], body=None, photo=True)
     world["message_repo"].add(message)
     decision_port = ScriptedDecision(fixed=_fixed_decision("chit_chat"))
     service = world["build_service"](decision_port)
@@ -334,7 +404,7 @@ def test_photo_without_text_posts_the_ask_kind_choice(world) -> None:
 
 
 def test_low_confidence_intent_asks_a_clarifying_choice(world) -> None:
-    message = _user_message(world["channel"], body="un truc chelou")
+    message = _user_message(world["channel"], world["user_id"], body="un truc chelou")
     world["message_repo"].add(message)
     low_confidence = Decision(
         choices={
@@ -355,7 +425,7 @@ def test_low_confidence_intent_asks_a_clarifying_choice(world) -> None:
 
 
 def test_clarify_intent_action_redispatches_with_the_chosen_intent(world) -> None:
-    original = _user_message(world["channel"], body="Où est la perceuse ?")
+    original = _user_message(world["channel"], world["user_id"], body="Où est la perceuse ?")
     world["message_repo"].add(original)
     choice = world["messenger"].post_choice(
         world["user_id"],
@@ -368,6 +438,8 @@ def test_clarify_intent_action_redispatches_with_the_chosen_intent(world) -> Non
             }
         ],
         reply_to_id=original.id,
+        channel=world["channel"],
+        scope=None,
     )
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision("find_equipment")))
 
@@ -390,7 +462,7 @@ def test_clarify_intent_action_redispatches_with_the_chosen_intent(world) -> Non
 @pytest.mark.parametrize("intent", ["identify_material", "import_ticket", "fetch_invoice"])
 def test_unimplemented_feature_intents_answer_not_available_yet(world, intent: str) -> None:
     body = "Peu importe, fais ce que tu veux"  # unambiguously French ("fais", "que", "tu")
-    message = _user_message(world["channel"], body=body)
+    message = _user_message(world["channel"], world["user_id"], body=body)
     world["message_repo"].add(message)
     service = world["build_service"](ScriptedDecision(fixed=_fixed_decision(intent)))
 
@@ -404,23 +476,31 @@ def test_default_feature_handlers_matches_the_protocol_signature() -> None:
     handlers = DefaultFeatureHandlers()
     message_repo = FakeMessageRepo()
     messenger = AssistantMessenger(message_repo, FakeSession())
-    channel = ChannelRef(kind="assistant", id=uuid4())
-    original = _user_message(channel)
+    channel = ChannelRef(kind="company", id=uuid4())
+    asker_id = uuid4()
+    scope = ChannelScope(
+        kind="company", company_id=channel.id, project_id=None, is_admin_channel=False, asker_id=asker_id
+    )
+    original = _user_message(channel, asker_id)
     message_repo.add(original)
 
     handlers.identify_material(
-        user_id=channel.id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t1"
+        user_id=asker_id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t1", scope=scope
     )
-    handlers.import_ticket(user_id=channel.id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t2")
+    handlers.import_ticket(
+        user_id=asker_id, message_id=original.id, lang="fr", messenger=messenger, trace_id="t2", scope=scope
+    )
     handlers.fetch_invoice(
-        user_id=channel.id,
+        user_id=asker_id,
         message_id=original.id,
         lang="fr",
         messenger=messenger,
         trace_id="t3",
         decision=RouterDecision(intent="fetch_invoice", intent_confidence=1.0),
+        scope=scope,
     )
     assert len(message_repo.messages) == 4  # original + 3 replies
+    assert all(m.channel == channel for m in message_repo.messages.values())
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +509,7 @@ def test_default_feature_handlers_matches_the_protocol_signature() -> None:
 
 
 def test_move_equipment_confirm_action_executes_the_move(world) -> None:
-    original = _user_message(world["channel"], body="Déplace la perceuse")
+    original = _user_message(world["channel"], world["user_id"], body="Déplace la perceuse")
     world["message_repo"].add(original)
     choice = world["messenger"].post_choice(
         world["user_id"],
@@ -442,6 +522,7 @@ def test_move_equipment_confirm_action_executes_the_move(world) -> None:
             }
         ],
         reply_to_id=original.id,
+        scope=None,
     )
     service = world["build_service"](ScriptedDecision())
 
@@ -457,13 +538,14 @@ def test_move_equipment_confirm_action_executes_the_move(world) -> None:
 
 
 def test_move_equipment_cancel_action_posts_nothing(world) -> None:
-    original = _user_message(world["channel"], body="Déplace la perceuse")
+    original = _user_message(world["channel"], world["user_id"], body="Déplace la perceuse")
     world["message_repo"].add(original)
     choice = world["messenger"].post_choice(
         world["user_id"],
         "Déplacer ?",
         [{"label": "Annuler", "action": "move_equipment_cancel", "payload": {}}],
         reply_to_id=original.id,
+        scope=None,
     )
     before = len(world["message_repo"].messages)
     service = world["build_service"](ScriptedDecision())

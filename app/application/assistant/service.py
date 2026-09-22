@@ -2,49 +2,88 @@
 
 ``AssistantService.handle_message`` is the S0-and-dispatch loop (plan section 3/4):
 router -> gate on intent confidence -> `find_equipment`/`move_equipment` (DB only, no
-LLM) or a DeepSeek text reply (`question`/`chit_chat`) or a `FeatureHandlers` hook
-(`identify_material`/`import_ticket`/`fetch_invoice` — phase 03/04 fill these in; the
-default posts "not available yet"). Every branch always posts at least one reply;
-`ProviderNotConfiguredError` -> the "not configured" template, any other exception ->
-the "error" template, both logged with the trace id.
+LLM), a DeepSeek text reply (`question`/`chit_chat`, guarded by the D17 output guard
+outside the admin channel), a `FeatureHandlers` hook (`identify_material`/
+`import_ticket`/`fetch_invoice`), a confidential-class question (`ask_project_income`/
+`ask_salary`/`ask_own_salary` — refused outside the admin channel, D17), or a labor/
+tasks/admin-answers handler (`ask_roster`/`log_attendance`/`validate_attendance`/
+`create_task`/`ask_tasks`/`ask_audit`) — any hook left unwired posts "not available
+yet". Every branch always posts at least one reply; `ProviderNotConfiguredError` -> the
+"not configured" template, any other exception -> the "error" template, both logged
+with the trace id. One `assistant_audit_log` row is written per handled mention/action
+(D17 layer 4, `_write_audit`).
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field as dc_field
+from decimal import Decimal
 from typing import Any, Optional, Protocol
 from uuid import UUID, uuid4
 
+from app.application.assistant.audit_ports import AssistantAuditPort
 from app.application.assistant.equipment import EquipmentHit, EquipmentService, MoveResult
 from app.application.assistant.exceptions import (
     AssistantAlreadyAnsweredError,
     AssistantError,
     AssistantMessageNotFoundError,
+    AssistantNotAddressedError,
     ProviderNotConfiguredError,
 )
-from app.application.assistant.gate import intent_status, is_write_allowed
+from app.application.assistant.features.admin_answers import AdminAnswersFeature
+from app.application.assistant.features.labor import LaborFeature
+from app.application.assistant.features.tasks import TasksFeature
+from app.application.assistant.gate import intent_status, is_write_allowed, output_guard_triggered
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import INTENTS, RouterDecision
+from app.application.assistant.models import INTENTS, ChannelScope, RouterDecision
 from app.application.assistant.ports import (
     AssistantDispatcherPort,
     CostLedgerPort,
+    DecisionPort,
     MessagePosterPort,
+    NoulQuestion,
+    ProjectCompanyReaderPort,
     RateLimiterPort,
     VisionLlmPort,
 )
+from app.application.assistant.project_resolution import resolve_project
 from app.application.assistant.router import Router
+from app.application.assistant.scope import channel_company_ids
 from app.application.assistant import reply
+from app.application.authz.ports import AuthzReaderPort
+from app.application.chat.ports import ChatDirectoryPort
 from app.application.companies.ports import UserCompanyAccessRepositoryPort
 from app.application.invitations.ports import TransactionalSessionPort
 from app.application.projects.ports import IProjectRepository
-from app.domain.entities.chat_message import ChannelRef, ChatMessage
+from app.domain.entities.chat_message import ChannelRef, ChatMessage, strip_assistant_mention
 
 logger = logging.getLogger(__name__)
 
 #: Assistant-authored messages never carry a `lang` payload themselves; language for a
 #: reply to a choice tap is read off the *original* user message via `reply_to_id`.
 _FALLBACK_LOCALE = "fr"
+
+#: D17 layer 3: an output-guard Jev Noul question, asked of every free-text DeepSeek
+#: reply in a non-admin scope — never against a fixed template (those never leak by
+#: construction).
+_OUTPUT_GUARD_INSTRUCTIONS = (
+    "Le texte révèle-t-il un montant reçu/budget/revenu d'un chantier ou la paie d'une personne ?"
+)
+
+
+@dataclass
+class _AuditContext:
+    """What a ``_dispatch``/action branch reports back for the audit row (D17 layer 4).
+
+    ``refused_reason`` stays ``None`` for anything that was not a refusal; ``tools`` is
+    the list of use-case/feature names actually invoked for this request, for the
+    admin-channel "who asked what" answer and the web supervision page.
+    """
+
+    refused_reason: Optional[str] = None
+    tools: list[str] = dc_field(default_factory=list)
 
 
 class FeatureHandlersPort(Protocol):
@@ -64,19 +103,31 @@ class FeatureHandlersPort(Protocol):
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
         """The user sent (or picked "material" for) a photo — feature A.
 
-        ``project_hint`` (the router's S0 ``project_hint``, when the caption named a
-        project) lets the caller resolve the company via ``project.company_id`` instead
-        of always asking ``pick_company``. Returns the outcome for the structured log
-        line (``replied``/``asked``/``created``/``refused``/``error``).
+        ``project_hint`` is accepted for backward compatibility but no longer used to
+        resolve the company (Q1/NEW-H1): the company is always the channel's own
+        (``scope.company_id``) — cross-company disambiguation by project name is
+        retired, since it could hand a photo taken in company A's channel to company B.
+        ``pick_company`` is only ever offered for a channel with no company at all.
+        ``scope`` is the channel this dispatch came from — used for redaction/tool
+        access and to bound the company. Returns the outcome for the structured log line
+        (``replied``/``asked``/``created``/``refused``/``error``).
         """
         ...
 
     def import_ticket(
-        self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        scope: ChannelScope,
     ) -> str:
         """The user sent (or picked "receipt" for) a photo — feature C. Returns the
         outcome for the structured log line."""
@@ -91,6 +142,7 @@ class FeatureHandlersPort(Protocol):
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
+        scope: ChannelScope,
     ) -> str:
         """The user asked to go fetch an invoice from a merchant site — feature B.
         Returns the outcome for the structured log line."""
@@ -106,6 +158,7 @@ class FeatureHandlersPort(Protocol):
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         """A choice tap not already handled by ``AssistantService`` itself (equipment,
         ``clarify_intent``): feature C/A own e.g. ``set_project``, ``confirm_duplicate``,
@@ -127,15 +180,37 @@ class DefaultFeatureHandlers:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
-        messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         return "replied"
 
     def import_ticket(
-        self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        scope: ChannelScope,
     ) -> str:
-        messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         return "replied"
 
     def fetch_invoice(
@@ -147,8 +222,16 @@ class DefaultFeatureHandlers:
         messenger: AssistantMessenger,
         trace_id: str,
         decision: RouterDecision,
+        scope: ChannelScope,
     ) -> str:
-        messenger.post_text(user_id, reply.render("not_available_yet", lang), reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         return "replied"
 
     def handle_action(
@@ -161,6 +244,7 @@ class DefaultFeatureHandlers:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         return False
 
@@ -174,11 +258,32 @@ _FEATURE_BY_INTENT: dict[str, str] = {
     "move_equipment": "equipment",
     "question": "chat",
     "chit_chat": "chat",
+    "ask_project_income": "finance",
+    "ask_salary": "finance",
+    "ask_own_salary": "finance",
+    "ask_roster": "labor",
+    "log_attendance": "labor",
+    "validate_attendance": "labor",
+    "create_task": "tasks",
+    "ask_tasks": "tasks",
+    "ask_audit": "chat",
+    "ask_unpaid_invoices": "finance",
 }
 
 
 def _feature_for_intent(intent: str) -> str:
     return _FEATURE_BY_INTENT.get(intent, "none")
+
+
+#: The audit log's own outcome vocabulary is exactly {"answered", "refused", "error"}
+#: (the web supervision page badges these three) — narrower than the request log line's
+#: own richer outcome ("replied"/"asked"/"created"/"queued"/"attached"/...), which stays
+#: unchanged for `logger.info` since other code/tests already depend on its exact values.
+_AUDIT_OUTCOMES = frozenset({"answered", "refused", "error"})
+
+
+def _audit_outcome(outcome: str) -> str:
+    return outcome if outcome in _AUDIT_OUTCOMES else "answered"
 
 
 def _equipment_option(hit: EquipmentHit, action: str, extra_payload: dict[str, Any]) -> dict[str, Any]:
@@ -203,7 +308,14 @@ class AssistantService:
         vision: VisionLlmPort,
         cost_ledger: CostLedgerPort,
         rate_limiter: RateLimiterPort,
+        project_company_reader: ProjectCompanyReaderPort,
         feature_handlers: Optional[FeatureHandlersPort] = None,
+        decisions: Optional[DecisionPort] = None,
+        authz_reader: Optional[AuthzReaderPort] = None,
+        audit: Optional[AssistantAuditPort] = None,
+        labor_feature: Optional[LaborFeature] = None,
+        tasks_feature: Optional[TasksFeature] = None,
+        admin_answers: Optional[AdminAnswersFeature] = None,
     ) -> None:
         self._messages = message_repo
         self._messenger = messenger
@@ -214,6 +326,13 @@ class AssistantService:
         self._vision = vision
         self._cost_ledger = cost_ledger
         self._rate_limiter = rate_limiter
+        self._project_company_reader = project_company_reader
+        self._decisions = decisions
+        self._authz_reader = authz_reader
+        self._audit = audit
+        self._labor = labor_feature
+        self._tasks = tasks_feature
+        self._admin_answers = admin_answers
         self._features = feature_handlers or DefaultFeatureHandlers()
 
     # ------------------------------------------------------------------
@@ -223,11 +342,119 @@ class AssistantService:
     def _company_ids(self, user_id: UUID) -> list[UUID]:
         return [access.company_id for access in self._company_access.list_for_user(user_id)]
 
+    def _channel_company_ids(self, scope: ChannelScope, user_id: UUID) -> list[UUID]:
+        """Company ids the router/equipment lookups may search — the channel's OWN
+        company only (H2), intersected with the asker's real memberships so a channel
+        member who somehow lost their company-access row still gets nothing (platform
+        ops excepted — Q3: bounded to the channel without needing a membership row of
+        their own). Every company the asker happens to also belong to elsewhere must
+        never leak into a company/project/admin channel's search results or into the
+        router's project-name state sent to the provider — that was the cross-tenant
+        disclosure the review found in ``find_equipment``/``move_equipment`` and the S0
+        router context. Delegates to the shared ``channel_company_ids`` (``scope.py``) so
+        ticket/material/invoice-fetch (NEW-H1) apply the exact same rule."""
+        return channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
+
     def _lang_for_original(self, original: Optional[ChatMessage]) -> str:
         if original is None:
             return _FALLBACK_LOCALE
         lang_hint = (original.payload or {}).get("lang") if original.payload else None
         return reply.detect_lang(original.body or "", lang_hint)
+
+    def _resolve_scope(self, channel: ChannelRef, asker_id: UUID) -> ChannelScope:
+        """Builds the ``ChannelScope`` a dispatch came from — a company/admin channel's
+        id IS the company id; a project channel's company is looked up (a project with no
+        company yet resolves to ``None``, same as everywhere else in the codebase)."""
+        return ChannelScope.for_channel(
+            channel, project_company_id=self._project_company_reader.project_company_id, asker_id=asker_id
+        )
+
+    def _is_company_admin(self, scope: ChannelScope, user_id: UUID) -> bool:
+        """True when ``user_id`` could ask the same (refused) question in the admin
+        channel instead — the refusal template's admin hint (D17)."""
+        if self._authz_reader is None or scope.company_id is None:
+            return False
+        if self._authz_reader.is_platform_ops(user_id):
+            return True
+        return self._authz_reader.company_role_for(user_id, scope.company_id) == "admin"
+
+    def _refuse_confidential(
+        self,
+        *,
+        intent: str,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
+    ) -> tuple[int, str]:
+        """D17 layer 2: fixed refusal template for a confidential-class intent asked
+        outside the admin channel — never model text."""
+        audit_ctx.refused_reason = "scope"
+        if intent == "ask_own_salary":
+            text = reply.render("refuse_own_salary", lang)
+        else:
+            template = "refuse_salary" if intent == "ask_salary" else "refuse_finance"
+            text = reply.render(template, lang)
+            if self._is_company_admin(scope, user_id):
+                text = f"{text}\n{reply.render('admin_channel_hint', lang)}"
+        self._messenger.post_text(
+            user_id, text, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+        )
+        return 0, "refused"
+
+    def _output_guard_check(self, text: str) -> Optional[float]:
+        """Jev Noul: does this free-text reply disclose a project's income/budget or a
+        person's pay? Returns ``None`` when the guard could not run at all — no
+        ``DecisionPort`` wired, or the provider call itself raised — so the caller can
+        fail CLOSED in a non-admin scope (M4): an unwired port or a Jev outage must
+        never silently downgrade D17 layer 3 to "no guard"."""
+        if self._decisions is None:
+            return None
+        try:
+            result = self._decisions.decide(
+                {"text": text}, {"leak": NoulQuestion(instructions=_OUTPUT_GUARD_INSTRUCTIONS)}
+            )
+        except Exception:
+            logger.exception("assistant output guard: Jev call failed, refusing the reply")
+            return None
+        return result.noul("leak")
+
+    def _write_audit(
+        self,
+        *,
+        scope: ChannelScope,
+        user_id: UUID,
+        message_id: Optional[UUID],
+        intent: str,
+        feature: str,
+        outcome: str,
+        cost_usd: float,
+        trace_id: str,
+        audit_ctx: "_AuditContext",
+    ) -> None:
+        if self._audit is None:
+            return
+        try:
+            self._audit.add(
+                company_id=scope.company_id,
+                channel_key=scope.channel.key,
+                user_id=user_id,
+                message_id=message_id,
+                intent=intent,
+                feature=feature,
+                tools=audit_ctx.tools or None,
+                outcome=_audit_outcome(outcome),
+                refused_reason=audit_ctx.refused_reason,
+                cost_usd=Decimal(str(round(cost_usd, 5))),
+                trace_id=trace_id,
+            )
+        except Exception:
+            # The audit log is a supervision aid, never a request-blocking dependency —
+            # a write failure here must not turn an already-answered request into an error.
+            logger.exception("assistant audit: failed to write audit row trace=%s", trace_id)
 
     # ------------------------------------------------------------------
     # S0 -> dispatch
@@ -235,55 +462,81 @@ class AssistantService:
 
     def handle_message(self, *, user_id: UUID, message_id: UUID) -> None:
         message = self._messages.find_by_id(message_id)
-        if message is None or message.channel != ChannelRef(kind="assistant", id=user_id):
+        if message is None or message.sender_id != user_id:
             # Defense in depth: the RQ dispatcher only ever enqueues a message it just
-            # saw a user post in their own assistant channel, but this is the same
-            # "verify inside the use-case, don't trust the caller" discipline every
-            # other handler in this file follows — never act on a message from a
-            # channel `user_id` does not own.
-            logger.warning(
-                "assistant handle_message: message %s not found in %s's assistant channel", message_id, user_id
-            )
+            # saw `user_id` themselves send (see `SendMessageUseCase`), but this is the
+            # same "verify inside the use-case, don't trust the caller" discipline every
+            # other handler in this file follows — never act on a message someone else
+            # sent, in any channel.
+            logger.warning("assistant handle_message: message %s was not sent by %s", message_id, user_id)
             return
 
+        channel = message.channel
+        scope = self._resolve_scope(channel, user_id)
         trace_id = uuid4().hex[:16]
         start = time.monotonic()
         lang = self._lang_for_original(message)
-        message_text = (message.body or "").strip()
+        message_text = strip_assistant_mention((message.body or "").strip())
         intent = "n/a"
         intent_confidence = 0.0
         provider_calls = 0
         feature = "none"
         outcome = "error"
+        audit_ctx = _AuditContext()
         cost_before = self._cost_ledger.today_total()
         try:
             if self._cost_ledger.over_cap():
                 outcome = "refused"
+                audit_ctx.refused_reason = "cost_cap"
                 self._messenger.post_text(
-                    user_id, reply.render("quota_exceeded", lang), reply_to_id=message.id, trace_id=trace_id
+                    user_id,
+                    reply.render("quota_exceeded", lang),
+                    reply_to_id=message.id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
                 )
                 return
 
             if not self._rate_limiter.allow(user_id):
                 outcome = "refused"
+                audit_ctx.refused_reason = "rate_limit"
                 self._messenger.post_text(
-                    user_id, reply.render("rate_limited", lang), reply_to_id=message.id, trace_id=trace_id
+                    user_id,
+                    reply.render("rate_limited", lang),
+                    reply_to_id=message.id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
                 )
                 return
 
             has_photo = message.content_type == "photo"
             if has_photo and not message_text:
                 outcome = "asked"
-                self._post_photo_ask_kind(user_id, message.id, lang, trace_id)
+                self._post_photo_ask_kind(user_id, message.id, lang, trace_id, channel, scope)
+                return
+            if not has_photo and not message_text:
+                # A message that is only "@folio" (or a bare reply to the assistant with
+                # nothing else typed) strips down to nothing to route on — answer the
+                # free greeting template instead of asking the router to make sense of
+                # an empty string.
+                outcome = "replied"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("greeting", lang),
+                    reply_to_id=message.id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
+                )
                 return
 
-            company_ids = self._company_ids(user_id)
+            company_ids = self._channel_company_ids(scope, user_id)
             projects = self._projects.list_for_user_and_companies(user_id, company_ids)
             project_names = [p.name for p in projects]
             history = [
-                m.body
-                for m in self._messages.list_recent_text(ChannelRef(kind="assistant", id=user_id), limit=10)
-                if m.id != message.id and m.body
+                m.body for m in self._messages.list_recent_addressed(channel, limit=10) if m.id != message.id and m.body
             ]
 
             decision = self._router.route(message_text, has_photo, project_names, history)
@@ -293,7 +546,7 @@ class AssistantService:
 
             if intent_status(intent_confidence) != "confirmed":
                 outcome = "asked"
-                self._post_clarify_intent(user_id, message.id, decision, lang, trace_id)
+                self._post_clarify_intent(user_id, message.id, decision, lang, trace_id, channel, scope)
                 return
 
             extra_calls, outcome = self._dispatch(
@@ -304,17 +557,32 @@ class AssistantService:
                 lang=lang,
                 trace_id=trace_id,
                 company_ids=company_ids,
+                channel=channel,
+                scope=scope,
+                audit_ctx=audit_ctx,
             )
             provider_calls += extra_calls
         except ProviderNotConfiguredError:
             outcome = "refused"
             self._messenger.post_text(
-                user_id, reply.render("not_configured", lang), reply_to_id=message.id, trace_id=trace_id
+                user_id,
+                reply.render("not_configured", lang),
+                reply_to_id=message.id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
         except Exception:
             outcome = "error"
             logger.exception("assistant.request trace=%s user=%s failed", trace_id, user_id)
-            self._messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message.id, trace_id=trace_id)
+            self._messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message.id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+            )
         finally:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             cost_usd = max(self._cost_ledger.today_total() - cost_before, 0.0)
@@ -331,6 +599,17 @@ class AssistantService:
                 cost_usd,
                 elapsed_ms,
             )
+            self._write_audit(
+                scope=scope,
+                user_id=user_id,
+                message_id=message.id,
+                intent=intent,
+                feature=feature,
+                outcome=outcome,
+                cost_usd=cost_usd,
+                trace_id=trace_id,
+                audit_ctx=audit_ctx,
+            )
 
     def _dispatch(
         self,
@@ -342,6 +621,9 @@ class AssistantService:
         lang: str,
         trace_id: str,
         company_ids: list[UUID],
+        channel: ChannelRef,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
     ) -> tuple[int, str]:
         """Returns (extra provider calls made, outcome) — both feed the request log line."""
         intent = decision.intent
@@ -351,7 +633,9 @@ class AssistantService:
                 text = reply.render("equipment_not_found", lang)
             else:
                 text = reply.render_equipment_found(result.hits, lang, more=max(result.total - len(result.hits), 0))
-            self._messenger.post_text(user_id, text, reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_text(
+                user_id, text, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+            )
             return 0, "replied"
         if intent == "move_equipment":
             outcome = self._dispatch_move_search(
@@ -363,16 +647,46 @@ class AssistantService:
                 lang=lang,
                 trace_id=trace_id,
                 company_ids=company_ids,
+                channel=channel,
+                scope=scope,
             )
             return 0, outcome
         if intent in ("question", "chit_chat"):
             if reply.is_trivial_greeting(message_text):
                 self._messenger.post_text(
-                    user_id, reply.render("greeting", lang), reply_to_id=message_id, trace_id=trace_id
+                    user_id,
+                    reply.render("greeting", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
                 )
                 return 0, "replied"
             answer = reply.chit_chat_reply(self._vision, lang, message_text)
-            self._messenger.post_text(user_id, answer, reply_to_id=message_id, trace_id=trace_id)
+            # D17 layer 3 — output guard: a free-text DeepSeek reply outside the admin
+            # channel is replaced by the refusal template once Jev's leak-Noul reaches
+            # gate.OUTPUT_GUARD_LEAK. A fixed template (every other branch here) never
+            # goes through this check — it cannot leak anything the template's own
+            # author did not already write.
+            if not scope.is_admin_channel:
+                leak_confidence = self._output_guard_check(answer)
+                # M4: a guard that could not run at all (unwired port, or the provider
+                # call raised) is not "no guard" — it is treated exactly like a positive
+                # leak-Noul, refusing the reply rather than letting it through unchecked.
+                if leak_confidence is None or output_guard_triggered(leak_confidence):
+                    audit_ctx.refused_reason = "output_guard" if leak_confidence is not None else "output_guard_error"
+                    self._messenger.post_text(
+                        user_id,
+                        reply.render("refuse_generic", lang),
+                        reply_to_id=message_id,
+                        trace_id=trace_id,
+                        channel=channel,
+                        scope=scope,
+                    )
+                    return 2, "refused"
+            self._messenger.post_text(
+                user_id, answer, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+            )
             return 1, "replied"
         if intent == "identify_material":
             outcome = self._features.identify_material(
@@ -381,12 +695,18 @@ class AssistantService:
                 lang=lang,
                 messenger=self._messenger,
                 trace_id=trace_id,
+                scope=scope,
                 project_hint=decision.project_hint,
             )
             return 0, outcome
         if intent == "import_ticket":
             outcome = self._features.import_ticket(
-                user_id=user_id, message_id=message_id, lang=lang, messenger=self._messenger, trace_id=trace_id
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+                scope=scope,
             )
             return 0, outcome
         if intent == "fetch_invoice":
@@ -397,18 +717,332 @@ class AssistantService:
                 messenger=self._messenger,
                 trace_id=trace_id,
                 decision=decision,
+                scope=scope,
+            )
+            return 0, outcome
+        if intent in ("ask_project_income", "ask_salary", "ask_own_salary"):
+            return self._dispatch_confidential(
+                intent=intent,
+                message_text=message_text,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+                audit_ctx=audit_ctx,
+            )
+        if intent in ("ask_roster", "log_attendance"):
+            return self._dispatch_labor_project_scoped(
+                intent=intent,
+                message_text=message_text,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                trace_id=trace_id,
+                scope=scope,
+                audit_ctx=audit_ctx,
+            )
+        if intent == "validate_attendance":
+            if self._labor is None:
+                return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
+            audit_ctx.tools.append("ValidateAttendanceUseCase")
+            outcome = self._labor.validate_attendance(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+            )
+            return 0, outcome
+        if intent in ("create_task", "ask_tasks"):
+            return self._dispatch_tasks_project_scoped(
+                intent=intent,
+                message_text=message_text,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                trace_id=trace_id,
+                scope=scope,
+                audit_ctx=audit_ctx,
+            )
+        if intent == "ask_unpaid_invoices":
+            # Client billing amounts are a finance_company class: admin channel only.
+            if not scope.is_admin_channel or self._admin_answers is None:
+                audit_ctx.refused_reason = "scope"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("refuse_finance", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
+                )
+                return 0, "refused"
+            audit_ctx.tools.append("BillingDocumentRepository")
+            company_ids = [scope.company_id] if scope.company_id is not None else self._company_ids(user_id)
+            outcome = self._admin_answers.ask_unpaid_invoices(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+                projects=self._projects.list_for_user_and_companies(user_id, company_ids),
+            )
+            return 0, outcome
+        if intent == "ask_audit":
+            if not scope.is_admin_channel or self._admin_answers is None:
+                audit_ctx.refused_reason = "scope"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("refuse_generic", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
+                )
+                return 0, "refused"
+            audit_ctx.tools.append("AssistantAuditPort")
+            outcome = self._admin_answers.ask_audit(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
             )
             return 0, outcome
         self._messenger.post_text(
-            user_id, reply.render("unknown_intent", lang), reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("unknown_intent", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=channel,
+            scope=scope,
         )
         return 0, "replied"
+
+    def _not_available(
+        self, user_id: UUID, message_id: UUID, lang: str, trace_id: str, channel: ChannelRef, scope: ChannelScope
+    ) -> tuple[int, str]:
+        self._messenger.post_text(
+            user_id,
+            reply.render("not_available_yet", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=channel,
+            scope=scope,
+        )
+        return 0, "replied"
+
+    @staticmethod
+    def _note_permission_refusal(audit_ctx: "_AuditContext", outcome: str) -> None:
+        """A feature handler's own ``project:read``/``project:manage_labor``/etc. check
+        (C1) denied the request — mark the audit row's reason so the admin-channel
+        supervision answer and the web audit page can tell it apart from a scope (D17)
+        or output-guard refusal."""
+        if outcome == "refused":
+            audit_ctx.refused_reason = "permission"
+
+    # ------------------------------------------------------------------
+    # Phase 03 — confidential-class questions (D17)
+    # ------------------------------------------------------------------
+
+    def _dispatch_confidential(
+        self,
+        *,
+        intent: str,
+        message_text: str,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
+    ) -> tuple[int, str]:
+        if not scope.is_admin_channel:
+            return self._refuse_confidential(
+                intent=intent,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+                audit_ctx=audit_ctx,
+            )
+        if self._admin_answers is None or self._decisions is None or self._authz_reader is None:
+            return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
+        project_id = resolve_project(
+            scope=scope,
+            text=message_text,
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            trace_id=trace_id,
+            pending_intent=intent,
+            project_repo=self._projects,
+            decisions=self._decisions,
+            messenger=self._messenger,
+            authz_reader=self._authz_reader,
+        )
+        if project_id is None:
+            return 1, "asked"
+        if intent == "ask_project_income":
+            audit_ctx.tools.append("InvoiceRepository")
+            outcome = self._admin_answers.ask_project_income(
+                scope=scope,
+                project_id=project_id,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+            )
+            self._note_permission_refusal(audit_ctx, outcome)
+            return 1, outcome
+        audit_ctx.tools.append("GetLaborPaymentsSummaryUseCase")
+        outcome = self._admin_answers.ask_salary(
+            scope=scope,
+            project_id=project_id,
+            text=message_text,
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            messenger=self._messenger,
+            trace_id=trace_id,
+        )
+        self._note_permission_refusal(audit_ctx, outcome)
+        return 1, outcome
+
+    # ------------------------------------------------------------------
+    # Phase 04 — labor/tasks handlers needing a resolved project (2.1/2.2/3.1/3.2)
+    # ------------------------------------------------------------------
+
+    def _dispatch_labor_project_scoped(
+        self,
+        *,
+        intent: str,
+        message_text: str,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        trace_id: str,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
+    ) -> tuple[int, str]:
+        channel = scope.channel
+        if self._labor is None or self._decisions is None or self._authz_reader is None:
+            return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
+        project_id = resolve_project(
+            scope=scope,
+            text=message_text,
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            trace_id=trace_id,
+            pending_intent=intent,
+            project_repo=self._projects,
+            decisions=self._decisions,
+            messenger=self._messenger,
+            authz_reader=self._authz_reader,
+        )
+        if project_id is None:
+            return 1, "asked"
+        if intent == "ask_roster":
+            audit_ctx.tools.append("GetDayRosterUseCase")
+            outcome = self._labor.ask_roster(
+                scope=scope,
+                project_id=project_id,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+            )
+            self._note_permission_refusal(audit_ctx, outcome)
+            return 1, outcome
+        audit_ctx.tools.append("BulkLogAttendanceUseCase")
+        outcome = self._labor.log_attendance(
+            scope=scope,
+            project_id=project_id,
+            text=message_text,
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            messenger=self._messenger,
+            trace_id=trace_id,
+        )
+        self._note_permission_refusal(audit_ctx, outcome)
+        return 1, outcome
+
+    def _dispatch_tasks_project_scoped(
+        self,
+        *,
+        intent: str,
+        message_text: str,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        trace_id: str,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
+    ) -> tuple[int, str]:
+        channel = scope.channel
+        if self._tasks is None or self._decisions is None or self._authz_reader is None:
+            return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
+        project_id = resolve_project(
+            scope=scope,
+            text=message_text,
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            trace_id=trace_id,
+            pending_intent=intent,
+            project_repo=self._projects,
+            decisions=self._decisions,
+            messenger=self._messenger,
+            authz_reader=self._authz_reader,
+        )
+        if project_id is None:
+            return 1, "asked"
+        if intent == "create_task":
+            audit_ctx.tools.append("CreateTaskUseCase")
+            outcome = self._tasks.create_task(
+                scope=scope,
+                project_id=project_id,
+                text=message_text,
+                user_id=user_id,
+                message_id=message_id,
+                lang=lang,
+                messenger=self._messenger,
+                trace_id=trace_id,
+            )
+            self._note_permission_refusal(audit_ctx, outcome)
+            return 2, outcome
+        audit_ctx.tools.append("ListTasksUseCase")
+        outcome = self._tasks.ask_tasks(
+            scope=scope,
+            project_id=project_id,
+            user_id=user_id,
+            message_id=message_id,
+            lang=lang,
+            messenger=self._messenger,
+            trace_id=trace_id,
+        )
+        self._note_permission_refusal(audit_ctx, outcome)
+        return 1, outcome
 
     # ------------------------------------------------------------------
     # Clarifying / choice replies
     # ------------------------------------------------------------------
 
-    def _post_photo_ask_kind(self, user_id: UUID, message_id: UUID, lang: str, trace_id: str) -> None:
+    def _post_photo_ask_kind(
+        self, user_id: UUID, message_id: UUID, lang: str, trace_id: str, channel: ChannelRef, scope: ChannelScope
+    ) -> None:
         prompt = reply.render("photo_ask_kind_prompt", lang)
         options = [
             {
@@ -422,10 +1056,19 @@ class AssistantService:
                 "payload": {"message_id": str(message_id)},
             },
         ]
-        self._messenger.post_choice(user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id)
+        self._messenger.post_choice(
+            user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+        )
 
     def _post_clarify_intent(
-        self, user_id: UUID, message_id: UUID, decision: RouterDecision, lang: str, trace_id: str
+        self,
+        user_id: UUID,
+        message_id: UUID,
+        decision: RouterDecision,
+        lang: str,
+        trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
     ) -> None:
         ranked = sorted(decision.intent_probabilities.items(), key=lambda item: item[1], reverse=True)
         top_two = ranked[:2] or [(decision.intent, decision.intent_confidence)]
@@ -438,7 +1081,13 @@ class AssistantService:
             for name, _confidence in top_two
         ]
         self._messenger.post_choice(
-            user_id, reply.render("clarify_intent_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("clarify_intent_prompt", lang),
+            options,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=channel,
+            scope=scope,
         )
 
     # ------------------------------------------------------------------
@@ -456,6 +1105,8 @@ class AssistantService:
         lang: str,
         trace_id: str,
         company_ids: list[UUID],
+        channel: ChannelRef,
+        scope: ChannelScope,
     ) -> str:
         outcome = self._equipment.move(
             user_id=user_id,
@@ -464,7 +1115,7 @@ class AssistantService:
             project_hint=project_hint,
             is_write_confirmed=is_write_confirmed,
         )
-        return self._reply_move_outcome(user_id, message_id, outcome, project_hint, lang, trace_id)
+        return self._reply_move_outcome(user_id, message_id, outcome, project_hint, lang, trace_id, channel, scope)
 
     def _reply_move_outcome(
         self,
@@ -474,10 +1125,17 @@ class AssistantService:
         project_hint: Optional[str],
         lang: str,
         trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
     ) -> str:
         if outcome.status == "not_found":
             self._messenger.post_text(
-                user_id, reply.render("equipment_not_found", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("equipment_not_found", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
             return "replied"
         elif outcome.status == "ambiguous_item":
@@ -491,6 +1149,8 @@ class AssistantService:
                 options,
                 reply_to_id=message_id,
                 trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
             return "asked"
         elif outcome.status == "ambiguous_project":
@@ -511,6 +1171,8 @@ class AssistantService:
                 options,
                 reply_to_id=message_id,
                 trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
             return "asked"
         elif outcome.status == "confirm":
@@ -530,7 +1192,9 @@ class AssistantService:
                     "payload": {},
                 },
             ]
-            self._messenger.post_choice(user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_choice(
+                user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+            )
             return "asked"
         elif outcome.status == "moved":
             item = outcome.item
@@ -541,11 +1205,18 @@ class AssistantService:
                 reply.render("equipment_moved", lang, name=item.name, project=outcome.project_name),
                 reply_to_id=message_id,
                 trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
             return "replied"
         elif outcome.status == "denied":
             self._messenger.post_text(
-                user_id, reply.render("equipment_move_denied", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("equipment_move_denied", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
             return "refused"
         else:  # pragma: no cover - defensive, every status above is exhaustive
@@ -557,35 +1228,77 @@ class AssistantService:
 
     def handle_action(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
         choice_message = self._messages.find_by_id(message_id)
-        if choice_message is None or choice_message.channel != ChannelRef(kind="assistant", id=user_id):
+        if (
+            choice_message is None
+            or choice_message.content_type != "choice"
+            or str((choice_message.payload or {}).get("addressed_to")) != str(user_id)
+        ):
             # Defense in depth — see the identical check in handle_message(). By the
             # time this runs, `SubmitAssistantActionUseCase` has already verified the
-            # choice belongs to `user_id`'s channel, but this handler must never trust
-            # that on its own.
-            logger.warning(
-                "assistant handle_action: message %s not found in %s's assistant channel", message_id, user_id
-            )
+            # caller is a member of the choice's channel AND is its addressee, but this
+            # handler must never trust that on its own.
+            logger.warning("assistant handle_action: message %s is not a choice addressed to %s", message_id, user_id)
             return
+        channel = choice_message.channel
+        scope = self._resolve_scope(channel, user_id)
         original = (
             self._messages.find_by_id(choice_message.reply_to_id) if choice_message.reply_to_id is not None else None
         )
         lang = self._lang_for_original(original)
         trace_id = uuid4().hex[:16]
+        audit_ctx = _AuditContext()
+        intent_for_audit = str(payload.get("intent") or action)
+        outcome = "answered"
+        cost_before = self._cost_ledger.today_total()
 
         if self._cost_ledger.over_cap():
+            audit_ctx.refused_reason = "cost_cap"
             self._messenger.post_text(
-                user_id, reply.render("quota_exceeded", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("quota_exceeded", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+            )
+            self._write_audit(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                intent=intent_for_audit,
+                feature=_feature_for_intent(intent_for_audit),
+                outcome="refused",
+                cost_usd=0.0,
+                trace_id=trace_id,
+                audit_ctx=audit_ctx,
             )
             return
         if not self._rate_limiter.allow(user_id):
+            audit_ctx.refused_reason = "rate_limit"
             self._messenger.post_text(
-                user_id, reply.render("rate_limited", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("rate_limited", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+            )
+            self._write_audit(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                intent=intent_for_audit,
+                feature=_feature_for_intent(intent_for_audit),
+                outcome="refused",
+                cost_usd=0.0,
+                trace_id=trace_id,
+                audit_ctx=audit_ctx,
             )
             return
 
         try:
             if action == "clarify_intent":
-                self._handle_clarify_intent(user_id, payload, lang, trace_id)
+                self._handle_clarify_intent(user_id, payload, lang, trace_id, channel, scope, audit_ctx)
             elif action == "import_ticket":
                 self._features.import_ticket(
                     user_id=user_id,
@@ -593,6 +1306,7 @@ class AssistantService:
                     lang=lang,
                     messenger=self._messenger,
                     trace_id=trace_id,
+                    scope=scope,
                 )
             elif action == "identify_material":
                 self._features.identify_material(
@@ -601,34 +1315,90 @@ class AssistantService:
                     lang=lang,
                     messenger=self._messenger,
                     trace_id=trace_id,
+                    scope=scope,
                 )
             elif action == "move_equipment_pick":
-                outcome = self._equipment.move_item(
+                move_outcome = self._equipment.move_item(
                     user_id=user_id,
                     item_id=_uuid_from_payload(payload, "item_id"),
                     project_hint=payload.get("project_hint"),
                     is_write_confirmed=True,  # an explicit tap on a named tool is itself the write confirmation
                 )
-                self._reply_move_outcome(user_id, message_id, outcome, payload.get("project_hint"), lang, trace_id)
+                self._reply_move_outcome(
+                    user_id, message_id, move_outcome, payload.get("project_hint"), lang, trace_id, channel, scope
+                )
             elif action == "move_equipment_set_project":
-                outcome = self._equipment.move_item(
+                move_outcome = self._equipment.move_item(
                     user_id=user_id,
                     item_id=_uuid_from_payload(payload, "item_id"),
                     project_hint=payload.get("project_name"),
                     is_write_confirmed=True,  # an explicit tap on a named project is itself the write confirmation
                 )
-                self._reply_move_outcome(user_id, message_id, outcome, payload.get("project_name"), lang, trace_id)
+                self._reply_move_outcome(
+                    user_id, message_id, move_outcome, payload.get("project_name"), lang, trace_id, channel, scope
+                )
             elif action == "move_equipment_confirm":
-                outcome = self._equipment.move_by_item_id(
+                move_outcome = self._equipment.move_by_item_id(
                     user_id=user_id,
                     item_id=_uuid_from_payload(payload, "item_id"),
                     project_id=_uuid_from_payload(payload, "project_id"),
                     is_write_confirmed=True,
                 )
-                self._reply_move_outcome(user_id, message_id, outcome, None, lang, trace_id)
+                self._reply_move_outcome(user_id, message_id, move_outcome, None, lang, trace_id, channel, scope)
             elif action == "move_equipment_cancel":
                 # The tap already disabled the choice (SubmitAssistantActionUseCase marks
                 # `payload.answered`); nothing more to say.
+                pass
+            elif action == "pick_project_ctx":
+                outcome = self._handle_pick_project_ctx(user_id, message_id, payload, lang, trace_id, scope, audit_ctx)
+            elif action == "confirm_bulk_attendance":
+                if self._labor is None:
+                    outcome = "error"
+                else:
+                    audit_ctx.tools.append("BulkLogAttendanceUseCase")
+                    outcome = self._labor.confirm_bulk_attendance(
+                        scope=scope,
+                        payload=payload,
+                        user_id=user_id,
+                        message_id=message_id,
+                        lang=lang,
+                        messenger=self._messenger,
+                        trace_id=trace_id,
+                    )
+                    self._note_permission_refusal(audit_ctx, outcome)
+            elif action == "cancel_bulk_attendance":
+                pass
+            elif action == "confirm_validate_attendance":
+                if self._labor is None:
+                    outcome = "error"
+                else:
+                    audit_ctx.tools.append("ValidateAttendanceUseCase")
+                    outcome = self._labor.confirm_validate_attendance(
+                        scope=scope,
+                        payload=payload,
+                        user_id=user_id,
+                        message_id=message_id,
+                        lang=lang,
+                        messenger=self._messenger,
+                        trace_id=trace_id,
+                    )
+                    self._note_permission_refusal(audit_ctx, outcome)
+            elif action == "confirm_create_task":
+                if self._tasks is None:
+                    outcome = "error"
+                else:
+                    audit_ctx.tools.append("CreateTaskUseCase")
+                    outcome = self._tasks.confirm_create_task(
+                        scope=scope,
+                        payload=payload,
+                        user_id=user_id,
+                        message_id=message_id,
+                        lang=lang,
+                        messenger=self._messenger,
+                        trace_id=trace_id,
+                    )
+                    self._note_permission_refusal(audit_ctx, outcome)
+            elif action == "cancel_create_task":
                 pass
             elif not self._features.handle_action(
                 user_id=user_id,
@@ -638,42 +1408,193 @@ class AssistantService:
                 lang=lang,
                 messenger=self._messenger,
                 trace_id=trace_id,
+                scope=scope,
             ):
                 logger.info("assistant handle_action: unrecognised action=%s message=%s", action, message_id)
+                outcome = "error"
                 self._messenger.post_text(
-                    user_id, reply.render("unknown_action", lang), reply_to_id=message_id, trace_id=trace_id
+                    user_id,
+                    reply.render("unknown_action", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
                 )
         except ProviderNotConfiguredError:
+            outcome = "refused"
             self._messenger.post_text(
-                user_id, reply.render("not_configured", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("not_configured", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
             )
         except Exception:
+            outcome = "error"
             logger.exception("assistant.action trace=%s user=%s action=%s failed", trace_id, user_id, action)
-            self._messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            self._messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+            )
+        finally:
+            cost_usd = max(self._cost_ledger.today_total() - cost_before, 0.0)
+            self._write_audit(
+                scope=scope,
+                user_id=user_id,
+                message_id=message_id,
+                intent=intent_for_audit,
+                feature=_feature_for_intent(intent_for_audit),
+                outcome=outcome,
+                cost_usd=cost_usd,
+                trace_id=trace_id,
+                audit_ctx=audit_ctx,
+            )
 
-    def _handle_clarify_intent(self, user_id: UUID, payload: dict[str, Any], lang: str, trace_id: str) -> None:
+    def _handle_pick_project_ctx(
+        self,
+        user_id: UUID,
+        message_id: UUID,
+        payload: dict[str, Any],
+        lang: str,
+        trace_id: str,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
+    ) -> str:
+        """The tap on a ``resolve_project`` choice — re-runs the pending intent directly
+        against the tapped project, skipping ``resolve_project`` this time around.
+
+        Every branch below re-checks the caller's permission on the tapped project
+        inside the feature method itself (C1: a stale tap after a role change must be
+        refused, not honoured just because the choice was offered earlier) — this
+        method only forwards that outcome into the audit row.
+        """
+        intent = str(payload.get("intent") or "")
+        project_id = UUID(str(payload["project_id"]))
+        text = str(payload.get("text") or "")
+        outcome = "error"
+        if intent in ("ask_roster", "log_attendance") and self._labor is not None:
+            if intent == "ask_roster":
+                audit_ctx.tools.append("GetDayRosterUseCase")
+                outcome = self._labor.ask_roster(
+                    scope=scope,
+                    project_id=project_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    lang=lang,
+                    messenger=self._messenger,
+                    trace_id=trace_id,
+                )
+            else:
+                audit_ctx.tools.append("BulkLogAttendanceUseCase")
+                outcome = self._labor.log_attendance(
+                    scope=scope,
+                    project_id=project_id,
+                    text=text,
+                    user_id=user_id,
+                    message_id=message_id,
+                    lang=lang,
+                    messenger=self._messenger,
+                    trace_id=trace_id,
+                )
+        elif intent in ("create_task", "ask_tasks") and self._tasks is not None:
+            if intent == "create_task":
+                audit_ctx.tools.append("CreateTaskUseCase")
+                outcome = self._tasks.create_task(
+                    scope=scope,
+                    project_id=project_id,
+                    text=text,
+                    user_id=user_id,
+                    message_id=message_id,
+                    lang=lang,
+                    messenger=self._messenger,
+                    trace_id=trace_id,
+                )
+            else:
+                audit_ctx.tools.append("ListTasksUseCase")
+                outcome = self._tasks.ask_tasks(
+                    scope=scope,
+                    project_id=project_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    lang=lang,
+                    messenger=self._messenger,
+                    trace_id=trace_id,
+                )
+        elif intent in ("ask_project_income", "ask_salary", "ask_own_salary") and self._admin_answers is not None:
+            if intent == "ask_project_income":
+                audit_ctx.tools.append("InvoiceRepository")
+                outcome = self._admin_answers.ask_project_income(
+                    scope=scope,
+                    project_id=project_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    lang=lang,
+                    messenger=self._messenger,
+                    trace_id=trace_id,
+                )
+            else:
+                audit_ctx.tools.append("GetLaborPaymentsSummaryUseCase")
+                outcome = self._admin_answers.ask_salary(
+                    scope=scope,
+                    project_id=project_id,
+                    text=text,
+                    user_id=user_id,
+                    message_id=message_id,
+                    lang=lang,
+                    messenger=self._messenger,
+                    trace_id=trace_id,
+                )
+        else:
+            self._messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+        self._note_permission_refusal(audit_ctx, outcome)
+        return outcome
+
+    def _handle_clarify_intent(
+        self,
+        user_id: UUID,
+        payload: dict[str, Any],
+        lang: str,
+        trace_id: str,
+        channel: ChannelRef,
+        scope: ChannelScope,
+        audit_ctx: "_AuditContext",
+    ) -> None:
         intent = payload.get("intent")
         if intent not in INTENTS:
             return
         original_message_id = _uuid_from_payload(payload, "message_id")
         message = self._messages.find_by_id(original_message_id)
         # Defense in depth (see handle_message's identical check) — never launder
-        # another channel's message body through DeepSeek into this caller's assistant
-        # conversation.
-        if message is None or message.channel != ChannelRef(kind="assistant", id=user_id):
+        # another channel's message body through DeepSeek into this caller's conversation.
+        if message is None or message.sender_id != user_id:
             return
-        company_ids = self._company_ids(user_id)
+        company_ids = self._channel_company_ids(scope, user_id)
         # An explicitly clarified intent carries no merchant/project/write signal of its
         # own — every downstream gate (is_write in particular) stays conservative.
         decision = RouterDecision(intent=intent, intent_confidence=1.0, intent_probabilities={intent: 1.0})
         self._dispatch(
             user_id=user_id,
             message_id=message.id,
-            message_text=(message.body or "").strip(),
+            message_text=strip_assistant_mention((message.body or "").strip()),
             decision=decision,
             lang=lang,
             trace_id=trace_id,
             company_ids=company_ids,
+            channel=channel,
+            scope=scope,
+            audit_ctx=audit_ctx,
         )
 
 
@@ -701,30 +1622,33 @@ class SubmitAssistantActionUseCase:
     (``AssistantService.handle_action``) then only ever sees a payload this server
     authored, never one the client invented. The app always resubmits an option
     unmodified, so this is fully backward compatible.
+
+    A choice now lives in a shared channel (company/project/admin), so being a channel
+    member is not enough to answer it: only the person it was addressed to
+    (``payload["addressed_to"]``, set by ``AssistantMessenger.post_choice``) may tap it —
+    anyone else, member or not, gets ``AssistantNotAddressedError`` (403 NotAddressed).
     """
 
     def __init__(
         self,
         message_repo: MessagePosterPort,
+        directory: ChatDirectoryPort,
         db_session: TransactionalSessionPort,
         dispatcher: AssistantDispatcherPort,
     ) -> None:
         self._messages = message_repo
+        self._directory = directory
         self._db = db_session
         self._dispatcher = dispatcher
 
     def execute(self, *, actor_id: UUID, action: str, payload: dict[str, Any], reply_to_id: UUID) -> None:
         message = self._messages.find_by_id(reply_to_id)
-        if (
-            message is None
-            or message.channel.kind != "assistant"
-            or message.channel.id != actor_id
-            or message.content_type != "choice"
-        ):
-            raise AssistantMessageNotFoundError(
-                f"Message {reply_to_id} is not a choice in {actor_id}'s assistant conversation."
-            )
+        if message is None or message.content_type != "choice":
+            raise AssistantMessageNotFoundError(f"Message {reply_to_id} is not a choice message.")
         current_payload = dict(message.payload or {})
+        addressed_to = current_payload.get("addressed_to")
+        if not self._directory.is_member(actor_id, message.channel) or str(actor_id) != str(addressed_to):
+            raise AssistantNotAddressedError(f"Message {reply_to_id} was not addressed to {actor_id}.")
         # A stale-read "already answered" check would be redundant with (and no safer
         # than) the atomic transition below, so the only authority for that decision is
         # answer_choice_if_unanswered's return value.

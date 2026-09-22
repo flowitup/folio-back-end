@@ -7,9 +7,14 @@ Kept dependency-free of any provider SDK — only pydantic.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.application.assistant.scope import allowed_classes_for
+from app.domain.entities.chat_message import ChannelRef
 
 # ---------------------------------------------------------------------------
 # S1 extraction (Feature B/C: invoices and receipts)
@@ -128,10 +133,22 @@ class AmountDate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Phase 04 — tasks handler (catalogue 3.1: create a task from a chat utterance)
+# ---------------------------------------------------------------------------
+
+
+class TaskDraft(BaseModel):
+    """Title/due date parsed by DeepSeek out of a "create a task" chat utterance."""
+
+    title: Optional[str] = None
+    due_date: Optional[str] = None  # YYYY-MM-DD
+
+
+# ---------------------------------------------------------------------------
 # Router (S0)
 # ---------------------------------------------------------------------------
 
-#: The seven intents Router.route() can return — shared by router.py and reply.py
+#: The intents Router.route() can return — shared by router.py and reply.py
 #: (clarifying-choice labels) so the two never drift apart.
 INTENTS: tuple[str, ...] = (
     "identify_material",
@@ -141,6 +158,19 @@ INTENTS: tuple[str, ...] = (
     "move_equipment",
     "question",
     "chit_chat",
+    # Phase 03 — confidential-class questions (D17): refused outside the admin channel.
+    "ask_project_income",
+    "ask_salary",
+    "ask_own_salary",
+    # Phase 04 — labor/tasks handlers on channels (catalogue 2.1-2.3, 3.1-3.2).
+    "ask_roster",
+    "log_attendance",
+    "validate_attendance",
+    "create_task",
+    "ask_tasks",
+    # Phase 03/04 — admin-channel supervision ("who asked what this week").
+    "ask_audit",
+    "ask_unpaid_invoices",
 )
 
 #: Merchants Jev is asked to recognise for `fetch_invoice` (S0 `merchant` question).
@@ -169,3 +199,72 @@ class RouterDecision(BaseModel):
     project_hint: Optional[str] = None
     project_hint_confidence: float = 0.0
     is_write: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Channel scope (phase 02: dispatch now happens in company/project/admin channels,
+# never just a private per-user conversation)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChannelScope:
+    """Who is asking, and from where — threaded from ``AssistantService`` down to
+    ``FeatureHandlersPort`` so a feature can redact confidential classes and gate tool
+    access by audience (D17).
+
+    ``company_id`` is the channel's own id for ``"company"``/``"admin"`` kinds, and the
+    owning company of the project for a ``"project"`` channel (resolved via
+    ``ProjectCompanyReaderPort`` — ``None`` when the project has no company yet).
+
+    ``allowed_classes`` is always computed from ``is_admin_channel`` (never passed by a
+    caller) — every confidential class (``finance_company``, ``payroll``) in an admin
+    channel, none otherwise. See ``app.application.assistant.scope``.
+    """
+
+    kind: str
+    company_id: Optional[UUID]
+    project_id: Optional[UUID]
+    is_admin_channel: bool
+    asker_id: UUID
+    allowed_classes: frozenset[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed_classes", allowed_classes_for(self.is_admin_channel))
+
+    @staticmethod
+    def for_channel(
+        channel: ChannelRef, *, project_company_id: "Callable[[UUID], Optional[UUID]]", asker_id: UUID
+    ) -> "ChannelScope":
+        """Build the scope a bare ``ChannelRef`` resolves to.
+
+        Shared by ``AssistantService._resolve_scope`` (the synchronous dispatch path,
+        which always has the asker's own request to build a scope from) and an async
+        job's ``on_result`` (feature A/B), which only ever has the job's stored
+        ``channel_key`` to go on — never the original request's own scope object, since
+        the browser worker may finish long after that request returned.
+        """
+        if channel.kind == "project":
+            return ChannelScope(
+                kind="project",
+                company_id=project_company_id(channel.id),
+                project_id=channel.id,
+                is_admin_channel=False,
+                asker_id=asker_id,
+            )
+        if channel.kind == "admin":
+            return ChannelScope(
+                kind="admin", company_id=channel.id, project_id=None, is_admin_channel=True, asker_id=asker_id
+            )
+        return ChannelScope(
+            kind="company", company_id=channel.id, project_id=None, is_admin_channel=False, asker_id=asker_id
+        )
+
+    @property
+    def channel(self) -> ChannelRef:
+        """The ``ChannelRef`` this scope was resolved from — where replies belong."""
+        if self.kind == "project":
+            assert self.project_id is not None, "a project scope always carries its project_id"
+            return ChannelRef(kind="project", id=self.project_id)
+        assert self.company_id is not None, "a company/admin scope always carries its company_id"
+        return ChannelRef(kind=self.kind, id=self.company_id)

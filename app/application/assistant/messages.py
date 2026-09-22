@@ -1,21 +1,40 @@
-"""AssistantMessenger — posts assistant-authored replies into a user's assistant channel.
+"""AssistantMessenger — posts assistant-authored replies into a chat channel.
 
 Every post builds a ``ChatMessage.assistant(...)`` with a plain-text ``body`` fallback (so
 the web widget and an older app build that does not understand a ``content_type`` still
 show something useful), persists it through the chat message repository, commits, and
-then — best-effort — pushes the owner through the chat push notifier's assistant-safe
+then — best-effort — pushes the channel through the chat push notifier's assistant-safe
 path (``ChatPushNotifier.message_sent_by_assistant``, which does not exclude the message's
 own "sender" the way a human-to-human push would).
+
+Every ``post_*`` method takes an explicit ``channel`` — the message's own channel
+(company/project/admin) when called from ``AssistantService`` or a feature under
+``app.application.assistant.features`` (ticket/material/invoice-fetch/labor/tasks/
+admin-answers), all of which are channel-aware since phase 03/04. ``channel`` omitted
+falls back to the retired ``assistant:<user_id>`` channel — kept only so an internal
+caller with no channel context (none remain in production code) still compiles.
+
+Every ``post_*`` method also takes a REQUIRED ``scope`` keyword (``ChannelScope | None``
+— required so a missing call site is a type error, not a silent bypass; ``None`` itself
+still fails closed, see ``scope.redact``) — ``_post`` runs the payload through
+``app.application.assistant.scope.redact`` before persisting it (D17 layer 1): a card/
+choice/job_status built for a non-admin channel never carries a ``finance_company``/
+``payroll`` classified field, whichever feature posted it. The plain-text ``body``
+fallback is always built from the REDACTED payload (never the raw one passed in), so a
+stripped field can never survive verbatim in the one field every client (and the push
+notification preview) always reads.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import UUID
 
 from app.application.assistant.exceptions import AssistantError
+from app.application.assistant.models import ChannelScope
 from app.application.assistant.ports import MessagePosterPort
+from app.application.assistant.scope import redact
 from app.application.invitations.ports import TransactionalSessionPort
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 
@@ -68,16 +87,28 @@ class AssistantMessenger:
         user_id: UUID,
         content_type: str,
         payload: dict[str, Any] | None,
-        body: str,
         reply_to_id: UUID | None,
         trace_id: str | None,
+        channel: ChannelRef | None,
+        scope: ChannelScope | None,
+        body: str | None = None,
+        body_builder: "Callable[[dict[str, Any] | None], str] | None" = None,
     ) -> ChatMessage:
-        channel = ChannelRef(kind="assistant", id=user_id)
+        target = channel if channel is not None else ChannelRef(kind="assistant", id=user_id)
+        # D17 layer 1: strip every confidential-class field the scope does not allow
+        # before the message is ever built/persisted — the ONE place every card/choice/
+        # job_status payload passes through, whichever feature/service call site posted
+        # it. `body` is then derived from the REDACTED payload (via `body_builder`) when
+        # the caller has one — never from the raw `payload` — so a stripped field cannot
+        # resurface verbatim in the plain-text fallback every client (and the push
+        # preview) reads (review finding H1(b)).
+        redacted_payload = redact(scope, payload)
+        resolved_body = body_builder(redacted_payload) if body_builder is not None else (body or "")
         message = ChatMessage.assistant(
-            channel=channel,
+            channel=target,
             content_type=content_type,
-            payload=payload,
-            body=body,
+            payload=redacted_payload,
+            body=resolved_body,
             reply_to_id=reply_to_id,
             trace_id=trace_id,
         )
@@ -85,14 +116,28 @@ class AssistantMessenger:
         self._db.commit()
         # After the commit: a push must never be able to roll back the message.
         if self.notifier is not None:
-            self.notifier.message_sent_by_assistant(channel=channel, preview=message.body, sent_at=message.created_at)
+            self.notifier.message_sent_by_assistant(channel=target, preview=message.body, sent_at=message.created_at)
         return message
 
     def post_text(
-        self, user_id: UUID, body: str, *, reply_to_id: UUID | None = None, trace_id: str | None = None
+        self,
+        user_id: UUID,
+        body: str,
+        *,
+        scope: ChannelScope | None,
+        reply_to_id: UUID | None = None,
+        trace_id: str | None = None,
+        channel: ChannelRef | None = None,
     ) -> ChatMessage:
         return self._post(
-            user_id=user_id, content_type="text", payload=None, body=body, reply_to_id=reply_to_id, trace_id=trace_id
+            user_id=user_id,
+            content_type="text",
+            payload=None,
+            body=body,
+            reply_to_id=reply_to_id,
+            trace_id=trace_id,
+            channel=channel,
+            scope=scope,
         )
 
     def post_card(
@@ -102,6 +147,7 @@ class AssistantMessenger:
         card_type: str,
         entity_id: UUID,
         title: str,
+        scope: ChannelScope | None,
         subtitle: str | None = None,
         badge: str | None = None,
         project_id: UUID | None = None,
@@ -109,6 +155,7 @@ class AssistantMessenger:
         extra: dict[str, Any] | None = None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
+        channel: ChannelRef | None = None,
     ) -> ChatMessage:
         """Builds the ``card`` content-type's wire contract itself — callers pass typed
         fields, never a raw dict, so every card the assistant posts is shaped identically
@@ -135,9 +182,13 @@ class AssistantMessenger:
             user_id=user_id,
             content_type="card",
             payload={"card": card},
-            body=_card_fallback(card),
+            # Fallback built from the REDACTED payload (H1(b)): a stripped `extra` field
+            # must not resurface verbatim in the subtitle/body every client renders.
+            body_builder=lambda redacted: _card_fallback((redacted or {}).get("card") or {}),
             reply_to_id=reply_to_id,
             trace_id=trace_id,
+            channel=channel,
+            scope=scope,
         )
 
     def post_choice(
@@ -146,17 +197,32 @@ class AssistantMessenger:
         prompt: str,
         options: list[dict[str, Any]],
         *,
+        scope: ChannelScope | None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
+        channel: ChannelRef | None = None,
+        addressed_to: UUID | None = None,
     ) -> ChatMessage:
-        payload = {"prompt": prompt, "options": options, "answered": None}
+        """``addressed_to`` (the asker) defaults to ``user_id`` — every current caller
+        already passes the asker's id there, so this is free for them. Only the person
+        it names may answer the choice (``SubmitAssistantActionUseCase``)."""
+        payload = {
+            "prompt": prompt,
+            "options": options,
+            "answered": None,
+            "addressed_to": str(addressed_to if addressed_to is not None else user_id),
+        }
         return self._post(
             user_id=user_id,
             content_type="choice",
             payload=payload,
-            body=_choice_fallback(prompt, options),
+            # Same H1(b) fix as post_card: build the fallback from whatever survives
+            # redaction in `options`, never from the caller's original list.
+            body_builder=lambda redacted: _choice_fallback(prompt, (redacted or {}).get("options") or []),
             reply_to_id=reply_to_id,
             trace_id=trace_id,
+            channel=channel,
+            scope=scope,
         )
 
     def post_job_status(
@@ -166,9 +232,11 @@ class AssistantMessenger:
         state: str,
         text: str,
         *,
+        scope: ChannelScope | None,
         progress: float | None = None,
         reply_to_id: UUID | None = None,
         trace_id: str | None = None,
+        channel: ChannelRef | None = None,
     ) -> ChatMessage:
         payload = {"job_id": job_id, "state": state, "text": text, "progress": progress}
         return self._post(
@@ -178,6 +246,8 @@ class AssistantMessenger:
             body=text,
             reply_to_id=reply_to_id,
             trace_id=trace_id,
+            channel=channel,
+            scope=scope,
         )
 
     def update_job_status(
@@ -186,6 +256,7 @@ class AssistantMessenger:
         *,
         state: str,
         text: str,
+        scope: ChannelScope | None,
         progress: float | None = None,
         terminal: bool = False,
     ) -> None:
@@ -193,6 +264,12 @@ class AssistantMessenger:
         — queued -> running -> not_ready|blocked|done|failed|not_found). Pushes through
         the notifier only when ``terminal`` — the plan's "job_status shows a spinner
         while queued|running" only needs the app's 5s poll to see intermediate states.
+
+        ``scope`` is required (NEW-L2) so this goes through ``redact()`` the same as
+        every ``post_*`` above — the module docstring's "the ONE place every card/
+        choice/job_status payload passes through" previously had this one hole. Inert
+        today (every caller passes a fixed template ``text`` with no classified field),
+        but a future caller can no longer bypass D17 layer 1 by accident.
         """
         message = self._messages.find_by_id(message_id)
         if message is None:
@@ -201,10 +278,14 @@ class AssistantMessenger:
         payload["state"] = state
         payload["text"] = text
         payload["progress"] = progress
-        self._messages.update_payload(message_id, payload)
+        redacted_payload = redact(scope, payload)
+        assert redacted_payload is not None  # `payload` is always a dict here
+        self._messages.update_payload(message_id, redacted_payload)
         self._db.commit()
         # After the commit: a push must never be able to roll back the update.
         if terminal and self.notifier is not None:
             self.notifier.message_sent_by_assistant(
-                channel=message.channel, preview=text, sent_at=datetime.now(timezone.utc)
+                channel=message.channel,
+                preview=str(redacted_payload.get("text", text)),
+                sent_at=datetime.now(timezone.utc),
             )

@@ -35,7 +35,7 @@ from app.application.assistant.extract import extract_invoice, is_readable, pdf_
 from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import InvoiceImportRepositoryPort
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import Invoice
+from app.application.assistant.models import ChannelScope, Invoice
 from app.application.assistant.ports import (
     ChoiceQuestion,
     DecisionPort,
@@ -45,6 +45,7 @@ from app.application.assistant.ports import (
     VisionLlmPort,
 )
 from app.application.assistant.scanify import scanify, to_pdf
+from app.application.assistant.scope import channel_company_ids
 from app.application.assistant.state import (
     WritableProject,
     amounts_sane,
@@ -206,11 +207,25 @@ class TicketFeature:
     # Entry point — a fresh photo (C1-C4, S2-S4)
     # ------------------------------------------------------------------
 
-    def run(self, *, user_id: UUID, message_id: UUID, lang: str, messenger: AssistantMessenger, trace_id: str) -> str:
+    def run(
+        self,
+        *,
+        user_id: UUID,
+        message_id: UUID,
+        lang: str,
+        messenger: AssistantMessenger,
+        trace_id: str,
+        scope: ChannelScope,
+    ) -> str:
         photo = read_photo_bytes(self._messages, self._storage, message_id, user_id)
         if photo is None:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
         photo_bytes, photo_filename, photo_mime = photo
@@ -218,13 +233,27 @@ class TicketFeature:
         try:
             invoice_a = extract_invoice(self._vision, [photo_bytes])
         except LlmOutputError:
-            messenger.post_text(user_id, reply.render("retake_photo", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("retake_photo", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return "asked"
         if not is_readable(invoice_a):
-            messenger.post_text(user_id, reply.render("retake_photo", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("retake_photo", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return "asked"
 
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
         today = date.today()
         ticket_day = _parse_date(invoice_a.date) or today
@@ -241,6 +270,7 @@ class TicketFeature:
                     lang=lang,
                     messenger=messenger,
                     trace_id=trace_id,
+                    scope=scope,
                     project=project,
                     existing=existing,
                     confidence=attach_confidence,
@@ -273,6 +303,7 @@ class TicketFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
             invoice_a=invoice_a,
             projects=projects,
             decision=decision,
@@ -293,6 +324,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         data: bytes,
         content_type: str,
         chat_hint: Optional[str],
@@ -311,17 +343,27 @@ class TicketFeature:
             invoice_a = extract_invoice(self._vision, images)
         except LlmOutputError:
             messenger.post_text(
-                user_id, reply.render("fetch_extract_failed", lang), reply_to_id=reply_to_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_extract_failed", lang),
+                reply_to_id=reply_to_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
         if not is_readable(invoice_a):
             messenger.post_text(
-                user_id, reply.render("fetch_extract_failed", lang), reply_to_id=reply_to_id, trace_id=trace_id
+                user_id,
+                reply.render("fetch_extract_failed", lang),
+                reply_to_id=reply_to_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
 
         filename = "facture.pdf" if content_type == "application/pdf" else "facture"
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
         today = date.today()
         ticket_day = _parse_date(invoice_a.date) or today
@@ -337,6 +379,7 @@ class TicketFeature:
                     lang=lang,
                     messenger=messenger,
                     trace_id=trace_id,
+                    scope=scope,
                     project=project,
                     existing=existing,
                     confidence=attach_confidence,
@@ -368,6 +411,7 @@ class TicketFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
             invoice_a=invoice_a,
             projects=projects,
             decision=decision,
@@ -468,6 +512,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project: WritableProject,
         existing: InvoiceEntity,
         confidence: float,
@@ -512,6 +557,8 @@ class TicketFeature:
             reply.render("invoice_attached", lang, number=existing.invoice_number),
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
         card = self._invoice_card(
             invoice_id=existing.id,
@@ -523,7 +570,14 @@ class TicketFeature:
             issue_date=existing.issue_date.isoformat(),
             status=status,
         )
-        messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_card(
+            user_id,
+            **card,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         return "attached"
 
     # ------------------------------------------------------------------
@@ -538,6 +592,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         invoice_a: Invoice,
         projects: list[WritableProject],
         decision: TicketDecision,
@@ -551,7 +606,7 @@ class TicketFeature:
             dup_status = gate.duplicate_status(decision.duplicate_confidence)
             if dup_status == "reject":
                 return self._post_duplicate_refused(
-                    user_id, message_id, lang, messenger, trace_id, decision.duplicate_of, projects
+                    user_id, message_id, lang, messenger, trace_id, decision.duplicate_of, projects, scope=scope
                 )
             if dup_status == "ask":
                 return self._post_duplicate_check(
@@ -560,6 +615,7 @@ class TicketFeature:
                     lang=lang,
                     messenger=messenger,
                     trace_id=trace_id,
+                    scope=scope,
                     invoice_a=invoice_a,
                     decision=decision,
                     original_bytes=original_bytes,
@@ -574,6 +630,7 @@ class TicketFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
             invoice_a=invoice_a,
             projects=projects,
             decision=decision,
@@ -593,6 +650,7 @@ class TicketFeature:
         trace_id: str,
         duplicate_of: UUID,
         projects: list[WritableProject],
+        scope: ChannelScope,
     ) -> str:
         existing = self._invoice_repo.find_by_id(duplicate_of)
         if existing is not None:
@@ -607,8 +665,22 @@ class TicketFeature:
                 issue_date=existing.issue_date.isoformat(),
                 status="confirmed",
             )
-            messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
-        messenger.post_text(user_id, reply.render("duplicate_refused", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_card(
+                user_id,
+                **card,
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+        messenger.post_text(
+            user_id,
+            reply.render("duplicate_refused", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         return "refused"
 
     def _post_duplicate_check(
@@ -619,6 +691,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         invoice_a: Invoice,
         decision: TicketDecision,
         original_bytes: bytes,
@@ -646,7 +719,13 @@ class TicketFeature:
             },
         ]
         messenger.post_choice(
-            user_id, reply.render("duplicate_check_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("duplicate_check_prompt", lang),
+            options,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
         return "asked"
 
@@ -658,6 +737,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         invoice_a: Invoice,
         projects: list[WritableProject],
         decision: TicketDecision,
@@ -680,6 +760,7 @@ class TicketFeature:
                     lang=lang,
                     messenger=messenger,
                     trace_id=trace_id,
+                    scope=scope,
                     invoice_a=invoice_a,
                     project=projects[0],
                     category=decision.category,
@@ -694,7 +775,12 @@ class TicketFeature:
                 )
             if not projects:
                 messenger.post_text(
-                    user_id, reply.render("pick_project_none", lang), reply_to_id=message_id, trace_id=trace_id
+                    user_id,
+                    reply.render("pick_project_none", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=scope.channel,
+                    scope=scope,
                 )
                 return "refused"
             return self._post_pick_project_all(
@@ -703,6 +789,7 @@ class TicketFeature:
                 lang=lang,
                 messenger=messenger,
                 trace_id=trace_id,
+                scope=scope,
                 invoice_a=invoice_a,
                 decision=decision,
                 projects=projects,
@@ -730,6 +817,7 @@ class TicketFeature:
                 lang=lang,
                 messenger=messenger,
                 trace_id=trace_id,
+                scope=scope,
                 invoice_a=invoice_a,
                 decision=decision,
                 projects=_top_candidate_projects(target, projects, decision),
@@ -746,6 +834,7 @@ class TicketFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
             invoice_a=invoice_a,
             project=target,
             category=decision.category,
@@ -767,6 +856,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         invoice_a: Invoice,
         decision: TicketDecision,
         projects: list[WritableProject],
@@ -789,7 +879,13 @@ class TicketFeature:
             for project in projects
         ]
         messenger.post_choice(
-            user_id, reply.render("pick_project_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("pick_project_prompt", lang),
+            options,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
         return "asked"
 
@@ -801,6 +897,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         invoice_a: Invoice,
         project: WritableProject,
         category: str,
@@ -826,6 +923,7 @@ class TicketFeature:
             original_filename=original_filename,
             scan_bytes=scan_bytes,
             trace_id=trace_id,
+            scope=scope,
             source=source,
         )
         messenger.post_text(
@@ -833,10 +931,17 @@ class TicketFeature:
             reply.render("invoice_created", lang, number=response.invoice_number, project=project.name),
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
         if "amounts_to_check" in flags:
             messenger.post_text(
-                user_id, reply.render("amounts_to_check", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("amounts_to_check", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
         card = self._invoice_card(
             invoice_id=UUID(response.id),
@@ -848,7 +953,14 @@ class TicketFeature:
             issue_date=response.issue_date,
             status=status,
         )
-        messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
+        messenger.post_card(
+            user_id,
+            **card,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         return "created"
 
     def _create_and_attach(
@@ -866,6 +978,7 @@ class TicketFeature:
         original_filename: str,
         scan_bytes: Optional[bytes],
         trace_id: str,
+        scope: ChannelScope,
         source: str = "ticket",
     ) -> InvoiceResponse:
         response = self._create_invoice(user_id, project_id, invoice_a, trace_id)
@@ -902,7 +1015,13 @@ class TicketFeature:
         )
         return response
 
-    def _create_invoice(self, user_id: UUID, project_id: UUID, invoice_a: Invoice, trace_id: str) -> InvoiceResponse:
+    def _create_invoice(
+        self,
+        user_id: UUID,
+        project_id: UUID,
+        invoice_a: Invoice,
+        trace_id: str,
+    ) -> InvoiceResponse:
         issue_date = _parse_date(invoice_a.date) or date.today()
         notes = f"Importé par l'assistant (trace {trace_id})"
         items = _build_line_items(invoice_a)
@@ -939,16 +1058,17 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         """Returns True when this feature handled ``action``, False otherwise."""
         if action == "set_project":
-            self._action_set_project(user_id, message_id, payload, lang, messenger, trace_id)
+            self._action_set_project(user_id, message_id, payload, lang, messenger, trace_id, scope=scope)
             return True
         if action == "confirm_duplicate":
-            self._action_confirm_duplicate(user_id, message_id, payload, lang, messenger, trace_id)
+            self._action_confirm_duplicate(user_id, message_id, payload, lang, messenger, trace_id, scope=scope)
             return True
         if action == "not_duplicate":
-            self._action_not_duplicate(user_id, message_id, payload, lang, messenger, trace_id)
+            self._action_not_duplicate(user_id, message_id, payload, lang, messenger, trace_id, scope=scope)
             return True
         return False
 
@@ -960,6 +1080,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> None:
         # "Move an already-created invoice to another project" (delete + recreate) was
         # removed entirely (decision D13): it was non-atomic, silently dropped payment/
@@ -967,10 +1088,17 @@ class TicketFeature:
         # `applied_to_invoice_id` are ON DELETE SET NULL so it silently broke avoir/
         # refund back-references. `set_project` now only ever creates from pending state.
         if "invoice" not in payload:
-            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return
         project_id = UUID(str(payload["project_id"]))
-        self._create_from_pending(user_id, message_id, payload, project_id, lang, messenger, trace_id)
+        self._create_from_pending(user_id, message_id, payload, project_id, lang, messenger, trace_id, scope=scope)
 
     def _create_from_pending(
         self,
@@ -981,6 +1109,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> None:
         invoice_a = Invoice.model_validate(payload["invoice"])
         category = str(payload.get("category") or "autre")
@@ -988,11 +1117,25 @@ class TicketFeature:
         scan_key = payload.get("scan_key")
         scan_bytes = self._fetch_pending(str(scan_key)) if scan_key else None
         if original_bytes is None or (scan_key and scan_bytes is None):
-            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return
-        project = self._resolve_writable_project(user_id, project_id)
+        project = self._resolve_writable_project(user_id, project_id, scope)
         if project is None:
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return
         confidence = float(payload.get("project_confidence") or 0.0)
         amounts_consistent = float(payload.get("amounts_consistent") or 1.0)
@@ -1003,6 +1146,7 @@ class TicketFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
             invoice_a=invoice_a,
             project=project,
             category=category,
@@ -1025,6 +1169,7 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> None:
         candidate_id = payload.get("candidate_invoice_id")
         if candidate_id:
@@ -1033,7 +1178,9 @@ class TicketFeature:
             # closes the "any invoice's details disclosed" IDOR even if a forged
             # `candidate_invoice_id` ever reached this far (defense in depth: the
             # SubmitAssistantActionUseCase fix already stops a forged one from arriving).
-            writable = self._resolve_writable_project(user_id, existing.project_id) if existing is not None else None
+            writable = (
+                self._resolve_writable_project(user_id, existing.project_id, scope) if existing is not None else None
+            )
             if existing is not None and writable is not None:
                 card = self._invoice_card(
                     invoice_id=existing.id,
@@ -1045,8 +1192,22 @@ class TicketFeature:
                     issue_date=existing.issue_date.isoformat(),
                     status="confirmed",
                 )
-                messenger.post_card(user_id, **card, reply_to_id=message_id, trace_id=trace_id)
-        messenger.post_text(user_id, reply.render("duplicate_refused", lang), reply_to_id=message_id, trace_id=trace_id)
+                messenger.post_card(
+                    user_id,
+                    **card,
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=scope.channel,
+                    scope=scope,
+                )
+        messenger.post_text(
+            user_id,
+            reply.render("duplicate_refused", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
+        )
         self._cleanup_pending(str(payload.get("original_key") or ""), str(payload.get("scan_key") or ""))
 
     def _action_not_duplicate(
@@ -1057,15 +1218,23 @@ class TicketFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> None:
         invoice_a = Invoice.model_validate(payload["invoice"])
         original_bytes = self._fetch_pending(str(payload["original_key"]))
         scan_key = payload.get("scan_key")
         scan_bytes = self._fetch_pending(str(scan_key)) if scan_key else None
         if original_bytes is None or (scan_key and scan_bytes is None):
-            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
         project_id_raw = payload.get("project_id")
         decision = TicketDecision(
@@ -1084,6 +1253,7 @@ class TicketFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
             invoice_a=invoice_a,
             projects=projects,
             decision=decision,
@@ -1099,8 +1269,10 @@ class TicketFeature:
     # Small helpers
     # ------------------------------------------------------------------
 
-    def _resolve_writable_project(self, user_id: UUID, project_id: UUID) -> Optional[WritableProject]:
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
+    def _resolve_writable_project(
+        self, user_id: UUID, project_id: UUID, scope: ChannelScope
+    ) -> Optional[WritableProject]:
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         for project in writable_projects(self._project_repo, self._authz_reader, user_id, company_ids):
             if project.id == project_id:
                 return project

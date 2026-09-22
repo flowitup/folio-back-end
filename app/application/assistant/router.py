@@ -18,6 +18,32 @@ _INTENT_CRITERIA: dict[str, str | None] = {
     "move_equipment": "déclarer un déplacement d'outil",
     "question": "autre question chantier",
     "chit_chat": "autre",
+    # Phase 03 — confidential-class questions (D17). French criteria, like every other
+    # intent above; the refusal/answer branching happens after routing, in service.py.
+    "ask_project_income": "combien le chantier a reçu, budget, reste, revenu de l'entreprise",
+    "ask_salary": "salaire, taux journalier ou paiement de main d'oeuvre d'une autre personne",
+    "ask_own_salary": "mon propre salaire, mon taux, ma paie",
+    # Phase 04 — labor/tasks handlers on channels; examples given in vi/fr/en since users
+    # write in any of the three (Jev itself is multilingual, this just widens recall).
+    "ask_roster": (
+        "qui est présent aujourd'hui / effectif du jour "
+        "(vi: hôm nay ai đi làm, fr: qui est sur le chantier aujourd'hui, en: who's on site today)"
+    ),
+    "log_attendance": (
+        "déclarer une présence, pointer des ouvriers "
+        "(vi: khai công, fr: déclare la présence de, en: log attendance for)"
+    ),
+    "validate_attendance": (
+        "valider les pointages en attente "
+        "(vi: duyệt công, fr: valider les journées en attente, en: validate pending attendance)"
+    ),
+    "create_task": ("créer une tâche (vi: tạo công việc, fr: créer une tâche, en: create a task)"),
+    "ask_tasks": (
+        "tâches ouvertes cette semaine (vi: công việc mở tuần này, fr: tâches ouvertes cette semaine, "
+        "en: open tasks this week)"
+    ),
+    "ask_audit": "qui a demandé quoi cette semaine à l'assistant (admin uniquement)",
+    "ask_unpaid_invoices": "factures clients impayées ou en retard, devis/factures non réglés (admin uniquement)",
 }
 if set(_INTENT_CRITERIA) != set(INTENTS):
     raise RuntimeError("_INTENT_CRITERIA and INTENTS have drifted apart.")

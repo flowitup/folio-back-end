@@ -466,7 +466,7 @@ def _configure_di_container() -> None:
             current_app.config.get("TYPESAFE_API_KEY"),
         )
 
-    _chat_repo = SqlAlchemyChatRepository(db.session, assistant_enabled=_assistant_enabled_fn)
+    _chat_repo = SqlAlchemyChatRepository(db.session)
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
     _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
@@ -487,7 +487,9 @@ def _configure_di_container() -> None:
         current_app.config.get("REDIS_URL", ""), assistant_enabled=_assistant_enabled_fn
     )
     _c.assistant_messenger = AssistantMessenger(_chat_repo, db.session)
-    _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(_chat_repo, db.session, _c.assistant_dispatcher)
+    _c.submit_assistant_action_usecase = SubmitAssistantActionUseCase(
+        _chat_repo, _chat_repo, db.session, _c.assistant_dispatcher
+    )
     _c.send_chat_message_usecase.assistant_dispatcher = _c.assistant_dispatcher
 
     # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio | gateway).
@@ -1545,6 +1547,7 @@ def _configure_di_container() -> None:
 
     _c.inventory_warehouse_repo = _inventory_warehouse_repo
     _c.inventory_item_repo = _inventory_item_repo
+    _c.assistant_project_company_reader = _inventory_project_reader
     _c.inventory_list_warehouses_usecase = _ListWarehousesUC(
         warehouse_repo=_inventory_warehouse_repo,
         membership_reader=_biblio_membership_reader,
@@ -1660,6 +1663,7 @@ def _configure_di_container() -> None:
                 vision=_c.assistant_vision_llm,
                 cost_ledger=_c.assistant_cost_ledger,
                 rate_limiter=_c.assistant_rate_limiter,
+                project_company_reader=_inventory_project_reader,
             )
 
     # -----------------------------------------------------------------------
@@ -1807,7 +1811,93 @@ def _configure_di_container() -> None:
             vision=_c.assistant_vision_llm,
             cost_ledger=_c.assistant_cost_ledger,
             rate_limiter=_c.assistant_rate_limiter,
+            project_company_reader=_inventory_project_reader,
             feature_handlers=_c.assistant_feature_handlers,
+        )
+
+    # -----------------------------------------------------------------------
+    # Phase 03/04 — confidential-class scope/redaction, supervision audit log,
+    # labor/tasks handlers on channels, admin-only finance/payroll answers.
+    # Rebuilds `_c.assistant_service` a second time with these wired in.
+    # -----------------------------------------------------------------------
+    from app.application.assistant.features.admin_answers import AdminAnswersFeature as _AdminAnswersFeature
+    from app.application.assistant.features.labor import LaborFeature as _LaborFeature
+    from app.application.assistant.features.tasks import TasksFeature as _TasksFeature
+    from app.infrastructure.database.repositories.sqlalchemy_assistant_audit_repository import (
+        SqlAlchemyAssistantAuditRepository as _SqlAlchemyAssistantAuditRepository,
+    )
+
+    _c.assistant_audit_repo = _SqlAlchemyAssistantAuditRepository(db.session)
+
+    if (
+        _c.authz_reader is not None
+        and _c.worker_repository is not None
+        and _c.project_repository is not None
+        and _c.get_day_roster_usecase is not None
+        and _c.bulk_log_attendance_usecase is not None
+        and _c.validate_attendance_usecase is not None
+        and _c.list_pending_attendance_usecase is not None
+    ):
+        _c.assistant_labor_feature = _LaborFeature(
+            authz_reader=_c.authz_reader,
+            worker_repo=_c.worker_repository,
+            project_repo=_c.project_repository,
+            day_roster_usecase=_c.get_day_roster_usecase,
+            bulk_log_usecase=_c.bulk_log_attendance_usecase,
+            validate_usecase=_c.validate_attendance_usecase,
+            pending_attendance_usecase=_c.list_pending_attendance_usecase,
+        )
+
+    if (
+        _c.create_task_usecase is not None
+        and _c.list_tasks_usecase is not None
+        and _c.project_repository is not None
+        and _c.authz_reader is not None
+    ):
+        _c.assistant_tasks_feature = _TasksFeature(
+            vision=_c.assistant_vision_llm,
+            project_repo=_c.project_repository,
+            create_usecase=_c.create_task_usecase,
+            list_usecase=_c.list_tasks_usecase,
+            authz_reader=_c.authz_reader,
+        )
+
+    if (
+        _c.project_repository is not None
+        and _c.invoice_repository is not None
+        and _c.billing_document_repo is not None
+        and _c.get_labor_payments_summary_usecase is not None
+        and _c.authz_reader is not None
+    ):
+        _c.assistant_admin_answers = _AdminAnswersFeature(
+            project_repo=_c.project_repository,
+            invoice_repo=_c.invoice_repository,
+            billing_repo=_c.billing_document_repo,
+            labor_payments_usecase=_c.get_labor_payments_summary_usecase,
+            audit=_c.assistant_audit_repo,
+            directory=_chat_repo,
+            authz_reader=_c.authz_reader,
+        )
+
+    if _c.assistant_service is not None and _c.project_repository is not None and _c.assistant_messenger is not None:
+        _c.assistant_service = _AssistantService(
+            message_repo=_chat_repo,
+            messenger=_c.assistant_messenger,
+            router=_c.assistant_router,
+            equipment=_c.assistant_equipment_service,
+            company_access_repo=_access_repo,
+            project_repo=_c.project_repository,
+            vision=_c.assistant_vision_llm,
+            cost_ledger=_c.assistant_cost_ledger,
+            rate_limiter=_c.assistant_rate_limiter,
+            project_company_reader=_inventory_project_reader,
+            feature_handlers=_c.assistant_feature_handlers,
+            decisions=_c.assistant_decision_port,
+            authz_reader=_c.authz_reader,
+            audit=_c.assistant_audit_repo,
+            labor_feature=_c.assistant_labor_feature,
+            tasks_feature=_c.assistant_tasks_feature,
+            admin_answers=_c.assistant_admin_answers,
         )
 
     # -----------------------------------------------------------------------

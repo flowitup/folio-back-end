@@ -29,7 +29,7 @@ from app.application.assistant.features.invoice_fetch import (
 )
 from app.application.assistant.features.ticket import TicketFeature
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import AmountDate, RouterDecision
+from app.application.assistant.models import AmountDate, ChannelScope, RouterDecision
 from tests.fakes.ai import RecordingImageGen, ScriptedDecision, ScriptedVision
 from app.application.invoice.create_invoice import CreateInvoiceUseCase
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
@@ -108,6 +108,15 @@ class FakeProjectRepo:
 
 
 class FakeAuthzReader:
+    """``project_company_id`` defaults to the constructor's ``company_id`` for every
+    project (every project in this file's ``World`` belongs to ``World.company_id`` by
+    default), with per-project overrides for a NEW-H1 test that needs a project rowed
+    to a different, foreign company — mirrors ``test_ticket.py``'s fake."""
+
+    def __init__(self, company_id: Optional[UUID] = None, project_companies: Optional[dict[UUID, UUID]] = None) -> None:
+        self._company_id = company_id or uuid4()
+        self._project_companies = project_companies or {}
+
     def company_role_for(self, user_id: UUID, company_id: UUID) -> Optional[str]:
         return "manager"
 
@@ -115,7 +124,7 @@ class FakeAuthzReader:
         return True
 
     def project_company_id(self, project_id: UUID) -> Optional[UUID]:
-        return uuid4()
+        return self._project_companies.get(project_id, self._company_id)
 
     def project_exists(self, project_id: UUID) -> bool:
         return True
@@ -145,11 +154,11 @@ class _Access:
 
 
 class FakeCompanyAccessRepo:
-    def __init__(self, company_id: UUID) -> None:
-        self._company_id = company_id
+    def __init__(self, *company_ids: UUID) -> None:
+        self._company_ids = list(company_ids)
 
     def list_for_user(self, user_id: UUID) -> list[_Access]:
-        return [_Access(company_id=self._company_id)]
+        return [_Access(company_id=cid) for cid in self._company_ids]
 
 
 class FakeLaborEntryRepo:
@@ -188,7 +197,7 @@ class FakeMessageRepo:
             ai_trace_id=message.ai_trace_id,
         )
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
         return []
 
 
@@ -233,10 +242,11 @@ class World:
     def __init__(self, session) -> None:
         self.session = session
         self.user_id = uuid4()
+        self.company_id = uuid4()
         self.project_a = _project("Villa Arcueil")
         self.project_repo = FakeProjectRepo([self.project_a])
-        self.authz_reader = FakeAuthzReader()
-        self.company_access = FakeCompanyAccessRepo(uuid4())
+        self.authz_reader = FakeAuthzReader(self.company_id)
+        self.company_access = FakeCompanyAccessRepo(self.company_id)
         self.labor_entry_repo = FakeLaborEntryRepo()
         self.worker_repo = FakeWorkerRepo()
         self.invoice_repo = SQLAlchemyInvoiceRepository(session)
@@ -308,6 +318,18 @@ class World:
         self.messages.add(message)
         return message
 
+    def default_scope(self) -> ChannelScope:
+        """A generic company-channel scope — every real ``fetch_invoice``/``handle_action``
+        call now requires one; most tests here don't care which channel, only that
+        ``on_result`` has a real ``channel_key`` to resolve back (M1: a NULL/unparsable
+        one now means the reply is dropped, matching production's post-migration
+        behaviour where a job is never created without one)."""
+        return ChannelScope(
+            kind="company", company_id=self.company_id, project_id=None, is_admin_channel=False, asker_id=self.user_id
+        )
+
+    _NO_CHANNEL_KEY_GIVEN = "__use_default_scope__"
+
     def create_job(
         self,
         *,
@@ -315,9 +337,21 @@ class World:
         amount: Decimal = Decimal("79.54"),
         job_date: date = date(2026, 9, 10),
         reply_to: Optional[ChatMessage] = None,
+        channel_key: Optional[str] = _NO_CHANNEL_KEY_GIVEN,
     ):
+        # `channel_key=None` (as opposed to simply omitted) is a deliberate M1 test of
+        # the pre-migration "no channel at all" case, so it must NOT fall back to the
+        # default scope's channel — only an omitted argument does.
+        resolved_channel_key = (
+            self.default_scope().channel.key if channel_key == self._NO_CHANNEL_KEY_GIVEN else channel_key
+        )
         job = self.job_repo.add(
-            user_id=self.user_id, merchant=merchant, amount_ttc=amount, date=job_date, project_hint=None
+            user_id=self.user_id,
+            merchant=merchant,
+            amount_ttc=amount,
+            date=job_date,
+            project_hint=None,
+            channel_key=resolved_channel_key,
         )
         status_message = self.messenger.post_job_status(
             self.user_id,
@@ -325,6 +359,7 @@ class World:
             state="queued",
             text="Je m'en occupe",
             reply_to_id=reply_to.id if reply_to is not None else None,
+            scope=None,
         )
         self.job_repo.set_status_message(job.id, status_message.id)
         return self.job_repo.find_by_id(job.id)
@@ -349,6 +384,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
 
         jobs = world.job_repo.list_recent_for_user(world.user_id)
@@ -373,6 +409,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
@@ -393,6 +430,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
@@ -410,6 +448,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t1",
             decision=decision,
+            scope=world.default_scope(),
         )
         assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
 
@@ -421,6 +460,7 @@ class TestFetchInvoice:
             messenger=world.messenger,
             trace_id="t2",
             decision=decision,
+            scope=world.default_scope(),
         )
         # No second job created — the existing active one is reused.
         assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
@@ -467,6 +507,26 @@ class TestOnResultNotReady:
         assert len(world.notifier.calls) == 1  # terminal: pushed once
 
 
+class TestNullChannelKeyDropsTheReply:
+    """M1: a job queued before `channel_key` existed (or with an unparsable one, e.g.
+    the retired `assistant:` kind) has nowhere safe to post — the reply is dropped and
+    the job is still marked processed."""
+
+    def test_null_channel_key_drops_the_reply_and_marks_processed(self, session) -> None:
+        world = World(session)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(reply_to=original, channel_key=None)
+        world.job_repo.update_result(job.id, status="blocked", result={"status": "blocked"})
+        world.notifier.calls.clear()
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        assert world.messages.messages[job.status_message_id].payload["state"] == "queued"  # never updated
+        assert world.notifier.calls == []
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
+
+
 class TestOnResultBlocked:
     def test_marks_blocked_and_pushes(self, session) -> None:
         world = World(session)
@@ -511,6 +571,50 @@ class TestOnResultNotFound:
         options = choices[0].payload["options"]
         assert any(opt["action"] == "fetch_pick_existing" for opt in options)
         assert any(opt["action"] == "fetch_none" for opt in options)
+
+    def test_never_offers_a_purchase_on_a_foreign_companys_project(self, session) -> None:
+        """NEW-H1: `_closest_purchases` must never search a project of a company OTHER
+        than the job's own channel — even when the asker also belongs to that company
+        and has a matching purchase already recorded there. `on_result` rebuilds its
+        scope from the job's stored `channel_key` (M1), so the company bound must
+        survive that round trip too."""
+        world = World(session)
+        foreign_company_id = uuid4()
+        foreign_project = _project("Chantier Confidentiel")
+        world.project_repo = FakeProjectRepo([world.project_a, foreign_project])
+        world.authz_reader = FakeAuthzReader(
+            world.company_id, project_companies={foreign_project.id: foreign_company_id}
+        )
+        world.company_access = FakeCompanyAccessRepo(world.company_id, foreign_company_id)
+        world.feature._project_repo = world.project_repo
+        world.feature._authz_reader = world.authz_reader
+        world.feature._company_access = world.company_access
+
+        from app.application.invoice.create_invoice import CreateInvoiceRequest
+        from app.domain.entities.invoice import InvoiceType
+
+        world.create_invoice_usecase.execute(
+            CreateInvoiceRequest(
+                project_id=foreign_project.id,
+                created_by=world.user_id,
+                type=InvoiceType.MATERIALS_SERVICES,
+                issue_date=date(2026, 9, 9),
+                recipient_name="Leroy Merlin",
+                recipient_address="Elsewhere",
+                items=[{"description": "x", "quantity": 1, "unit_price": 66.67, "vat_rate": 20.0}],
+            )
+        )
+        original = world.post_user_message("va chercher la facture Leroy Merlin 80e")
+        job = world.create_job(amount=Decimal("80.00"), job_date=date(2026, 9, 10), reply_to=original)
+        world.job_repo.update_result(job.id, status="not_found", result={"status": "not_found"})
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        choices = [m for m in world.messages.messages.values() if m.content_type == "choice"]
+        assert choices == []
+        for message in world.messages.messages.values():
+            assert "Confidentiel" not in (message.body or "")
+            assert message.payload is None or "Confidentiel" not in str(message.payload)
 
     def test_no_candidates_falls_back_to_text(self, session) -> None:
         world = World(session)
@@ -566,6 +670,70 @@ class TestOnResultDone:
         assert len(invoices) == 1
 
 
+class TestChannelRoundTrip:
+    """Phase 03's answer to phase 01/02's open question 2: `fetch_invoice`'s job carries
+    the originating channel, and `on_result` posts the final reply back into it."""
+
+    def test_fetch_invoice_stamps_channel_key_on_job_creation(self, session) -> None:
+        world = World(session)
+        channel = ChannelRef(kind="project", id=world.project_a.id)
+        message = world.post_user_message("va chercher la facture Leroy Merlin 79,54 e d'hier")
+        world.vision._json_answers = [AmountDate(amount_ttc=79.54, date="2026-09-20")]
+        decision = RouterDecision(intent="fetch_invoice", intent_confidence=0.95, merchant="leroymerlin")
+
+        world.feature.fetch_invoice(
+            user_id=world.user_id,
+            message_id=message.id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            decision=decision,
+            scope=ChannelScope(
+                kind="project",
+                company_id=world.company_id,
+                project_id=world.project_a.id,
+                is_admin_channel=False,
+                asker_id=world.user_id,
+            ),
+        )
+
+        job = world.job_repo.list_recent_for_user(world.user_id, limit=1)[0]
+        assert job.channel_key == channel.key
+
+    def test_on_result_posts_the_invoice_card_into_the_jobs_channel(self, session) -> None:
+        world = World(session)
+        channel = ChannelRef(kind="project", id=world.project_a.id)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(
+            amount=Decimal("79.54"), job_date=date(2026, 9, 10), reply_to=original, channel_key=channel.key
+        )
+
+        pdf_key = f"assistant/jobs/{job.id}.pdf"
+        world.storage.put(pdf_key, io.BytesIO(_pdf_bytes()), content_type="application/pdf")
+        world.job_repo.update_result(job.id, status="done", pdf_storage_key=pdf_key, result={"status": "done"})
+
+        from app.application.assistant.models import Invoice as AssistantInvoice
+        from app.application.assistant.ports import Decision
+
+        world.vision._json_answers = [
+            AssistantInvoice(merchant="Leroy Merlin", total_ttc=79.54, readability=0.9, date="2026-09-10")
+        ]
+        world.decisions._fixed = Decision(
+            choices={
+                "project": (str(world.project_a.id), 0.95, {}),
+                "category": ("materiaux", 0.9, {}),
+                "duplicate_of": ("none", 0.95, {}),
+            },
+            nouls={"amounts_consistent": 0.95},
+        )
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        cards = [m for m in world.messages.messages.values() if m.content_type == "card"]
+        assert len(cards) == 1
+        assert cards[0].channel == channel
+
+
 class TestHandleAction:
     def test_fetch_pick_existing_posts_the_invoice_card(self, session) -> None:
         world = World(session)
@@ -593,6 +761,7 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -632,6 +801,54 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
+        )
+
+        assert handled is True
+        assert [m for m in world.messages.messages.values() if m.content_type == "card"] == []
+
+    def test_fetch_pick_existing_refuses_an_invoice_on_a_writable_project_of_a_different_company(self, session) -> None:
+        """NEW-H1: unlike the forged/never-registered case above, this project genuinely
+        exists and the asker genuinely belongs to its company — but NOT the channel this
+        tap came from. `writable_projects` must bound to the channel's own company, not
+        every company the asker belongs to, or this card would disclose another
+        tenant's invoice."""
+        world = World(session)
+        foreign_company_id = uuid4()
+        foreign_project = _project("Chantier Confidentiel")
+        world.project_repo = FakeProjectRepo([world.project_a, foreign_project])
+        world.authz_reader = FakeAuthzReader(
+            world.company_id, project_companies={foreign_project.id: foreign_company_id}
+        )
+        world.company_access = FakeCompanyAccessRepo(world.company_id, foreign_company_id)
+        world.feature._project_repo = world.project_repo
+        world.feature._authz_reader = world.authz_reader
+        world.feature._company_access = world.company_access
+
+        from app.application.invoice.create_invoice import CreateInvoiceRequest
+        from app.domain.entities.invoice import InvoiceType
+
+        foreign = world.create_invoice_usecase.execute(
+            CreateInvoiceRequest(
+                project_id=foreign_project.id,
+                created_by=world.user_id,
+                type=InvoiceType.MATERIALS_SERVICES,
+                issue_date=date(2026, 9, 9),
+                recipient_name="Leroy Merlin",
+                recipient_address="Elsewhere",
+                items=[{"description": "x", "quantity": 1, "unit_price": 66.67, "vat_rate": 20.0}],
+            )
+        )
+
+        handled = world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=uuid4(),
+            action="fetch_pick_existing",
+            payload={"invoice_id": foreign.id},
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -649,6 +866,7 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -666,5 +884,6 @@ class TestHandleAction:
             lang="fr",
             messenger=world.messenger,
             trace_id="t",
+            scope=world.default_scope(),
         )
         assert handled is False

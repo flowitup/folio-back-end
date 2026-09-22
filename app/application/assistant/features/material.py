@@ -40,7 +40,7 @@ from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import MaterialImportRecord, MaterialImportRepositoryPort
 from app.application.assistant.jobs_repo import AssistantJobRepositoryPort
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import MaterialIdent, ProductCandidate, ProductSearchResult
+from app.application.assistant.models import ChannelScope, MaterialIdent, ProductCandidate, ProductSearchResult
 from app.application.assistant.ports import (
     ChoiceQuestion,
     DecisionPort,
@@ -48,6 +48,7 @@ from app.application.assistant.ports import (
     NoulQuestion,
     VisionLlmPort,
 )
+from app.application.assistant.scope import channel_company_ids
 from app.application.authz.ports import AuthzReaderPort
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
 from app.application.bibliotheque.exceptions import (
@@ -62,6 +63,7 @@ from app.application.chat.ports import ChatAttachmentStoragePort
 from app.application.companies.ports import CompanyRepositoryPort, UserCompanyAccessRepositoryPort
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.library_product import LibraryProduct
+from app.domain.entities.chat_message import ChannelRef
 from app.domain.value_objects.supplier_slug import slugify
 
 logger = logging.getLogger(__name__)
@@ -173,12 +175,22 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
         project_hint: Optional[str] = None,
     ) -> str:
+        # `project_hint` is kept for `FeatureHandlersPort.identify_material` interface
+        # parity but is otherwise unused: `_resolve_company` now always resolves to the
+        # channel's own company (Q1), so there is no cross-company ambiguity left for a
+        # project-name hint to break.
         photo = read_photo_bytes(self._messages, self._storage, message_id, user_id)
         if photo is None:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
         photo_bytes, _photo_filename, _photo_mime = photo
@@ -189,12 +201,22 @@ class MaterialFeature:
             )
         except LlmOutputError:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
         if not gate.identify_ok(ident.confidence):
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
 
@@ -205,37 +227,35 @@ class MaterialFeature:
         # companies photographing the same product could leak each other's product
         # card (and the DB's `(company_id, photo_sha256)` unique constraint would raise
         # on the second company's own otherwise-legitimate import).
-        company_id = self._resolve_company(user_id, project_hint)
+        company_id = self._resolve_company(user_id, scope)
         if company_id is None:
-            return self._post_pick_company(user_id, message_id, lang, messenger, trace_id, ident, sha, message_id)
+            return self._post_pick_company(
+                user_id, message_id, lang, messenger, trace_id, ident, sha, message_id, scope=scope
+            )
 
         cached = self._material_imports.find_by_photo_hash(company_id, sha)
         if cached is not None:
-            self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
+            self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached, scope=scope)
             return "replied"
 
-        return self._continue_after_company(user_id, message_id, company_id, ident, sha, lang, messenger, trace_id)
+        return self._continue_after_company(
+            user_id, message_id, company_id, ident, sha, lang, messenger, trace_id, scope=scope
+        )
 
     # ------------------------------------------------------------------
     # Company resolution (plan item 5)
     # ------------------------------------------------------------------
 
-    def _resolve_company(self, user_id: UUID, project_hint: Optional[str] = None) -> Optional[UUID]:
-        company_ids = [access.company_id for access in self._company_access.list_for_user(user_id)]
-        needle = (project_hint or "").strip().lower()
-        if needle:
-            visible = self._project_repo.list_for_user_and_companies(user_id, company_ids)
-            matches = [p for p in visible if p.name.strip().lower() == needle]
-            if not matches:
-                matches = [p for p in visible if needle in p.name.strip().lower()]
-            if len(matches) == 1:
-                hinted_company_id = self._authz_reader.project_company_id(matches[0].id)
-                if hinted_company_id is not None:
-                    return hinted_company_id
-        unique_company_ids = set(company_ids)
-        if len(unique_company_ids) == 1:
-            return next(iter(unique_company_ids))
-        return None
+    def _resolve_company(self, user_id: UUID, scope: ChannelScope) -> Optional[UUID]:
+        """The channel's own company — Q1: no cross-company company picking. A company/
+        project/admin channel always pins its own company, so there is nothing left to
+        disambiguate by matching ``project_hint`` against every company's projects (the
+        old behaviour, which could hand a company-A asker's photo to company B just
+        because the caption named a B project by the same/similar name). Returns
+        ``None`` only when the channel itself has no company — the caller then falls
+        back to ``_post_pick_company``, bounded to the asker's own memberships."""
+        company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
+        return company_ids[0] if company_ids else None
 
     def _post_pick_company(
         self,
@@ -247,6 +267,7 @@ class MaterialFeature:
         ident: MaterialIdent,
         sha: str,
         photo_message_id: UUID,
+        scope: ChannelScope,
     ) -> str:
         options = []
         for access in self._company_access.list_for_user(user_id):
@@ -266,10 +287,23 @@ class MaterialFeature:
                 }
             )
         if not options:
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return "refused"
         messenger.post_choice(
-            user_id, reply.render("pick_company_prompt", lang), options, reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("pick_company_prompt", lang),
+            options,
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
         return "asked"
 
@@ -287,11 +321,12 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> str:
         if ident.reference:
             cached = self._material_imports.find_by_reference(company_id, ident.reference)
             if cached is not None:
-                self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached)
+                self._reply_existing(user_id, message_id, lang, messenger, trace_id, cached, scope=scope)
                 return "replied"
 
         since = datetime.now(timezone.utc) - DEDUPE_WINDOW
@@ -300,7 +335,12 @@ class MaterialFeature:
         )
         if duplicate is not None:
             messenger.post_text(
-                user_id, reply.render("product_search_ack", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("product_search_ack", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return "asked"
 
@@ -312,7 +352,14 @@ class MaterialFeature:
             "message_id": str(message_id),
             "lang": lang,
         }
-        job = self._job_repo.add(job_type="find_product", user_id=user_id, project_hint=None, lang=lang, params=params)
+        job = self._job_repo.add(
+            job_type="find_product",
+            user_id=user_id,
+            project_hint=None,
+            lang=lang,
+            params=params,
+            channel_key=scope.channel.key,
+        )
         status_message = messenger.post_job_status(
             user_id,
             job_id=str(job.id),
@@ -320,6 +367,8 @@ class MaterialFeature:
             text=reply.render("product_search_ack", lang),
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
         self._job_repo.set_status_message(job.id, status_message.id)
         return "queued"
@@ -333,6 +382,26 @@ class MaterialFeature:
         if job is None:
             logger.warning("assistant.material: job %s not found", job_id)
             return
+        # Post back into the channel the request actually came from (phase 03's answer
+        # to phase 01/02's open question 2). A job queued before the `channel_key` column
+        # existed (or one with a key `ChannelRef.parse` no longer accepts, e.g. the
+        # retired `assistant:` kind) has nowhere safe left to post: that channel is gone
+        # and no client can read it any more, so the reply is dropped rather than
+        # resurrecting the dead fallback (M1) — the job is still marked processed so the
+        # reaper does not retry it forever.
+        channel: Optional[ChannelRef] = None
+        if job.channel_key:
+            try:
+                channel = ChannelRef.parse(job.channel_key)
+            except ValueError:
+                logger.warning("assistant.material: job %s has an unparsable channel_key", job.id)
+        if channel is None:
+            logger.warning("assistant.material: job %s has no resolvable channel_key, dropping its reply", job.id)
+            self._job_repo.mark_processed(job.id)
+            return
+        scope = ChannelScope.for_channel(
+            channel, project_company_id=self._authz_reader.project_company_id, asker_id=job.user_id
+        )
         if not self._job_repo.mark_processed(job.id):
             # Guards against a duplicate reply/import if `process_product_search` is
             # ever invoked twice for the same job — same one-shot pattern as
@@ -352,7 +421,7 @@ class MaterialFeature:
             logger.error("assistant.material: job %s has malformed params, dropping", job.id)
             if reply_to_id is not None:
                 messenger.update_job_status(
-                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True
+                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True, scope=scope
                 )
             return
 
@@ -360,7 +429,7 @@ class MaterialFeature:
         if photo is None:
             if reply_to_id is not None:
                 messenger.update_job_status(
-                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True
+                    reply_to_id, state="failed", text=reply.render("error", lang), terminal=True, scope=scope
                 )
             return
         photo_bytes, photo_filename, photo_mime = photo
@@ -378,7 +447,7 @@ class MaterialFeature:
                 status = gate.pick_status(pick_confidence)
                 if reply_to_id is not None:
                     text = reply.render("material_found" if status == "confirmed" else "material_to_confirm", lang)
-                    messenger.update_job_status(reply_to_id, state="done", text=text, terminal=True)
+                    messenger.update_job_status(reply_to_id, state="done", text=text, terminal=True, scope=scope)
                 self._create_from_candidate(
                     job.user_id,
                     reply_to_id,
@@ -394,6 +463,7 @@ class MaterialFeature:
                     lang,
                     messenger,
                     trace_id,
+                    scope=scope,
                 )
                 return
             logger.info(
@@ -405,7 +475,11 @@ class MaterialFeature:
             )
             if reply_to_id is not None:
                 messenger.update_job_status(
-                    reply_to_id, state="done", text=reply.render("material_photo_only", lang), terminal=True
+                    reply_to_id,
+                    state="done",
+                    text=reply.render("material_photo_only", lang),
+                    terminal=True,
+                    scope=scope,
                 )
             self._import_photo_only(
                 job.user_id,
@@ -419,6 +493,7 @@ class MaterialFeature:
                 lang,
                 messenger,
                 trace_id,
+                scope=scope,
             )
             return
 
@@ -426,8 +501,15 @@ class MaterialFeature:
         # before falling back to the same photo-only import.
         if reply_to_id is not None:
             failed_text = reply.render("product_search_failed", lang)
-            messenger.update_job_status(reply_to_id, state="failed", text=failed_text, terminal=True)
-            messenger.post_text(job.user_id, failed_text, reply_to_id=reply_to_id, trace_id=trace_id)
+            messenger.update_job_status(reply_to_id, state="failed", text=failed_text, terminal=True, scope=scope)
+            messenger.post_text(
+                job.user_id,
+                failed_text,
+                reply_to_id=reply_to_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
         self._import_photo_only(
             job.user_id,
             reply_to_id,
@@ -440,6 +522,7 @@ class MaterialFeature:
             lang,
             messenger,
             trace_id,
+            scope=scope,
         )
 
     # ------------------------------------------------------------------
@@ -500,6 +583,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> str:
         supplier_name = _SUPPLIER_NAME_BY_MERCHANT.get(candidate.merchant) or ident.brand or "Fournisseur non identifié"
         reference = candidate.reference or candidate.ean or f"AI-{sha[:8]}"
@@ -517,6 +601,7 @@ class MaterialFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
         )
         if product is None:
             return "refused"
@@ -530,7 +615,7 @@ class MaterialFeature:
             photo_sha256=sha,
             source_url=candidate.url,
         )
-        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, status, supplier_name)
+        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, status, supplier_name, scope=scope)
         return "created"
 
     def _import_photo_only(
@@ -546,6 +631,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> str:
         supplier_name = ident.brand or "Fournisseur non identifié"
         reference = ident.reference or ident.ean or f"AI-{sha[:8]}"
@@ -563,6 +649,7 @@ class MaterialFeature:
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
+            scope=scope,
         )
         if product is None:
             return "refused"
@@ -576,9 +663,16 @@ class MaterialFeature:
             source_url=None,
         )
         messenger.post_text(
-            user_id, reply.render("material_photo_only", lang), reply_to_id=message_id, trace_id=trace_id
+            user_id,
+            reply.render("material_photo_only", lang),
+            reply_to_id=message_id,
+            trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
-        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, "to_confirm", supplier_name)
+        self._reply_product(
+            user_id, message_id, lang, messenger, trace_id, product, "to_confirm", supplier_name, scope=scope
+        )
         return "created"
 
     def _get_or_create_product(
@@ -597,6 +691,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> Optional[LibraryProduct]:
         try:
             return self._create_product_usecase.execute(
@@ -613,11 +708,25 @@ class MaterialFeature:
         except ProductAlreadyExistsError:
             existing = self._find_existing_by_reference(company_id, supplier_name, reference)
             if existing is None:
-                messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+                messenger.post_text(
+                    user_id,
+                    reply.render("error", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=scope.channel,
+                    scope=scope,
+                )
                 return None
             return existing
         except (CompanyAccessDeniedError, InsufficientPermissionError):
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return None
 
     def _find_existing_by_reference(
@@ -672,14 +781,24 @@ class MaterialFeature:
         messenger: AssistantMessenger,
         trace_id: str,
         cached: MaterialImportRecord,
+        scope: ChannelScope,
     ) -> None:
         product = self._product_repo.find_by_id(cached.product_id)
         if product is None:
-            messenger.post_text(user_id, reply.render("error", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("error", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return
         supplier = self._supplier_repo.find_by_id(product.supplier_id)
         supplier_name = supplier.name if supplier is not None else ""
-        self._reply_product(user_id, message_id, lang, messenger, trace_id, product, cached.status, supplier_name)
+        self._reply_product(
+            user_id, message_id, lang, messenger, trace_id, product, cached.status, supplier_name, scope=scope
+        )
 
     def _reply_product(
         self,
@@ -691,14 +810,25 @@ class MaterialFeature:
         product: LibraryProduct,
         status: str,
         supplier_name: str,
+        scope: ChannelScope,
     ) -> None:
         if status == "confirmed":
             messenger.post_text(
-                user_id, reply.render("material_found", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("material_found", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
         elif status == "to_confirm":
             messenger.post_text(
-                user_id, reply.render("material_to_confirm", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("material_to_confirm", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
         subtitle = f"{supplier_name} · {product.supplier_reference}" if supplier_name else product.supplier_reference
         thumbnail_url = (
@@ -714,6 +844,8 @@ class MaterialFeature:
             thumbnail_url=thumbnail_url,
             reply_to_id=message_id,
             trace_id=trace_id,
+            channel=scope.channel,
+            scope=scope,
         )
 
     # ------------------------------------------------------------------
@@ -730,6 +862,7 @@ class MaterialFeature:
         lang: str,
         messenger: AssistantMessenger,
         trace_id: str,
+        scope: ChannelScope,
     ) -> bool:
         """Returns True when this feature handled ``action``, False otherwise."""
         if action != "pick_company":
@@ -739,7 +872,14 @@ class MaterialFeature:
         # companies, but this is cheap insurance against a future caller of this method
         # skipping that guarantee.
         if company_id not in {access.company_id for access in self._company_access.list_for_user(user_id)}:
-            messenger.post_text(user_id, reply.render("no_permission", lang), reply_to_id=message_id, trace_id=trace_id)
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
             return True
         ident = MaterialIdent.model_validate(payload["ident"])
         sha = str(payload["sha256"])
@@ -747,10 +887,17 @@ class MaterialFeature:
         photo = read_photo_bytes(self._messages, self._storage, photo_message_id, user_id)
         if photo is None:
             messenger.post_text(
-                user_id, reply.render("photo_unreadable", lang), reply_to_id=message_id, trace_id=trace_id
+                user_id,
+                reply.render("photo_unreadable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
             return True
-        self._continue_after_company(user_id, message_id, company_id, ident, sha, lang, messenger, trace_id)
+        self._continue_after_company(
+            user_id, message_id, company_id, ident, sha, lang, messenger, trace_id, scope=scope
+        )
         return True
 
 

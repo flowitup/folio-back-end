@@ -53,10 +53,20 @@ def writable_projects(
     user_id: UUID,
     company_ids: list[UUID],
 ) -> list[WritableProject]:
-    """Projects visible to the user AND granting ``project:manage_invoices``."""
+    """Projects visible to the user AND granting ``project:manage_invoices``, bounded to
+    ``company_ids`` — the caller passes the channel's own company only (NEW-H1; see
+    ``app.application.assistant.scope.channel_company_ids``), never every company the
+    asker happens to belong to. ``list_for_user_and_companies`` UNIONS owner/assigned
+    projects with the ``company_ids`` filter rather than intersecting them, so a project
+    the asker owns or is directly assigned to in a DIFFERENT company would otherwise
+    still surface here — the explicit ``project_company_id`` check below closes that
+    (same pattern as ``project_resolution.py``'s candidate-list fix)."""
     projects = project_repo.list_for_user_and_companies(user_id, company_ids)
+    allowed_companies = set(company_ids)
     result: list[WritableProject] = []
     for project in projects:
+        if authz_reader.project_company_id(project.id) not in allowed_companies:
+            continue
         if has_permission(authz_reader, user_id, MANAGE_INVOICES_PERMISSION, project_id=project.id):
             result.append(WritableProject(id=project.id, name=project.name, address=project.address))
     return result

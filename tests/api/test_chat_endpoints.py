@@ -89,12 +89,12 @@ class TestChannels:
 
     def test_company_channel_listed_first(self, inv_client, member_token, company_channel):
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        # The assistant conversation (when enabled) is pinned ahead of every other kind;
-        # the company channel is first among the rest.
-        assert items[0]["kind"] == "assistant"
-        assert items[1]["key"] == company_channel
-        assert items[1]["name"] == "AVN Construction"
-        assert items[1]["member_count"] == 2
+        # Company channels are sorted by legal name; "AVN Construction" sorts before
+        # "Invite Test Company".
+        assert items[0]["key"] == company_channel
+        assert items[0]["kind"] == "company"
+        assert items[0]["name"] == "AVN Construction"
+        assert items[0]["member_count"] == 2
 
     def test_outsider_sees_no_project_channel(self, inv_client, outsider_token, invitation_app):
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(outsider_token)).get_json()["items"]
@@ -289,114 +289,159 @@ class TestAttachments:
         )
 
 
-class TestAssistantChannel:
-    """The pinned assistant:<user_id> channel, listed only when the feature is on."""
+class TestRetiredAssistantChannel:
+    """The old per-user `assistant:<user_id>` channel is retired: parsing that key
+    raises inside the domain entity, so every chat route (and `/assistant/actions`,
+    covered in test_assistant_endpoints.py) answers 404 exactly like any other unknown
+    channel — old rows are left in the database, simply unreachable."""
 
-    def _assistant_key(self, app, user_id: str) -> str:
+    def _assistant_key(self, user_id: str) -> str:
         return f"assistant:{user_id}"
 
-    def test_listed_first_when_enabled(self, inv_client, member_token, invitation_app):
+    def test_list_messages_404(self, inv_client, member_token, invitation_app):
+        key = self._assistant_key(invitation_app._test_member_user_id)
+        resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "NotFound"
+
+    def test_send_message_404(self, inv_client, member_token, invitation_app):
+        key = self._assistant_key(invitation_app._test_member_user_id)
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "bonjour"}, headers=_auth(member_token)
+        )
+        assert resp.status_code == 404
+        assert resp.get_json()["error"] == "NotFound"
+
+    def test_mark_read_404(self, inv_client, member_token, invitation_app):
+        key = self._assistant_key(invitation_app._test_member_user_id)
+        resp = inv_client.post(f"/api/v1/chat/channels/{key}/read", headers=_auth(member_token))
+        assert resp.status_code == 404
+
+    def test_not_listed(self, inv_client, member_token):
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        assert items[0]["key"] == self._assistant_key(invitation_app, invitation_app._test_member_user_id)
-        assert items[0]["kind"] == "assistant"
-        assert items[0]["name"] == "Assistant"
-        assert items[0]["member_count"] == 1
+        assert "assistant" not in [c["kind"] for c in items]
 
-    def test_not_listed_when_disabled(self, inv_client, member_token, invitation_app):
-        invitation_app.config["FEATURE_ASSISTANT"] = False
-        try:
-            items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-            assert "assistant" not in [c["kind"] for c in items]
-        finally:
-            invitation_app.config["FEATURE_ASSISTANT"] = True
 
-    def test_send_and_read_404_when_disabled(self, inv_client, member_token, invitation_app):
-        """FEATURE_ASSISTANT is the pipeline's real kill switch (review finding C3), not
-        just the channel listing / actions endpoint: with the flag off, the assistant
-        channel does not exist at all — send/list answer 404 exactly like any unknown
-        channel, so nothing ever reaches the AI pipeline even if the provider API keys
-        are already configured in the deployment's environment."""
-        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
-        invitation_app.config["FEATURE_ASSISTANT"] = False
-        try:
-            sent = inv_client.post(
-                f"/api/v1/chat/channels/{key}/messages", json={"body": "bonjour"}, headers=_auth(member_token)
-            )
-            assert sent.status_code == 404
-            listed = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
-            assert listed.status_code == 404
-        finally:
-            invitation_app.config["FEATURE_ASSISTANT"] = True
+class TestAdminChannel:
+    """`admin:<company_id>` — a company's admins + platform ops (D17)."""
 
-    def test_send_and_list_own_assistant_messages(self, inv_client, member_token, invitation_app):
-        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+    def _admin_key(self, company_id: str) -> str:
+        return f"admin:{company_id}"
+
+    def test_listed_for_admin_not_for_member(self, inv_client, admin_token, member_token, invitation_app):
+        key = self._admin_key(invitation_app._test_company_id)
+        admin_items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
+        admin_channel = next(c for c in admin_items if c["key"] == key)
+        assert admin_channel["kind"] == "admin"
+        assert admin_channel["name"] == "Invite Test Company"
+
+        member_items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        assert key not in [c["key"] for c in member_items]
+
+    def test_admin_channel_right_after_its_company_channel(self, inv_client, admin_token, invitation_app):
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
+        keys = [c["key"] for c in items]
+        company_index = keys.index(f"company:{invitation_app._test_company_id}")
+        assert keys[company_index + 1] == self._admin_key(invitation_app._test_company_id)
+
+    def test_member_forbidden(self, inv_client, member_token, invitation_app):
+        key = self._admin_key(invitation_app._test_company_id)
+        assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).status_code == 403
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "hi"}, headers=_auth(member_token)
+        )
+        assert resp.status_code == 403
+
+    def test_admin_can_read_and_send(self, inv_client, admin_token, invitation_app):
+        key = self._admin_key(invitation_app._test_company_id)
         sent = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages",
-            json={"body": "bonjour", "lang": "fr"},
-            headers=_auth(member_token),
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "Bilan du mois"}, headers=_auth(admin_token)
         )
         assert sent.status_code == 201, sent.get_json()
-        data = sent.get_json()
-        assert data["mine"] is True
-        assert data["sender_type"] == "user"
-        assert data["content_type"] == "text"
-        assert data["payload"] == {"lang": "fr"}
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
+        assert page["items"][-1]["body"] == "Bilan du mois"
 
-        # lang is dropped outside the assistant channel.
-        project_key = _project_key(invitation_app)
-        resp = inv_client.post(
-            f"/api/v1/chat/channels/{project_key}/messages",
-            json={"body": "hi", "lang": "vi"},
-            headers=_auth(member_token),
-        )
-        assert resp.get_json()["payload"] is None
+    def test_platform_ops_can_access_without_a_company_role(self, inv_client, superadmin_token, invitation_app):
+        key = self._admin_key(invitation_app._test_company_id)
+        resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(superadmin_token))
+        assert resp.status_code == 200
 
-    def test_dispatcher_called_after_commit(self, inv_client, member_token, invitation_app):
-        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
-        invitation_app._assistant_dispatcher.messages_received.clear()
-        sent = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages", json={"body": "salut"}, headers=_auth(member_token)
-        )
-        assert sent.status_code == 201
-        message_id = uuid.UUID(sent.get_json()["id"])
-        user_id = uuid.UUID(invitation_app._test_member_user_id)
-        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
+    def test_unknown_company_404(self, inv_client, admin_token):
+        key = self._admin_key(str(uuid.uuid4()))
+        resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
+        assert resp.status_code == 404
 
-    def test_other_user_cannot_read_someone_elses_assistant_channel(
-        self, inv_client, member_token, admin_token, invitation_app
-    ):
-        member_key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
-        resp = inv_client.get(f"/api/v1/chat/channels/{member_key}/messages", headers=_auth(admin_token))
-        assert resp.status_code == 403
-        resp = inv_client.post(
-            f"/api/v1/chat/channels/{member_key}/messages", json={"body": "hi"}, headers=_auth(admin_token)
-        )
-        assert resp.status_code == 403
+    def test_platform_ops_sees_the_admin_channel_in_the_chip_row(self, inv_client, superadmin_token, invitation_app):
+        """Phase 03's answer to phase 01/02's open question 1: ops oversees every
+        company, not just the ones it happens to hold a `user_company_access` row for."""
+        key = self._admin_key(invitation_app._test_company_id)
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(superadmin_token)).get_json()["items"]
+        admin_channel = next(c for c in items if c["key"] == key)
+        assert admin_channel["kind"] == "admin"
+        # Ops is not itself a member of the company, so the company channel is absent —
+        # only its admin channel is listed.
+        assert f"company:{invitation_app._test_company_id}" not in [c["key"] for c in items]
 
-    def test_unread_count_includes_assistant_reply(self, inv_client, member_token, invitation_app):
+
+class TestFolioReplies:
+    """`AssistantMessenger` posting into a shared channel — sender name, unread counts,
+    and the `card` wire contract, all through the same `GET .../messages` the apps poll."""
+
+    def _channel(self, invitation_app) -> str:
+        return f"company:{invitation_app._test_company_id}"
+
+    def test_reply_lands_in_the_target_channel_with_folio_as_sender(self, inv_client, member_token, invitation_app):
+        from app.domain.entities.chat_message import ChannelRef
         from wiring import get_container
 
-        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
-        # Sending resets the sender's own read marker, so post the assistant reply directly
-        # (as the RQ job would) without a further user message in between.
+        key = self._channel(invitation_app)
         with invitation_app.app_context():
-            get_container().assistant_messenger.post_text(uuid.UUID(invitation_app._test_member_user_id), "Bonjour !")
-        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        assistant_channel = next(c for c in items if c["key"] == key)
-        assert assistant_channel["unread_count"] == 1
-
-    def test_assistant_reply_has_null_sender_and_assistant_name(self, inv_client, member_token, invitation_app):
-        from wiring import get_container
-
-        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
-        with invitation_app.app_context():
-            get_container().assistant_messenger.post_text(uuid.UUID(invitation_app._test_member_user_id), "Salut !")
+            get_container().assistant_messenger.post_text(
+                uuid.UUID(invitation_app._test_member_user_id),
+                "Salut !",
+                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
+            )
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         reply = page["items"][-1]
         assert reply["sender_id"] is None
-        assert reply["sender_name"] == "Assistant"
+        assert reply["sender_name"] == "Folio"
         assert reply["sender_type"] == "assistant"
         assert reply["mine"] is False
+
+    def test_reply_visible_to_every_channel_member(self, inv_client, member_token, admin_token, invitation_app):
+        """The assistant answered a mention in a shared channel — every member (not
+        just the asker) sees the reply, same as a human message (D19)."""
+        from app.domain.entities.chat_message import ChannelRef
+        from wiring import get_container
+
+        key = self._channel(invitation_app)
+        with invitation_app.app_context():
+            get_container().assistant_messenger.post_text(
+                uuid.UUID(invitation_app._test_member_user_id),
+                "Voici la réponse pour toute l'équipe.",
+                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
+            )
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
+        assert page["items"][-1]["body"] == "Voici la réponse pour toute l'équipe."
+
+    def test_unread_count_includes_the_reply(self, inv_client, member_token, invitation_app):
+        from app.domain.entities.chat_message import ChannelRef
+        from wiring import get_container
+
+        key = self._channel(invitation_app)
+        inv_client.post(f"/api/v1/chat/channels/{key}/read", headers=_auth(member_token))
+        with invitation_app.app_context():
+            get_container().assistant_messenger.post_text(
+                uuid.UUID(invitation_app._test_member_user_id),
+                "Bonjour !",
+                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
+            )
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        company_channel = next(c for c in items if c["key"] == key)
+        assert company_channel["unread_count"] >= 1
 
     def test_post_card_round_trips_with_the_wire_contract_shape(self, inv_client, member_token, invitation_app):
         """A real `AssistantMessenger.post_card(...)` call, read back through the same
@@ -404,9 +449,10 @@ class TestAssistantChannel:
         receives `{"card": {type, id, project_id, title, subtitle, badge, thumbnail_url,
         extra}}`, not the pre-fix ad-hoc shape (second addendum: the app's parser
         rejected every real card and silently fell back to text)."""
+        from app.domain.entities.chat_message import ChannelRef
         from wiring import get_container
 
-        key = self._assistant_key(invitation_app, invitation_app._test_member_user_id)
+        key = self._channel(invitation_app)
         product_id = uuid.uuid4()
         with invitation_app.app_context():
             get_container().assistant_messenger.post_card(
@@ -418,6 +464,8 @@ class TestAssistantChannel:
                 badge="confirmed",
                 thumbnail_url="/api/v1/bibliotheque/products/x/image",
                 extra={"has_image": True},
+                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
+                scope=None,
             )
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         card_message = page["items"][-1]
@@ -432,3 +480,98 @@ class TestAssistantChannel:
             "thumbnail_url": "/api/v1/bibliotheque/products/x/image",
             "extra": {"has_image": True},
         }
+
+
+class TestMentionDispatch:
+    """Send-time `@folio` detection / reply-to-assistant detection and the dispatch gate
+    (D18) — never other chat reaches the assistant pipeline."""
+
+    def test_message_without_mention_never_dispatches(self, inv_client, member_token, invitation_app):
+        key = _project_key(invitation_app)
+        invitation_app._assistant_dispatcher.messages_received.clear()
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            json={"body": "Sáng nay đổ xong sàn mái"},
+            headers=_auth(member_token),
+        )
+        assert sent.status_code == 201
+        assert sent.get_json()["mentions_assistant"] is False
+        assert invitation_app._assistant_dispatcher.messages_received == []
+
+    def test_mention_dispatches_case_insensitively(self, inv_client, member_token, invitation_app):
+        key = _project_key(invitation_app)
+        invitation_app._assistant_dispatcher.messages_received.clear()
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            json={"body": "@Folio combien on a dépensé ?"},
+            headers=_auth(member_token),
+        )
+        assert sent.status_code == 201
+        data = sent.get_json()
+        assert data["mentions_assistant"] is True
+        message_id = uuid.UUID(data["id"])
+        user_id = uuid.UUID(invitation_app._test_member_user_id)
+        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
+
+    def test_reply_to_an_assistant_message_dispatches_without_the_token(self, inv_client, member_token, invitation_app):
+        from app.domain.entities.chat_message import ChannelRef
+        from wiring import get_container
+
+        key = _project_key(invitation_app)
+        with invitation_app.app_context():
+            assistant_reply = get_container().assistant_messenger.post_text(
+                uuid.UUID(invitation_app._test_member_user_id),
+                "Tu veux dire quoi exactement ?",
+                channel=ChannelRef(kind="project", id=uuid.UUID(invitation_app._test_project_id)),
+                scope=None,
+            )
+        invitation_app._assistant_dispatcher.messages_received.clear()
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            json={"body": "le budget travaux", "reply_to_id": str(assistant_reply.id)},
+            headers=_auth(member_token),
+        )
+        assert sent.status_code == 201, sent.get_json()
+        data = sent.get_json()
+        assert data["mentions_assistant"] is True
+        assert data["reply_to_id"] == str(assistant_reply.id)
+        message_id = uuid.UUID(data["id"])
+        user_id = uuid.UUID(invitation_app._test_member_user_id)
+        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
+
+    def test_photo_caption_with_mention_dispatches(self, inv_client, member_token, invitation_app):
+        key = _project_key(invitation_app)
+        invitation_app._assistant_dispatcher.messages_received.clear()
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data={
+                "body": "@folio c'est quoi ce matériau ?",
+                "file": (io.BytesIO(b"\xff\xd8\xff" + b"1" * 10), "a.jpg", "image/jpeg"),
+            },
+            content_type="multipart/form-data",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        data = resp.get_json()
+        assert data["mentions_assistant"] is True
+        message_id = uuid.UUID(data["id"])
+        user_id = uuid.UUID(invitation_app._test_member_user_id)
+        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
+
+    def test_reply_to_id_from_another_channel_400s(
+        self, inv_client, member_token, admin_token, invitation_app, company_channel
+    ):
+        other_channel_message = inv_client.post(
+            f"/api/v1/chat/channels/{company_channel}/messages",
+            json={"body": "message dans un autre channel"},
+            headers=_auth(admin_token),
+        ).get_json()
+
+        key = _project_key(invitation_app)
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            json={"body": "@folio salut", "reply_to_id": other_channel_message["id"]},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "BadRequest"

@@ -20,6 +20,14 @@ from app.application.assistant.service import SubmitAssistantActionUseCase
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 
 
+class FakeDirectory:
+    """Every message in this module lives in ``company:<user_id>`` and is addressed to
+    that same user — the only membership fact `SubmitAssistantActionUseCase` needs."""
+
+    def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
+        return channel.id == user_id
+
+
 class FakeMessageRepo:
     """In-memory double for `MessagePosterPort` whose `answer_choice_if_unanswered`
     mirrors the real repository's atomicity contract: it decides purely from the
@@ -58,7 +66,7 @@ class FakeMessageRepo:
         self.messages[message_id] = replace(current, payload=current_payload)
         return True
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
         return []
 
 
@@ -81,7 +89,7 @@ class FakeDispatcher:
 def _choice_message(user_id: UUID) -> ChatMessage:
     return ChatMessage(
         id=uuid4(),
-        channel=ChannelRef(kind="assistant", id=user_id),
+        channel=ChannelRef(kind="company", id=user_id),
         sender_id=None,
         body="Confirmer ?",
         attachment=None,
@@ -89,10 +97,11 @@ def _choice_message(user_id: UUID) -> ChatMessage:
         sender_type="assistant",
         content_type="choice",
         payload={
+            "addressed_to": str(user_id),
             "options": [
                 {"label": "Confirmer", "action": "confirm", "payload": {}},
                 {"label": "Annuler", "action": "cancel", "payload": {}},
-            ]
+            ],
         },
     )
 
@@ -103,7 +112,7 @@ def test_two_sequential_submits_second_raises_already_answered() -> None:
     message = _choice_message(user_id)
     repo.add(message)
     dispatcher = FakeDispatcher()
-    use_case = SubmitAssistantActionUseCase(repo, FakeSession(), dispatcher)
+    use_case = SubmitAssistantActionUseCase(repo, FakeDirectory(), FakeSession(), dispatcher)
 
     use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
     with pytest.raises(AssistantAlreadyAnsweredError):
@@ -124,7 +133,7 @@ def test_lost_update_race_between_read_and_write_never_double_dispatches() -> No
     message = _choice_message(user_id)
     repo.add(message)
     dispatcher = FakeDispatcher()
-    use_case = SubmitAssistantActionUseCase(repo, FakeSession(), dispatcher)
+    use_case = SubmitAssistantActionUseCase(repo, FakeDirectory(), FakeSession(), dispatcher)
 
     # Arm the race: the instant `execute` performs its own `find_by_id` read, a
     # concurrent request answers the message first (simulating another process's

@@ -29,3 +29,7 @@ class AttachmentTooLargeError(ChatError):
 
 class UnsupportedAttachmentTypeError(ChatError):
     """Attachment content type is not an allowed image type."""
+
+
+class ReplyTargetNotInChannelError(ChatError):
+    """``reply_to_id`` names a message that does not exist, or exists in a different channel."""

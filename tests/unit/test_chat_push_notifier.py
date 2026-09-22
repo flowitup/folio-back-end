@@ -186,3 +186,38 @@ def test_long_preview_is_truncated():
     notifier, sender = _build([Member(alice, "Alice"), Member(bob, "Bob")], unread={bob: 1})
     notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="x" * 500, sent_at=NOW)
     assert len(sender.sent[0].body) == 120
+
+
+# ---------------------------------------------------------------------------
+# message_sent_by_assistant — M2: an admin-channel push must never carry the reply
+# ---------------------------------------------------------------------------
+
+ADMIN_CHANNEL = ChannelRef(kind="admin", id=uuid4())
+
+
+def test_assistant_reply_in_admin_channel_never_carries_the_body():
+    alice = uuid4()
+    notifier, sender = _build([Member(alice, "Alice")], unread={alice: 1})
+    notifier.message_sent_by_assistant(
+        channel=ADMIN_CHANNEL,
+        preview="Villa Arcueil — budget 10000, reçu 5000, dépensé 2000, restant 3000",
+        sent_at=NOW,
+    )
+    assert len(sender.sent) == 1
+    assert "10000" not in sender.sent[0].body
+    assert "budget" not in sender.sent[0].body
+    assert sender.sent[0].body == "Folio replied"
+
+
+def test_assistant_reply_in_admin_channel_generic_body_even_with_multiple_unread():
+    alice = uuid4()
+    notifier, sender = _build([Member(alice, "Alice")], unread={alice: 5})
+    notifier.message_sent_by_assistant(channel=ADMIN_CHANNEL, preview="Le salaire de Minh est 2500€", sent_at=NOW)
+    assert sender.sent[0].body == "Folio replied"
+
+
+def test_assistant_reply_in_a_non_admin_channel_keeps_the_real_preview():
+    alice = uuid4()
+    notifier, sender = _build([Member(alice, "Alice")], unread={alice: 1})
+    notifier.message_sent_by_assistant(channel=CHANNEL, preview="Perceuse Bosch trouvée", sent_at=NOW)
+    assert sender.sent[0].body == "Perceuse Bosch trouvée"

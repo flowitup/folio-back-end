@@ -49,6 +49,7 @@ class MessageDto:
     content_type: str = "text"
     payload: dict[str, Any] | None = None
     reply_to_id: UUID | None = None
+    mentions_assistant: bool = False
 
     @classmethod
     def from_entity(cls, message: ChatMessage, sender_name: str) -> MessageDto:
@@ -57,7 +58,7 @@ class MessageDto:
             channel_key=message.channel.key,
             sender_id=message.sender_id,
             # An assistant-authored message has no sender to look up a display name for.
-            sender_name="Assistant" if message.sender_id is None else sender_name,
+            sender_name="Folio" if message.sender_id is None else sender_name,
             body=message.body,
             attachment=(
                 AttachmentDto(
@@ -73,6 +74,7 @@ class MessageDto:
             content_type=message.content_type,
             payload=message.payload,
             reply_to_id=message.reply_to_id,
+            mentions_assistant=message.mentions_assistant,
         )
 
 

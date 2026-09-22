@@ -349,6 +349,189 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "fr": "(scan généré en mode de secours)",
         "en": "(scan generated in fallback mode)",
     },
+    # -----------------------------------------------------------------
+    # D17 — confidential-class refusals (phase 03). Never model text.
+    # -----------------------------------------------------------------
+    "refuse_finance": {
+        "vi": "Thông tin tài chính công ty (ngân sách, doanh thu, số tiền đã nhận) chỉ được xem trong kênh Quản trị.",
+        "fr": "Les informations financières de l'entreprise (budget, revenus, montants reçus) ne sont visibles "
+        "que dans le canal Administration.",
+        "en": "Company financial information (budget, income, funds received) is only visible in the Admin channel.",
+    },
+    "refuse_salary": {
+        "vi": "Thông tin lương/taux của người khác chỉ được xem trong kênh Quản trị.",
+        "fr": "Le salaire ou le taux d'une autre personne n'est visible que dans le canal Administration.",
+        "en": "Someone else's pay or rate is only visible in the Admin channel.",
+    },
+    "refuse_own_salary": {
+        "vi": "Tôi không trả lời về lương ở đây, bạn xem taux/lương của mình trong tab Lương của ứng dụng nhé.",
+        "fr": "Je ne réponds pas sur les salaires ici, tu peux voir ton taux et ta paie dans l'onglet Salaire "
+        "de l'application.",
+        "en": "I don't answer pay questions here — check your rate and pay in the app's Salary tab.",
+    },
+    "refuse_generic": {
+        "vi": "Tôi không thể chia sẻ thông tin này ở kênh này.",
+        "fr": "Je ne peux pas partager cette information dans ce canal.",
+        "en": "I can't share this information in this channel.",
+    },
+    "admin_channel_hint": {
+        "vi": "(Với vai trò quản trị, bạn có thể hỏi lại trong kênh Quản trị.)",
+        "fr": "(En tant qu'administrateur, tu peux reposer la question dans le canal Administration.)",
+        "en": "(As an admin, you can ask again in the Admin channel.)",
+    },
+    # -----------------------------------------------------------------
+    # Phase 04 — labor handlers (day roster, bulk attendance, validation).
+    # -----------------------------------------------------------------
+    "roster_empty": {
+        "vi": "Không có ai trên công trình này hôm đó.",
+        "fr": "Personne sur ce chantier ce jour-là.",
+        "en": "No one on this project that day.",
+    },
+    "roster_line_present": {
+        "vi": "{name} — có mặt, {hours}h, {day_type}",
+        "fr": "{name} — présent, {hours}h, {day_type}",
+        "en": "{name} — present, {hours}h, {day_type}",
+    },
+    "roster_line_pending": {
+        "vi": "{name} — chờ duyệt, {hours}h, {day_type}",
+        "fr": "{name} — en attente de validation, {hours}h, {day_type}",
+        "en": "{name} — pending validation, {hours}h, {day_type}",
+    },
+    "roster_line_absent": {
+        "vi": "{name} — vắng mặt",
+        "fr": "{name} — absent",
+        "en": "{name} — absent",
+    },
+    "attendance_need_names": {
+        "vi": "Tôi không nhận ra tên người thợ nào trong tin nhắn, bạn nói rõ tên giúp tôi nhé?",
+        "fr": "Je n'ai reconnu aucun nom d'ouvrier dans le message, tu peux préciser ?",
+        "en": "I did not recognise any worker's name in the message, could you clarify?",
+    },
+    "attendance_confirm_prompt": {
+        "vi": "Ghi {names} có mặt ngày {date} ở {project}?",
+        "fr": "Enregistrer {names} présent(s) le {date} sur {project} ?",
+        "en": "Log {names} as present on {date} at {project}?",
+    },
+    "attendance_confirm_yes": {"vi": "Xác nhận", "fr": "Confirmer", "en": "Confirm"},
+    "attendance_confirm_no": {"vi": "Huỷ", "fr": "Annuler", "en": "Cancel"},
+    "attendance_logged": {
+        "vi": "Đã ghi nhận {created} người có mặt ({skipped} đã có sẵn).",
+        "fr": "{created} présence(s) enregistrée(s) ({skipped} déjà existante(s)).",
+        "en": "{created} attendance(s) logged ({skipped} already existed).",
+    },
+    "validate_attendance_none_pending": {
+        "vi": "Không có ngày công nào đang chờ duyệt.",
+        "fr": "Aucune journée en attente de validation.",
+        "en": "No pending day to validate.",
+    },
+    "validate_attendance_prompt": {
+        "vi": "Duyệt ngày công nào?",
+        "fr": "Valider quelle(s) journée(s) ?",
+        "en": "Validate which day(s)?",
+    },
+    "validate_attendance_all_option": {
+        "vi": "Tất cả",
+        "fr": "Toutes",
+        "en": "All",
+    },
+    "validate_attendance_done": {
+        "vi": "Đã duyệt {count} ngày công.",
+        "fr": "{count} journée(s) validée(s).",
+        "en": "{count} day(s) validated.",
+    },
+    # -----------------------------------------------------------------
+    # Phase 04 — tasks handlers.
+    # -----------------------------------------------------------------
+    "task_need_title": {
+        "vi": "Tôi chưa hiểu rõ tên công việc, bạn nói lại giúp tôi nhé?",
+        "fr": "Je n'ai pas bien compris le titre de la tâche, tu peux reformuler ?",
+        "en": "I did not quite catch the task's title, could you rephrase?",
+    },
+    "task_confirm_prompt_with_due": {
+        "vi": 'Tạo công việc "{title}" hạn {due} ở {project}?',
+        "fr": "Créer la tâche « {title} » pour le {due} sur {project} ?",
+        "en": 'Create the task "{title}" due {due} on {project}?',
+    },
+    "task_confirm_prompt_no_due": {
+        "vi": 'Tạo công việc "{title}" ở {project}?',
+        "fr": "Créer la tâche « {title} » sur {project} ?",
+        "en": 'Create the task "{title}" on {project}?',
+    },
+    "task_confirm_yes": {"vi": "Tạo", "fr": "Créer", "en": "Create"},
+    "task_confirm_no": {"vi": "Huỷ", "fr": "Annuler", "en": "Cancel"},
+    "task_created": {
+        "vi": 'Đã tạo công việc "{title}".',
+        "fr": "Tâche « {title} » créée.",
+        "en": 'Task "{title}" created.',
+    },
+    "tasks_none_open": {
+        "vi": "Không có công việc nào mở trong tuần này.",
+        "fr": "Aucune tâche ouverte cette semaine.",
+        "en": "No open task this week.",
+    },
+    "tasks_line": {
+        "vi": "{title} — hạn {due}",
+        "fr": "{title} — échéance {due}",
+        "en": "{title} — due {due}",
+    },
+    "tasks_line_no_due": {
+        "vi": "{title} — chưa có hạn",
+        "fr": "{title} — sans échéance",
+        "en": "{title} — no due date",
+    },
+    # -----------------------------------------------------------------
+    # Phase 04 — admin-only finance/payroll answers (templates only, no model text).
+    # -----------------------------------------------------------------
+    "project_income_summary": {
+        "vi": "{project} — ngân sách {budget}, đã nhận {released}, đã chi {spent}, còn lại {remaining}.",
+        "fr": "{project} — budget {budget}, reçu {released}, dépensé {spent}, restant {remaining}.",
+        "en": "{project} — budget {budget}, received {released}, spent {spent}, remaining {remaining}.",
+    },
+    "salary_summary_none": {
+        "vi": "Không có dữ liệu lương phù hợp.",
+        "fr": "Aucune donnée de paie correspondante.",
+        "en": "No matching pay data.",
+    },
+    "salary_summary_line": {
+        "vi": "{worker} — {month}: đã trả {paid} ({count} hoá đơn)",
+        "fr": "{worker} — {month} : payé {paid} ({count} facture(s))",
+        "en": "{worker} — {month}: paid {paid} ({count} invoice(s))",
+    },
+    "unpaid_invoices_none": {
+        "vi": "Không có hoá đơn khách hàng nào chưa thanh toán.",
+        "fr": "Aucune facture client impayée.",
+        "en": "No unpaid client invoice.",
+    },
+    "unpaid_invoices_line": {
+        "vi": "{project} — {number} — {amount} — quá hạn {days} ngày",
+        "fr": "{project} — {number} — {amount} — {days} jour(s) de retard",
+        "en": "{project} — {number} — {amount} — {days} day(s) late",
+    },
+    "unpaid_invoices_line_not_due": {
+        "vi": "{project} — {number} — {amount} — chưa đến hạn",
+        "fr": "{project} — {number} — {amount} — pas encore échue",
+        "en": "{project} — {number} — {amount} — not yet due",
+    },
+    "audit_summary_none": {
+        "vi": "Tuần này chưa có ai hỏi trợ lý.",
+        "fr": "Personne n'a sollicité l'assistant cette semaine.",
+        "en": "No one asked the assistant this week.",
+    },
+    "audit_summary_line": {
+        "vi": "{user} — {total} câu hỏi, {refused} bị từ chối",
+        "fr": "{user} — {total} question(s), {refused} refusée(s)",
+        "en": "{user} — {total} question(s), {refused} refused",
+    },
+    "resolve_project_prompt": {
+        "vi": "Bạn muốn nói về công trình nào?",
+        "fr": "De quel chantier veux-tu parler ?",
+        "en": "Which project do you mean?",
+    },
+    "resolve_project_none": {
+        "vi": "Bạn chưa có công trình nào trong công ty này.",
+        "fr": "Tu n'as aucun chantier dans cette entreprise.",
+        "en": "You have no project in this company.",
+    },
 }
 
 #: Human-readable label per intent, per language — used by the "clarify the top-2
@@ -361,6 +544,24 @@ INTENT_LABELS: dict[str, dict[str, str]] = {
     "move_equipment": {"vi": "Di chuyển dụng cụ", "fr": "Déplacer un outil", "en": "Move a tool"},
     "question": {"vi": "Câu hỏi khác", "fr": "Une question", "en": "A question"},
     "chit_chat": {"vi": "Trò chuyện", "fr": "Discuter", "en": "Just chat"},
+    "ask_project_income": {
+        "vi": "Tài chính công trình",
+        "fr": "Finances du chantier",
+        "en": "Project finances",
+    },
+    "ask_salary": {"vi": "Lương của một người", "fr": "Salaire d'une personne", "en": "Someone's pay"},
+    "ask_own_salary": {"vi": "Lương của tôi", "fr": "Mon salaire", "en": "My pay"},
+    "ask_roster": {"vi": "Ai có mặt hôm nay", "fr": "Qui est présent aujourd'hui", "en": "Who's on site today"},
+    "log_attendance": {"vi": "Khai công", "fr": "Déclarer une présence", "en": "Log attendance"},
+    "validate_attendance": {"vi": "Duyệt công", "fr": "Valider des pointages", "en": "Validate attendance"},
+    "create_task": {"vi": "Tạo công việc", "fr": "Créer une tâche", "en": "Create a task"},
+    "ask_tasks": {"vi": "Công việc mở", "fr": "Tâches ouvertes", "en": "Open tasks"},
+    "ask_audit": {"vi": "Ai đã hỏi gì", "fr": "Qui a demandé quoi", "en": "Who asked what"},
+    "ask_unpaid_invoices": {
+        "vi": "Hoá đơn khách chưa thanh toán",
+        "fr": "Factures clients impayées",
+        "en": "Unpaid client invoices",
+    },
 }
 if set(INTENT_LABELS) != set(INTENTS):
     raise RuntimeError("INTENT_LABELS and INTENTS have drifted apart.")

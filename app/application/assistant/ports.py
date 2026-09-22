@@ -9,7 +9,7 @@ application layer (only the infrastructure adapter — `jev_client.py` — touch
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeVar
+from typing import Any, Optional, Protocol, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -52,8 +52,18 @@ class MessagePosterPort(Protocol):
         the same choice can never both dispatch."""
         ...
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
-        """Last ``limit`` text messages of a channel, oldest first (S0 chat history)."""
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+        """Last ``limit`` messages of a channel the assistant was addressed by/as, oldest
+        first (S0 chat history) — never other chat in the channel (D18)."""
+        ...
+
+
+class ProjectCompanyReaderPort(Protocol):
+    """The company that owns a project — resolves ``ChannelScope.company_id`` for a
+    ``project:<id>`` channel."""
+
+    def project_company_id(self, project_id: UUID) -> Optional[UUID]:
+        """``None`` when the project does not exist or has no company yet."""
         ...
 
 

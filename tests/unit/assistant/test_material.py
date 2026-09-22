@@ -28,7 +28,7 @@ import pytest
 from app.application.assistant.features.material import MaterialFeature
 from app.application.assistant.jobs_repo import AssistantJobRecord
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import MaterialIdent, ProductCandidate, ProductSearchResult
+from app.application.assistant.models import ChannelScope, MaterialIdent, ProductCandidate, ProductSearchResult
 from app.application.bibliotheque.create_product_usecase import CreateProductUseCase
 from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
 from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
@@ -119,7 +119,7 @@ class FakeMessageRepo:
             ai_trace_id=message.ai_trace_id,
         )
 
-    def list_recent_text(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
         return []
 
 
@@ -138,6 +138,9 @@ class FakeProjectRepo:
 class FakeAuthzReader:
     def project_company_id(self, project_id: UUID) -> Optional[UUID]:
         return None
+
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        return False
 
 
 class RecordingFetchImage:
@@ -209,6 +212,11 @@ class World:
             upload_image_usecase=self.upload_image_usecase,
         )
 
+    def default_scope(self) -> ChannelScope:
+        return ChannelScope(
+            kind="company", company_id=self.company_id, project_id=None, is_admin_channel=False, asker_id=self.user_id
+        )
+
     def post_photo(self, photo_bytes: bytes = _PHOTO_BYTES) -> UUID:
         key = f"chat/{uuid4()}"
         self.storage.put(key, io.BytesIO(photo_bytes), content_type="image/jpeg")
@@ -230,7 +238,12 @@ class World:
         """Runs `feature.run()` (already scripted with an ident answer) through to job
         creation, and returns the freshly created `find_product` job."""
         outcome = self.feature.run(
-            user_id=self.user_id, message_id=message_id, lang="fr", messenger=self.messenger, trace_id="t1"
+            user_id=self.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=self.messenger,
+            trace_id="t1",
+            scope=self.default_scope(),
         )
         assert outcome == "queued"
         jobs = self.job_repo.list_recent_for_user(self.user_id, limit=1)
@@ -301,7 +314,12 @@ class TestJobCreation:
         world.vision._json_answers = [_ident()]
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         jobs = world.job_repo.list_recent_for_user(world.user_id)
@@ -311,6 +329,39 @@ class TestJobCreation:
         job_status = next(m for m in world.last_replies() if m.content_type == "job_status")
         assert job_status.payload["state"] == "queued"
         assert "cherche" in job_status.payload["text"].lower()
+
+
+class TestChannelRoundTrip:
+    """Phase 03's answer to phase 01/02's open question 2: the async `find_product` job
+    carries the originating channel, and `on_result` posts back into it."""
+
+    def test_job_carries_the_channel_key_and_on_result_posts_back_into_it(self, world: World) -> None:
+        channel = ChannelRef(kind="project", id=uuid4())
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+
+        world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=ChannelScope(
+                kind="project",
+                company_id=world.company_id,
+                project_id=channel.id,
+                is_admin_channel=False,
+                asker_id=world.user_id,
+            ),
+        )
+
+        job = world.job_repo.list_recent_for_user(world.user_id, limit=1)[0]
+        assert job.channel_key == channel.key
+
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/produit")])
+        posted = [m for m in world.last_replies() if m.channel == channel]
+        assert posted, "on_result should have posted into the job's originating channel"
 
 
 class TestConfirmed:
@@ -423,7 +474,12 @@ class TestCacheHitBySha:
 
         message_id = world.post_photo()
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
@@ -440,11 +496,52 @@ class TestDedupeByPhotoHash:
 
         second_message_id = world.post_photo()
         outcome = world.feature.run(
-            user_id=world.user_id, message_id=second_message_id, lang="fr", messenger=world.messenger, trace_id="t3"
+            user_id=world.user_id,
+            message_id=second_message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t3",
+            scope=world.default_scope(),
         )
 
         assert outcome == "asked"
         assert len(world.job_repo.list_recent_for_user(world.user_id)) == 1
+
+
+class TestNullChannelKeyDropsTheReply:
+    """M1: a job queued before `channel_key` existed (or with an unparsable one, e.g.
+    the retired `assistant:` kind) has nowhere safe to post — the reply is dropped and
+    the job is still marked processed, rather than resurrecting the dead fallback
+    channel."""
+
+    def test_null_channel_key_drops_the_reply_and_marks_processed(self, world: World) -> None:
+        job = world.job_repo.add(
+            job_type="find_product",
+            user_id=world.user_id,
+            project_hint=None,
+            lang="fr",
+            params={
+                "ident": _ident().model_dump(),
+                "search_queries": ["perceuse bosch 18v"],
+                "company_id": str(world.company_id),
+                "photo_sha256": _sha(_PHOTO_BYTES),
+                "message_id": str(uuid4()),
+            },
+            channel_key=None,
+        )
+        world.job_repo.update_result(
+            job.id,
+            status="done",
+            result=ProductSearchResult(
+                status="done", candidates=[_candidate("https://www.leroymerlin.fr/p/1")]
+            ).model_dump(),
+        )
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        assert world.last_replies() == []
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
 
 
 class TestIdempotentOnResult:
@@ -536,6 +633,7 @@ class TestDefenseInDepthPickCompanyForeignCompany:
             lang="fr",
             messenger=world.messenger,
             trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert handled is True
@@ -546,13 +644,38 @@ class TestDefenseInDepthPickCompanyForeignCompany:
         assert total == 0
 
 
+class TestChannelBoundCompanyResolution:
+    """NEW-H1: `_resolve_company` must resolve to the channel's own company (Q1), never
+    to another company the asker also belongs to — the same cross-tenant enumeration
+    fixed for equipment/router (H2) also let this feature start a `find_product` job,
+    and later post its result, under a foreign tenant's `company_id`."""
+
+    def test_never_resolves_to_a_foreign_company_the_asker_also_belongs_to(self, world: World) -> None:
+        other_company_id = uuid4()
+        # The asker belongs to BOTH world.company_id (the channel's own) and a second
+        # company — mirrors a real multi-company user (same setup as H2's equipment test).
+        world.feature._company_access = FakeCompanyAccessRepo([world.company_id, other_company_id])
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+
+        job = world.start_search(message_id)
+
+        assert job.params["company_id"] == str(world.company_id)
+        assert job.params["company_id"] != str(other_company_id)
+
+
 class TestLowConfidenceIdentification:
     def test_asks_for_a_clearer_photo(self, world: World) -> None:
         message_id = world.post_photo()
         world.vision._json_answers = [_ident(confidence=0.2)]
 
         world.feature.run(
-            user_id=world.user_id, message_id=message_id, lang="fr", messenger=world.messenger, trace_id="t1"
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
         )
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
