@@ -250,6 +250,10 @@ def superadmin_token(doc_client, doc_app):
     return _login(doc_client, doc_app._doc_superadmin_email, doc_app._doc_superadmin_password)
 
 
+def _uploaders_url(project_id: str) -> str:
+    return f"/api/v1/projects/{project_id}/documents/uploaders"
+
+
 # ===========================================================================
 # LIST  GET /api/v1/projects/<pid>/documents
 # ===========================================================================
@@ -1018,3 +1022,30 @@ class TestCrossProjectDownloadAdversarial:
         # against project B context; the guard must have short-circuited first)
         data = resp.get_json()
         assert data.get("error") == "NOT_FOUND"
+
+
+# ===========================================================================
+# UPLOADERS  GET /api/v1/projects/<pid>/documents/uploaders
+# ===========================================================================
+
+
+class TestListDocumentUploaders:
+    def test_200_lists_uploaders_including_an_unassigned_one(self, doc_client, owner_token, superadmin_token, doc_app):
+        """The platform-ops user is not assigned to the project, yet owns documents in it."""
+        project_id = doc_app._doc_project_id
+        _upload_doc(doc_client, project_id, owner_token)
+        _upload_doc(doc_client, project_id, superadmin_token)
+
+        resp = doc_client.get(_uploaders_url(project_id), headers=_auth(owner_token))
+
+        assert resp.status_code == 200
+        items = resp.get_json()["items"]
+        user_ids = [item["user_id"] for item in items]
+        assert len(user_ids) == len(set(user_ids))
+        names = {item["display_name"] for item in items}
+        assert doc_app._doc_owner_email in names
+        assert doc_app._doc_superadmin_email in names
+
+    def test_403_member_cannot_list_uploaders(self, doc_client, member_token, doc_app):
+        resp = doc_client.get(_uploaders_url(doc_app._doc_project_id), headers=_auth(member_token))
+        assert resp.status_code == 403

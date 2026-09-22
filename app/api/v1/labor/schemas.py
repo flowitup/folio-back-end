@@ -376,7 +376,11 @@ class MonthlyWorkerSubRowResponse(BaseModel):
     worker_id: str
     worker_name: str
     days_worked: float
+    # Priced attendance + bonus_cost — the same "earned" figure the per-worker
+    # summary reports for that month.
     total_cost: float
+    # Share of total_cost earned by converting banked hours into paid days.
+    bonus_cost: float
 
 
 class MonthlySummaryRowResponse(BaseModel):
@@ -388,8 +392,10 @@ class MonthlySummaryRowResponse(BaseModel):
 
     year: int
     month: int
+    # Bonus days are not attendance: they raise total_cost, never total_days.
     total_days: float
     total_cost: float
+    total_bonus_cost: float
     workers: List[MonthlyWorkerSubRowResponse]
 
 

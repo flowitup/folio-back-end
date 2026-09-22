@@ -34,8 +34,17 @@ class UpdateTaskSchema(BaseModel):
 
 
 class MoveTaskSchema(BaseModel):
-    """Atomic drag-drop endpoint payload."""
+    """Atomic drag-drop endpoint payload.
+
+    The neighbours describe the gap the card is dropped into, in the lane named
+    by `status` — the same lane the card already sits in when it is only
+    reordered. Sending neither appends the card to the end of that lane.
+    """
 
     status: str = Field(pattern="^(backlog|todo|in_progress|blocked|done)$")
-    before_id: Optional[UUID] = None
-    after_id: Optional[UUID] = None
+    before_id: Optional[UUID] = Field(
+        default=None, description="Task that ends up directly ABOVE the moved one; null when dropped at the top."
+    )
+    after_id: Optional[UUID] = Field(
+        default=None, description="Task that ends up directly BELOW the moved one; null when dropped at the end."
+    )

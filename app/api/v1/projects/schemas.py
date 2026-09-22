@@ -60,6 +60,10 @@ class ProjectResponse(BaseModel):
     # released_funds and labor invoices (the latter settle the accrual, they are not
     # extra cost). Refunds net down.
     spent: float = 0
+    # The same figure the invoice list adds up to: every spend invoice (labor,
+    # materials_services, others) minus every credit note, with released_funds left out.
+    # Unlike `spent` it carries no accrual, so wages logged but not yet paid are absent.
+    spent_invoiced: float = 0
     # Share of spend funded with company money (the credit line). Same rule as the
     # Expense page's "spent by company" KPI, so the two always agree.
     spent_by_credits: float = 0
@@ -67,7 +71,9 @@ class ProjectResponse(BaseModel):
     spent_personal: float = 0
     # Labor accrued from attendance entries, settled by labor-type invoices.
     # labor_unpaid is owed to workers — not spent by anyone yet, so it sits outside
-    # both spent_by_credits and spent_personal.
+    # both spent_by_credits and spent_personal. It reconciles per worker (the sum of
+    # each worker's own shortfall, floored at zero, with worker-less labor invoices
+    # settling nobody), so it is not labor_accrued - labor_paid.
     labor_accrued: float = 0
     labor_paid: float = 0
     labor_unpaid: float = 0

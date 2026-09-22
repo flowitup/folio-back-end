@@ -250,10 +250,21 @@ class BillingDocumentResponse:
     issuer_bic: Optional[str] = None
     issuer_logo_url: Optional[str] = None
     source_devis_id: Optional[UUID] = None
+    # Mirror of source_devis_id seen from the devis: the facture that was created
+    # from it. None on a facture and on a devis nobody converted yet, which is what
+    # tells a client the conversion is still on offer.
+    converted_to_facture_id: Optional[UUID] = None
 
     @staticmethod
-    def from_entity(doc: BillingDocument) -> "BillingDocumentResponse":
-        """Build response DTO from a domain entity."""
+    def from_entity(
+        doc: BillingDocument,
+        converted_to_facture_id: Optional[UUID] = None,
+    ) -> "BillingDocumentResponse":
+        """Build response DTO from a domain entity.
+
+        The conversion link is not carried by the entity — the caller resolves it
+        and passes it in.
+        """
         item_responses = [
             ItemResponse(
                 description=it.description,
@@ -300,6 +311,7 @@ class BillingDocumentResponse:
             issuer_bic=doc.issuer_bic,
             issuer_logo_url=doc.issuer_logo_url,
             source_devis_id=doc.source_devis_id,
+            converted_to_facture_id=converted_to_facture_id,
         )
 
 

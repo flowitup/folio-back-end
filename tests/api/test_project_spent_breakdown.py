@@ -466,7 +466,7 @@ def test_labor_invoice_settles_accrual_without_inflating_total(invitation_app, c
 
     with invitation_app.app_context():
         pid = credit_project["project_id"]
-        _add_labor_entries(db.session, pid, days=3)  # accrues 600
+        worker = _add_labor_entries(db.session, pid, days=3)  # accrues 600
 
         before = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert before.total == pytest.approx(Decimal("600"))
@@ -478,6 +478,7 @@ def test_labor_invoice_settles_accrual_without_inflating_total(invitation_app, c
             number="CS-LAB-1",
             amount=250,
             type="labor",
+            worker_id=worker.id,
             payment_method_id=credit_project["regular_pm_id"],
         )
 
@@ -510,13 +511,14 @@ def test_unpaid_floors_at_zero_when_workers_are_overpaid(invitation_app, credit_
 
     with invitation_app.app_context():
         pid = credit_project["project_id"]
-        _add_labor_entries(db.session, pid, days=1)  # accrues 200
+        worker = _add_labor_entries(db.session, pid, days=1)  # accrues 200
         _add_invoice(
             db.session,
             pid,
             number="CS-LAB-2",
             amount=500,
             type="labor",
+            worker_id=worker.id,
             payment_method_id=credit_project["regular_pm_id"],
         )
 
@@ -530,13 +532,14 @@ def test_company_paid_labor_invoice_is_credit_not_personal(invitation_app, credi
 
     with invitation_app.app_context():
         pid = credit_project["project_id"]
-        _add_labor_entries(db.session, pid, days=2)  # 400
+        worker = _add_labor_entries(db.session, pid, days=2)  # 400
         _add_invoice(
             db.session,
             pid,
             number="CS-LAB-3",
             amount=150,
             type="labor",
+            worker_id=worker.id,
             payment_method_id=credit_project["company_pm_id"],
         )
 
@@ -580,9 +583,13 @@ def test_reconciliation_invariant_holds_on_mixed_data(invitation_app, credit_pro
         company = credit_project["company_pm_id"]
         cash = credit_project["regular_pm_id"]
 
-        _add_labor_entries(db.session, pid, days=4)  # 800 accrued
-        _add_invoice(db.session, pid, number="CS-M1", amount=1000, type="labor", payment_method_id=company)
-        _add_invoice(db.session, pid, number="CS-M2", amount=90, type="labor", payment_method_id=cash)
+        worker = _add_labor_entries(db.session, pid, days=4)  # 800 accrued
+        _add_invoice(
+            db.session, pid, number="CS-M1", amount=1000, type="labor", worker_id=worker.id, payment_method_id=company
+        )
+        _add_invoice(
+            db.session, pid, number="CS-M2", amount=90, type="labor", worker_id=worker.id, payment_method_id=cash
+        )
         _add_invoice(db.session, pid, number="CS-M3", amount=400, type="materials_services", payment_method_id=company)
         _add_invoice(db.session, pid, number="CS-M4", amount=250, type="materials_services", payment_method_id=cash)
         _add_invoice(db.session, pid, number="CS-M5", amount=75, type="others", payment_method_id=cash)
@@ -598,6 +605,9 @@ def test_reconciliation_invariant_holds_on_mixed_data(invitation_app, credit_pro
         assert r.labor_paid == pytest.approx(Decimal("1090"))
         assert r.labor_unpaid == Decimal("0")
         assert r.total == pytest.approx(Decimal("1090") + Decimal("400") + Decimal("250") + Decimal("75"))
+        # The ledger figure sums the invoices and nothing else — here every euro of labor
+        # was invoiced, so it lands on the same number as `total`.
+        assert r.invoiced == pytest.approx(r.total)
 
 
 def test_wages_paid_without_logged_attendance_still_count_as_spend(invitation_app, credit_project):
@@ -625,3 +635,98 @@ def test_wages_paid_without_logged_attendance_still_count_as_spend(invitation_ap
         assert r.labor_unpaid == Decimal("0")
         assert r.total == pytest.approx(Decimal("700"))
         assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+
+
+def test_worker_less_labor_invoice_settles_nobody(invitation_app, credit_project):
+    """A labor payment with no worker recorded cannot cancel anyone's due.
+
+    There is no worker to credit it to, so it is money out on top of what is still
+    owed — exactly what the labor tab shows, and what the old project-wide netting hid.
+    """
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_labor_entries(db.session, pid, days=3)  # 600 accrued, by one worker
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-LAB-ORPHAN",
+            amount=250,
+            type="labor",
+            payment_method_id=credit_project["regular_pm_id"],
+        )
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.labor_accrued == pytest.approx(Decimal("600"))
+        assert r.labor_paid == pytest.approx(Decimal("250"))
+        assert r.labor_unpaid == pytest.approx(Decimal("600"))
+        assert r.total == pytest.approx(Decimal("850"))
+        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+
+
+def test_unpaid_is_reconciled_per_worker_not_project_wide(invitation_app, credit_project):
+    """Overpaying one worker must not erase what another is still owed."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        cash = credit_project["regular_pm_id"]
+        alice = _add_labor_entries(db.session, pid, days=2, name="Alice")  # 400 accrued
+        bob = _add_labor_entries(db.session, pid, days=3, name="Bob")  # 600 accrued
+
+        _add_invoice(
+            db.session, pid, number="CS-W1", amount=900, type="labor", worker_id=alice.id, payment_method_id=cash
+        )
+        _add_invoice(
+            db.session, pid, number="CS-W2", amount=100, type="labor", worker_id=bob.id, payment_method_id=cash
+        )
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.labor_accrued == pytest.approx(Decimal("1000"))
+        assert r.labor_paid == pytest.approx(Decimal("1000"))
+        # Alice is 500 over, Bob is 500 short. Netting project-wide would report 0 owed;
+        # Bob is still owed 500.
+        assert r.labor_unpaid == pytest.approx(Decimal("500"))
+        assert r.total == pytest.approx(Decimal("1500"))
+        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+
+
+def test_invoiced_is_the_invoice_ledger_without_accruals(invitation_app, credit_project):
+    """`invoiced` must equal what the invoice list adds up to on screen.
+
+    Spend invoices minus credit notes, released_funds excluded, and no accrued wage that
+    was never invoiced — that last part is what makes it differ from `total`.
+    """
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        cash = credit_project["regular_pm_id"]
+        worker = _add_labor_entries(db.session, pid, days=3)  # 600 accrued, 200 invoiced below
+
+        _add_invoice(
+            db.session, pid, number="CS-INV-1", amount=200, type="labor", worker_id=worker.id, payment_method_id=cash
+        )
+        _add_invoice(db.session, pid, number="CS-INV-2", amount=500, type="materials_services", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-INV-3", amount=80, type="others", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-INV-4", amount=-50, type="return", payment_method_id=cash)
+        _add_invoice(db.session, pid, number="CS-INV-5", amount=90000, type="released_funds")
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.invoiced == pytest.approx(Decimal("730"))
+        # `total` adds the 400 still owed to the worker, which no invoice records yet.
+        assert r.total == pytest.approx(Decimal("1130"))
+
+
+def test_invoiced_is_zero_for_a_project_with_only_accruals(invitation_app, credit_project):
+    """Logged days nobody has been paid for are a cost, but they are not a ledger entry."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_labor_entries(db.session, pid, days=2)
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.invoiced == Decimal("0")
+        assert r.total == pytest.approx(Decimal("400"))

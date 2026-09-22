@@ -101,3 +101,36 @@ class TestConvertDevisToFacture:
             json={},
         )
         assert resp.status_code == 401
+
+
+class TestConvertedToFactureId:
+    """The devis carries the facture it became, so a client stops offering the conversion."""
+
+    def test_devis_carries_the_facture_id_after_conversion(self, inv_client, billing_token, seeded_accepted_devis):
+        devis_id = seeded_accepted_devis["id"]
+        assert seeded_accepted_devis["converted_to_facture_id"] is None
+
+        convert = inv_client.post(
+            f"/api/v1/billing-documents/{devis_id}/convert-to-facture",
+            json={},
+            headers=_auth(billing_token),
+        )
+        assert convert.status_code == 201
+        facture = convert.get_json()
+        assert facture["converted_to_facture_id"] is None  # a facture is never a conversion source
+
+        detail = inv_client.get(f"/api/v1/billing-documents/{devis_id}", headers=_auth(billing_token))
+        assert detail.status_code == 200
+        assert detail.get_json()["converted_to_facture_id"] == facture["id"]
+
+        listing = inv_client.get("/api/v1/billing-documents?kind=devis", headers=_auth(billing_token))
+        assert listing.status_code == 200
+        listed = {d["id"]: d["converted_to_facture_id"] for d in listing.get_json()["items"]}
+        assert listed[devis_id] == facture["id"]
+
+    def test_unconverted_devis_carries_null(self, inv_client, billing_token, seeded_accepted_devis):
+        detail = inv_client.get(
+            f"/api/v1/billing-documents/{seeded_accepted_devis['id']}", headers=_auth(billing_token)
+        )
+        assert detail.status_code == 200
+        assert detail.get_json()["converted_to_facture_id"] is None

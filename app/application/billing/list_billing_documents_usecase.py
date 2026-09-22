@@ -71,8 +71,14 @@ class ListBillingDocumentsUseCase:
             limit=limit,
             offset=offset,
         )
+        # One batch query for the whole page: a devis carries the facture it became.
+        converted = (
+            self._doc_repo.map_facture_ids_by_source_devis([d.id for d in docs])
+            if kind == BillingDocumentKind.DEVIS
+            else {}
+        )
         return ListBillingDocumentsResult(
-            items=[BillingDocumentResponse.from_entity(d) for d in docs],
+            items=[BillingDocumentResponse.from_entity(d, converted.get(d.id)) for d in docs],
             total=total,
             limit=limit,
             offset=offset,

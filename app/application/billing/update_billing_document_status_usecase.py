@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from app.application.billing._helpers import _assert_billing_doc_access
+from app.application.billing._helpers import _assert_billing_doc_access, _converted_facture_id
 from app.application.billing.dtos import BillingDocumentResponse, UpdateStatusInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
@@ -69,7 +69,7 @@ class UpdateBillingDocumentStatusUseCase:
 
         self._handle_funds_release(saved, old_status, inp.new_status)
 
-        return BillingDocumentResponse.from_entity(saved)
+        return BillingDocumentResponse.from_entity(saved, _converted_facture_id(self._doc_repo, saved))
 
     def _handle_funds_release(
         self,

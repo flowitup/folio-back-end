@@ -119,10 +119,14 @@ class UpdateTaskUseCase:
 class MoveTaskUseCase:
     """Drag-drop atomic update: change status and/or position.
 
-    `before_id` / `after_id` express the drop target as neighbours; the use
-    case computes a position between them. If only one neighbour is given,
-    the new position is bumped up/down by `POSITION_STEP`. If neither is
-    given, the task goes to the end of the lane.
+    The drop target is expressed as its neighbours in the destination lane:
+    `before_id` is the card that ends up above the moved one, `after_id` the
+    card below it. Both are optional — with neither the task lands at the end
+    of the lane. The position is always recomputed against the lane as it is
+    stored, so a reorder inside the same lane moves the card just as a move
+    between lanes does. When no integer fits between the two neighbours the
+    lane is renumbered with even steps, because handing out a duplicate
+    position would leave the order to the creation date and lose the drop.
     """
 
     def __init__(self, repo: ITaskRepository) -> None:
@@ -139,25 +143,55 @@ class MoveTaskUseCase:
         if task is None:
             raise TaskNotFoundError(f"Task {task_id} not found")
 
-        before = self._repo.find_by_id(before_id) if before_id else None
-        after = self._repo.find_by_id(after_id) if after_id else None
+        # The destination lane without the moved card, ordered by position.
+        lane = [t for t in self._repo.list_by_project(task.project_id, new_status) if t.id != task.id]
+        index = _drop_index(lane, before_id, after_id)
 
-        if before and after:
-            # Drop between two cards.
-            new_pos = (before.position + after.position) // 2
-            if new_pos == before.position:
-                # Gap collapsed — nudge target neighbour and rebalance later if needed.
-                new_pos = before.position + 1
-        elif before:
-            new_pos = before.position + POSITION_STEP
-        elif after:
-            new_pos = max(0, after.position - POSITION_STEP)
+        above = lane[index - 1].position if index > 0 else None
+        below = lane[index].position if index < len(lane) else None
+
+        if above is not None and below is not None:
+            new_pos = (above + below) // 2
+            needs_renumber = not above < new_pos < below
+        elif above is not None:
+            new_pos = above + POSITION_STEP
+            needs_renumber = False
+        elif below is not None:
+            new_pos = below - POSITION_STEP
+            needs_renumber = new_pos < 0
         else:
-            new_pos = self._repo.max_position(task.project_id, new_status) + POSITION_STEP
+            new_pos = POSITION_STEP
+            needs_renumber = False
+
+        if needs_renumber:
+            new_pos = self._renumber(lane, index)
 
         task.status = new_status
         task.position = new_pos
         return self._repo.update(task)
+
+    def _renumber(self, lane: list[Task], index: int) -> int:
+        """Space the lane out again and return the free slot at *index*."""
+        for slot, sibling in enumerate(lane):
+            position = (slot if slot < index else slot + 1) * POSITION_STEP + POSITION_STEP
+            if sibling.position != position:
+                sibling.position = position
+                self._repo.update(sibling)
+        return index * POSITION_STEP + POSITION_STEP
+
+
+def _drop_index(lane: list[Task], before_id: Optional[UUID], after_id: Optional[UUID]) -> int:
+    """Index the moved card takes in *lane*, from the neighbours the client sent.
+
+    A neighbour that is not in this lane any more (stale client view) is
+    ignored; with no usable neighbour the card is appended.
+    """
+    positions = {t.id: i for i, t in enumerate(lane)}
+    if before_id is not None and before_id in positions:
+        return positions[before_id] + 1
+    if after_id is not None and after_id in positions:
+        return positions[after_id]
+    return len(lane)
 
 
 class DeleteTaskUseCase:

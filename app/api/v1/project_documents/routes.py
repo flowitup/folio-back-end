@@ -24,7 +24,11 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.api.openapi import openapi_doc
 from app.api.v1.project_documents import project_documents_bp
-from app.api.v1.project_documents.schemas import ListQueryParams
+from app.api.v1.project_documents.schemas import (
+    DocumentUploaderSchema,
+    DocumentUploadersResponse,
+    ListQueryParams,
+)
 from app.api.v1.projects.decorators import (
     _effective_perms_for,
     _has_permission,
@@ -503,6 +507,31 @@ def update_document_tags(project_id: str, document_id: str):
 
     updated = container.project_document_repository.find_by_id(doc_uuid)
     return jsonify(_serialize(updated)), 200
+
+
+@project_documents_bp.route("/projects/<project_id>/documents/uploaders", methods=["GET"])
+@openapi_doc(
+    summary="List the distinct uploaders of a project's documents",
+    responses={200: DocumentUploadersResponse},
+    tags=["project_documents"],
+)
+@jwt_required()
+@require_permission("project:update")
+@require_project_access(write=True, permission="project:update")
+def list_project_document_uploaders(project_id: str):
+    """Return who actually uploaded documents here, for the uploader filter.
+
+    Read from the documents, not from the project assignments: someone may hold
+    the documents through a company role without ever being assigned, and
+    filtering on them must still be offered.
+    """
+    container = get_container()
+    rows = container.project_document_repository.list_uploaders_for_project(UUID(project_id))
+    items = [
+        DocumentUploaderSchema(user_id=user_id, display_name=display_name or email)
+        for user_id, display_name, email in rows
+    ]
+    return jsonify(DocumentUploadersResponse(items=items).model_dump(mode="json")), 200
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/tags", methods=["GET"])

@@ -1,11 +1,11 @@
 """List workers use case."""
 
 from dataclasses import dataclass
-from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository, IWorkerRateChangeRepository
+from app.domain.time import business_today
 
 
 @dataclass
@@ -58,7 +58,9 @@ class ListWorkersUseCase:
             worker_ids = [w.id for w in workers]
             rate_map = self._rate_change_repo.list_by_workers(worker_ids)
 
-        today = date.today()
+        # Business calendar, not UTC: a change effective today must apply from the
+        # first minute of the site's day, not from 01:00/02:00 local.
+        today = business_today()
 
         def _resolve_current_rate(worker) -> float:
             """Return the latest rate change effective <= today, or base rate."""

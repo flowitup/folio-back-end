@@ -113,6 +113,10 @@ class InMemoryBillingDocumentRepository:
                 return doc
         return None
 
+    def map_facture_ids_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, UUID]:
+        wanted = set(devis_ids)
+        return {d.source_devis_id: d.id for d in self._store.values() if d.source_devis_id in wanted}
+
     def aggregate_item_suggestions(self, user_id, category, q, limit):
         """In-memory aggregation — delegates to the SQLite path of the real repo."""
         from collections import defaultdict

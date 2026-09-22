@@ -40,6 +40,10 @@ class MonthlyWorkerSubRow:
     # Same fractional semantics as LaborSummaryRow.days_worked above.
     days_worked: Decimal
     total_cost: Decimal
+    banked_hours: int = 0  # sum of supplement_hours for this worker in this month
+    daily_rate: Decimal = Decimal(
+        "0"
+    )  # resolved bonus rate — worker's latest rate effective on or before the month's last day
 
 
 @dataclass
@@ -76,9 +80,9 @@ class MonthlyLaborSummaryRow:
     sub-rows so the FE can render them inline under the month header
     without an extra round trip.
 
-    Bonus-day cost is intentionally NOT included here — those are derived
-    in the per-worker use case from banked_hours, which doesn't roll up
-    cleanly into monthly buckets.
+    ``total_cost`` is the priced attendance only; the banked-hours bonus is
+    priced by the use case from each sub-row's banked_hours, exactly as the
+    per-worker summary does, so both endpoints report one earned total.
     """
 
     year: int

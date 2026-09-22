@@ -240,9 +240,11 @@ def create_billing_document():
 @require_billing_document_owner
 def get_billing_document(doc_id: str, billing_doc):
     """Retrieve a single billing document by ID (ownership enforced by decorator)."""
+    from app.application.billing._helpers import _converted_facture_id
     from app.application.billing.dtos import BillingDocumentResponse
 
-    return jsonify(_doc_to_json(BillingDocumentResponse.from_entity(billing_doc)))
+    converted_id = _converted_facture_id(get_container().billing_document_repo, billing_doc)
+    return jsonify(_doc_to_json(BillingDocumentResponse.from_entity(billing_doc, converted_id)))
 
 
 # ---------------------------------------------------------------------------

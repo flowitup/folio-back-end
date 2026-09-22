@@ -18,3 +18,16 @@ class ListQueryParams(BaseModel):
     order: Literal["asc", "desc"] = "desc"
     page: int = Field(default=1, ge=1, le=10_000)  # cap OFFSET DoS surface (M2)
     per_page: int = Field(default=25, ge=1, le=100)
+
+
+class DocumentUploaderSchema(BaseModel):
+    """One person who has a document in this project."""
+
+    user_id: UUID
+    display_name: str  # the account's display name, or its e-mail when it has none
+
+
+class DocumentUploadersResponse(BaseModel):
+    """GET /projects/<id>/documents/uploaders — the uploader filter's options."""
+
+    items: list[DocumentUploaderSchema]

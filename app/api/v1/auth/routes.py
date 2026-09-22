@@ -37,6 +37,7 @@ from app.api.v1.auth.schemas import (
     ErrorResponse,
     LogoutResponse,
 )
+from app.api.v1.labor.attendance_validation_routes import _max_backdate_days
 from app.application.ports.sms_sender import SmsSendError
 from app.application.usecases.delete_account import (
     AccountNotFoundError,
@@ -65,11 +66,16 @@ def _persistent_sessions() -> bool:
     summary="Sign-in options of this deployment", responses={200: AuthConfigResponse}, tags=["auth"], auth=False
 )
 def auth_config():
-    """Public: which sign-in the apps should offer and whether sessions persist until sign-out."""
+    """Public: which sign-in the apps should offer and whether sessions persist until sign-out.
+
+    Also carries the self-attendance backdate window so a client blocks the same
+    days the labor endpoint would refuse, whatever ops set it to.
+    """
     return jsonify(
         AuthConfigResponse(
             session="persistent" if _persistent_sessions() else "expiring",
             signup=True,
+            self_attendance_max_backdate_days=_max_backdate_days(),
         ).model_dump()
     )
 

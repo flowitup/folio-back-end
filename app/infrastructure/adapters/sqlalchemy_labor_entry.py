@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of labor entry repository."""
 
+import calendar
 from datetime import date
 from decimal import Decimal
 from typing import List, Optional
@@ -268,34 +269,43 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 month_expr.label("month"),
                 WorkerModel.id.label("worker_id"),
                 display_name.label("worker_name"),
+                WorkerModel.daily_rate.label("base_rate"),
                 func.sum(priced_days).label("days_worked"),
                 func.sum(effective_cost).label("total_cost"),
+                func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
             )
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
             .outerjoin(PersonModel, WorkerModel.person_id == PersonModel.id)
             .filter(WorkerModel.project_id == project_id, LaborEntryModel.status == "validated")
-            .group_by(year_expr, month_expr, WorkerModel.id, display_name)
+            .group_by(year_expr, month_expr, WorkerModel.id, display_name, WorkerModel.daily_rate)
             .order_by(year_expr.desc(), month_expr.desc(), display_name.asc())
         )
 
         # Bucket the (year, month, worker) granularity rows back into per-month
         # rows with their `workers` list. The DB sort guarantees that within a
         # (year, month) block the worker sub-rows arrive together, alphabetically
-        # by name. Workers who only contributed supplement-only rows (days==0
-        # AND cost==0) are skipped — they would otherwise add an empty row.
+        # by name. Workers who contributed nothing at all that month (no priced
+        # day, no cost, no banked hour) are skipped — they would otherwise add an
+        # empty row.
+        rows = query.all()
+        bonus_rates = self._bonus_rates_by_worker_month(rows)
+
         buckets: dict[tuple[int, int], MonthlyLaborSummaryRow] = {}
         order: List[tuple[int, int]] = []
-        for row in query.all():
+        for row in rows:
             key = (int(row.year), int(row.month))
             cost = Decimal(str(row.total_cost)) if row.total_cost is not None else Decimal("0")
             days = Decimal(str(row.days_worked)) if row.days_worked is not None else Decimal("0")
-            if days == 0 and cost == 0:
+            banked = int(row.banked_hours) if row.banked_hours else 0
+            if days == 0 and cost == 0 and banked == 0:
                 continue
             sub = MonthlyWorkerSubRow(
                 worker_id=row.worker_id,
                 worker_name=row.worker_name,
                 days_worked=days,
                 total_cost=cost,
+                banked_hours=banked,
+                daily_rate=bonus_rates[(row.worker_id, key)],
             )
             bucket = buckets.get(key)
             if bucket is None:
@@ -313,6 +323,43 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             bucket.total_cost += cost
 
         return [buckets[k] for k in order]
+
+    def _bonus_rates_by_worker_month(self, rows) -> dict:
+        """Map (worker_id, (year, month)) -> the rate a bonus day is worth that month.
+
+        That is the worker's latest rate change effective on or before the month's last
+        day, falling back to their base rate. ``get_summary`` resolves the bonus rate as
+        of its ``date_to``; for a month bucket that boundary is the month's last day, so
+        the monthly rollup and a summary requested for the same month price the bonus
+        identically.
+        """
+        if not rows:
+            return {}
+
+        changes: dict = {}
+        for change in (
+            self._session.query(
+                WorkerRateChangeModel.worker_id,
+                WorkerRateChangeModel.effective_date,
+                WorkerRateChangeModel.daily_rate,
+            )
+            .filter(WorkerRateChangeModel.worker_id.in_({row.worker_id for row in rows}))
+            .order_by(WorkerRateChangeModel.effective_date.desc())
+            .all()
+        ):
+            changes.setdefault(change.worker_id, []).append(change)
+
+        resolved: dict = {}
+        for row in rows:
+            key = (int(row.year), int(row.month))
+            month_end = date(key[0], key[1], calendar.monthrange(key[0], key[1])[1])
+            rate = Decimal(str(row.base_rate)) if row.base_rate is not None else Decimal("0")
+            for change in changes.get(row.worker_id, ()):
+                if change.effective_date <= month_end:
+                    rate = Decimal(str(change.daily_rate))
+                    break
+            resolved[(row.worker_id, key)] = rate
+        return resolved
 
     def list_by_project_in_range(
         self,

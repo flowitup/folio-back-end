@@ -18,6 +18,15 @@ class ProjectSpent:
     both would bill the same work twice. Whatever accrued but has not been settled is
     ``labor_unpaid``: owed to workers, not yet spent by anyone.
 
+    ``labor_unpaid`` reconciles per worker — the sum over workers of
+    ``max(0, accrued − paid)`` — so paying one worker ahead never cancels another's due,
+    and a labor invoice carrying no ``worker_id`` settles nobody. It is therefore not
+    ``labor_accrued − labor_paid``.
+
+    ``invoiced`` is the ledger figure: every non-``released_funds`` invoice, credit notes
+    included (they carry negative lines). Unlike ``total`` it contains no accrual, so it
+    equals what the invoice list adds up to on screen.
+
     Invariant, asserted by test::
 
         by_credits + personal + labor_unpaid == total
@@ -28,6 +37,7 @@ class ProjectSpent:
     """
 
     total: Decimal
+    invoiced: Decimal
     by_credits: Decimal
     personal: Decimal
     labor_accrued: Decimal

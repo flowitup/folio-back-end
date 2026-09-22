@@ -12,11 +12,12 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     WorkerNotLinkedError,
 )
+from app.domain.time import business_now
 
-# A phone ahead of server UTC (Vietnam is UTC+7, Paris UTC+1/+2) is already on
-# "tomorrow" during the last hours of the UTC day; only then is the next date accepted,
-# so nobody can pre-log a future shift in the middle of the day.
-_FORWARD_TOLERANCE_FROM_UTC_HOUR = 16
+# A phone east of the site (Vietnam is UTC+7, the site UTC+1/+2) is already on "tomorrow"
+# during the last hours of the business day; only from this business-local hour on is the
+# next date accepted, so nobody can pre-log a future shift in the middle of the day.
+_FORWARD_TOLERANCE_FROM_BUSINESS_HOUR = 18
 
 
 @dataclass
@@ -29,7 +30,7 @@ class SubmitOwnAttendanceRequest:
     note: Optional[str] = None
     # How many days back a worker may still log (1 = today or yesterday).
     max_backdate_days: int = 1
-    # Injected clock for tests; defaults to the server's UTC time.
+    # Injected clock for tests; any instant, read on the business calendar.
     now: Optional[datetime] = None
 
 
@@ -66,10 +67,12 @@ class SubmitOwnAttendanceUseCase:
         if not worker.is_active:
             raise WorkerNotFoundError(str(worker.id))
 
-        now = request.now or datetime.now(timezone.utc)
+        # The window is a business-calendar window: right after midnight on site, "today"
+        # is the new day and "yesterday" is the day that just ended, whatever UTC says.
+        now = business_now(request.now)
         today = now.date()
         earliest = today - timedelta(days=max(request.max_backdate_days, 0))
-        latest = today + timedelta(days=1) if now.hour >= _FORWARD_TOLERANCE_FROM_UTC_HOUR else today
+        latest = today + timedelta(days=1) if now.hour >= _FORWARD_TOLERANCE_FROM_BUSINESS_HOUR else today
         if not (earliest <= request.date <= latest):
             raise AttendanceDateOutOfRangeError(
                 f"Attendance can only be logged between {earliest.isoformat()} and {latest.isoformat()}"

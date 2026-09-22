@@ -101,6 +101,14 @@ class BillingDocumentRepositoryPort(Protocol):
         """
         ...
 
+    def map_facture_ids_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, UUID]:
+        """Return {devis_id: facture_id} for the devis among *devis_ids* already converted.
+
+        Unconverted devis are simply absent from the mapping. Batch form so a
+        list page resolves every conversion link in one query.
+        """
+        ...
+
     def list_by_project(self, project_id: UUID) -> list[BillingDocument]:
         """Return all billing documents linked to *project_id*, newest first.
 
