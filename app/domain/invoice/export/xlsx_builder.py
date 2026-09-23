@@ -29,7 +29,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 # Reuse the canonical EUR_FR_FORMAT constant — do not redefine.
 from app.domain.labor.export.xlsx_builder import EUR_FR_FORMAT  # noqa: F401
 
-from app.domain.invoice.export.format import TYPE_LABEL_EN
+from app.domain.invoice.export.format import TYPE_LABEL_EN, invoice_type_label
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext, TypeSubtotal
 from app.domain.entities.invoice import Invoice, InvoiceType
 
@@ -103,7 +103,7 @@ def _merge_and_write(ws: Worksheet, row: int, start_col: int, end_col: int, valu
 
 
 def _invoice_sort_key(inv: Invoice):
-    return (inv.issue_date, inv.type.value, inv.invoice_number)
+    return (inv.issue_date, inv.ledger_type.value, inv.invoice_number)
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
     data_row = hdr_row + 1
     for idx, inv in enumerate(sorted_invoices, start=1):
         item_count = len(inv.items)
-        type_label = TYPE_LABEL_EN.get(inv.type.value, inv.type.value.title())
+        type_label = invoice_type_label(inv)
         values = [
             idx,
             inv.issue_date,
@@ -431,7 +431,7 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
         InvoiceType.OTHERS,
         InvoiceType.RETURN,
     ):
-        type_invoices = [inv for inv in bundle.invoices if inv.type == invoice_type]
+        type_invoices = [inv for inv in bundle.invoices if inv.ledger_type == invoice_type]
         if not type_invoices:
             continue
         type_label = TYPE_LABEL_EN.get(invoice_type.value, invoice_type.value.replace("_", " ").title())

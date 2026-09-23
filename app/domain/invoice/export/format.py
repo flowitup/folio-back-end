@@ -16,3 +16,14 @@ TYPE_LABEL_EN = {
     "others": "Others",
     "return": "Return",
 }
+
+
+def invoice_type_label(inv) -> str:
+    """Row label for an exported invoice: its ledger type, flagged when it is a cash advance.
+
+    A cash advance is listed under Others (see Invoice.ledger_type); the suffix keeps it
+    distinguishable from a real Others expense for whoever reads the export.
+    """
+    value = inv.ledger_type.value
+    label = TYPE_LABEL_EN.get(value, value.title())
+    return f"{label} (cash advance)" if inv.is_cash_advance else label

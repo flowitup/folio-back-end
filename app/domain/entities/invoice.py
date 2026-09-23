@@ -123,6 +123,19 @@ class Invoice:
     def total_amount(self) -> Decimal:
         return sum((item.total for item in self.items), Decimal("0"))
 
+    @property
+    def ledger_type(self) -> InvoiceType:
+        """The ledger category this row is listed under.
+
+        A company cash advance is stored as a released_funds row (so the release
+        totals can leave it out and the purses can show it), but it is not a draw
+        from the bank, so ledgers and exports file it under OTHERS. Display and
+        filtering only — money aggregates keep using `type`.
+        """
+        if self.type == InvoiceType.RELEASED_FUNDS and self.is_cash_advance:
+            return InvoiceType.OTHERS
+        return self.type
+
     def with_updates(self, **kwargs: object) -> "Invoice":
         """Return a new Invoice with the given fields replaced.
 

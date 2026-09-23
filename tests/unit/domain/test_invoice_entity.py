@@ -306,3 +306,14 @@ class TestInvoiceWorkerId:
         assert updated.recipient_address == "123 Main St"
         assert updated.type == InvoiceType.LABOR
         assert updated.id == invoice.id
+
+
+class TestInvoiceLedgerType:
+    def test_cash_advance_release_is_listed_under_others(self):
+        inv = make_invoice(type=InvoiceType.RELEASED_FUNDS, is_cash_advance=True)
+        assert inv.ledger_type == InvoiceType.OTHERS
+        assert inv.type == InvoiceType.RELEASED_FUNDS
+
+    def test_plain_release_and_other_types_keep_their_type(self):
+        assert make_invoice(type=InvoiceType.RELEASED_FUNDS).ledger_type == InvoiceType.RELEASED_FUNDS
+        assert make_invoice(type=InvoiceType.LABOR).ledger_type == InvoiceType.LABOR

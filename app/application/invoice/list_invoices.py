@@ -26,10 +26,16 @@ class ListInvoicesUseCase:
         self._repo = invoice_repo
 
     def execute(self, request: ListInvoicesRequest) -> list:
+        # The type filter matches the LEDGER type: a cash advance is stored as
+        # released_funds but listed under others. The repository filters on the
+        # stored type, so an OTHERS request loads every type and narrows below.
+        repo_type = None if request.invoice_type == InvoiceType.OTHERS else request.invoice_type
         invoices = self._repo.list_by_project(
             request.project_id,
-            request.invoice_type,
+            repo_type,
             service_month=request.service_month,
             worker_id=request.worker_id,
         )
+        if request.invoice_type is not None:
+            invoices = [inv for inv in invoices if inv.ledger_type == request.invoice_type]
         return [InvoiceResponse.from_entity(inv) for inv in invoices]

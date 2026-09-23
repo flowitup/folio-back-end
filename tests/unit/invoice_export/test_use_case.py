@@ -122,25 +122,102 @@ def test_empty_range_returns_summary_only():
     assert result.mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def test_filters_by_type_filter():
-    """With type_filter=CLIENT, invoice_repo is called with type_filter arg."""
+def test_filters_by_type_filter(monkeypatch):
+    """type_filter narrows the rows in memory; the repo loads the whole range."""
     project = _make_project()
-    project_repo = MagicMock(spec=IProjectRepository)
-    project_repo.find_by_id.return_value = project
+    pid = project.id
+    release = _make_invoice(project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, invoice_number="R1")
+    labor = _make_invoice(project_id=pid, invoice_type=InvoiceType.LABOR, invoice_number="L1")
 
-    invoice_repo = MagicMock(spec=IInvoiceRepository)
-    client_inv = _make_invoice(project_id=project.id, invoice_type=InvoiceType.RELEASED_FUNDS)
-    invoice_repo.find_by_project_in_range.return_value = [client_inv]
+    captured = {}
 
-    uc = ExportInvoicesUseCase(invoice_repo=invoice_repo, project_repo=project_repo)
-    req = _base_request(project.id, type_filter=InvoiceType.RELEASED_FUNDS)
-    result = uc.execute(req)
+    def _spy(context, bundle):
+        captured["bundle"] = bundle
+        return b"PK\x03\x04stub"
 
-    # Verify the repo was called with the correct type_filter
-    call_kwargs = invoice_repo.find_by_project_in_range.call_args[1]
-    assert call_kwargs["type_filter"] == InvoiceType.RELEASED_FUNDS
-    # Result is valid xlsx
-    assert result.content[:4] == b"PK\x03\x04"
+    import app.domain.invoice.export.xlsx_builder as xlsx_builder
+
+    monkeypatch.setattr(xlsx_builder, "build_xlsx", _spy)
+
+    uc = _build_usecase(project, [release, labor])
+    uc.execute(_base_request(pid, type_filter=InvoiceType.RELEASED_FUNDS))
+
+    call_kwargs = uc._invoice_repo.find_by_project_in_range.call_args[1]
+    assert call_kwargs["type_filter"] is None
+    assert [i.invoice_number for i in captured["bundle"].invoices] == ["R1"]
+
+
+def _cash_advance(project_id: UUID, invoice_number: str = "CA1", amount: Decimal = Decimal("500.00")) -> Invoice:
+    inv = _make_invoice(
+        project_id=project_id,
+        invoice_type=InvoiceType.RELEASED_FUNDS,
+        amount=amount,
+        invoice_number=invoice_number,
+    )
+    return inv.with_updates(is_cash_advance=True)
+
+
+def _export_bundle(monkeypatch, project, invoices, **request_overrides):
+    captured = {}
+
+    def _spy(context, bundle):
+        captured["bundle"] = bundle
+        return b"PK\x03\x04stub"
+
+    import app.domain.invoice.export.xlsx_builder as xlsx_builder
+
+    monkeypatch.setattr(xlsx_builder, "build_xlsx", _spy)
+    req = _base_request(project.id, type_filter=request_overrides.pop("type_filter", None))
+    for key, value in request_overrides.items():
+        setattr(req, key, value)
+    _build_usecase(project, invoices).execute(req)
+    return captured["bundle"]
+
+
+def test_cash_advance_exports_under_others_not_released_funds(monkeypatch):
+    """A cash advance is stored as released_funds but exported as an OTHERS row."""
+    project = _make_project("Cash Advance Project")
+    pid = project.id
+    invoices = [
+        _cash_advance(pid),
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("9000.00"), invoice_number="R1"
+        ),
+        _make_invoice(project_id=pid, invoice_type=InvoiceType.OTHERS, amount=Decimal("40.00"), invoice_number="O1"),
+    ]
+
+    released = _export_bundle(monkeypatch, project, invoices, type_filter=InvoiceType.RELEASED_FUNDS)
+    assert [i.invoice_number for i in released.invoices] == ["R1"]
+    assert released.grand_total == Decimal("9000.00")
+
+    others = _export_bundle(monkeypatch, project, invoices, type_filter=InvoiceType.OTHERS)
+    assert sorted(i.invoice_number for i in others.invoices) == ["CA1", "O1"]
+    assert [(s.type, s.total_amount) for s in others.subtotals_by_type] == [(InvoiceType.OTHERS, Decimal("540.00"))]
+
+    everything = _export_bundle(monkeypatch, project, invoices)
+    assert {s.type: s.total_amount for s in everything.subtotals_by_type} == {
+        InvoiceType.RELEASED_FUNDS: Decimal("9000.00"),
+        InvoiceType.OTHERS: Decimal("540.00"),
+    }
+
+
+def test_cash_advance_stays_hidden_from_callers_without_budget(monkeypatch):
+    """Permission exclusion reads the stored type, so an Others export still drops the advance."""
+    project = _make_project("Hidden Advance Project")
+    pid = project.id
+    invoices = [
+        _cash_advance(pid),
+        _make_invoice(project_id=pid, invoice_type=InvoiceType.OTHERS, amount=Decimal("40.00"), invoice_number="O1"),
+    ]
+
+    bundle = _export_bundle(
+        monkeypatch,
+        project,
+        invoices,
+        type_filter=InvoiceType.OTHERS,
+        exclude_types=frozenset({InvoiceType.RELEASED_FUNDS}),
+    )
+    assert [i.invoice_number for i in bundle.invoices] == ["O1"]
 
 
 def test_exclude_types_drops_rows_and_their_subtotals(monkeypatch):

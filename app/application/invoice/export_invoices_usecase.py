@@ -96,23 +96,29 @@ class ExportInvoicesUseCase:
         from_d = _parse_yyyy_mm(req.from_month)
         to_d = _last_of_month(_parse_yyyy_mm(req.to_month))
 
-        # 3. Load invoices in range, optionally filtered by type
+        # 3. Load invoices in range. The type filter matches the LEDGER type, not the
+        # stored one — a cash advance is stored as released_funds but listed under
+        # others — so it is applied here rather than in the repository query.
         invoices: list[Invoice] = self._invoice_repo.find_by_project_in_range(
             project_id=req.project_id,
             date_from=from_d,
             date_to=to_d,
-            type_filter=req.type_filter,
+            type_filter=None,
         )
+        if req.type_filter is not None:
+            invoices = [i for i in invoices if i.ledger_type == req.type_filter]
+        # Permission exclusion reads the STORED type: a cash advance is financing
+        # data, hidden from callers without project:view_budget like any release.
         if req.exclude_types:
             invoices = [i for i in invoices if i.type not in req.exclude_types]
 
-        # 4. Sort deterministically: (issue_date, type.value, invoice_number)
-        invoices.sort(key=lambda inv: (inv.issue_date, inv.type.value, inv.invoice_number))
+        # 4. Sort deterministically: (issue_date, ledger type, invoice_number)
+        invoices.sort(key=lambda inv: (inv.issue_date, inv.ledger_type.value, inv.invoice_number))
 
         # 5. Aggregate per-type subtotals + grand total (Decimal-safe)
         subtotals: list[TypeSubtotal] = []
         for t in _TYPE_ORDER:
-            scoped = [i for i in invoices if i.type == t]
+            scoped = [i for i in invoices if i.ledger_type == t]
             if not scoped:
                 continue
             subtotals.append(
