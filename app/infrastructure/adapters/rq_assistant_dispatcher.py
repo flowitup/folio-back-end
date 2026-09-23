@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 QUEUE_NAME = "assistant"
 
+#: Explicit RQ job timeout — with none set, rq's own un-set default (180s) is the real
+#: timeout, firing at an arbitrary line (`JobTimeoutException` is a plain `Exception`,
+#: caught by `AssistantService`'s own generic handler, but only after the request may
+#: already be mid-write). 600s leaves headroom above the sum of every provider client's
+#: own timeout (DeepSeek/genai/Jev, each well under a minute) that a single request can
+#: chain through.
+JOB_TIMEOUT_SECONDS = 600
+
 
 class RqAssistantDispatcher:
     """Implements AssistantDispatcherPort against a real Redis-backed RQ queue.
@@ -49,19 +57,44 @@ class RqAssistantDispatcher:
             logger.info("assistant dispatch skipped (FEATURE_ASSISTANT off) message_id=%s", message_id)
             return
         try:
-            self._queue().enqueue("app.application.assistant.jobs.handle_message", str(user_id), str(message_id))
+            self._queue().enqueue(
+                "app.application.assistant.jobs.handle_message",
+                str(user_id),
+                str(message_id),
+                job_timeout=JOB_TIMEOUT_SECONDS,
+            )
         except Exception:
             logger.exception("assistant dispatch failed (message_received) message_id=%s", message_id)
 
-    def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
+    def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> bool:
+        """Returns True once the job is enqueued, False when the assistant is disabled
+        or the enqueue itself failed — ``SubmitAssistantActionUseCase`` resets the
+        choice back to unanswered and reports 503 on ``False`` instead of leaving the
+        caller with a 202 and a tap that will never actually run."""
         if not self._assistant_enabled():
             logger.info(
                 "assistant dispatch skipped (FEATURE_ASSISTANT off) message_id=%s action=%s", message_id, action
             )
-            return
+            return False
         try:
             self._queue().enqueue(
-                "app.application.assistant.jobs.handle_action", str(user_id), str(message_id), action, payload
+                "app.application.assistant.jobs.handle_action",
+                str(user_id),
+                str(message_id),
+                action,
+                payload,
+                job_timeout=JOB_TIMEOUT_SECONDS,
+                # Deterministic, keyed only on the choice's own message id (never
+                # answered twice with a different action either — `answer_choice_
+                # if_unanswered` is a one-shot atomic transition): a retry after this
+                # enqueue's own Redis ack times out (the write itself can still have
+                # gone through) reuses the SAME RQ job instead of dispatching a second,
+                # genuinely distinct one for the same tap (`SubmitAssistantActionUseCase`
+                # resets the choice to unanswered and reports 503 whenever this raises,
+                # so the client always retries on a real failure).
+                job_id=f"action:{message_id}",
             )
+            return True
         except Exception:
             logger.exception("assistant dispatch failed (action_received) message_id=%s action=%s", message_id, action)
+            return False

@@ -7,10 +7,10 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from app.application.assistant.audit_ports import AuditLogEntry
+from app.application.assistant.audit_ports import AuditLogEntry, UserAuditCount
 from app.infrastructure.database.models.assistant_audit_log import AssistantAuditLogModel
 
 
@@ -90,3 +90,21 @@ class SqlAlchemyAssistantAuditRepository:
         stmt = stmt.order_by(AssistantAuditLogModel.created_at.desc()).limit(limit)
         rows = self._session.execute(stmt).scalars().all()
         return [_to_entity(r) for r in rows]
+
+    def count_by_user_for_company(
+        self, company_id: UUID, *, from_: Optional[datetime] = None, to: Optional[datetime] = None
+    ) -> list[UserAuditCount]:
+        refused = func.sum(case((AssistantAuditLogModel.outcome == "refused", 1), else_=0))
+        stmt = (
+            select(AssistantAuditLogModel.user_id, func.count().label("total"), refused.label("refused"))
+            .where(AssistantAuditLogModel.company_id == company_id)
+            .group_by(AssistantAuditLogModel.user_id)
+        )
+        if from_ is not None:
+            stmt = stmt.where(AssistantAuditLogModel.created_at >= from_)
+        if to is not None:
+            stmt = stmt.where(AssistantAuditLogModel.created_at <= to)
+        rows = self._session.execute(stmt).all()
+        return [
+            UserAuditCount(user_id=row.user_id, total=int(row.total), refused=int(row.refused or 0)) for row in rows
+        ]

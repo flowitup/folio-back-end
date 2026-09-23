@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from app.application.assistant import gate, reply
-from app.application.assistant.exceptions import LlmOutputError
+from app.application.assistant.exceptions import LlmOutputError, LlmUnavailableError
 from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import MaterialImportRecord, MaterialImportRepositoryPort
 from app.application.assistant.jobs_repo import AssistantJobRepositoryPort
@@ -56,7 +56,10 @@ from app.application.bibliotheque.exceptions import (
     InsufficientPermissionError,
     ProductAlreadyExistsError,
 )
-from app.application.bibliotheque.fetch_product_image_from_url_usecase import FetchProductImageFromUrlUseCase
+from app.application.bibliotheque.fetch_product_image_from_url_usecase import (
+    FetchProductImageFromUrlUseCase,
+    _is_host_allowed,
+)
 from app.application.bibliotheque.ports import ILibraryProductRepository, ISupplierRepository
 from app.application.bibliotheque.upload_product_image_usecase import UploadProductImageUseCase
 from app.application.chat.ports import ChatAttachmentStoragePort
@@ -64,6 +67,7 @@ from app.application.companies.ports import CompanyRepositoryPort, UserCompanyAc
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.library_product import LibraryProduct
 from app.domain.entities.chat_message import ChannelRef
+from app.domain.value_objects.library_category import normalize_category
 from app.domain.value_objects.supplier_slug import slugify
 
 logger = logging.getLogger(__name__)
@@ -111,9 +115,8 @@ DEDUPE_WINDOW = timedelta(hours=24)
 
 def is_merchant_url(url: str) -> bool:
     """True when ``url``'s host is one of the allow-listed merchant domains (or a
-    subdomain of one) — gates whether a candidate's ``image_url`` may be fetched
-    server-side (``FetchProductImageFromUrlUseCase``) instead of falling back to the
-    user's own photo."""
+    subdomain of one) — gates whether a candidate's ``product_url`` may be stored on a
+    library product."""
     try:
         host = urlparse(url).netloc.lower()
     except ValueError:
@@ -122,6 +125,53 @@ def is_merchant_url(url: str) -> bool:
     if not host:
         return False
     return any(host == domain or host.endswith("." + domain) for domain in MATERIAL_SEARCH_DOMAINS)
+
+
+def _fetchable_image_url(url: Optional[str]) -> Optional[str]:
+    """The real gate for ``_attach_image``'s server-side fetch: ``FetchProductImageFrom
+    UrlUseCase``'s own SSRF host allowlist, not ``is_merchant_url``'s broader
+    7-merchant-site list — the two barely overlap, so gating on ``is_merchant_url``
+    made the server-side fetch path dead in practice; every candidate fell back to the
+    user's own photo. Returns ``url`` unchanged when fetchable, else ``None``."""
+    if not url:
+        return None
+    try:
+        host = urlparse(url).netloc.lower()
+    except ValueError:
+        return None
+    return url if host and _is_host_allowed(host) else None
+
+
+def _valid_product_url(url: Optional[str]) -> Optional[str]:
+    """``product_url`` is only ever kept when it is https and on an allow-listed
+    merchant host — ``candidate.url`` is text the browser agent read off a web page,
+    so a ``javascript:``/arbitrary-scheme value must never reach
+    ``bibliotheque_products.product_url``."""
+    if not url:
+        return None
+    try:
+        scheme = urlparse(url).scheme
+    except ValueError:
+        return None
+    return url if scheme == "https" and is_merchant_url(url) else None
+
+
+def _truncate(value: Optional[str], max_length: int) -> Optional[str]:
+    """Truncate to a column's max length — the identify/candidate fields are free
+    text from a vision model or a scraped web page and have no length bound of their
+    own, while ``bibliotheque_products.category``/``size`` are ``String(100)`` and
+    ``product_url`` is ``String(500)``. An overflow otherwise raises a DataError
+    inside ``on_result``, after the job is already marked processed."""
+    if value is None:
+        return None
+    return value[:max_length] if len(value) > max_length else value
+
+
+#: Column lengths this feature must never overflow when writing a library product —
+#: see ``app.infrastructure.database.models.bibliotheque_product``.
+_CATEGORY_MAX_LENGTH = 100
+_SIZE_MAX_LENGTH = 100
+_PRODUCT_URL_MAX_LENGTH = 500
 
 
 class MaterialFeature:
@@ -199,6 +249,18 @@ class MaterialFeature:
             ident = self._vision.chat_json(
                 system=IDENTIFY_SYSTEM_FR, user_text=_IDENTIFY_USER_TEXT, images=[photo_bytes], model_cls=MaterialIdent
             )
+        except LlmUnavailableError:
+            # A provider outage, not a bad photo — telling the user to retake it would
+            # bill another DeepSeek call for a photo that was never the problem.
+            messenger.post_text(
+                user_id,
+                reply.render("provider_unavailable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "error"
         except LlmOutputError:
             messenger.post_text(
                 user_id,
@@ -229,9 +291,20 @@ class MaterialFeature:
         # on the second company's own otherwise-legitimate import).
         company_id = self._resolve_company(user_id, scope)
         if company_id is None:
-            return self._post_pick_company(
-                user_id, message_id, lang, messenger, trace_id, ident, sha, message_id, scope=scope
+            # No cross-company fallback: an asker who is not a member of the channel's
+            # own company has no permission here, period — the old fallback offered
+            # every OTHER company the asker belongs to, none of which this channel is
+            # scoped to, and always failed at the end (the tap's `photo_message_id`
+            # was never threaded through).
+            messenger.post_text(
+                user_id,
+                reply.render("no_permission", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
             )
+            return "refused"
 
         cached = self._material_imports.find_by_photo_hash(company_id, sha)
         if cached is not None:
@@ -252,60 +325,11 @@ class MaterialFeature:
         disambiguate by matching ``project_hint`` against every company's projects (the
         old behaviour, which could hand a company-A asker's photo to company B just
         because the caption named a B project by the same/similar name). Returns
-        ``None`` only when the channel itself has no company — the caller then falls
-        back to ``_post_pick_company``, bounded to the asker's own memberships."""
+        ``None`` when the asker is not a member of the channel's own company, or the
+        channel itself has no company — the caller replies ``no_permission`` either
+        way (there is no cross-company fallback)."""
         company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         return company_ids[0] if company_ids else None
-
-    def _post_pick_company(
-        self,
-        user_id: UUID,
-        message_id: UUID,
-        lang: str,
-        messenger: AssistantMessenger,
-        trace_id: str,
-        ident: MaterialIdent,
-        sha: str,
-        photo_message_id: UUID,
-        scope: ChannelScope,
-    ) -> str:
-        options = []
-        for access in self._company_access.list_for_user(user_id):
-            company = self._company_repo.find_by_id(access.company_id)
-            if company is None:
-                continue
-            options.append(
-                {
-                    "label": company.legal_name,
-                    "action": "pick_company",
-                    "payload": {
-                        "company_id": str(access.company_id),
-                        "message_id": str(photo_message_id),
-                        "ident": ident.model_dump(),
-                        "sha256": sha,
-                    },
-                }
-            )
-        if not options:
-            messenger.post_text(
-                user_id,
-                reply.render("no_permission", lang),
-                reply_to_id=message_id,
-                trace_id=trace_id,
-                channel=scope.channel,
-                scope=scope,
-            )
-            return "refused"
-        messenger.post_choice(
-            user_id,
-            reply.render("pick_company_prompt", lang),
-            options,
-            reply_to_id=message_id,
-            trace_id=trace_id,
-            channel=scope.channel,
-            scope=scope,
-        )
-        return "asked"
 
     # ------------------------------------------------------------------
     # A1 cache-by-reference, then A2 — start the browser product search
@@ -445,26 +469,45 @@ class MaterialFeature:
             if pick_index is not None and gate.pick_status(pick_confidence) != "reject":
                 candidate = candidates[pick_index]
                 status = gate.pick_status(pick_confidence)
+                # The job_status message is only moved to a terminal "done" state AFTER
+                # the write below returns — posting it first told the user "added to
+                # the library" even when `_create_from_candidate` then failed (e.g. the
+                # `(company_id, photo_sha256)` IntegrityError when two users send the
+                # same photo), leaving no product and a false success.
+                try:
+                    self._create_from_candidate(
+                        job.user_id,
+                        reply_to_id,
+                        company_id,
+                        ident,
+                        sha,
+                        candidate,
+                        status,
+                        pick_confidence,
+                        photo_bytes,
+                        photo_filename,
+                        photo_mime,
+                        lang,
+                        messenger,
+                        trace_id,
+                        scope=scope,
+                    )
+                except Exception:
+                    logger.exception("assistant.material: failed to create from candidate for job %s", job.id)
+                    # The write above can fail mid-transaction (e.g. the (company_id,
+                    # photo_sha256) unique violation this handler exists for) and leave
+                    # the session unusable for any further statement until it is rolled
+                    # back — without this, `update_job_status` below raises too and the
+                    # job_status message never leaves "running".
+                    messenger.rollback()
+                    if reply_to_id is not None:
+                        messenger.update_job_status(
+                            reply_to_id, state="failed", text=reply.render("error", lang), terminal=True, scope=scope
+                        )
+                    return
                 if reply_to_id is not None:
                     text = reply.render("material_found" if status == "confirmed" else "material_to_confirm", lang)
                     messenger.update_job_status(reply_to_id, state="done", text=text, terminal=True, scope=scope)
-                self._create_from_candidate(
-                    job.user_id,
-                    reply_to_id,
-                    company_id,
-                    ident,
-                    sha,
-                    candidate,
-                    status,
-                    pick_confidence,
-                    photo_bytes,
-                    photo_filename,
-                    photo_mime,
-                    lang,
-                    messenger,
-                    trace_id,
-                    scope=scope,
-                )
                 return
             logger.info(
                 "assistant.material trace=%s: no confident browser match (candidates=%d) for job %s, falling "
@@ -473,6 +516,31 @@ class MaterialFeature:
                 len(candidates),
                 job.id,
             )
+            try:
+                self._import_photo_only(
+                    job.user_id,
+                    reply_to_id,
+                    company_id,
+                    ident,
+                    sha,
+                    photo_bytes,
+                    photo_filename,
+                    photo_mime,
+                    lang,
+                    messenger,
+                    trace_id,
+                    scope=scope,
+                )
+            except Exception:
+                logger.exception("assistant.material: photo-only import failed for job %s", job.id)
+                # Same reasoning as the candidate-write handler above: roll back the
+                # possibly poisoned session before issuing another statement on it.
+                messenger.rollback()
+                if reply_to_id is not None:
+                    messenger.update_job_status(
+                        reply_to_id, state="failed", text=reply.render("error", lang), terminal=True, scope=scope
+                    )
+                return
             if reply_to_id is not None:
                 messenger.update_job_status(
                     reply_to_id,
@@ -481,20 +549,6 @@ class MaterialFeature:
                     terminal=True,
                     scope=scope,
                 )
-            self._import_photo_only(
-                job.user_id,
-                reply_to_id,
-                company_id,
-                ident,
-                sha,
-                photo_bytes,
-                photo_filename,
-                photo_mime,
-                lang,
-                messenger,
-                trace_id,
-                scope=scope,
-            )
             return
 
         # blocked / failed (or any other worker-reported status) — one extra template
@@ -594,10 +648,10 @@ class MaterialFeature:
             name=candidate.title or ident.name,
             supplier_name=supplier_name,
             reference=reference,
-            category=ident.category,
+            category=_truncate(normalize_category(ident.category), _CATEGORY_MAX_LENGTH),
             description=ident.specs,
-            size=candidate.unit,
-            product_url=candidate.url,
+            size=_truncate(candidate.unit, _SIZE_MAX_LENGTH),
+            product_url=_truncate(_valid_product_url(candidate.url), _PRODUCT_URL_MAX_LENGTH),
             lang=lang,
             messenger=messenger,
             trace_id=trace_id,
@@ -605,8 +659,15 @@ class MaterialFeature:
         )
         if product is None:
             return "refused"
-        image_url = candidate.image_url if candidate.image_url and is_merchant_url(candidate.image_url) else None
-        self._attach_image(user_id, product.id, image_url, photo_bytes, photo_mime, photo_filename)
+        if product.image_storage_key is None:
+            # Never overwrite a curated image — a manually created product has no
+            # import row, so the cache check at `run()`'s photo-hash lookup does not
+            # catch this: `_get_or_create_product` can hand back an existing product
+            # via `ProductAlreadyExistsError` on ANY subsequent photo of the same
+            # reference, including one photographed at a worksite long after an
+            # office admin uploaded a proper picture.
+            image_url = _fetchable_image_url(candidate.image_url)
+            self._attach_image(user_id, product.id, image_url, photo_bytes, photo_mime, photo_filename)
         self._material_imports.add_material_import(
             product_id=product.id,
             company_id=company_id,
@@ -642,7 +703,7 @@ class MaterialFeature:
             name=ident.name,
             supplier_name=supplier_name,
             reference=reference,
-            category=ident.category,
+            category=_truncate(normalize_category(ident.category), _CATEGORY_MAX_LENGTH),
             description=ident.specs,
             size=None,
             product_url=None,
@@ -653,7 +714,10 @@ class MaterialFeature:
         )
         if product is None:
             return "refused"
-        self._attach_image(user_id, product.id, None, photo_bytes, photo_mime, photo_filename)
+        if product.image_storage_key is None:
+            # Never overwrite a curated image — see the matching guard in
+            # `_create_from_candidate`.
+            self._attach_image(user_id, product.id, None, photo_bytes, photo_mime, photo_filename)
         self._material_imports.add_material_import(
             product_id=product.id,
             company_id=company_id,
@@ -864,41 +928,14 @@ class MaterialFeature:
         trace_id: str,
         scope: ChannelScope,
     ) -> bool:
-        """Returns True when this feature handled ``action``, False otherwise."""
-        if action != "pick_company":
-            return False
-        company_id = UUID(str(payload["company_id"]))
-        # Defense in depth: `_post_pick_company` only ever offers the caller's own
-        # companies, but this is cheap insurance against a future caller of this method
-        # skipping that guarantee.
-        if company_id not in {access.company_id for access in self._company_access.list_for_user(user_id)}:
-            messenger.post_text(
-                user_id,
-                reply.render("no_permission", lang),
-                reply_to_id=message_id,
-                trace_id=trace_id,
-                channel=scope.channel,
-                scope=scope,
-            )
-            return True
-        ident = MaterialIdent.model_validate(payload["ident"])
-        sha = str(payload["sha256"])
-        photo_message_id = UUID(str(payload["message_id"]))
-        photo = read_photo_bytes(self._messages, self._storage, photo_message_id, user_id)
-        if photo is None:
-            messenger.post_text(
-                user_id,
-                reply.render("photo_unreadable", lang),
-                reply_to_id=message_id,
-                trace_id=trace_id,
-                channel=scope.channel,
-                scope=scope,
-            )
-            return True
-        self._continue_after_company(
-            user_id, message_id, company_id, ident, sha, lang, messenger, trace_id, scope=scope
-        )
-        return True
+        """Returns True when this feature handled ``action``, False otherwise.
+
+        Feature A has no action of its own to handle any more: `pick_company` (the
+        cross-company fallback) was removed — `run()` now replies `no_permission`
+        directly instead of ever posting a choice this method would need to process.
+        Kept as a structural implementation of `FeatureHandlersPort`.
+        """
+        return False
 
 
 __all__ = ["MaterialFeature", "is_merchant_url", "MATERIAL_SEARCH_DOMAINS", "DEDUPE_WINDOW"]

@@ -28,13 +28,25 @@ class PendingAttendanceDto:
 
 
 class ListPendingAttendanceUseCase:
-    """Pending worker-submitted days the caller may validate, newest first, capped at 100."""
+    """Pending worker-submitted days the caller may validate, newest first, capped at 100.
+
+    ``company_id``/``project_id`` are optional filters forwarded straight to the query
+    port, so a caller scoped to one company or project gets that scope's own 100, not
+    the first 100 across every company/project it may validate with the scope applied
+    afterwards."""
 
     def __init__(self, query: IPendingAttendanceQuery) -> None:
         self._query = query
 
-    def execute(self, *, user_id: UUID) -> List[PendingAttendanceDto]:
-        items = self._query.list_pending_for_validator(user_id=user_id, limit=_PENDING_ATTENDANCE_HARD_CAP)
+    def execute(
+        self, *, user_id: UUID, company_id: Optional[UUID] = None, project_id: Optional[UUID] = None
+    ) -> List[PendingAttendanceDto]:
+        items = self._query.list_pending_for_validator(
+            user_id=user_id,
+            limit=_PENDING_ATTENDANCE_HARD_CAP,
+            company_id=company_id,
+            project_id=project_id,
+        )
         return [
             PendingAttendanceDto(
                 entry_id=str(i.entry_id),

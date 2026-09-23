@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from app.application.assistant import gate, reply
 from app.application.assistant.decide import TicketDecision, decide_ticket
-from app.application.assistant.exceptions import AssistantError, LlmOutputError
+from app.application.assistant.exceptions import AssistantError, LlmOutputError, LlmUnavailableError
 from app.application.assistant.extract import extract_invoice, is_readable, pdf_to_images
 from app.application.assistant.features._photos import read_photo_bytes
 from app.application.assistant.import_ports import InvoiceImportRepositoryPort
@@ -63,10 +63,17 @@ from app.application.invoice.create_invoice import CreateInvoiceRequest, CreateI
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
 from app.application.invoice.dtos import InvoiceResponse
 from app.application.invoice.ports import IInvoiceAttachmentRepository, IInvoiceRepository
-from app.application.invoice.upload_attachment import UploadAttachmentUseCase
+from app.application.invoice.upload_attachment import (
+    _MAGIC_PEEK_BYTES,
+    ALLOWED_MIME_TYPES,
+    UnsupportedFileTypeError,
+    UploadAttachmentUseCase,
+    _matches_magic,
+)
 from app.application.labor.ports import ILaborEntryRepository, IWorkerRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.invoice import Invoice as InvoiceEntity, InvoiceType
+from app.domain.time import business_today
 
 logger = logging.getLogger(__name__)
 
@@ -107,14 +114,70 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
-def _line_vat_rate(invoice: Invoice) -> float:
-    return invoice.tva_rates[0] if len(invoice.tva_rates) == 1 else 20.0
+#: Fallback rate used only when nothing else is available to anchor on — the receipt
+#: gave neither an HT/TVA pair nor exactly one tva_rate. Flagged for review by every
+#: caller of `_line_vat_rate` since a flat 20% guess is frequently wrong on BTP
+#: receipts, which mix 5.5/10/20.
+_DEFAULT_VAT_RATE = 20.0
+
+#: The only rates French VAT actually takes. `total_tva / total_ht` is an OCR-derived
+#: ratio, not a value read straight off the receipt — an OCR misread of either total
+#: (e.g. `total_ht` misread as a unit price) can turn it into something like 1100%,
+#: which `InvoiceItem.__post_init__` then rejects outright (`vat_rate must be between 0
+#: and 100`), losing the whole receipt instead of letting a human fix one field.
+_FRENCH_VAT_RATES = (0.0, 2.1, 5.5, 10.0, 20.0)
+#: How far a derived ratio may drift from its nearest French rate and still be trusted.
+_FRENCH_VAT_RATE_TOLERANCE = 0.5
 
 
-def _build_line_items(invoice: Invoice) -> list[dict[str, Any]]:
-    """Per-line items when every line has a total, else one summary line (plan section 4)."""
-    if invoice.lines and all(line.total_ttc is not None for line in invoice.lines):
-        vat_rate = _line_vat_rate(invoice)
+def _snap_to_french_vat_rate(rate: float) -> Optional[float]:
+    """The nearest `_FRENCH_VAT_RATES` entry, when `rate` is within
+    `_FRENCH_VAT_RATE_TOLERANCE` points of it — otherwise `None`, meaning the ratio is
+    implausible and must not be trusted as-is."""
+    nearest = min(_FRENCH_VAT_RATES, key=lambda candidate: abs(candidate - rate))
+    return nearest if abs(nearest - rate) <= _FRENCH_VAT_RATE_TOLERANCE else None
+
+
+def _line_vat_rate(invoice: Invoice) -> tuple[float, bool]:
+    """Best-guess VAT rate for the whole ticket, and whether that guess is reliable.
+
+    Priority:
+      1. total_tva / total_ht, when both are present AND the ratio snaps to a real
+         French rate (within `_FRENCH_VAT_RATE_TOLERANCE`) — an implausible ratio falls
+         through to priority 2/3 instead of ever being trusted verbatim.
+      2. the receipt's own tva_rates, when there is exactly one. A rate under 1 is a
+         fraction, not a percentage (an OCR/Jev misread — e.g. 0.2 meaning 20%).
+      3. `_DEFAULT_VAT_RATE`, flagged unreliable — the caller adds `amounts_to_check`.
+
+    More than one distinct `tva_rates` entry (a mixed-rate receipt, e.g. 5.5% and 20%
+    lines) always comes back unreliable even when priority 1 lands on a real French
+    rate: a single blended percentage still cannot be trusted for the per-line
+    reconstruction below.
+    """
+    mixed_rates = len(invoice.tva_rates) > 1
+    if invoice.total_ht is not None and invoice.total_ht > 0 and invoice.total_tva is not None:
+        snapped = _snap_to_french_vat_rate((invoice.total_tva / invoice.total_ht) * 100.0)
+        if snapped is not None:
+            return snapped, not mixed_rates
+    if len(invoice.tva_rates) == 1:
+        rate = invoice.tva_rates[0]
+        return (rate * 100.0 if rate < 1 else rate), True
+    return _DEFAULT_VAT_RATE, False
+
+
+def _build_line_items(invoice: Invoice) -> tuple[list[dict[str, Any]], bool]:
+    """Per-line items when every line has a total and no line quantity is negative, else
+    one summary line. A negative quantity (e.g. a "RETOUR" line) makes
+    `CreateInvoiceUseCase` reject the whole invoice — fall back to the single summary
+    line instead of losing the whole receipt over one returned item.
+
+    Returns (items, needs_review) — `needs_review` is True when the VAT rate applied is
+    only the last-resort default, never a per-line judgement.
+    """
+    has_totals = bool(invoice.lines) and all(line.total_ttc is not None for line in invoice.lines)
+    no_negative_qty = all(line.qty is None or line.qty >= 0 for line in invoice.lines)
+    if has_totals and no_negative_qty:
+        vat_rate, reliable = _line_vat_rate(invoice)
         items = []
         for line in invoice.lines:
             if line.total_ttc is None:  # pragma: no cover - excluded by the `all(...)` check above
@@ -125,18 +188,18 @@ def _build_line_items(invoice: Invoice) -> list[dict[str, Any]]:
             items.append(
                 {"description": line.label, "quantity": qty, "unit_price": unit_price_ht, "vat_rate": vat_rate}
             )
-        return items
+        return items, not reliable
     return _build_single_line_item(invoice)
 
 
-def _build_single_line_item(invoice: Invoice) -> list[dict[str, Any]]:
-    vat_rate = _line_vat_rate(invoice)
-    if invoice.total_ht is not None:
-        unit_price_ht = invoice.total_ht
-    else:
-        unit_price_ht = invoice.total_ttc / (1 + vat_rate / 100.0)
+def _build_single_line_item(invoice: Invoice) -> tuple[list[dict[str, Any]], bool]:
+    vat_rate, reliable = _line_vat_rate(invoice)
+    # Always anchor on total_ttc — total_ht is never trusted as the unit price on its
+    # own: an OCR misread there would otherwise silently produce the wrong invoice
+    # total instead of letting the drift recheck in `_create_invoice` catch it.
+    unit_price_ht = invoice.total_ttc / (1 + vat_rate / 100.0)
     label = f"Ticket {invoice.merchant} {invoice.date}".strip() if invoice.date else f"Ticket {invoice.merchant}"
-    return [{"description": label, "quantity": 1, "unit_price": unit_price_ht, "vat_rate": vat_rate}]
+    return [{"description": label, "quantity": 1, "unit_price": unit_price_ht, "vat_rate": vat_rate}], not reliable
 
 
 def _top_candidate_projects(
@@ -232,6 +295,16 @@ class TicketFeature:
 
         try:
             invoice_a = extract_invoice(self._vision, [photo_bytes])
+        except LlmUnavailableError:
+            messenger.post_text(
+                user_id,
+                reply.render("provider_unavailable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "error"
         except LlmOutputError:
             messenger.post_text(
                 user_id,
@@ -255,7 +328,21 @@ class TicketFeature:
 
         company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
-        today = date.today()
+        if not projects:
+            # Nowhere to attach or create an invoice — the answer is always
+            # `pick_project_none` (`_resolve_project_and_create`'s own empty-projects
+            # branch would reach the same reply anyway). Return here instead of paying
+            # for the genai/OpenCV scan and the S3 Jev call first.
+            messenger.post_text(
+                user_id,
+                reply.render("pick_project_none", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "refused"
+        today = business_today()
         ticket_day = _parse_date(invoice_a.date) or today
 
         candidates = match_candidates(self._invoice_repo, self._import_repo, projects, invoice_a, ticket_day)
@@ -280,8 +367,6 @@ class TicketFeature:
                     scan_pdf=scan_pdf,
                 )
 
-        scan_pdf, _mode = self._make_scan(invoice_a, photo_bytes)
-
         workers_by_project = {
             str(p.id): workers_on_site(self._labor_entry_repo, self._worker_repo, p.id, ticket_day) for p in projects
         }
@@ -296,6 +381,14 @@ class TicketFeature:
             invoice_a, projects, workers_by_project, recent_by_project, dup_candidates, sane
         )
         decision = decide_ticket(self._decisions, ticket_state, projects, dup_candidates)
+
+        # A rejected duplicate never creates or attaches anything below (`_apply_gate`'s
+        # own `_post_duplicate_refused` branch) — skip the paid scan entirely instead of
+        # generating one just to discard it.
+        is_rejected_duplicate = (
+            decision.duplicate_of is not None and gate.duplicate_status(decision.duplicate_confidence) == "reject"
+        )
+        scan_pdf = None if is_rejected_duplicate else self._make_scan(invoice_a, photo_bytes)[0]
 
         return self._apply_gate(
             user_id=user_id,
@@ -341,6 +434,16 @@ class TicketFeature:
         try:
             images = pdf_to_images(data) if content_type == "application/pdf" else [data]
             invoice_a = extract_invoice(self._vision, images)
+        except LlmUnavailableError:
+            messenger.post_text(
+                user_id,
+                reply.render("provider_unavailable", lang),
+                reply_to_id=reply_to_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "error"
         except LlmOutputError:
             messenger.post_text(
                 user_id,
@@ -365,7 +468,7 @@ class TicketFeature:
         filename = "facture.pdf" if content_type == "application/pdf" else "facture"
         company_ids = channel_company_ids(scope, user_id, self._company_access, self._authz_reader)
         projects = writable_projects(self._project_repo, self._authz_reader, user_id, company_ids)
-        today = date.today()
+        today = business_today()
         ticket_day = _parse_date(invoice_a.date) or today
 
         candidates = match_candidates(self._invoice_repo, self._import_repo, projects, invoice_a, ticket_day)
@@ -426,13 +529,28 @@ class TicketFeature:
     # C2 — scan generation
     # ------------------------------------------------------------------
 
-    def _make_scan(self, invoice_a: Invoice, photo_bytes: bytes) -> tuple[bytes, str]:
+    def _make_scan(self, invoice_a: Invoice, photo_bytes: bytes) -> tuple[Optional[bytes], str]:
+        """Never raises — a scan failure must never abort the ticket import. genai
+        (when enabled) falls back to OpenCV on any exception; OpenCV itself falls back
+        to no scan at all (``scan=None``) rather than losing the whole receipt over
+        `img2pdf`/`scanify`/a Gemini SDK error."""
         if self._scan_mode == "genai":
-            generated = self._try_genai_scan(invoice_a, photo_bytes)
+            try:
+                generated = self._try_genai_scan(invoice_a, photo_bytes)
+            except Exception:
+                logger.exception("assistant.ticket: genai scan generation crashed, falling back to OpenCV")
+                generated = None
             if generated is not None:
-                return to_pdf(generated), "genai"
-        processed = scanify(photo_bytes, self._vision)
-        return to_pdf(processed), "opencv"
+                try:
+                    return to_pdf(generated), "genai"
+                except Exception:
+                    logger.exception("assistant.ticket: genai scan to_pdf failed, falling back to OpenCV")
+        try:
+            processed = scanify(photo_bytes, self._vision)
+            return to_pdf(processed), "opencv"
+        except Exception:
+            logger.exception("assistant.ticket: OpenCV scan fallback failed, continuing without a scan")
+            return None, "none"
 
     def _try_genai_scan(self, invoice_a: Invoice, photo_bytes: bytes) -> Optional[bytes]:
         from app.application.assistant.exceptions import ProviderNotConfiguredError
@@ -910,7 +1028,7 @@ class TicketFeature:
         scan_bytes: Optional[bytes],
         source: str = "ticket",
     ) -> str:
-        response = self._create_and_attach(
+        response, final_flags = self._create_and_attach(
             user_id=user_id,
             project_id=project.id,
             invoice_a=invoice_a,
@@ -925,6 +1043,7 @@ class TicketFeature:
             trace_id=trace_id,
             scope=scope,
             source=source,
+            messenger=messenger,
         )
         messenger.post_text(
             user_id,
@@ -934,7 +1053,7 @@ class TicketFeature:
             channel=scope.channel,
             scope=scope,
         )
-        if "amounts_to_check" in flags:
+        if "amounts_to_check" in final_flags:
             messenger.post_text(
                 user_id,
                 reply.render("amounts_to_check", lang),
@@ -979,41 +1098,90 @@ class TicketFeature:
         scan_bytes: Optional[bytes],
         trace_id: str,
         scope: ChannelScope,
+        messenger: AssistantMessenger,
         source: str = "ticket",
-    ) -> InvoiceResponse:
-        response = self._create_invoice(user_id, project_id, invoice_a, trace_id)
+    ) -> tuple[InvoiceResponse, list[str]]:
+        # Validate the attachment BEFORE creating the invoice — chat only checks the
+        # declared MIME type; `UploadAttachmentUseCase`'s own magic-byte check
+        # previously only ran AFTER the invoice already existed, leaving an orphan on a
+        # mismatch (a PNG sent as `image/jpeg`, for example).
+        if original_mime not in ALLOWED_MIME_TYPES or not _matches_magic(
+            original_mime, original_bytes[:_MAGIC_PEEK_BYTES]
+        ):
+            raise UnsupportedFileTypeError(f"File contents do not match declared type '{original_mime}'")
+
+        response, needs_review = self._create_invoice(user_id, project_id, invoice_a, trace_id)
         invoice_id = UUID(response.id)
-        original_attachment = self._upload_attachment_usecase.execute(
-            invoice_id=invoice_id,
-            filename=original_filename,
-            mime_type=original_mime,
-            size_bytes=len(original_bytes),
-            fileobj=io.BytesIO(original_bytes),
-            uploaded_by=user_id,
-        )
-        scan_attachment_id: Optional[UUID] = None
-        if scan_bytes is not None:
-            scan_attachment = self._upload_attachment_usecase.execute(
+        final_flags = list(flags)
+        if needs_review and "amounts_to_check" not in final_flags:
+            final_flags.append("amounts_to_check")
+        try:
+            original_attachment = self._upload_attachment_usecase.execute(
                 invoice_id=invoice_id,
-                filename=f"scan-{response.invoice_number}.pdf",
-                mime_type="application/pdf",
-                size_bytes=len(scan_bytes),
-                fileobj=io.BytesIO(scan_bytes),
+                filename=original_filename,
+                mime_type=original_mime,
+                size_bytes=len(original_bytes),
+                fileobj=io.BytesIO(original_bytes),
                 uploaded_by=user_id,
             )
-            scan_attachment_id = scan_attachment.id
-        self._import_repo.add_invoice_import(
-            invoice_id=invoice_id,
-            status=status,
-            source=source,
-            ai_confidence=confidence,
-            category=category,
-            flags=flags,
-            original_attachment_id=original_attachment.id,
-            scan_attachment_id=scan_attachment_id,
-            trace_id=trace_id,
-        )
-        return response
+            scan_attachment_id: Optional[UUID] = None
+            if scan_bytes is not None:
+                scan_attachment = self._upload_attachment_usecase.execute(
+                    invoice_id=invoice_id,
+                    filename=f"scan-{response.invoice_number}.pdf",
+                    mime_type="application/pdf",
+                    size_bytes=len(scan_bytes),
+                    fileobj=io.BytesIO(scan_bytes),
+                    uploaded_by=user_id,
+                )
+                scan_attachment_id = scan_attachment.id
+            self._import_repo.add_invoice_import(
+                invoice_id=invoice_id,
+                status=status,
+                source=source,
+                ai_confidence=confidence,
+                category=category,
+                flags=final_flags,
+                original_attachment_id=original_attachment.id,
+                scan_attachment_id=scan_attachment_id,
+                trace_id=trace_id,
+            )
+        except Exception:
+            # Anything after create fails (the S3 put, `add_invoice_import`'s DB write,
+            # a magic-byte mismatch the pre-check above missed) leaves an invoice with no
+            # attachment and no import row — delete it; nothing else references it yet,
+            # so this is the only place anything ever links to it.
+            logger.exception("assistant.ticket: post-create failure for invoice %s, deleting the orphan", invoice_id)
+            # A DB write in the try block (`add_invoice_import`, an attachment row) can
+            # be exactly what raised — the delete below runs on the same session and
+            # must start from a clean transaction or it raises too, leaving the orphan
+            # invoice (already committed by `CreateInvoiceUseCase`) behind for good.
+            messenger.rollback()
+            try:
+                self._delete_invoice_usecase.execute(invoice_id)
+            except Exception:
+                logger.exception("assistant.ticket: failed to delete orphaned invoice %s", invoice_id)
+            raise
+        return response, final_flags
+
+    #: Tolerance the reconstructed invoice's total is allowed to drift from the
+    #: receipt's extracted TTC before the single-line fallback is triggered, and again
+    #: afterwards before flagging the write for review — a rebuild that still doesn't
+    #: match a cent-precision original total is gated for a human, not silently
+    #: committed.
+    _TOTAL_DRIFT_TOLERANCE = 0.01
+    #: A ticket dated further back or further forward than this is almost certainly an
+    #: OCR misread (e.g. "2062") — replaced by today and flagged.
+    _ISSUE_DATE_PAST_WINDOW = timedelta(days=730)
+    _ISSUE_DATE_FUTURE_WINDOW = timedelta(days=7)
+
+    def _sane_issue_date(self, raw_date: Optional[str], today: date) -> tuple[date, bool]:
+        parsed = _parse_date(raw_date)
+        if parsed is None:
+            return today, False
+        if parsed < today - self._ISSUE_DATE_PAST_WINDOW or parsed > today + self._ISSUE_DATE_FUTURE_WINDOW:
+            return today, True
+        return parsed, False
 
     def _create_invoice(
         self,
@@ -1021,10 +1189,12 @@ class TicketFeature:
         project_id: UUID,
         invoice_a: Invoice,
         trace_id: str,
-    ) -> InvoiceResponse:
-        issue_date = _parse_date(invoice_a.date) or date.today()
+    ) -> tuple[InvoiceResponse, bool]:
+        today = business_today()
+        issue_date, date_out_of_range = self._sane_issue_date(invoice_a.date, today)
         notes = f"Importé par l'assistant (trace {trace_id})"
-        items = _build_line_items(invoice_a)
+        items, needs_review = _build_line_items(invoice_a)
+        needs_review = needs_review or date_out_of_range
         request = CreateInvoiceRequest(
             project_id=project_id,
             created_by=user_id,
@@ -1036,13 +1206,19 @@ class TicketFeature:
             notes=notes,
         )
         response = self._create_invoice_usecase.execute(request)
-        if abs(response.total_amount - invoice_a.total_ttc) > 0.02:
+        if abs(response.total_amount - invoice_a.total_ttc) > self._TOTAL_DRIFT_TOLERANCE:
             # The per-line reconstruction drifted from the extracted TTC total (plan's
             # safety net) — delete and recreate as a single summary line instead.
             self._delete_invoice_usecase.execute(UUID(response.id))
-            request.items = _build_single_line_item(invoice_a)
+            items, single_line_needs_review = _build_single_line_item(invoice_a)
+            needs_review = needs_review or single_line_needs_review
+            request.items = items
             response = self._create_invoice_usecase.execute(request)
-        return response
+            if abs(response.total_amount - invoice_a.total_ttc) > self._TOTAL_DRIFT_TOLERANCE:
+                # Still off after the fallback — flag it instead of silently keeping a
+                # wrong total.
+                needs_review = True
+        return response, needs_review
 
     # ------------------------------------------------------------------
     # Action taps
@@ -1138,7 +1314,10 @@ class TicketFeature:
             )
             return
         confidence = float(payload.get("project_confidence") or 0.0)
-        amounts_consistent = float(payload.get("amounts_consistent") or 1.0)
+        raw_amounts_consistent = payload.get("amounts_consistent")
+        # A Jev noul of exactly 0.0 must not be dropped by `or 1.0` — only a genuinely
+        # missing key defaults to "consistent".
+        amounts_consistent = float(raw_amounts_consistent) if raw_amounts_consistent is not None else 1.0
         flags = [] if gate.amounts_ok(amounts_consistent) else ["amounts_to_check"]
         self._finalize_create(
             user_id=user_id,
@@ -1245,7 +1424,9 @@ class TicketFeature:
             category_confidence=1.0,
             duplicate_of=None,
             duplicate_confidence=0.0,
-            amounts_consistent=float(payload.get("amounts_consistent") or 1.0),
+            amounts_consistent=(
+                float(payload["amounts_consistent"]) if payload.get("amounts_consistent") is not None else 1.0
+            ),
         )
         self._resolve_project_and_create(
             user_id=user_id,

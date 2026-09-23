@@ -1651,6 +1651,7 @@ def _configure_di_container() -> None:
             warehouse_repo=_inventory_warehouse_repo,
             project_repo=_c.project_repository,
             update_item_usecase=_c.inventory_update_item_usecase,
+            authz_reader=_c.authz_reader,
         )
         if _c.assistant_messenger is not None:
             _c.assistant_service = _AssistantService(
@@ -1846,6 +1847,10 @@ def _configure_di_container() -> None:
             bulk_log_usecase=_c.bulk_log_attendance_usecase,
             validate_usecase=_c.validate_attendance_usecase,
             pending_attendance_usecase=_c.list_pending_attendance_usecase,
+            # Without this, `_notify_worker_validated` always no-ops (`notifier is
+            # None`) and a day validated through @folio never reaches the worker who
+            # logged it — same push the HTTP validate route already sends.
+            notifier=_c.attendance_push_notifier,
         )
 
     if (
@@ -1868,6 +1873,7 @@ def _configure_di_container() -> None:
         and _c.billing_document_repo is not None
         and _c.get_labor_payments_summary_usecase is not None
         and _c.authz_reader is not None
+        and _c.project_spent_reader is not None
     ):
         _c.assistant_admin_answers = _AdminAnswersFeature(
             project_repo=_c.project_repository,
@@ -1877,6 +1883,7 @@ def _configure_di_container() -> None:
             audit=_c.assistant_audit_repo,
             directory=_chat_repo,
             authz_reader=_c.authz_reader,
+            project_spent_reader=_c.project_spent_reader,
         )
 
     if _c.assistant_service is not None and _c.project_repository is not None and _c.assistant_messenger is not None:

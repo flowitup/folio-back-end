@@ -143,3 +143,111 @@ def test_list_for_company_filters_by_date_range_and_user(session) -> None:
     assert [r.id for r in rows] == [in_range.id]
 
     assert repo.list_for_company(company_id, from_=now + timedelta(hours=1)) == []
+
+
+def test_count_by_user_for_company_aggregates_totals_and_refusals(session) -> None:
+    repo = _repo(session)
+    company_id = uuid4()
+    user_a = uuid4()
+    user_b = uuid4()
+
+    repo.add(
+        company_id=company_id,
+        channel_key="company:x",
+        user_id=user_a,
+        message_id=None,
+        intent=None,
+        feature=None,
+        outcome="answered",
+    )
+    repo.add(
+        company_id=company_id,
+        channel_key="company:x",
+        user_id=user_a,
+        message_id=None,
+        intent=None,
+        feature=None,
+        outcome="refused",
+    )
+    repo.add(
+        company_id=company_id,
+        channel_key="company:x",
+        user_id=user_a,
+        message_id=None,
+        intent=None,
+        feature=None,
+        outcome="refused",
+    )
+    repo.add(
+        company_id=company_id,
+        channel_key="company:x",
+        user_id=user_b,
+        message_id=None,
+        intent=None,
+        feature=None,
+        outcome="answered",
+    )
+
+    counts = {c.user_id: (c.total, c.refused) for c in repo.count_by_user_for_company(company_id)}
+
+    assert counts[user_a] == (3, 2)
+    assert counts[user_b] == (1, 0)
+
+
+def test_count_by_user_for_company_is_not_capped_by_list_for_companys_own_limit(session) -> None:
+    """`list_for_company`'s default `limit=200` used to be what `ask_audit` counted
+    against, silently undercounting a busy company's week. The SQL aggregate has no such
+    cap — proven here with a row count comfortably above that old default."""
+    repo = _repo(session)
+    company_id = uuid4()
+    user_id = uuid4()
+    row_count = 210
+
+    for _ in range(row_count):
+        repo.add(
+            company_id=company_id,
+            channel_key="company:x",
+            user_id=user_id,
+            message_id=None,
+            intent=None,
+            feature=None,
+            outcome="answered",
+        )
+
+    counts = repo.count_by_user_for_company(company_id)
+
+    assert len(counts) == 1
+    assert counts[0].total == row_count
+    assert len(repo.list_for_company(company_id)) == 200  # the OLD approach's own cap, unchanged
+
+
+def test_count_by_user_for_company_scopes_to_company_and_date_range(session) -> None:
+    repo = _repo(session)
+    company_a = uuid4()
+    company_b = uuid4()
+    user_id = uuid4()
+
+    repo.add(
+        company_id=company_a,
+        channel_key="company:a",
+        user_id=user_id,
+        message_id=None,
+        intent=None,
+        feature=None,
+        outcome="answered",
+    )
+    repo.add(
+        company_id=company_b,
+        channel_key="company:b",
+        user_id=user_id,
+        message_id=None,
+        intent=None,
+        feature=None,
+        outcome="answered",
+    )
+
+    now = datetime.now(timezone.utc)
+    counts_a = repo.count_by_user_for_company(company_a)
+    assert len(counts_a) == 1 and counts_a[0].user_id == user_id
+
+    assert repo.count_by_user_for_company(company_a, from_=now + timedelta(hours=1)) == []

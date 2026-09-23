@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -33,6 +33,12 @@ class AssistantJobModel(Base):
     """One ``fetch_invoice`` or ``find_product`` job (see ``jobs_repo.JOB_TYPES``)."""
 
     __tablename__ = "assistant_jobs"
+    __table_args__ = (
+        # Matches migration 22f80fb10dad's `ix_assistant_jobs_status_run_after` exactly
+        # (name + column order) — without this, `alembic revision --autogenerate` would
+        # propose dropping the index the claim query relies on.
+        Index("ix_assistant_jobs_status_run_after", "status", "run_after"),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     type: Mapped[str] = mapped_column(String(32), nullable=False, default="fetch_invoice")

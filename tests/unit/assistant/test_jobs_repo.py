@@ -236,11 +236,14 @@ class TestReapUnprocessed:
 
     def test_reaps_a_stale_done_row_with_processed_at_still_null(self, session) -> None:
         repo = _repo(session)
-        now = datetime.now(timezone.utc)
         job = repo.add(
             user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
         )
         repo.update_result(job.id, status="done", result={"status": "done"})
+        # Captured after `add()` sets its own `run_after` — `reap_unprocessed` now also
+        # requires `run_after <= now` (the daily-cost-cap pause defers it into the
+        # future), so `now` must not predate a `run_after` this test never touches.
+        now = datetime.now(timezone.utc)
         _set_updated_at(session, job.id, now - timedelta(minutes=31))
 
         reaped = repo.reap_unprocessed(now)
@@ -249,11 +252,11 @@ class TestReapUnprocessed:
 
     def test_reaped_row_is_not_returned_again_within_the_window(self, session) -> None:
         repo = _repo(session)
-        now = datetime.now(timezone.utc)
         job = repo.add(
             user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
         )
         repo.update_result(job.id, status="done", result={"status": "done"})
+        now = datetime.now(timezone.utc)
         _set_updated_at(session, job.id, now - timedelta(minutes=31))
 
         first = repo.reap_unprocessed(now)
@@ -284,6 +287,21 @@ class TestReapUnprocessed:
 
         assert repo.reap_unprocessed(now) == []
 
+    def test_does_not_reap_a_row_deferred_into_the_future(self, session) -> None:
+        """A job paused by the daily cost cap gets its `run_after` pushed to the next
+        Paris midnight (`jobs._notify_job_status`'s callers) — the sweep must leave it
+        alone until then even though `updated_at` alone looks stale enough."""
+        repo = _repo(session)
+        job = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        repo.update_result(job.id, status="done", result={"status": "done"})
+        now = datetime.now(timezone.utc)
+        _set_updated_at(session, job.id, now - timedelta(minutes=31))
+        repo.update_status(job.id, status="done", run_after=now + timedelta(hours=6))
+
+        assert repo.reap_unprocessed(now) == []
+
     def test_does_not_reap_queued_or_running_jobs(self, session) -> None:
         repo = _repo(session)
 
@@ -310,3 +328,38 @@ class TestClaimNextLeavesNoOpenTransaction:
         repo = _repo(session)
         assert repo.claim_next(datetime.now(timezone.utc)) is None
         assert session.in_transaction() is False
+
+
+class TestClaimNextReclaimAttemptCap:
+    """A stuck `running` job must eventually stop being reclaimed — the pre-fix
+    `claim_next` bumped `attempts` on every reclaim with no cap, so a job that crashes
+    its iteration (an S3 outage, a container SIGKILL) re-ran the full browser-agent
+    spend every 30 minutes forever."""
+
+    def test_stuck_job_reclaimed_up_to_the_cap_then_swept_to_failed(self, session) -> None:
+        repo = _repo(session)
+        job = repo.add(
+            user_id=uuid4(), merchant="leroymerlin", amount_ttc=Decimal("1"), date=date(2026, 1, 1), project_hint=None
+        )
+        # `add()` stamps `run_after` with its own `now()` call, after this test's `now`
+        # would otherwise be captured — the buffer keeps `run_after <= now` true (same
+        # pattern as `TestClaimNext.test_does_not_reclaim_running_job` above).
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        claimed = repo.claim_next(now)
+        assert claimed is not None and claimed.attempts == 0
+
+        for expected_attempts in (1, 2, 3):
+            _set_updated_at(session, job.id, now - timedelta(minutes=31))
+            reclaimed = repo.claim_next(now)
+            assert reclaimed is not None
+            assert reclaimed.id == job.id
+            assert reclaimed.attempts == expected_attempts
+            assert reclaimed.status == "running"
+
+        # A fourth stuck cycle must not be reclaimed again — swept to `failed` instead.
+        _set_updated_at(session, job.id, now - timedelta(minutes=31))
+        assert repo.claim_next(now) is None
+        final = repo.find_by_id(job.id)
+        assert final.status == "failed"
+        assert final.attempts == 3
+        assert final.processed_at is None

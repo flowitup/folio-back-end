@@ -170,3 +170,57 @@ class TestSubmitAction:
         )
         assert second.status_code == 409
         assert second.get_json()["error"] == "AlreadyAnswered"
+
+    def test_dispatch_failure_returns_503_and_resets_the_choice_for_a_retry(
+        self, inv_client, member_token, invitation_app
+    ):
+        """A dispatcher that cannot hand the tap off (assistant disabled between the
+        choice being posted and tapped, or the enqueue itself failing) must not leave the
+        choice permanently answered with no reply ever coming — the client gets 503 and
+        may resubmit once the dispatcher is healthy again."""
+        from app import db
+        from app.application.assistant.service import SubmitAssistantActionUseCase
+        from wiring import get_container
+
+        class _FailingDispatcher:
+            def message_received(self, *, user_id, message_id):  # pragma: no cover - unused here
+                pass
+
+            def action_received(self, *, user_id, message_id, action, payload):
+                return False
+
+        key = _project_key(invitation_app)
+        choice_id = _post_choice(invitation_app, key, invitation_app._test_member_user_id)
+
+        with invitation_app.app_context():
+            container = get_container()
+            original_dispatcher = container.assistant_dispatcher
+            original_usecase = container.submit_assistant_action_usecase
+            container.assistant_dispatcher = _FailingDispatcher()
+            container.submit_assistant_action_usecase = SubmitAssistantActionUseCase(
+                container.chat_repo, container.chat_repo, db.session, container.assistant_dispatcher
+            )
+        try:
+            resp = inv_client.post(
+                "/api/v1/assistant/actions",
+                json={"action": "confirm", "payload": {}, "reply_to_id": choice_id},
+                headers=_auth(member_token),
+            )
+            assert resp.status_code == 503
+            assert resp.get_json()["error"] == "AssistantUnavailable"
+
+            page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
+            choice_message = next(m for m in page["items"] if m["id"] == choice_id)
+            assert choice_message["payload"]["answered"] is None
+        finally:
+            with invitation_app.app_context():
+                container.assistant_dispatcher = original_dispatcher
+                container.submit_assistant_action_usecase = original_usecase
+
+        # The reset is real: a healthy dispatcher now accepts the same submission.
+        retry = inv_client.post(
+            "/api/v1/assistant/actions",
+            json={"action": "confirm", "payload": {}, "reply_to_id": choice_id},
+            headers=_auth(member_token),
+        )
+        assert retry.status_code == 202

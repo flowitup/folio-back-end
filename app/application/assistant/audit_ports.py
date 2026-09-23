@@ -35,6 +35,18 @@ class AuditLogEntry:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class UserAuditCount:
+    """One user's row/refusal counts for a company/period — the "who asked what"
+    weekly summary's own shape, aggregated in SQL rather than computed by loading
+    rows client-side, so it is never silently capped by ``list_for_company``'s own
+    ``limit`` for a busy company."""
+
+    user_id: Optional[UUID]
+    total: int
+    refused: int
+
+
 class AssistantAuditPort(Protocol):
     """Persistence contract for the assistant's supervision log."""
 
@@ -72,5 +84,16 @@ class AssistantAuditPort(Protocol):
         """
         ...
 
+    def count_by_user_for_company(
+        self, company_id: UUID, *, from_: Optional[datetime] = None, to: Optional[datetime] = None
+    ) -> list[UserAuditCount]:
+        """Per-user ``(total, refused)`` counts for the period, ``GROUP BY user_id`` in
+        SQL — the weekly "who asked what" admin-channel answer
+        (``AdminAnswersFeature.ask_audit``) should use this instead of ``list_for_company``
+        plus a client-side tally, which silently undercounts once a busy company has more
+        than ``limit`` rows in the window.
+        """
+        ...
 
-__all__ = ["AssistantAuditPort", "AuditLogEntry"]
+
+__all__ = ["AssistantAuditPort", "AuditLogEntry", "UserAuditCount"]

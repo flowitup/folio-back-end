@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional, TypeVar
 
 from pydantic import BaseModel
 
-from app.application.assistant.exceptions import LlmOutputError, ProviderNotConfiguredError
+from app.application.assistant.exceptions import LlmOutputError, LlmUnavailableError, ProviderNotConfiguredError
 from app.application.assistant.ports import ChoiceQuestion, Decision, NoulQuestion
 
 T = TypeVar("T", bound=BaseModel)
@@ -33,11 +33,13 @@ class ScriptedVision:
         text_answers: Optional[list[str]] = None,
         raise_not_configured: bool = False,
         raise_llm_output_error: bool = False,
+        raise_llm_unavailable_error: bool = False,
     ) -> None:
         self._json_answers = list(json_answers or [])
         self._text_answers = list(text_answers or [])
         self._raise_not_configured = raise_not_configured
         self._raise_llm_output_error = raise_llm_output_error
+        self._raise_llm_unavailable_error = raise_llm_unavailable_error
         self.json_calls: list[tuple[str, str, int]] = []  # (system, user_text, n_images)
         self.text_calls: list[tuple[str, str]] = []
 
@@ -47,6 +49,8 @@ class ScriptedVision:
         self.json_calls.append((system, user_text, len(images)))
         if self._raise_not_configured:
             raise ProviderNotConfiguredError("DEEPSEEK_API_KEY is not configured.")
+        if self._raise_llm_unavailable_error:
+            raise LlmUnavailableError("Scripted failure: DeepSeek is unavailable.")
         if self._raise_llm_output_error:
             raise LlmOutputError("Scripted failure: DeepSeek output failed validation twice.")
         if not self._json_answers:

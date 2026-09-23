@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import bindparam, exists, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, bindparam, exists, func, or_, select, text
+from sqlalchemy.orm import Session, aliased
 
 from app.application.chat.ports import ChannelInfo, MemberInfo
 from app.domain.companies.roles import CompanyRole
@@ -143,19 +143,48 @@ class SqlAlchemyChatRepository:
         # `update()`-construct version elsewhere in this codebase).
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
-    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(
+        self, channel: ChannelRef, limit: int = 10, *, user_id: Optional[UUID] = None
+    ) -> list[ChatMessage]:
         """Messages the assistant was actually addressed by/as, newest first (reversed
-        to oldest-first before returning) — never other chat in the channel (D18)."""
-        stmt = (
-            select(ChatMessageOrm)
-            .where(
-                ChatMessageOrm.channel_kind == channel.kind,
-                ChatMessageOrm.channel_id == channel.id,
-                or_(ChatMessageOrm.mentions_assistant.is_(True), ChatMessageOrm.sender_type == "assistant"),
+        to oldest-first before returning) — never other chat in the channel (D18).
+
+        ``user_id``, when given, narrows this further to ONE asker's own conversation
+        with the assistant: their own ``@folio`` mentions, plus the
+        assistant's own replies that were themselves posted in reply to one of their
+        messages (the self-join on ``reply_to_id`` below) — never another member's
+        mention or the assistant's replies to someone else, even inside the same shared
+        channel. ``user_id`` is optional only so an older caller that has not been
+        updated yet keeps compiling; every current caller (``AssistantService``) passes
+        it.
+        """
+        if user_id is None:
+            stmt = (
+                select(ChatMessageOrm)
+                .where(
+                    ChatMessageOrm.channel_kind == channel.kind,
+                    ChatMessageOrm.channel_id == channel.id,
+                    or_(ChatMessageOrm.mentions_assistant.is_(True), ChatMessageOrm.sender_type == "assistant"),
+                )
+                .order_by(ChatMessageOrm.created_at.desc())
+                .limit(limit)
             )
-            .order_by(ChatMessageOrm.created_at.desc())
-            .limit(limit)
-        )
+        else:
+            ReplyTarget = aliased(ChatMessageOrm)
+            stmt = (
+                select(ChatMessageOrm)
+                .outerjoin(ReplyTarget, ChatMessageOrm.reply_to_id == ReplyTarget.id)
+                .where(
+                    ChatMessageOrm.channel_kind == channel.kind,
+                    ChatMessageOrm.channel_id == channel.id,
+                    or_(
+                        and_(ChatMessageOrm.sender_id == user_id, ChatMessageOrm.mentions_assistant.is_(True)),
+                        and_(ChatMessageOrm.sender_type == "assistant", ReplyTarget.sender_id == user_id),
+                    ),
+                )
+                .order_by(ChatMessageOrm.created_at.desc())
+                .limit(limit)
+            )
         rows = self._session.execute(stmt).scalars().all()
         return [row.to_entity() for row in reversed(rows)]
 

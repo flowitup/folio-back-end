@@ -28,7 +28,7 @@ notification preview) always reads.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 from uuid import UUID
 
 from app.application.assistant.exceptions import AssistantError
@@ -37,6 +37,23 @@ from app.application.assistant.ports import MessagePosterPort
 from app.application.assistant.scope import redact
 from app.application.invitations.ports import TransactionalSessionPort
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
+
+
+class _RollbackCapableSession(TransactionalSessionPort, Protocol):
+    """``TransactionalSessionPort`` plus ``rollback()``.
+
+    ``TransactionalSessionPort`` itself deliberately stays minimal (``begin_nested``/
+    ``commit`` only — see ``app.application.invitations.ports``), but the real session
+    every caller here actually passes (Flask-SQLAlchemy's ``db.session``) is a full
+    SQLAlchemy ``Session``/``scoped_session`` and always has ``rollback()``. Declaring the
+    narrower type locally instead of widening the shared port lets ``AssistantMessenger``
+    expose ``rollback()`` without touching a port owned outside this bounded context.
+    """
+
+    def rollback(self) -> None:
+        """Roll back the current (possibly poisoned) transaction."""
+        ...
+
 
 # Keeps the text fallback of a choice message readable even if a caller ever passes an
 # unreasonably long option list.
@@ -76,10 +93,18 @@ class AssistantMessenger:
     bounded context in ``create_app()`` — mirrors ``SendMessageUseCase.notifier``.
     """
 
-    def __init__(self, message_repo: MessagePosterPort, db_session: TransactionalSessionPort) -> None:
+    def __init__(self, message_repo: MessagePosterPort, db_session: _RollbackCapableSession) -> None:
         self._messages = message_repo
         self._db = db_session
         self.notifier: Optional[Any] = None
+
+    def rollback(self) -> None:
+        """Roll back ``db_session``: called by ``AssistantService`` at the top of its
+        generic exception handlers, before posting the error reply and writing the audit
+        row on the SAME session that just failed mid-request — without this, the
+        poisoned transaction fails that INSERT too (``PendingRollbackError`` on
+        Postgres), leaving the user with no reply at all and no audit row either."""
+        self._db.rollback()
 
     def _post(
         self,
@@ -202,16 +227,26 @@ class AssistantMessenger:
         trace_id: str | None = None,
         channel: ChannelRef | None = None,
         addressed_to: UUID | None = None,
+        lang: str | None = None,
     ) -> ChatMessage:
         """``addressed_to`` (the asker) defaults to ``user_id`` — every current caller
         already passes the asker's id there, so this is free for them. Only the person
-        it names may answer the choice (``SubmitAssistantActionUseCase``)."""
-        payload = {
+        it names may answer the choice (``SubmitAssistantActionUseCase``).
+
+        ``lang``, when given, is stored on the payload so a later tap on THIS choice
+        can reuse the language the prompt was actually rendered in instead
+        of re-detecting it from the choice's own auto-built text fallback — which can
+        misfire on a French-looking project name inside an English/Vietnamese prompt.
+        Optional only so an older caller that has not been updated yet keeps compiling.
+        """
+        payload: dict[str, Any] = {
             "prompt": prompt,
             "options": options,
             "answered": None,
             "addressed_to": str(addressed_to if addressed_to is not None else user_id),
         }
+        if lang is not None:
+            payload["lang"] = lang
         return self._post(
             user_id=user_id,
             content_type="choice",

@@ -31,8 +31,21 @@ class AssistantDispatcherPort(Protocol):
         """A user sent a message in their assistant conversation."""
         ...
 
-    def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
-        """A user tapped a choice option (``POST /api/v1/assistant/actions``)."""
+    def action_received(
+        self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]
+    ) -> Optional[bool]:
+        """A user tapped a choice option (``POST /api/v1/assistant/actions``).
+
+        Returns ``True`` once the tap was actually handed off for processing; ``False``
+        when the assistant is disabled or the hand-off itself failed (Redis unreachable,
+        serialization error) — the caller (``SubmitAssistantActionUseCase``) must then
+        undo the just-recorded answer and tell the client to retry, since a 202 followed
+        by a silently dropped job would otherwise leave the choice permanently answered
+        with no reply ever coming. ``None`` is accepted from an older adapter that has
+        not been updated to report this yet — treated the same as ``True`` (the caller
+        only ever reacts to an explicit ``False``), so this stays backward compatible
+        with any implementation that still returns nothing.
+        """
         ...
 
 
@@ -52,9 +65,18 @@ class MessagePosterPort(Protocol):
         the same choice can never both dispatch."""
         ...
 
-    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
+    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10, *, user_id: UUID) -> list[ChatMessage]:
         """Last ``limit`` messages of a channel the assistant was addressed by/as, oldest
-        first (S0 chat history) — never other chat in the channel (D18)."""
+        first (S0 chat history) — never other chat in the channel (D18).
+
+        Scoped to ``user_id``'s own conversation with the assistant: only ``user_id``'s
+        own ``@folio`` mentions and the assistant's own replies
+        addressed back to ``user_id`` (i.e. in reply to one of their messages) ever feed
+        the router's state — another member's ``@folio`` message in the same channel must
+        never be laundered into this asker's routing context (a prompt-injection vector:
+        a planted "move the drill to <X>" from someone else could otherwise steer this
+        asker's own ambiguous message into an unconfirmed write under their permissions).
+        """
         ...
 
 

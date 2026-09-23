@@ -31,7 +31,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from app.application.assistant import reply
-from app.application.assistant.exceptions import LlmOutputError
+from app.application.assistant.exceptions import LlmOutputError, LlmUnavailableError
 from app.application.assistant.features.ticket import TicketFeature
 from app.application.assistant.jobs_repo import AssistantJobRecord, AssistantJobRepositoryPort
 from app.application.assistant.messages import AssistantMessenger
@@ -46,6 +46,7 @@ from app.application.invoice.ports import IInvoiceRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.domain.entities.invoice import Invoice as InvoiceEntity, InvoiceType
+from app.domain.time import business_today
 
 logger = logging.getLogger(__name__)
 
@@ -212,12 +213,22 @@ class InvoiceFetchFeature:
 
         message = self._messages.find_by_id(message_id)
         text = (message.body or "").strip() if message is not None else ""
-        today = date.today()
+        today = business_today()
         user_text = f"Aujourd'hui : {today.isoformat()}. Message : {text}"
         try:
             parsed = self._vision.chat_json(
                 system=AMOUNT_DATE_SYSTEM_FR, user_text=user_text, images=[], model_cls=AmountDate
             )
+        except LlmUnavailableError:
+            messenger.post_text(
+                user_id,
+                reply.render("provider_unavailable", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=scope.channel,
+                scope=scope,
+            )
+            return "error"
         except LlmOutputError:
             messenger.post_text(
                 user_id,
@@ -319,7 +330,12 @@ class InvoiceFetchFeature:
             self._handle_terminal_once(job, context, messenger, state="blocked", template="fetch_blocked", scope=scope)
         elif status == "not_found":
             self._handle_not_found(job, context, messenger, trace_id, scope=scope)
-        else:  # pragma: no cover - defensive: the worker only ever writes the above
+        elif status == "failed":
+            # A `failed` result previously fell into the `else` branch below and was
+            # never marked processed: the reaper re-enqueued this job forever and the
+            # user was never told. One-shot terminal reply, same as `blocked`.
+            self._handle_terminal_once(job, context, messenger, state="failed", template="fetch_failed", scope=scope)
+        else:
             logger.warning("assistant.fetch_invoice: job %s has unexpected status %s", job_id, status)
 
     def _handle_terminal_once(
@@ -380,6 +396,32 @@ class InvoiceFetchFeature:
             logger.exception("assistant.fetch_invoice: failed to read PDF for job %s", job.id)
             self._finish(job, context, messenger, state="failed", template="fetch_failed", scope=scope)
             return
+        try:
+            self._ticket.run_bytes(
+                user_id=job.user_id,
+                lang=context.lang,
+                messenger=messenger,
+                trace_id=trace_id,
+                scope=scope,
+                data=data,
+                content_type="application/pdf",
+                chat_hint=job.project_hint,
+                source="web",
+                reply_to_id=context.reply_to_id,
+            )
+        except Exception:
+            # The job is already marked processed above — without this guard an
+            # exception here (a pdf2image failure on an HTML error page saved as
+            # `.pdf`, a `DecisionError`, a DB error, ...) left the status message on
+            # "Facture récupérée !" forever with no invoice and no retry. Report
+            # failure instead of a false success.
+            logger.exception("assistant.fetch_invoice: run_bytes failed for job %s", job.id)
+            # `run_bytes` can fail mid-write (e.g. a DB constraint violation while
+            # creating the invoice); `_finish` below writes on the same session, so it
+            # must be rolled back first or the failure reply itself raises.
+            messenger.rollback()
+            self._finish(job, context, messenger, state="failed", template="fetch_failed", scope=scope)
+            return
         if job.status_message_id is not None:
             messenger.update_job_status(
                 job.status_message_id,
@@ -388,18 +430,6 @@ class InvoiceFetchFeature:
                 terminal=True,
                 scope=scope,
             )
-        self._ticket.run_bytes(
-            user_id=job.user_id,
-            lang=context.lang,
-            messenger=messenger,
-            trace_id=trace_id,
-            scope=scope,
-            data=data,
-            content_type="application/pdf",
-            chat_hint=job.project_hint,
-            source="web",
-            reply_to_id=context.reply_to_id,
-        )
 
     def _handle_not_ready(
         self,
@@ -496,7 +526,7 @@ class InvoiceFetchFeature:
         self, projects: list[WritableProject], merchant: str, amount: float, target_date: date
     ) -> list[tuple[WritableProject, InvoiceEntity]]:
         date_from = target_date - CLOSEST_PURCHASE_WINDOW
-        date_to = min(target_date + CLOSEST_PURCHASE_WINDOW, date.today() + timedelta(days=1))
+        date_to = min(target_date + CLOSEST_PURCHASE_WINDOW, business_today() + timedelta(days=1))
         found: list[tuple[WritableProject, InvoiceEntity]] = []
         for project in projects:
             rows = self._invoice_repo.find_by_project_in_range(

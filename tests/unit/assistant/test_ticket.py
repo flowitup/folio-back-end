@@ -20,13 +20,18 @@ import cv2
 import numpy as np
 import pytest
 
-from app.application.assistant.features.ticket import TicketFeature
+from app.application.assistant.features.ticket import (
+    TicketFeature,
+    _build_line_items,
+    _build_single_line_item,
+    _line_vat_rate,
+)
 from app.application.assistant.messages import AssistantMessenger
-from app.application.assistant.models import ChannelScope, Invoice
+from app.application.assistant.models import ChannelScope, Invoice, Line
 from app.application.assistant.ports import Decision
 from app.application.invoice.create_invoice import CreateInvoiceUseCase
 from app.application.invoice.delete_invoice import DeleteInvoiceUseCase
-from app.application.invoice.upload_attachment import UploadAttachmentUseCase
+from app.application.invoice.upload_attachment import UnsupportedFileTypeError, UploadAttachmentUseCase
 from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
 from app.domain.entities.project import Project
 from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
@@ -156,6 +161,9 @@ class FakeMessageRepo:
 
 class FakeSession:
     def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
         pass
 
 
@@ -315,6 +323,285 @@ class TestCreateConfirmed:
         replies = world.last_replies()
         assert replies[-1].content_type == "text"
         assert "reprendre" in (replies[-1].body or "")
+
+
+class TestProviderOutageDuringExtract:
+    """A DeepSeek outage during `extract_invoice` (photo or downloaded-PDF path) must
+    not be told to the user as "retake the photo" — that bills another call for a
+    photo that was never the problem — and must audit as an actual error."""
+
+    def test_run_replies_temporarily_unavailable_and_audits_an_error(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._raise_llm_unavailable_error = True
+
+        outcome = world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        assert outcome == "error"
+        reply_text = world.last_replies()[-1].body or ""
+        assert "indisponible" in reply_text.lower()
+
+    def test_run_bytes_replies_temporarily_unavailable_and_audits_an_error(self, world: World) -> None:
+        world.vision._raise_llm_unavailable_error = True
+
+        outcome = world.feature.run_bytes(
+            user_id=world.user_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+            data=_photo_bytes(),
+            content_type="image/jpeg",
+            chat_hint=None,
+            source="web",
+        )
+
+        assert outcome == "error"
+        reply_text = world.last_replies()[-1].body or ""
+        assert "indisponible" in reply_text.lower()
+
+
+class TestVatReconstruction:
+    """Every reconstruction anchors on total_ttc, not a (possibly OCR-misread)
+    total_ht — confirmed against the real InvoiceItem math."""
+
+    def test_ht_tva_pair_anchors_on_ttc_when_rates_are_mixed(self) -> None:
+        # HT 100, TVA 12, TTC 112, rates [5.5, 20] -> the committed total always anchors
+        # on TTC (112), whichever vat_rate ends up applied. The 12% ratio does not snap
+        # to a real French rate and the receipt has two distinct rates, so this is
+        # flagged for review rather than trusted silently.
+        invoice = Invoice(
+            merchant="Point P", total_ht=100.0, total_tva=12.0, total_ttc=112.0, tva_rates=[5.5, 20.0], readability=0.9
+        )
+        items, needs_review = _build_single_line_item(invoice)
+        assert len(items) == 1
+        total = items[0]["quantity"] * items[0]["unit_price"] * (1 + items[0]["vat_rate"] / 100.0)
+        assert abs(total - 112.0) < 0.01
+        assert needs_review is True
+
+    def test_a_misread_total_ht_is_ignored_in_favour_of_the_single_rate(self) -> None:
+        # Rate [10], HT misread as 90, TTC 110 -> the old code trusted the misread HT
+        # as the unit price and committed a total of 99.
+        invoice = Invoice(merchant="Point P", total_ht=90.0, total_ttc=110.0, tva_rates=[10.0], readability=0.9)
+        items, needs_review = _build_single_line_item(invoice)
+        total = items[0]["quantity"] * items[0]["unit_price"] * (1 + items[0]["vat_rate"] / 100.0)
+        assert abs(total - 110.0) < 0.01
+        assert needs_review is False
+
+    def test_mixed_rate_lines_snap_to_a_real_french_rate_but_stay_flagged(self) -> None:
+        # Two distinct rates on the receipt (10, 20) -> even when the blended HT/TVA
+        # ratio lands exactly on a real French rate (10%) and reconstructs the lines
+        # accurately, a blend across different lines still needs a human's eyes.
+        invoice = Invoice(
+            merchant="Point P",
+            total_ht=110.0,
+            total_tva=11.0,
+            total_ttc=121.0,
+            tva_rates=[10.0, 20.0],
+            lines=[Line(label="A", qty=1, total_ttc=60.5), Line(label="B", qty=1, total_ttc=60.5)],
+            readability=0.9,
+        )
+        items, needs_review = _build_line_items(invoice)
+        reconstructed_ht = sum(item["quantity"] * item["unit_price"] for item in items)
+        assert abs(reconstructed_ht - 110.0) < 0.01
+        assert needs_review is True
+
+    def test_an_implausible_derived_ratio_falls_back_instead_of_producing_an_out_of_bounds_rate(self) -> None:
+        # HT 10, TVA 110 -> a naive total_tva/total_ht ratio is 1100%, which
+        # `InvoiceItem` rejects outright (0-100 bound) and used to lose the whole
+        # receipt over one misread field. The ratio must never escape unbounded.
+        rate, reliable = _line_vat_rate(
+            Invoice(merchant="Point P", total_ht=10.0, total_tva=110.0, total_ttc=120.0, readability=0.9)
+        )
+        assert 0.0 <= rate <= 100.0
+        assert reliable is False
+
+    def test_an_implausible_derived_ratio_still_creates_the_invoice_flagged_for_review(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [
+            Invoice(
+                merchant="Point P",
+                date="2026-09-10",
+                total_ht=10.0,
+                total_tva=110.0,
+                total_ttc=120.0,
+                readability=0.9,
+            )
+        ]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
+
+        world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
+        assert len(invoices) == 1  # never raised, never lost the receipt
+        import_row = world.import_repo.find_by_invoice(invoices[0].id)
+        assert "amounts_to_check" in import_row.flags
+
+    def test_a_fractional_rate_is_treated_as_a_percentage(self) -> None:
+        # tva_rates returned as [0.2] (a Jev/OCR misread meaning 20%, not 0.2%).
+        rate, reliable = _line_vat_rate(Invoice(merchant="Point P", total_ttc=120.0, tva_rates=[0.2], readability=0.9))
+        assert rate == pytest.approx(20.0)
+        assert reliable is True
+
+    def test_no_reliable_signal_falls_back_to_20_percent_and_is_flagged(self) -> None:
+        rate, reliable = _line_vat_rate(Invoice(merchant="Point P", total_ttc=120.0, readability=0.9))
+        assert rate == 20.0
+        assert reliable is False
+
+    def test_a_ticket_with_no_ht_tva_or_rate_signal_is_flagged_for_review(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [Invoice(merchant="Point P", date="2026-09-10", total_ttc=50.0, readability=0.9)]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
+
+        world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
+        assert len(invoices) == 1
+        import_row = world.import_repo.find_by_invoice(invoices[0].id)
+        assert "amounts_to_check" in import_row.flags
+
+
+class TestNegativeQuantityLineFallsBackToSingleLine:
+    """A returned-item line with a negative quantity (e.g. "RETOUR") used to make
+    `CreateInvoiceUseCase` reject the whole invoice, losing the whole receipt."""
+
+    def test_a_negative_quantity_line_does_not_crash_the_import(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [
+            Invoice(
+                merchant="Point P",
+                date="2026-09-10",
+                total_ttc=50.0,
+                readability=0.9,
+                lines=[
+                    Line(label="Ciment", qty=2, unit_price_ht=20.0, total_ttc=48.0),
+                    Line(label="RETOUR palette", qty=-1, unit_price_ht=2.0, total_ttc=2.0),
+                ],
+            )
+        ]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
+
+        world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31))
+        assert len(invoices) == 1
+        assert abs(float(invoices[0].total_amount) - 50.0) <= 0.02
+
+
+class TestAttachmentValidatedBeforeInvoiceCreation:
+    """Chat only checks the declared MIME type; `UploadAttachmentUseCase`'s own
+    magic-byte check previously ran AFTER the invoice already existed, leaving an
+    orphan on a mismatch. Any failure after create must also delete the invoice."""
+
+    def test_a_declared_mime_that_does_not_match_the_bytes_never_creates_an_invoice(self, world: World) -> None:
+        photo_bytes = _photo_bytes()  # real JPEG magic bytes
+        key = f"chat/{uuid4()}"
+        world.storage.put(key, io.BytesIO(photo_bytes), content_type="image/png")  # declared PNG, sent JPEG
+        message = ChatMessage.create(
+            channel=ChannelRef(kind="assistant", id=world.user_id),
+            sender_id=world.user_id,
+            body=None,
+            attachment=ChatAttachment(
+                storage_key=key, filename="ticket.png", content_type="image/png", size_bytes=len(photo_bytes)
+            ),
+        )
+        world.messages.add(message)
+        world.vision._json_answers = [Invoice(merchant="Point P", date="2026-09-10", total_ttc=50.0, readability=0.9)]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
+
+        with pytest.raises(UnsupportedFileTypeError):
+            world.feature.run(
+                user_id=world.user_id,
+                message_id=message.id,
+                lang="fr",
+                messenger=world.messenger,
+                trace_id="t1",
+                scope=world.default_scope(),
+            )
+
+        assert (
+            world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31)) == []
+        )
+
+    def test_a_failure_after_invoice_creation_deletes_the_orphan(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [Invoice(merchant="Point P", date="2026-09-10", total_ttc=50.0, readability=0.9)]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
+
+        class RaisingImportRepo:
+            def add_invoice_import(self, **kwargs: Any) -> None:
+                raise RuntimeError("boom: simulated add_invoice_import failure")
+
+            def find_by_invoice(self, invoice_id: UUID) -> None:
+                return None
+
+        world.feature._import_repo = RaisingImportRepo()
+
+        with pytest.raises(RuntimeError):
+            world.feature.run(
+                user_id=world.user_id,
+                message_id=message_id,
+                lang="fr",
+                messenger=world.messenger,
+                trace_id="t1",
+                scope=world.default_scope(),
+            )
+
+        assert (
+            world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2026, 1, 1), date(2026, 12, 31)) == []
+        )
+
+
+class TestIssueDateSanityBound:
+    """An OCR misread like "2062" was committed as-is — no sanity bound existed on the
+    ticket path (unlike feature B's fetch path)."""
+
+    def test_an_implausible_date_is_replaced_by_today_and_flagged(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [Invoice(merchant="Point P", date="2062-01-15", total_ttc=50.0, readability=0.9)]
+        world.decisions._by_question_keys = {_S3_KEYS: _project_decision(world.project_a.id, 0.95)}
+
+        world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        invoices = world.invoice_repo.find_by_project_in_range(world.project_a.id, date(2020, 1, 1), date(2100, 1, 1))
+        assert len(invoices) == 1
+        assert invoices[0].issue_date != date(2062, 1, 15)
+        import_row = world.import_repo.find_by_invoice(invoices[0].id)
+        assert "amounts_to_check" in import_row.flags
 
 
 class TestDuplicateRefused:

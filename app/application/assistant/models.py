@@ -43,7 +43,10 @@ class Invoice(BaseModel):
     tva_rates: list[float] = Field(default_factory=list)
     lines: list[Line] = Field(default_factory=list)
     payment_method: Optional[str] = None
-    readability: float
+    # Bounded 0..1 — an out-of-range value from the model is a malformed response,
+    # rejected the same way any other schema violation is (one retry, then
+    # `LlmOutputError`), not silently trusted.
+    readability: float = Field(ge=0, le=1)
 
 
 # ---------------------------------------------------------------------------
@@ -58,10 +61,16 @@ class MaterialIdent(BaseModel):
     name: str
     reference: Optional[str] = None
     ean: Optional[str] = None
-    category: str
+    # Optional: the prompt itself says "unknown fields -> null", but this was `str`
+    # (required), so a photo the model genuinely can't categorise failed validation
+    # twice — two billed vision calls — before the user was told the photo is
+    # unreadable.
+    category: Optional[str] = None
     specs: Optional[str] = None
     search_queries: list[str] = Field(default_factory=list)
-    confidence: float
+    # Bounded 0..1 — an unbounded value (e.g. a 0-100 scale) passed `gate.identify_ok`
+    # and then overflowed `Numeric(4,3)` in `add_material_import`.
+    confidence: float = Field(ge=0, le=1)
 
 
 class Product(BaseModel):

@@ -29,6 +29,14 @@ from app.infrastructure.database.models.assistant_job import AssistantJobModel
 #: user's job_status message on "running" forever.
 _STUCK_RUNNING_AFTER = timedelta(minutes=30)
 
+#: A `running` row stuck past `_STUCK_RUNNING_AFTER` this many times (i.e. reclaimed and
+#: abandoned again) is swept to `failed` instead of being reclaimed once more — mirrors
+#: `features/invoice_fetch.py`'s own `MAX_ATTEMPTS` retry cap for the `not_ready` backoff
+#: path (kept as an independent constant here rather than imported: this repository is
+#: also constructed from a bare `sessionmaker` with no Flask app, so it must never gain a
+#: dependency on the much heavier feature-layer import chain).
+_MAX_RECLAIM_ATTEMPTS = 3
+
 #: The other half of H2 (review finding NEW-H2): a job whose worker-reported terminal
 #: status was written by `update_result` but whose `process_fetched_invoice` enqueue
 #: never happened (or never ran) is not `running` — `claim_next`'s reaper never sees it.
@@ -181,12 +189,32 @@ class SqlAlchemyAssistantJobRepository:
 
     def claim_next(self, now: datetime) -> Optional[AssistantJobRecord]:
         stuck_before = now - _STUCK_RUNNING_AFTER
+        # A stuck `running` row that already exhausted its reclaim attempts is swept to
+        # `failed` here, *before* the claim SELECT below — without this it would be
+        # reclaimed forever (every 30 minutes, at full browser-agent cost), since the old
+        # "attempts-exhausted -> failed path naturally finalizes" comment only covered the
+        # `not_ready` retry path, never a crashing iteration that never reaches
+        # `update_result` at all. `processed_at` stays NULL so `on_result`'s `failed`
+        # branch and `reap_unprocessed` still notify the user exactly once.
+        self._session.execute(
+            update(AssistantJobModel)
+            .where(
+                AssistantJobModel.status == "running",
+                AssistantJobModel.updated_at < stuck_before,
+                AssistantJobModel.attempts >= _MAX_RECLAIM_ATTEMPTS,
+            )
+            .values(status="failed", updated_at=now)
+        )
         query = (
             select(AssistantJobModel)
             .where(
                 or_(
                     and_(AssistantJobModel.status == "queued", AssistantJobModel.run_after <= now),
-                    and_(AssistantJobModel.status == "running", AssistantJobModel.updated_at < stuck_before),
+                    and_(
+                        AssistantJobModel.status == "running",
+                        AssistantJobModel.updated_at < stuck_before,
+                        AssistantJobModel.attempts < _MAX_RECLAIM_ATTEMPTS,
+                    ),
                 )
             )
             .order_by(AssistantJobModel.run_after.asc())
@@ -205,9 +233,9 @@ class SqlAlchemyAssistantJobRepository:
             self._session.commit()
             return None
         if model.status == "running":
-            # Reaped from a stuck row — bump attempts so the existing attempts-exhausted
-            # -> failed path (features/invoice_fetch.py's not_ready handler) naturally
-            # finalizes a job that keeps getting abandoned, instead of retrying forever.
+            # Reaped from a stuck row (guaranteed `attempts < _MAX_RECLAIM_ATTEMPTS` by
+            # the query above) — bump attempts so it eventually hits the sweep above
+            # instead of being reclaimed forever.
             model.attempts += 1
         model.status = "running"
         model.updated_at = datetime.now(timezone.utc)
@@ -277,6 +305,15 @@ class SqlAlchemyAssistantJobRepository:
                     AssistantJobModel.status.in_(_TERMINAL_UNPROCESSED_STATUSES),
                     AssistantJobModel.processed_at.is_(None),
                     AssistantJobModel.updated_at < stale_before,
+                    # A job paused by the daily cost cap sets `run_after` to the next
+                    # Paris-local midnight (see `jobs._notify_job_status`'s callers) so
+                    # this sweep leaves it alone until the cap resets instead of
+                    # re-enqueuing `process_*` every `_UNPROCESSED_REAP_AFTER` for
+                    # hours while it can only be skipped again. Every job not paused
+                    # this way keeps its `run_after` at creation time (always in the
+                    # past by the time it could possibly be reaped), so this is a no-op
+                    # for the common case.
+                    AssistantJobModel.run_after <= now,
                 )
             )
             .scalars()

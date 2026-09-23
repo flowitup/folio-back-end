@@ -205,6 +205,9 @@ class FakeSession:
     def commit(self) -> None:
         pass
 
+    def rollback(self) -> None:
+        pass
+
 
 class RecordingNotifier:
     def __init__(self) -> None:
@@ -435,6 +438,28 @@ class TestFetchInvoice:
 
         assert world.job_repo.list_recent_for_user(world.user_id) == []
 
+    def test_a_provider_outage_replies_temporarily_unavailable_and_never_queues(self, session) -> None:
+        world = World(session)
+        message = world.post_user_message("va chercher ma facture Leroy Merlin")
+        world.vision._raise_llm_unavailable_error = True
+        decision = RouterDecision(intent="fetch_invoice", intent_confidence=0.9, merchant="leroymerlin")
+
+        outcome = world.feature.fetch_invoice(
+            user_id=world.user_id,
+            message_id=message.id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            decision=decision,
+            scope=world.default_scope(),
+        )
+
+        assert outcome == "error"
+        assert world.job_repo.list_recent_for_user(world.user_id) == []
+        replies = [m for m in world.messages.messages.values() if m.reply_to_id == message.id]
+        assert len(replies) == 1
+        assert "indisponible" in (replies[0].body or "").lower()
+
     def test_dedupe_within_24h_reuses_active_job(self, session) -> None:
         world = World(session)
         message = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
@@ -540,6 +565,73 @@ class TestOnResultBlocked:
         status_message = world.messages.find_by_id(job.status_message_id)
         assert status_message.payload["state"] == "blocked"
         assert len(world.notifier.calls) == 1
+
+
+class TestOnResultFailed:
+    """A `failed` fetch result fell into the `else` branch (no `mark_processed`, no
+    reply) — the reaper re-enqueued the job every 30 min forever and the user was
+    never told. `failed` now gets the same one-shot terminal handling as `blocked`."""
+
+    def test_marks_processed_and_tells_the_user(self, session) -> None:
+        world = World(session)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(reply_to=original)
+        world.job_repo.update_result(job.id, status="failed", result={"status": "failed"})
+        world.notifier.calls.clear()
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        status_message = world.messages.find_by_id(job.status_message_id)
+        assert status_message.payload["state"] == "failed"
+        assert len(world.notifier.calls) == 1  # terminal: pushed once
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
+
+    def test_a_second_on_result_call_is_a_no_op(self, session) -> None:
+        world = World(session)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(reply_to=original)
+        world.job_repo.update_result(job.id, status="failed", result={"status": "failed"})
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+        world.notifier.calls.clear()
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t2")
+
+        assert world.notifier.calls == []  # not re-pushed the second time
+
+
+class TestOnResultDoneWriteFailure:
+    """`on_result`'s "done" handler previously marked the job_status message "Facture
+    récupérée !" (success) BEFORE calling `TicketFeature.run_bytes`, with no try/except
+    around it — any exception afterwards (a pdf2image failure on an HTML error page
+    saved as `.pdf`, a DecisionError, a DB error, ...) left a false "done" forever with
+    no invoice and no retry."""
+
+    def test_a_run_bytes_failure_is_reported_as_failed_not_as_success(self, session) -> None:
+        world = World(session)
+        original = world.post_user_message("va chercher la facture Leroy Merlin 79,54e")
+        job = world.create_job(amount=Decimal("79.54"), job_date=date(2026, 9, 10), reply_to=original)
+
+        pdf_key = f"assistant/jobs/{job.id}.pdf"
+        world.storage.put(pdf_key, io.BytesIO(b"%PDF-fake"), content_type="application/pdf")
+        world.job_repo.update_result(job.id, status="done", pdf_storage_key=pdf_key, result={"status": "done"})
+
+        class RaisingTicket:
+            def run_bytes(self, **kwargs: Any) -> str:
+                raise RuntimeError("boom: simulated pdf2image/DecisionError/DB failure after mark_processed")
+
+        world.feature._ticket = RaisingTicket()
+        world.notifier.calls.clear()
+
+        world.feature.on_result(job.id, messenger=world.messenger, trace_id="t")
+
+        status_message = world.messages.find_by_id(job.status_message_id)
+        assert status_message.payload["state"] == "failed"
+        assert status_message.payload["text"] != "Facture récupérée !"
+        assert not any(m.content_type == "card" for m in world.messages.messages.values())
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
+        assert len(world.notifier.calls) == 1  # terminal push, once
 
 
 class TestOnResultNotFound:
