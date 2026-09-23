@@ -1,6 +1,6 @@
 """SQLAlchemy adapter for IPendingAttendanceQuery — pending days a user may validate."""
 
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import func, literal, or_
@@ -27,7 +27,14 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def list_pending_for_validator(self, user_id: UUID, limit: int = 100) -> List[PendingAttendanceItem]:
+    def list_pending_for_validator(
+        self,
+        user_id: UUID,
+        limit: int = 100,
+        *,
+        company_id: Optional[UUID] = None,
+        project_id: Optional[UUID] = None,
+    ) -> List[PendingAttendanceItem]:
         is_ops = bool(self._session.query(UserModel.is_platform_ops).filter(UserModel.id == user_id).scalar())
         may_validate = (
             literal(True)
@@ -36,7 +43,7 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
         )
 
         worker_name = func.coalesce(PersonModel.name, WorkerModel.name)
-        rows = (
+        query = (
             self._session.query(
                 LaborEntryModel.id.label("entry_id"),
                 ProjectModel.id.label("project_id"),
@@ -61,10 +68,14 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 or_(LaborEntryModel.status == "pending", LaborEntryModel.change_requested_at.isnot(None)),
                 may_validate,
             )
-            .order_by(LaborEntryModel.date.desc(), LaborEntryModel.created_at.desc())
-            .limit(limit)
-            .all()
         )
+        # Scoped in SQL, not after the fetch: a caller bound to one company/project must
+        # never have `limit` spent on rows outside that scope before its own are counted.
+        if company_id is not None:
+            query = query.filter(ProjectModel.company_id == company_id)
+        if project_id is not None:
+            query = query.filter(ProjectModel.id == project_id)
+        rows = query.order_by(LaborEntryModel.date.desc(), LaborEntryModel.created_at.desc()).limit(limit).all()
         return [
             PendingAttendanceItem(
                 entry_id=r.entry_id,

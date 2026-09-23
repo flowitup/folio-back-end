@@ -18,12 +18,14 @@ feature B.
 
 from __future__ import annotations
 
+import hashlib
 import io
 from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.application.assistant.features.material import MaterialFeature
 from app.application.assistant.jobs_repo import AssistantJobRecord
@@ -127,6 +129,9 @@ class FakeSession:
     def commit(self) -> None:
         pass
 
+    def rollback(self) -> None:
+        pass
+
 
 class FakeProjectRepo:
     """No projects — these tests never exercise the `project_hint` resolution path."""
@@ -167,6 +172,7 @@ class World:
         session,
         permission_checker: Optional[FakePermissionChecker] = None,
         fetch_image_usecase: Optional[Any] = None,
+        real_messenger_session: bool = False,
     ) -> None:
         self.session = session
         self.user_id = uuid4()
@@ -190,7 +196,10 @@ class World:
             self.product_repo, self.image_storage, self.membership, self.permission_checker, session
         )
         self.messages = FakeMessageRepo()
-        self.messenger = AssistantMessenger(self.messages, FakeSession())
+        # `real_messenger_session=True` wires the messenger to the SAME real SQLAlchemy
+        # session the repos below use, instead of the always-succeeds FakeSession — only
+        # that combination can reproduce a genuine poisoned-transaction failure.
+        self.messenger = AssistantMessenger(self.messages, session if real_messenger_session else FakeSession())
         self.storage = InMemoryDocumentStorage()
         self.vision = ScriptedVision(json_answers=[])
         self.decisions = ScriptedDecision()
@@ -329,6 +338,30 @@ class TestJobCreation:
         job_status = next(m for m in world.last_replies() if m.content_type == "job_status")
         assert job_status.payload["state"] == "queued"
         assert "cherche" in job_status.payload["text"].lower()
+
+
+class TestProviderOutageDuringIdentify:
+    """A DeepSeek outage (timeout, 5xx, rate limit) must not be told to the user as
+    "retake the photo" — that bills another call for a photo that was never the
+    problem, and the audit log must show an actual error, not a normal turn."""
+
+    def test_replies_with_the_temporarily_unavailable_template_and_audits_an_error(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._raise_llm_unavailable_error = True
+
+        outcome = world.feature.run(
+            user_id=world.user_id,
+            message_id=message_id,
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        assert outcome == "error"
+        reply_text = world.last_replies()[-1].body or ""
+        assert "indisponible" in reply_text.lower()
+        assert world.job_repo.list_recent_for_user(world.user_id) == []  # never queued a job over an outage
 
 
 class TestChannelRoundTrip:
@@ -562,6 +595,118 @@ class TestIdempotentOnResult:
         assert total == 1
 
 
+class TestOnResultWriteFailureDoesNotReportFalseSuccess:
+    """The job_status message must only move to a terminal "done" state AFTER the
+    write actually succeeds — otherwise a failure right after (a DB IntegrityError
+    from `add_material_import`, for example) leaves the user told "added to the
+    library" while no product/import row exists."""
+
+    def test_a_write_failure_after_the_pick_is_reported_as_failed(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        class RaisingMaterialImports:
+            def add_material_import(self, **kwargs: Any) -> None:
+                raise RuntimeError("boom: simulated (company_id, photo_sha256) IntegrityError")
+
+        world.feature._material_imports = RaisingMaterialImports()
+
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/1")])
+
+        status_message = world.messages.find_by_id(job.status_message_id)
+        assert status_message.payload["state"] == "failed"
+        assert not any(m.content_type == "card" for m in world.last_replies())
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
+
+    def test_a_write_failure_on_the_photo_only_fallback_is_reported_as_failed(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+
+        class RaisingMaterialImports:
+            def add_material_import(self, **kwargs: Any) -> None:
+                raise RuntimeError("boom: simulated failure on the photo-only import path")
+
+        world.feature._material_imports = RaisingMaterialImports()
+
+        world.complete_search(job, status="not_found", candidates=[])
+
+        status_message = world.messages.find_by_id(job.status_message_id)
+        assert status_message.payload["state"] == "failed"
+        updated = world.job_repo.find_by_id(job.id)
+        assert updated.processed_at is not None
+
+
+class TestOnResultRollsBackBeforeReportingFailure:
+    """Real SQLAlchemy session, real `SqlAlchemyAssistantImportRepository` — proves the
+    rollback actually clears the poisoned transaction a genuine `(company_id,
+    photo_sha256)` unique-constraint violation leaves behind, not just a fake repo
+    raising an arbitrary exception.
+
+    Uses its own engine/session bound directly (no outer `connection.begin()` wrapper)
+    instead of the shared `session` fixture: that fixture's test-isolation pattern
+    treats every `session.rollback()` as "discard the whole test", which would make
+    this test unable to tell a correct rollback (discards only the failed statement)
+    from a bug — the same gap that let the reviewed fix's own commit stay unverified
+    against a real session.
+    """
+
+    @pytest.fixture
+    def real_session(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from app.infrastructure.database.models import Base
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        db_session = sessionmaker(bind=engine)()
+        yield db_session
+        db_session.close()
+
+    def test_a_real_unique_violation_still_ends_the_job_failed(self, real_session) -> None:
+        world = World(real_session, real_messenger_session=True)
+        photo_bytes = _PHOTO_BYTES
+        sha = hashlib.sha256(photo_bytes).hexdigest()
+
+        message_id = world.post_photo(photo_bytes)
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        # A pre-existing import row for this exact (company, photo) pair — `on_result`
+        # never re-runs the cache check `run()` already passed, so this collision is
+        # only hit inside `_create_from_candidate`'s own `add_material_import` write.
+        world.material_imports.add_material_import(
+            product_id=uuid4(),
+            company_id=world.company_id,
+            status="confirmed",
+            confidence=0.9,
+            photo_sha256=sha,
+        )
+
+        # Would raise `sqlalchemy.exc.PendingRollbackError` out of `on_result` without
+        # the `messenger.rollback()` fix, since `update_job_status` below writes on the
+        # same session the unique-constraint violation just poisoned.
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/1")])
+
+        status_message = world.messages.find_by_id(job.status_message_id)
+        assert status_message.payload["state"] == "failed"
+        # The job itself (committed by `mark_processed` before the failing write) is
+        # still there and still marked processed — the rollback discarded only the
+        # failed `add_material_import` insert, not everything committed before it.
+        updated_job = world.job_repo.find_by_id(job.id)
+        assert updated_job is not None
+        assert updated_job.processed_at is not None
+        # The session is usable again for a fresh write — the rollback actually
+        # cleared the poisoned transaction rather than leaving it for the next
+        # statement to trip over.
+        assert real_session.execute(select(1)).scalar() == 1
+
+
 class TestImageFetchOnlyForMerchantDomain:
     def test_a_merchant_hosted_image_url_is_fetched_server_side(self, session) -> None:
         fetch_spy = RecordingFetchImage()
@@ -597,6 +742,58 @@ class TestImageFetchOnlyForMerchantDomain:
         products, _total = world.product_repo.list(world.company_id)
         assert products[0].image_storage_key is not None  # fell back to the user's own photo upload
 
+    def test_an_adeo_cdn_image_url_is_now_fetchable(self, session) -> None:
+        """`is_merchant_url`'s 7-merchant-site allowlist never matched the SSRF
+        allowlist's only CDN entry (media.adeo.com, Leroy Merlin's image host) — the
+        server-side fetch path was dead in practice. Gating on the fetch use case's own
+        `_is_host_allowed` fixes that."""
+        fetch_spy = RecordingFetchImage()
+        world = World(session, fetch_image_usecase=fetch_spy)
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        world.complete_search(
+            job,
+            candidates=[_candidate("https://www.leroymerlin.fr/p/1", image_url="https://media.adeo.com/gsb18v.jpg")],
+        )
+
+        assert fetch_spy.calls and fetch_spy.calls[0][1] == "https://media.adeo.com/gsb18v.jpg"
+
+
+class TestMaterialWriteValidation:
+    """A manual `CreateProductUseCase.execute()` call skips the API schema's own
+    validation (canonical category slugs, https-only product_url, column-length caps) —
+    this feature must apply the same rules itself before it ever reaches the DB."""
+
+    def test_free_text_category_is_normalised_to_a_canonical_slug(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        world.complete_search(job, candidates=[_candidate("https://www.leroymerlin.fr/p/1")])
+
+        products, _total = world.product_repo.list(world.company_id)
+        assert products[0].category == "outillage"  # _ident()'s free-text category, already canonical
+
+    def test_a_non_https_product_url_is_never_stored(self, world: World) -> None:
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
+        job = world.start_search(message_id)
+        world.decisions._by_question_keys = {frozenset({"pick"}): _pick_decision("0", 0.9)}
+
+        world.complete_search(
+            job,
+            candidates=[
+                _candidate("javascript:alert(1)", merchant="leroymerlin"),
+            ],
+        )
+
+        products, _total = world.product_repo.list(world.company_id)
+        assert products[0].product_url is None
+
 
 class TestNoPermission:
     def test_posts_the_no_permission_template(self, session) -> None:
@@ -614,34 +811,51 @@ class TestNoPermission:
         assert replies[-1].content_type == "text"
 
 
-class TestDefenseInDepthPickCompanyForeignCompany:
-    """C1's defense-in-depth layer (pass-2 review, previously untested): the primary
-    defense is `SubmitAssistantActionUseCase`'s stored-option equality check (`_post_
-    pick_company` only ever offers the caller's own companies), but `handle_action`
-    independently re-checks membership before touching anything else in the payload —
-    closing the "attach a product to a foreign company" IDOR even if a forged
-    `company_id` ever reached this far."""
+class TestNotAMemberOfChannelCompany:
+    """The old `pick_company` cross-company fallback always failed at the end (the
+    photo message id was never threaded through the tap), and offered companies this
+    channel is not scoped to. An asker who is not a member of the channel's own
+    company now gets a plain `no_permission` reply instead of a choice offering every
+    OTHER company they belong to — none of which this channel is scoped to."""
 
-    def test_pick_company_refuses_a_company_the_user_is_not_a_member_of(self, world: World) -> None:
-        foreign_company_id = uuid4()  # never in world.company_access's list
+    def test_replies_no_permission_instead_of_offering_other_companies(self, world: World) -> None:
+        other_company_id = uuid4()
+        # The asker belongs to a DIFFERENT company than the channel's own.
+        world.feature._company_access = FakeCompanyAccessRepo([other_company_id])
+        message_id = world.post_photo()
+        world.vision._json_answers = [_ident()]
 
-        handled = world.feature.handle_action(
+        outcome = world.feature.run(
             user_id=world.user_id,
-            message_id=uuid4(),
-            action="pick_company",
-            payload={"company_id": str(foreign_company_id)},
+            message_id=message_id,
             lang="fr",
             messenger=world.messenger,
             trace_id="t1",
             scope=world.default_scope(),
         )
 
-        assert handled is True
+        assert outcome == "refused"
+        assert world.job_repo.list_recent_for_user(world.user_id) == []
         replies = world.last_replies()
-        assert len(replies) == 1
-        assert replies[0].content_type == "text"
-        products, total = world.product_repo.list(foreign_company_id)
-        assert total == 0
+        assert replies[-1].content_type == "text"
+        assert not any(m.content_type == "choice" for m in replies)
+
+    def test_handle_action_no_longer_recognises_pick_company(self, world: World) -> None:
+        """The `pick_company` action can no longer be offered by `run()`, so
+        `handle_action` has nothing left to do with it — defence in depth against a
+        stale/forged action string is now simply "never handled"."""
+        handled = world.feature.handle_action(
+            user_id=world.user_id,
+            message_id=uuid4(),
+            action="pick_company",
+            payload={"company_id": str(uuid4())},
+            lang="fr",
+            messenger=world.messenger,
+            trace_id="t1",
+            scope=world.default_scope(),
+        )
+
+        assert handled is False
 
 
 class TestChannelBoundCompanyResolution:
@@ -662,6 +876,25 @@ class TestChannelBoundCompanyResolution:
 
         assert job.params["company_id"] == str(world.company_id)
         assert job.params["company_id"] != str(other_company_id)
+
+
+class TestMaterialIdentSchemaBounds:
+    """`category` conflicted with the prompt's own "unknown fields -> null" instruction
+    (it was required), and `confidence`/`Invoice.readability` had no [0,1] bound, so a
+    misread confidence on a 0-100 scale overflowed `Numeric(4,3)` at write time instead
+    of being rejected up front like any other malformed response."""
+
+    def test_category_is_optional(self) -> None:
+        ident = MaterialIdent(name="Perceuse", confidence=0.9)
+        assert ident.category is None
+
+    def test_confidence_above_one_is_rejected(self) -> None:
+        with pytest.raises(Exception):
+            MaterialIdent(name="Perceuse", category="outillage", confidence=42.0)
+
+    def test_confidence_below_zero_is_rejected(self) -> None:
+        with pytest.raises(Exception):
+            MaterialIdent(name="Perceuse", category="outillage", confidence=-0.1)
 
 
 class TestLowConfidenceIdentification:

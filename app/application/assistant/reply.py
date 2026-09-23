@@ -174,6 +174,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "fr": "Une erreur est survenue, réessaie s'il te plaît.",
         "en": "Something went wrong, please try again.",
     },
+    "provider_unavailable": {
+        "vi": "Trợ lý đang tạm thời quá tải, vui lòng thử lại sau ít phút.",
+        "fr": "L'assistant est temporairement indisponible, réessaie dans quelques minutes.",
+        "en": "The assistant is temporarily unavailable, please try again in a few minutes.",
+    },
     "fetch_ack": {
         "vi": "Tôi đang tìm hoá đơn, sẽ báo lại sớm.",
         "fr": "Je m'en occupe, je te dis dès que j'ai la facture.",
@@ -378,6 +383,12 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "vi": "(Với vai trò quản trị, bạn có thể hỏi lại trong kênh Quản trị.)",
         "fr": "(En tant qu'administrateur, tu peux reposer la question dans le canal Administration.)",
         "en": "(As an admin, you can ask again in the Admin channel.)",
+    },
+    "refuse_ask_in_project_channel": {
+        "vi": "Thông tin của một công trình (nhân sự, công việc) chỉ được trả lời trong kênh của chính công trình đó.",
+        "fr": "Les informations d'un chantier (effectif, tâches) ne sont répondues que dans le canal de ce "
+        "chantier.",
+        "en": "Project details (roster, tasks) are only answered in that project's own channel.",
     },
     # -----------------------------------------------------------------
     # Phase 04 — labor handlers (day roster, bulk attendance, validation).

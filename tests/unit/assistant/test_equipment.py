@@ -47,6 +47,38 @@ class FakeProjectCompanyReader:
         return self._owners.get(project_id)
 
 
+class FakeEquipmentAuthzReader:
+    """Just enough of `AuthzReaderPort` for `_resolve_project`'s `accessible_projects`
+    call: the caller is an admin of every company in `admin_of`, and every
+    project in `owners` belongs to its mapped company — matches `world`'s single-company
+    setup, so `project:read` resolves True for both of its projects."""
+
+    def __init__(self, owners: dict[UUID, UUID], *, admin_of: list[UUID]) -> None:
+        self._owners = owners
+        self._admin_of = admin_of
+
+    def company_role_for(self, user_id: UUID, company_id: UUID) -> "str | None":
+        return "admin" if company_id in self._admin_of else None
+
+    def is_assigned(self, user_id: UUID, project_id: UUID) -> bool:
+        return True
+
+    def project_company_id(self, project_id: UUID) -> Optional[UUID]:
+        return self._owners.get(project_id)
+
+    def project_exists(self, project_id: UUID) -> bool:
+        return project_id in self._owners
+
+    def admin_company_ids(self, user_id: UUID) -> list[UUID]:
+        return list(self._admin_of)
+
+    def is_platform_ops(self, user_id: UUID) -> bool:
+        return False
+
+    def grants_for(self, user_id: UUID, company_id: UUID, project_id: "UUID | None") -> list:
+        return []
+
+
 class FakeMembership:
     def is_member(self, user_id: UUID, company_id: UUID) -> bool:
         return True
@@ -93,6 +125,9 @@ def world(session):
 
     project_repo = FakeProjectRepo([project, other_project])
     project_reader = FakeProjectCompanyReader({project.id: company_id, other_project.id: company_id})
+    authz_reader = FakeEquipmentAuthzReader(
+        {project.id: company_id, other_project.id: company_id}, admin_of=[company_id]
+    )
     update_item_usecase = UpdateInventoryItemUseCase(
         item_repo=item_repo,
         warehouse_repo=warehouse_repo,
@@ -106,6 +141,7 @@ def world(session):
         warehouse_repo=warehouse_repo,
         project_repo=project_repo,
         update_item_usecase=update_item_usecase,
+        authz_reader=authz_reader,
     )
     return {
         "service": service,
@@ -118,6 +154,7 @@ def world(session):
         "item_repo": item_repo,
         "warehouse_repo": warehouse_repo,
         "project_reader": project_reader,
+        "authz_reader": authz_reader,
         "session": session,
     }
 
@@ -261,6 +298,7 @@ def test_move_denied_when_caller_lacks_manage_permission(world) -> None:
         warehouse_repo=world["warehouse_repo"],
         project_repo=FakeProjectRepo([world["project"], world["other_project"]]),
         update_item_usecase=denied_update_usecase,
+        authz_reader=world["authz_reader"],
     )
     outcome = service.move(
         user_id=world["user_id"],
@@ -287,6 +325,7 @@ def test_move_denied_raises_neither_company_access_nor_permission_error(world) -
         warehouse_repo=world["warehouse_repo"],
         project_repo=FakeProjectRepo([world["project"]]),
         update_item_usecase=denied_update_usecase,
+        authz_reader=world["authz_reader"],
     )
     try:
         outcome = service.move_by_item_id(
@@ -298,3 +337,86 @@ def test_move_denied_raises_neither_company_access_nor_permission_error(world) -
     except (CompanyAccessDeniedError, InsufficientPermissionError):  # pragma: no cover - documents the contract
         pytest.fail("EquipmentService must translate permission errors into MoveResult(status='denied')")
     assert outcome.status == "denied"
+
+
+# ---------------------------------------------------------------------------
+# Equipment moves must never enumerate another company's projects.
+# ---------------------------------------------------------------------------
+
+
+def test_move_ambiguous_project_never_offers_a_project_of_another_company(world) -> None:
+    """The caller owns/is-assigned-to a project of a DIFFERENT company; the old
+    `list_for_user_and_companies(user_id, [item.company_id])` union still returned it
+    (it only filters "belongs to this company" for the admin-of branch, never for the
+    owner/member branch). `_resolve_project` must keep only projects of the item's own
+    company."""
+    other_company_id = uuid4()
+    foreign_project = _project(other_company_id, "Chantier d'une autre société")
+    project_repo = FakeProjectRepo([world["project"], world["other_project"], foreign_project])
+    authz_reader = FakeEquipmentAuthzReader(
+        {
+            world["project"].id: world["company_id"],
+            world["other_project"].id: world["company_id"],
+            foreign_project.id: other_company_id,
+        },
+        # The caller administers BOTH companies — exactly the scenario the old union
+        # leaked: an admin of company A asking in company A's channel must still never
+        # see company B's projects just because they also administer B.
+        admin_of=[world["company_id"], other_company_id],
+    )
+    service = EquipmentService(
+        item_repo=world["item_repo"],
+        warehouse_repo=world["warehouse_repo"],
+        project_repo=project_repo,
+        update_item_usecase=world["service"]._update_item,
+        authz_reader=authz_reader,
+    )
+    outcome = service.move(
+        user_id=world["user_id"],
+        company_ids=[world["company_id"]],
+        query="perceuse",
+        project_hint="Chantier inconnu",
+        is_write_confirmed=True,
+    )
+    assert outcome.status == "ambiguous_project"
+    assert "Chantier d'une autre société" not in outcome.project_candidates
+    assert set(outcome.project_candidates) == {"Villa Arcueil", "Extension Meaux"}
+
+
+# ---------------------------------------------------------------------------
+# Search stops after MAX_CANDIDATES + 1 rows.
+# ---------------------------------------------------------------------------
+
+
+def test_find_caps_hits_and_reports_truncated_for_a_large_match_set(world) -> None:
+    for i in range(8):
+        world["item_repo"].add(
+            InventoryItem.create(
+                company_id=world["company_id"],
+                name=f"Perceuse modèle {i}",
+                quantity=1,
+                condition="working",
+                location_type="warehouse",
+                warehouse_id=world["warehouse"].id,
+            )
+        )
+    world["session"].commit()
+
+    result = world["service"].find(company_ids=[world["company_id"]], query="perceuse")
+    assert len(result.hits) == 5
+    assert result.truncated is True
+
+
+# ---------------------------------------------------------------------------
+# LIKE wildcard escaping — `%`/`_` in a free-text query must not turn into a match-all.
+# ---------------------------------------------------------------------------
+
+
+def test_find_percent_query_does_not_match_every_item(world) -> None:
+    result = world["service"].find(company_ids=[world["company_id"]], query="%")
+    assert result.hits == []
+
+
+def test_find_underscore_query_does_not_match_every_item(world) -> None:
+    result = world["service"].find(company_ids=[world["company_id"]], query="_")
+    assert result.hits == []

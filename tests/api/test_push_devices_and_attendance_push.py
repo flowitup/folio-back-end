@@ -296,3 +296,17 @@ def test_global_switch_mutes_every_category(client, linked_h, push_app):
         with push_app.app_context():
             repo = get_container().notification_preference_repository
             assert repo.muted_user_ids([linked_id], "chat") == set()
+
+
+def test_the_labor_feature_is_wired_with_the_attendance_push_notifier(push_app):
+    """`create_app()` must wire the same notifier the HTTP validate route uses into
+    `assistant_labor_feature`, or a day validated through @folio never reaches the
+    worker who logged it (`LaborFeature._notify_worker_validated` silently no-ops on
+    a `None` notifier)."""
+    from wiring import get_container
+
+    with push_app.app_context():
+        container = get_container()
+        assert container.assistant_labor_feature is not None
+        assert container.assistant_labor_feature._notifier is not None
+        assert container.assistant_labor_feature._notifier is container.attendance_push_notifier

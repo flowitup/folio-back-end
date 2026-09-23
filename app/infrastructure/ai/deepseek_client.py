@@ -15,10 +15,11 @@ import json
 import logging
 from typing import Any, Optional, TypeVar
 
+import openai
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
-from app.application.assistant.exceptions import LlmOutputError, ProviderNotConfiguredError
+from app.application.assistant.exceptions import LlmOutputError, LlmUnavailableError, ProviderNotConfiguredError
 from app.application.assistant.ports import CostLedgerPort
 from app.infrastructure.ai.cost import deepseek_cost_usd
 
@@ -29,6 +30,12 @@ BASE_URL = "https://api.deepseek.com"
 MAX_IMAGE_SIDE_PX = 1600
 MAX_TOKENS = 2048
 _RETRY_TEMPERATURE = 0.2
+#: A hung/slow DeepSeek call must not eat the RQ worker's whole job_timeout — well
+#: under the ceiling for any provider call. Retries are disabled at the SDK level:
+#: `chat_json`'s own one retry at a different temperature is the retry policy for this
+#: adapter, so the SDK's own retry-on-error would only add latency on top without
+#: changing the outcome.
+REQUEST_TIMEOUT_SECONDS = 60
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -68,23 +75,40 @@ class DeepSeekVisionLlm:
 
     def __init__(self, api_key: str, cost_ledger: CostLedgerPort, client: Optional[OpenAI] = None) -> None:
         self._cost_ledger = cost_ledger
-        self._client = client or OpenAI(api_key=api_key, base_url=BASE_URL)
+        self._client = client or OpenAI(
+            api_key=api_key, base_url=BASE_URL, timeout=REQUEST_TIMEOUT_SECONDS, max_retries=1
+        )
 
     def _complete(self, system: str, user_text: str, images: list[bytes], temperature: float, json_mode: bool) -> str:
         extra: dict[str, Any] = {}
         if json_mode:
             extra["response_format"] = {"type": "json_object"}
-        response = self._client.chat.completions.create(
-            model=MODEL,
-            temperature=temperature,
-            max_tokens=MAX_TOKENS,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": _user_content(user_text, images)},
-            ],
-            extra_body={"thinking": {"type": "disabled"}},
-            **extra,
-        )
+        try:
+            response = self._client.chat.completions.create(
+                model=MODEL,
+                temperature=temperature,
+                max_tokens=MAX_TOKENS,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": _user_content(user_text, images)},
+                ],
+                extra_body={"thinking": {"type": "disabled"}},
+                **extra,
+            )
+        except (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError) as exc:
+            # The provider itself is unavailable (timeout/connection error —
+            # `APITimeoutError` subclasses `APIConnectionError`, so it is covered here
+            # too — 429, or 5xx), not a bad request: a distinct, narrower exception so
+            # callers can tell the user to retry later instead of "retake the photo"
+            # (which bills another DeepSeek call for a photo that was never the
+            # problem) and audit it as an actual error, not a normal "asked" turn.
+            raise LlmUnavailableError(f"DeepSeek is unavailable: {exc}") from exc
+        except openai.APIError as exc:
+            # Any other SDK/transport failure (4xx other than rate-limited) was
+            # previously unhandled here and propagated as a raw `openai` exception no
+            # caller catches, crashing the whole extract/identify call instead of the
+            # graceful "retake the photo" reply those callers give on `LlmOutputError`.
+            raise LlmOutputError(f"DeepSeek request failed: {exc}") from exc
         if response.usage is not None:
             kind = "deepseek_vision" if images else "deepseek_text"
             self._cost_ledger.add(kind, deepseek_cost_usd(response.usage))

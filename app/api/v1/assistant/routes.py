@@ -30,6 +30,7 @@ from app.application.assistant.exceptions import (
     AssistantMessageNotFoundError,
     AssistantNotAddressedError,
 )
+from app.application.assistant.service import AssistantDispatchFailedError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -105,6 +106,8 @@ def submit_action() -> Any:
         return _err(403, "NotAddressed", "This choice was not addressed to you")
     except AssistantAlreadyAnsweredError:
         return _err(409, "AlreadyAnswered", "This choice has already been answered")
+    except AssistantDispatchFailedError:
+        return _err(503, "AssistantUnavailable", "Could not hand this off for processing, please retry.")
     except Exception:
         logger.exception("submit_action unexpected error")
         return _err(500, "InternalError", "An unexpected error occurred.")

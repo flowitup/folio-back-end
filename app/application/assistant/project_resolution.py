@@ -68,6 +68,15 @@ def accessible_projects(
         candidates = project_repo.list_for_user_and_companies(user_id, admin_company_ids)
 
     if company_id is not None:
+        # Batch the project->company lookup into one query instead of one per
+        # candidate — matters most here, since a platform-ops caller's `candidates` is
+        # every project system-wide (`list_all()` above), not just the caller's own.
+        # No-op (falls through to the per-candidate calls below, unchanged) for an
+        # `AuthzReaderPort` implementation that does not offer this method — same
+        # duck-typed opt-in `preload_for_projects` below already uses.
+        preload_companies = getattr(authz_reader, "preload_project_company_ids", None)
+        if preload_companies is not None:
+            preload_companies([p.id for p in candidates])
         candidates = [p for p in candidates if authz_reader.project_company_id(p.id) == company_id]
 
     # NEW-M1: prime the per-request cache in three queries total instead of the
@@ -151,6 +160,7 @@ def resolve_project(
         channel=scope.channel,
         addressed_to=user_id,
         scope=scope,
+        lang=lang,
     )
     return None
 

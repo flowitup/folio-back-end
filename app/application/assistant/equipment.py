@@ -11,12 +11,14 @@ duplicate them.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 from uuid import UUID
 
 from app.application.assistant import aliases
 from app.application.assistant.exceptions import AssistantError
+from app.application.authz.ports import AuthzReaderPort
 from app.application.inventory.exceptions import (
     CompanyAccessDeniedError,
     InsufficientPermissionError,
@@ -28,9 +30,30 @@ from app.application.inventory.item_usecases import UpdateInventoryItemUseCase
 from app.application.inventory.ports import IInventoryItemRepository, IWarehouseRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.inventory_item import InventoryItem
+from app.domain.entities.project import Project
+from app.domain.entities.warehouse import Warehouse
 
 #: `move_equipment` never asks the user to pick from more than this many candidates.
 MAX_CANDIDATES = 5
+
+#: `_search` stops collecting rows (and stops issuing further `list()` calls) once it
+#: knows the answer is already "more than fits" -- one past `MAX_CANDIDATES` is enough to
+#: set `FindResult.truncated`/`MoveResult.status == "ambiguous_item"` without scanning
+#: (and later resolving a warehouse/project for) the rest of a large company's inventory
+#: (an unbounded scan of a large company's inventory otherwise runs one `list()` call
+#: per company/term and one location lookup per row before ever truncating).
+_SEARCH_ROW_CAP = MAX_CANDIDATES + 1
+
+_LIKE_SPECIAL_RE = re.compile(r"([\\%_])")
+
+
+def _escape_like(term: str) -> str:
+    """Escape `%`/`_` (and a literal backslash) so a free-text search term is matched
+    literally by the repository's ILIKE, not as a wildcard — an unescaped `%`/`_` in a
+    free-text message would otherwise turn `@folio %` into a search that matches the
+    whole inventory. Postgres' default LIKE escape character is the
+    backslash, with no ESCAPE clause required on the SQL side."""
+    return _LIKE_SPECIAL_RE.sub(r"\\\1", term)
 
 
 @dataclass(frozen=True)
@@ -88,17 +111,23 @@ class EquipmentService:
         warehouse_repo: IWarehouseRepository,
         project_repo: IProjectRepository,
         update_item_usecase: UpdateInventoryItemUseCase,
+        authz_reader: AuthzReaderPort,
     ) -> None:
         self._items = item_repo
         self._warehouses = warehouse_repo
         self._projects = project_repo
         self._update_item = update_item_usecase
+        self._authz_reader = authz_reader
 
     # ------------------------------------------------------------------
     # Search — shared by find and move.
     # ------------------------------------------------------------------
 
-    def _search(self, company_ids: list[UUID], query: str) -> list[EquipmentHit]:
+    def _search_items(self, company_ids: list[UUID], query: str) -> list[InventoryItem]:
+        """Every matching row, stopped as soon as the result is already known to be
+        "more than fits" — `_SEARCH_ROW_CAP` rows is enough to set `truncated`/
+        `ambiguous_item` without scanning (or issuing further `list()` calls against) the
+        rest of a large company's inventory."""
         terms = aliases.expand(query)
         if not terms:
             return []
@@ -106,36 +135,66 @@ class EquipmentService:
         rows: list[InventoryItem] = []
         for company_id in company_ids:
             for term in terms:
-                for row in self._items.list(company_id, q=term):
-                    if row.id not in seen_item_ids:
-                        seen_item_ids.add(row.id)
-                        rows.append(row)
-        return [self._to_hit(row) for row in rows]
+                for row in self._items.list(company_id, q=_escape_like(term)):
+                    if row.id in seen_item_ids:
+                        continue
+                    seen_item_ids.add(row.id)
+                    rows.append(row)
+                    if len(rows) >= _SEARCH_ROW_CAP:
+                        return rows
+        return rows
+
+    def _search(self, company_ids: list[UUID], query: str) -> list[EquipmentHit]:
+        return self._to_hits(self._search_items(company_ids, query))
+
+    def _to_hits(self, items: list[InventoryItem]) -> list[EquipmentHit]:
+        """Resolve a warehouse/project name for each of `items` — cached per id so a
+        batch of rows sharing the same warehouse/project issues one lookup, not one per
+        row."""
+        warehouse_cache: dict[UUID, Optional[Warehouse]] = {}
+        project_cache: dict[UUID, Optional[Project]] = {}
+        hits = []
+        for item in items:
+            if item.location_type == "warehouse" and item.warehouse_id is not None:
+                if item.warehouse_id not in warehouse_cache:
+                    warehouse_cache[item.warehouse_id] = self._warehouses.find_by_id(item.warehouse_id)
+                warehouse = warehouse_cache[item.warehouse_id]
+                location_label = warehouse.name if warehouse is not None else "?"
+            elif item.project_id is not None:
+                if item.project_id not in project_cache:
+                    project_cache[item.project_id] = self._projects.find_by_id(item.project_id)
+                project = project_cache[item.project_id]
+                location_label = project.name if project is not None else "?"
+            else:
+                location_label = "?"
+            hits.append(
+                EquipmentHit(
+                    item_id=item.id,
+                    company_id=item.company_id,
+                    name=item.name,
+                    quantity=item.quantity,
+                    condition=item.condition,
+                    location_label=location_label,
+                    location_type=item.location_type,
+                    warehouse_id=item.warehouse_id,
+                    project_id=item.project_id,
+                )
+            )
+        return hits
 
     def _to_hit(self, item: InventoryItem) -> EquipmentHit:
-        if item.location_type == "warehouse" and item.warehouse_id is not None:
-            warehouse = self._warehouses.find_by_id(item.warehouse_id)
-            location_label = warehouse.name if warehouse is not None else "?"
-        elif item.project_id is not None:
-            project = self._projects.find_by_id(item.project_id)
-            location_label = project.name if project is not None else "?"
-        else:
-            location_label = "?"
-        return EquipmentHit(
-            item_id=item.id,
-            company_id=item.company_id,
-            name=item.name,
-            quantity=item.quantity,
-            condition=item.condition,
-            location_label=location_label,
-            location_type=item.location_type,
-            warehouse_id=item.warehouse_id,
-            project_id=item.project_id,
-        )
+        return self._to_hits([item])[0]
 
     def find(self, *, company_ids: list[UUID], query: str) -> FindResult:
-        hits = self._search(company_ids, query)
-        return FindResult(hits=hits[:MAX_CANDIDATES], truncated=len(hits) > MAX_CANDIDATES, total=len(hits))
+        items = self._search_items(company_ids, query)
+        shown = items[:MAX_CANDIDATES]
+        hits = self._to_hits(shown)
+        truncated = len(items) > MAX_CANDIDATES
+        # `_search_items` stops at `_SEARCH_ROW_CAP`, so `len(items)` is a floor, not the
+        # true total, once truncated — the "+N more" line only ever needs to know there
+        # IS more, never exactly how much.
+        total = len(items) if not truncated else MAX_CANDIDATES + 1
+        return FindResult(hits=hits, truncated=truncated, total=total)
 
     # ------------------------------------------------------------------
     # Move
@@ -144,8 +203,21 @@ class EquipmentService:
     def _resolve_project(
         self, *, company_id: UUID, user_id: UUID, project_hint: Optional[str]
     ) -> tuple[Optional[UUID], Optional[str], list[str]]:
-        """(project_id, project_name, candidate_names) — candidates only set when ambiguous."""
-        visible = self._projects.list_for_user_and_companies(user_id, [company_id])
+        """(project_id, project_name, candidate_names) — candidates only set when ambiguous.
+
+        `accessible_projects` (imported lazily — `project_resolution` imports `reply`,
+        which imports this module for `EquipmentHit`, so a top-level import here would be
+        circular) narrows the caller's own union of visible projects down to `company_id`
+        (the item's/channel's own company) and the resolver's `project:read` grant —
+        a bare `list_for_user_and_companies(user_id, [company_id])` still includes every
+        OTHER company the caller owns or is assigned to — that union only scopes its
+        "admin of this company" branch to `company_id`, never its owner/member branch.
+        """
+        from app.application.assistant.project_resolution import accessible_projects
+
+        visible = accessible_projects(
+            project_repo=self._projects, authz_reader=self._authz_reader, user_id=user_id, company_id=company_id
+        )
         if not project_hint:
             names = [p.name for p in visible][:MAX_CANDIDATES]
             return None, None, names

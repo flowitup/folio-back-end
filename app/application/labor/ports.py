@@ -125,8 +125,20 @@ class IPendingAttendanceQuery(ABC):
     """
 
     @abstractmethod
-    def list_pending_for_validator(self, user_id: UUID, limit: int = 100) -> List[PendingAttendanceItem]:
-        """Newest submissions first (date DESC, submitted_at DESC), capped at ``limit``."""
+    def list_pending_for_validator(
+        self,
+        user_id: UUID,
+        limit: int = 100,
+        *,
+        company_id: Optional[UUID] = None,
+        project_id: Optional[UUID] = None,
+    ) -> List[PendingAttendanceItem]:
+        """Newest submissions first (date DESC, submitted_at DESC), capped at ``limit``.
+
+        ``company_id``/``project_id`` narrow the SQL ``WHERE`` clause itself (never
+        applied after the fact) — a caller scoped to one company/project must never have
+        ``limit`` spent on another company's rows before its own are even considered.
+        """
         ...
 
 

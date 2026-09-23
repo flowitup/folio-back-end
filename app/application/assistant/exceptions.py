@@ -35,5 +35,17 @@ class LlmOutputError(AssistantError):
     """DeepSeek's JSON reply failed pydantic validation twice (temperature 0 then 0.2)."""
 
 
+class LlmUnavailableError(LlmOutputError):
+    """The provider itself failed to answer at all (timeout, connection error, rate
+    limit, 5xx) rather than answering with something pydantic could not parse.
+
+    A subclass of `LlmOutputError` on purpose: every existing `except LlmOutputError:`
+    still catches this, so a caller that has not been updated keeps its old (safe)
+    behaviour. A caller that DOES check for this first can tell the user the assistant
+    is temporarily unavailable instead of asking them to retake a perfectly good photo
+    — and paying for another DeepSeek call — over an outage that was never their fault.
+    """
+
+
 class DecisionError(AssistantError):
     """Jev (TypeSafe) raised while making a routing/extraction decision."""

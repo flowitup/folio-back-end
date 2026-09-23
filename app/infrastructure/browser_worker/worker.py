@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Protocol
 from zoneinfo import ZoneInfo
@@ -22,6 +23,7 @@ from app.application.assistant import reply
 from app.application.assistant.jobs_repo import AssistantJobRecord, AssistantJobRepositoryPort
 from app.application.assistant.models import ProductSearchResult
 from app.application.assistant.ports import CostLedgerPort
+from app.infrastructure.adapters.rq_assistant_dispatcher import JOB_TIMEOUT_SECONDS
 from app.infrastructure.browser_worker.agent import FetchOutcome
 from app.infrastructure.database.models.chat_message import ChatMessageOrm
 
@@ -43,6 +45,17 @@ DISABLED_LOG_INTERVAL = timedelta(minutes=5)
 #: `RqAssistantDispatcher` uses, consumed by the shared `stack.queue.rq_worker`
 #: container (already listening on "assistant").
 QUEUE_NAME = "assistant"
+
+#: JOB_OFFPEAK_ONLY accepts the same spelling everywhere it's read: "1"/"true"/"yes",
+#: case-insensitive, surrounding whitespace ignored — everything else (including
+#: "0"/"false"/"no"/unset) is False. `__main__.py` and `config.Config` both parse through
+#: the same accepted-value set instead of each inventing their own subset.
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
+
+
+def parse_bool_env(value: str) -> bool:
+    return value.strip().lower() in _TRUTHY_ENV_VALUES
+
 
 #: Which RQ function a claimed/reaped job's result gets handed to, by `job.type`.
 _RESULT_JOB_NAME: dict[str, str] = {
@@ -99,6 +112,21 @@ def _update_status_message(session: Session, job: AssistantJobRecord, *, state: 
     session.commit()
 
 
+def _requeue_after_cancel(session: Session, job_repo: AssistantJobRepositoryPort, job: AssistantJobRecord) -> None:
+    """SIGTERM arrived while ``job`` was running the (multi-minute) browser agent —
+    put it straight back to ``queued`` with `run_after=now` so the next poll (this
+    container's own restart, or another replica) picks it up immediately, WITHOUT
+    bumping `attempts`: this was never the job's fault, so it must not spend one of
+    its `_MAX_RECLAIM_ATTEMPTS` retries. Without this, the job sat `running` until the
+    30-minute stuck-job window, silently burning a paid re-run for nothing."""
+    logger.info("browser_worker: SIGTERM during job %s, requeuing without consuming an attempt", job.id)
+    try:
+        job_repo.update_status(job.id, status="queued", run_after=datetime.now(timezone.utc))
+    except Exception:
+        logger.exception("browser_worker: failed to requeue job %s after SIGTERM", job.id)
+        session.rollback()
+
+
 def _reap_unprocessed(job_repo: AssistantJobRepositoryPort, queue: QueueLike, now: datetime) -> None:
     """The other half of the H2 fix (review finding NEW-H2): re-enqueue
     ``process_fetched_invoice`` for any terminal job whose own enqueue never happened
@@ -117,7 +145,11 @@ def _reap_unprocessed(job_repo: AssistantJobRepositoryPort, queue: QueueLike, no
             job.type if job is not None else "fetch_invoice", "app.application.assistant.jobs.process_fetched_invoice"
         )
         try:
-            queue.enqueue(func_name, str(job_id))
+            # Explicit timeout: with none set, rq's
+            # own 180s default applies, well under `process_fetched_invoice`'s own
+            # worst case (DeepSeek retries can alone take ~240s) — same constant the
+            # web-side dispatcher already uses.
+            queue.enqueue(func_name, str(job_id), job_timeout=JOB_TIMEOUT_SECONDS)
             logger.info("browser_worker: reaped unprocessed job %s, re-enqueued", job_id)
         except Exception:
             logger.exception("browser_worker: failed to re-enqueue reaped job %s", job_id)
@@ -153,6 +185,16 @@ async def run_once(
     but shares this same claim/reaper/kill-switch/cost-billing plumbing.
     """
     if offpeak_only and not is_offpeak(now):
+        return False
+    if cost_ledger is not None and cost_ledger.over_cap():
+        # The browser agent's own DeepSeek spend is the single most expensive call in
+        # the pipeline (see agent.py's COST_KIND docstring) — once the daily cap is hit,
+        # stop claiming *new* work the same way `AssistantService` already does on the
+        # web side, but keep reaping already-terminal jobs so a user is not left on
+        # "running" forever just because the cap tripped.
+        logger.info("browser_worker: daily cost cap reached, not claiming new jobs")
+        _reap_unprocessed(job_repo, queue, now)
+        session.commit()
         return False
     job = job_repo.claim_next(now)
     if job is None:
@@ -216,35 +258,62 @@ async def _run_fetch_invoice_job(
         job.attempts + 1,
     )
     _update_status_message(session, job, state="running", text=reply.render("fetch_running", job.lang or "fr"))
+    # Close the transaction before the (multi-minute) agent run regardless of whether
+    # the status message existed to update — `_update_status_message` only commits when
+    # it actually writes, and without this the session's SELECT-triggered autobegin
+    # (from `claim_next`'s post-commit attribute refresh) would otherwise sit
+    # idle-in-transaction on `assistant_jobs` for the whole run.
+    session.commit()
 
-    outcome = await job_runner(
-        job,
-        chrome_path=chrome_path,
-        profile_dir=profile_dir,
-        downloads_dir=downloads_dir,
-        deepseek_api_key=deepseek_api_key,
-        cost_ledger=cost_ledger,
-    )
+    try:
+        outcome = await job_runner(
+            job,
+            chrome_path=chrome_path,
+            profile_dir=profile_dir,
+            downloads_dir=downloads_dir,
+            deepseek_api_key=deepseek_api_key,
+            cost_ledger=cost_ledger,
+        )
+    except asyncio.CancelledError:
+        _requeue_after_cancel(session, job_repo, job)
+        raise
 
     pdf_key = None
     if outcome.result.status == "done" and outcome.pdf_path is not None:
+        local_pdf_path = outcome.pdf_path
         pdf_key = f"assistant/jobs/{job.id}.pdf"
         try:
-            with open(outcome.pdf_path, "rb") as fileobj:
+            with open(local_pdf_path, "rb") as fileobj:
                 storage.put(pdf_key, fileobj, content_type="application/pdf")
-        except OSError:
+        except Exception:
+            # Not just `OSError`: `S3AttachmentStorage.put` raises boto3/botocore errors
+            # (e.g. `S3UploadFailedError`) on an S3/MinIO outage, which are not
+            # `OSError`. Catching only `OSError` here left the job `running` forever
+            # (the exception used to escape all the way out to `run_forever`'s own
+            # `except Exception`, which rolls back and retries the same job every poll,
+            # at full browser-agent cost, with no attempt cap).
             logger.exception("browser_worker: failed to upload PDF for job %s", job.id)
             outcome = FetchOutcome(
                 result=outcome.result.model_copy(update={"status": "failed", "message": "PDF upload failed"}),
                 pdf_path=None,
             )
             pdf_key = None
+        finally:
+            # Never let the downloads volume accumulate every fetched invoice forever —
+            # remove the local copy once this iteration is done with it, whether the
+            # upload succeeded or failed (a failed upload has nothing left to retry
+            # against this same local file: on_result's `failed` branch is the only
+            # consumer of the terminal status from here on).
+            try:
+                os.remove(local_pdf_path)
+            except OSError:
+                logger.warning("browser_worker: failed to delete downloaded PDF %s", local_pdf_path)
 
     job_repo.update_result(
         job.id, status=outcome.result.status, result=outcome.result.model_dump(), pdf_storage_key=pdf_key
     )
     logger.info("browser_worker: job %s finished with status=%s", job.id, outcome.result.status)
-    queue.enqueue(_RESULT_JOB_NAME["fetch_invoice"], str(job.id))
+    queue.enqueue(_RESULT_JOB_NAME["fetch_invoice"], str(job.id), job_timeout=JOB_TIMEOUT_SECONDS)
 
 
 async def _run_product_search_job(
@@ -262,19 +331,25 @@ async def _run_product_search_job(
 ) -> None:
     logger.info("browser_worker: claimed job %s type=find_product attempt=%d", job.id, job.attempts + 1)
     _update_status_message(session, job, state="running", text=reply.render("product_search_running", job.lang or "fr"))
+    # See `_run_fetch_invoice_job`'s identical comment.
+    session.commit()
 
-    result = await product_search_runner(
-        job,
-        chrome_path=chrome_path,
-        profile_dir=profile_dir,
-        downloads_dir=downloads_dir,
-        deepseek_api_key=deepseek_api_key,
-        cost_ledger=cost_ledger,
-    )
+    try:
+        result = await product_search_runner(
+            job,
+            chrome_path=chrome_path,
+            profile_dir=profile_dir,
+            downloads_dir=downloads_dir,
+            deepseek_api_key=deepseek_api_key,
+            cost_ledger=cost_ledger,
+        )
+    except asyncio.CancelledError:
+        _requeue_after_cancel(session, job_repo, job)
+        raise
 
     job_repo.update_result(job.id, status=result.status, result=result.model_dump())
     logger.info("browser_worker: job %s finished with status=%s", job.id, result.status)
-    queue.enqueue(_RESULT_JOB_NAME["find_product"], str(job.id))
+    queue.enqueue(_RESULT_JOB_NAME["find_product"], str(job.id), job_timeout=JOB_TIMEOUT_SECONDS)
 
 
 async def run_forever(
@@ -291,35 +366,57 @@ async def run_forever(
     offpeak_only: bool,
     stop_event: asyncio.Event,
     assistant_enabled: Callable[[], bool] = lambda: True,
+    disabled_reason: Callable[[], str] = lambda: "FEATURE_ASSISTANT is off",
     cost_ledger: Optional[CostLedgerPort] = None,
     product_search_runner: ProductSearchRunner = _unconfigured_product_search_runner,
 ) -> None:
-    """SIGTERM-safe poll loop: ``stop_event`` is checked between jobs, never mid-job —
-    the caller (``__main__.py``) sets it from a signal handler, letting the current job
-    (if any) finish cleanly before the process exits.
+    """SIGTERM-safe poll loop: ``stop_event`` is raced against the in-flight
+    ``run_once`` call (``asyncio.wait(..., FIRST_COMPLETED)``), not just checked
+    between jobs — a SIGTERM arriving mid-job (the caller, ``__main__.py``, sets
+    ``stop_event`` from a signal handler) cancels the current claim, which requeues
+    the job (``status="queued"``, ``attempts`` untouched) instead of leaving it
+    ``running`` for up to ``AGENT_RUN_TIMEOUT_SECONDS`` — long past the compose stop
+    grace period, which would SIGKILL the process and only recover the job 30 minutes
+    later at the cost of a burned attempt.
 
     ``assistant_enabled`` is the container-side half of the ``FEATURE_ASSISTANT`` kill
-    switch (review finding NEW-H3): re-read on every iteration (unlike the web process,
-    this container never restarts on a config change) so flipping the flag off stops the
-    poller claiming any *new* job — ``job_repo.claim_next`` is never even called while
-    disabled. It does not interrupt a job already in flight; ``run_once`` only ever
-    claims one job before returning.
+    switch: re-read on every iteration (unlike the web process, this container never
+    restarts on a config change) so flipping the flag off stops the poller claiming any
+    *new* job — ``job_repo.claim_next`` is never even called while disabled.
     """
     last_disabled_log: Optional[datetime] = None
+    last_disabled_reason: Optional[str] = None
     while not stop_event.is_set():
         now = datetime.now(timezone.utc)
         if not assistant_enabled():
-            if last_disabled_log is None or now - last_disabled_log >= DISABLED_LOG_INTERVAL:
-                logger.info("browser_worker: FEATURE_ASSISTANT is off, idling (claiming no jobs)")
+            reason = disabled_reason()
+            # Log immediately on a state change (first time disabled, or the missing
+            # input changed — e.g. the flag flips off while the DeepSeek key was
+            # already missing) instead of only on the periodic heartbeat below; once
+            # the reason is stable, `DISABLED_LOG_INTERVAL` still throttles the repeat
+            # so the container's logs are not one line per 10s poll.
+            if (
+                reason != last_disabled_reason
+                or last_disabled_log is None
+                or now - last_disabled_log >= DISABLED_LOG_INTERVAL
+            ):
+                logger.info("browser_worker: idling (claiming no jobs) — %s", reason)
                 last_disabled_log = now
+                last_disabled_reason = reason
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=IDLE_SLEEP_SECONDS)
             except asyncio.TimeoutError:
                 pass
             continue
         last_disabled_log = None
-        try:
-            processed = await run_once(
+        last_disabled_reason = None
+        # Raced against `stop_event` (not just awaited) so a SIGTERM arriving while
+        # `run_once` is deep inside the (up to 20-minute) browser agent run cancels it
+        # right away instead of blocking the whole compose stop grace period on it —
+        # `_run_fetch_invoice_job`/`_run_product_search_job` catch the resulting
+        # `CancelledError` around the agent call and requeue the job first.
+        run_once_task: "asyncio.Task[bool]" = asyncio.ensure_future(
+            run_once(
                 session=session,
                 job_repo=job_repo,
                 storage=storage,
@@ -334,6 +431,38 @@ async def run_forever(
                 cost_ledger=cost_ledger,
                 product_search_runner=product_search_runner,
             )
+        )
+        stop_wait_task = asyncio.ensure_future(stop_event.wait())
+        await asyncio.wait({run_once_task, stop_wait_task}, return_when=asyncio.FIRST_COMPLETED)
+
+        if not run_once_task.done():
+            # SIGTERM fired mid-job: cancel it (requeuing happens inside the job
+            # runner's own CancelledError handler) and stop the loop — no more polling,
+            # the process is shutting down.
+            run_once_task.cancel()
+            try:
+                await run_once_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("browser_worker: run_once failed while shutting down")
+                session.rollback()
+            stop_wait_task.cancel()
+            try:
+                await stop_wait_task
+            except asyncio.CancelledError:
+                pass
+            break
+
+        if not stop_wait_task.done():
+            stop_wait_task.cancel()
+            try:
+                await stop_wait_task
+            except asyncio.CancelledError:
+                pass
+
+        try:
+            processed = run_once_task.result()
         except Exception:
             # A DB blip, an S3 error, an `rq` enqueue failure, or anything else raised
             # mid-iteration must never kill the poll loop (review finding H2) — log it,
@@ -354,6 +483,7 @@ __all__ = [
     "run_once",
     "run_forever",
     "is_offpeak",
+    "parse_bool_env",
     "QUEUE_NAME",
     "IDLE_SLEEP_SECONDS",
     "DISABLED_LOG_INTERVAL",

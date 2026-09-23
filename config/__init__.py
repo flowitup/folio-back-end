@@ -136,7 +136,10 @@ class Config:
     # generation) or "opencv" (perspective-correct + threshold, no API call).
     SCAN_MODE: str = get_env("SCAN_MODE", default="genai")
     # Restrict the browser-worker's merchant-site jobs to off-peak hours (owner runbook).
-    JOB_OFFPEAK_ONLY: bool = get_env("JOB_OFFPEAK_ONLY", default="0") == "1"
+    # Accepts the same spelling the ai-browser container's own parser does: "1"/"true"/
+    # "yes", case-insensitive, surrounding whitespace ignored; anything else (including
+    # "0"/"false"/"no"/unset) is False.
+    JOB_OFFPEAK_ONLY: bool = get_env("JOB_OFFPEAK_ONLY", default="0").strip().lower() in ("1", "true", "yes")
     ASSISTANT_DAILY_COST_CAP_USD: float = float(get_env("ASSISTANT_DAILY_COST_CAP_USD", default="5"))
     # browser-use / real Chrome, used by the separate ai-browser container (phase 03).
     BROWSER_WORKER_CHROME_PATH: str = get_env("BROWSER_WORKER_CHROME_PATH", default="")

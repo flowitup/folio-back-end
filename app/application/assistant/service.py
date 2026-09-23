@@ -48,7 +48,7 @@ from app.application.assistant.ports import (
     RateLimiterPort,
     VisionLlmPort,
 )
-from app.application.assistant.project_resolution import resolve_project
+from app.application.assistant.project_resolution import accessible_projects, resolve_project
 from app.application.assistant.router import Router
 from app.application.assistant.scope import channel_company_ids
 from app.application.assistant import reply
@@ -112,7 +112,6 @@ class FeatureHandlersPort(Protocol):
         resolve the company (Q1/NEW-H1): the company is always the channel's own
         (``scope.company_id``) — cross-company disambiguation by project name is
         retired, since it could hand a photo taken in company A's channel to company B.
-        ``pick_company`` is only ever offered for a channel with no company at all.
         ``scope`` is the channel this dispatch came from — used for redaction/tool
         access and to bound the company. Returns the outcome for the structured log line
         (``replied``/``asked``/``created``/``refused``/``error``).
@@ -162,9 +161,9 @@ class FeatureHandlersPort(Protocol):
     ) -> bool:
         """A choice tap not already handled by ``AssistantService`` itself (equipment,
         ``clarify_intent``): feature C/A own e.g. ``set_project``, ``confirm_duplicate``,
-        ``not_duplicate``, ``pick_company``. Returns True when handled (a reply was
-        posted), False when no feature recognised ``action`` — the caller then posts the
-        "unknown_action" template.
+        ``not_duplicate``. Returns True when handled (a reply was posted), False when no
+        feature recognised ``action`` — the caller then posts the "unknown_action"
+        template.
         """
         ...
 
@@ -339,9 +338,6 @@ class AssistantService:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _company_ids(self, user_id: UUID) -> list[UUID]:
-        return [access.company_id for access in self._company_access.list_for_user(user_id)]
-
     def _channel_company_ids(self, scope: ChannelScope, user_id: UUID) -> list[UUID]:
         """Company ids the router/equipment lookups may search — the channel's OWN
         company only (H2), intersected with the asker's real memberships so a channel
@@ -483,8 +479,14 @@ class AssistantService:
         feature = "none"
         outcome = "error"
         audit_ctx = _AuditContext()
-        cost_before = self._cost_ledger.today_total()
+        # Read inside the try — a Redis blip here must go through the same generic
+        # except below (error template + audit row) instead of crashing the RQ job with
+        # no reply and no audit row at all. `cost_before` keeps its 0.0 default when the
+        # call itself raises, so the `finally` block's own `today_total()` delta still
+        # computes (never a more-accurate-but-crashing NameError).
+        cost_before = 0.0
         try:
+            cost_before = self._cost_ledger.today_total()
             if self._cost_ledger.over_cap():
                 outcome = "refused"
                 audit_ctx.refused_reason = "cost_cap"
@@ -533,10 +535,28 @@ class AssistantService:
                 return
 
             company_ids = self._channel_company_ids(scope, user_id)
-            projects = self._projects.list_for_user_and_companies(user_id, company_ids)
+            # The router only ever hears about the CHANNEL's own company's projects —
+            # `list_for_user_and_companies` is a union (owner OR assigned OR company_ids)
+            # that would otherwise surface a project of another company the asker happens
+            # to also own/be assigned to, straight into the S0 provider call's state and
+            # into `move_equipment`'s ambiguous-project options. `accessible_projects`
+            # narrows to `scope.company_id` and re-checks `project:read` on top.
+            if self._authz_reader is not None:
+                projects = accessible_projects(
+                    project_repo=self._projects,
+                    authz_reader=self._authz_reader,
+                    user_id=user_id,
+                    company_id=scope.company_id,
+                )
+            else:
+                # No AuthzReaderPort wired: fail CLOSED (no project names/hints at all)
+                # rather than fall back to the cross-tenant union.
+                projects = []
             project_names = [p.name for p in projects]
             history = [
-                m.body for m in self._messages.list_recent_addressed(channel, limit=10) if m.id != message.id and m.body
+                m.body
+                for m in self._messages.list_recent_addressed(channel, limit=10, user_id=user_id)
+                if m.id != message.id and m.body
             ]
 
             decision = self._router.route(message_text, has_photo, project_names, history)
@@ -575,6 +595,10 @@ class AssistantService:
         except Exception:
             outcome = "error"
             logger.exception("assistant.request trace=%s user=%s failed", trace_id, user_id)
+            # Roll back BEFORE posting the error reply/writing the audit row — a failed
+            # write earlier in this same request (e.g. a task insert over the column's
+            # length cap) otherwise poisons the session for both of those too.
+            self._messenger.rollback()
             self._messenger.post_text(
                 user_id,
                 reply.render("error", lang),
@@ -780,8 +804,21 @@ class AssistantService:
                     scope=scope,
                 )
                 return 0, "refused"
+            if self._authz_reader is None:
+                return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
             audit_ctx.tools.append("BillingDocumentRepository")
-            company_ids = [scope.company_id] if scope.company_id is not None else self._company_ids(user_id)
+            # Same fix as the router project list above — this admin-channel answer used
+            # to union in every project the asker owns/is assigned to in ANY company,
+            # then listed every one of THAT company's billing documents with no further
+            # check (the only admin-channel answer that skipped `accessible_projects`),
+            # which is how another tenant's client invoice numbers/amounts ended up
+            # posted into this company's admin channel.
+            projects = accessible_projects(
+                project_repo=self._projects,
+                authz_reader=self._authz_reader,
+                user_id=user_id,
+                company_id=scope.company_id,
+            )
             outcome = self._admin_answers.ask_unpaid_invoices(
                 scope=scope,
                 user_id=user_id,
@@ -789,7 +826,7 @@ class AssistantService:
                 lang=lang,
                 messenger=self._messenger,
                 trace_id=trace_id,
-                projects=self._projects.list_for_user_and_companies(user_id, company_ids),
+                projects=projects,
             )
             return 0, outcome
         if intent == "ask_audit":
@@ -937,6 +974,21 @@ class AssistantService:
         channel = scope.channel
         if self._labor is None or self._decisions is None or self._authz_reader is None:
             return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
+        if intent == "ask_roster" and scope.kind == "company":
+            # A company channel is read by every member of the company, including
+            # people with no access to the project being asked about — the roster
+            # itself is answered only where its own audience already has that access:
+            # the project's own channel.
+            audit_ctx.refused_reason = "scope"
+            self._messenger.post_text(
+                user_id,
+                reply.render("refuse_ask_in_project_channel", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+            )
+            return 0, "refused"
         project_id = resolve_project(
             scope=scope,
             text=message_text,
@@ -994,6 +1046,20 @@ class AssistantService:
         channel = scope.channel
         if self._tasks is None or self._decisions is None or self._authz_reader is None:
             return self._not_available(user_id, message_id, lang, trace_id, channel, scope)
+        if intent == "ask_tasks" and scope.kind == "company":
+            # Same reasoning as the roster: a company channel's audience is broader
+            # than the project's own, so the task list is answered only in the
+            # project's own channel.
+            audit_ctx.refused_reason = "scope"
+            self._messenger.post_text(
+                user_id,
+                reply.render("refuse_ask_in_project_channel", lang),
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+            )
+            return 0, "refused"
         project_id = resolve_project(
             scope=scope,
             text=message_text,
@@ -1057,7 +1123,7 @@ class AssistantService:
             },
         ]
         self._messenger.post_choice(
-            user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+            user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope, lang=lang
         )
 
     def _post_clarify_intent(
@@ -1088,6 +1154,7 @@ class AssistantService:
             trace_id=trace_id,
             channel=channel,
             scope=scope,
+            lang=lang,
         )
 
     # ------------------------------------------------------------------
@@ -1151,6 +1218,7 @@ class AssistantService:
                 trace_id=trace_id,
                 channel=channel,
                 scope=scope,
+                lang=lang,
             )
             return "asked"
         elif outcome.status == "ambiguous_project":
@@ -1173,6 +1241,7 @@ class AssistantService:
                 trace_id=trace_id,
                 channel=channel,
                 scope=scope,
+                lang=lang,
             )
             return "asked"
         elif outcome.status == "confirm":
@@ -1193,7 +1262,14 @@ class AssistantService:
                 },
             ]
             self._messenger.post_choice(
-                user_id, prompt, options, reply_to_id=message_id, trace_id=trace_id, channel=channel, scope=scope
+                user_id,
+                prompt,
+                options,
+                reply_to_id=message_id,
+                trace_id=trace_id,
+                channel=channel,
+                scope=scope,
+                lang=lang,
             )
             return "asked"
         elif outcome.status == "moved":
@@ -1244,63 +1320,53 @@ class AssistantService:
         original = (
             self._messages.find_by_id(choice_message.reply_to_id) if choice_message.reply_to_id is not None else None
         )
-        lang = self._lang_for_original(original)
+        # Reuse the language THIS choice was actually rendered in when it carries one,
+        # instead of re-detecting it from `original`'s body every time — a chained
+        # choice (e.g. a `pick_project_ctx` tap) can otherwise flip language on a
+        # French-looking project name inside an English/Vietnamese prompt.
+        payload_lang = (choice_message.payload or {}).get("lang")
+        lang = (
+            payload_lang
+            if isinstance(payload_lang, str) and payload_lang in reply.LANGUAGES
+            else (self._lang_for_original(original))
+        )
         trace_id = uuid4().hex[:16]
         audit_ctx = _AuditContext()
         intent_for_audit = str(payload.get("intent") or action)
         outcome = "answered"
-        cost_before = self._cost_ledger.today_total()
-
-        if self._cost_ledger.over_cap():
-            audit_ctx.refused_reason = "cost_cap"
-            self._messenger.post_text(
-                user_id,
-                reply.render("quota_exceeded", lang),
-                reply_to_id=message_id,
-                trace_id=trace_id,
-                channel=channel,
-                scope=scope,
-            )
-            self._write_audit(
-                scope=scope,
-                user_id=user_id,
-                message_id=message_id,
-                intent=intent_for_audit,
-                feature=_feature_for_intent(intent_for_audit),
-                outcome="refused",
-                cost_usd=0.0,
-                trace_id=trace_id,
-                audit_ctx=audit_ctx,
-            )
-            return
-        if not self._rate_limiter.allow(user_id):
-            audit_ctx.refused_reason = "rate_limit"
-            self._messenger.post_text(
-                user_id,
-                reply.render("rate_limited", lang),
-                reply_to_id=message_id,
-                trace_id=trace_id,
-                channel=channel,
-                scope=scope,
-            )
-            self._write_audit(
-                scope=scope,
-                user_id=user_id,
-                message_id=message_id,
-                intent=intent_for_audit,
-                feature=_feature_for_intent(intent_for_audit),
-                outcome="refused",
-                cost_usd=0.0,
-                trace_id=trace_id,
-                audit_ctx=audit_ctx,
-            )
-            return
+        # Read inside the try, same reasoning as handle_message.
+        cost_before = 0.0
 
         try:
+            cost_before = self._cost_ledger.today_total()
+            if self._cost_ledger.over_cap():
+                outcome = "refused"
+                audit_ctx.refused_reason = "cost_cap"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("quota_exceeded", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
+                )
+                return
+            if not self._rate_limiter.allow(user_id):
+                outcome = "refused"
+                audit_ctx.refused_reason = "rate_limit"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("rate_limited", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=channel,
+                    scope=scope,
+                )
+                return
             if action == "clarify_intent":
-                self._handle_clarify_intent(user_id, payload, lang, trace_id, channel, scope, audit_ctx)
+                outcome = self._handle_clarify_intent(user_id, payload, lang, trace_id, channel, scope, audit_ctx)
             elif action == "import_ticket":
-                self._features.import_ticket(
+                outcome = self._features.import_ticket(
                     user_id=user_id,
                     message_id=_uuid_from_payload(payload, "message_id", default=message_id),
                     lang=lang,
@@ -1309,7 +1375,7 @@ class AssistantService:
                     scope=scope,
                 )
             elif action == "identify_material":
-                self._features.identify_material(
+                outcome = self._features.identify_material(
                     user_id=user_id,
                     message_id=_uuid_from_payload(payload, "message_id", default=message_id),
                     lang=lang,
@@ -1324,7 +1390,7 @@ class AssistantService:
                     project_hint=payload.get("project_hint"),
                     is_write_confirmed=True,  # an explicit tap on a named tool is itself the write confirmation
                 )
-                self._reply_move_outcome(
+                outcome = self._reply_move_outcome(
                     user_id, message_id, move_outcome, payload.get("project_hint"), lang, trace_id, channel, scope
                 )
             elif action == "move_equipment_set_project":
@@ -1334,7 +1400,7 @@ class AssistantService:
                     project_hint=payload.get("project_name"),
                     is_write_confirmed=True,  # an explicit tap on a named project is itself the write confirmation
                 )
-                self._reply_move_outcome(
+                outcome = self._reply_move_outcome(
                     user_id, message_id, move_outcome, payload.get("project_name"), lang, trace_id, channel, scope
                 )
             elif action == "move_equipment_confirm":
@@ -1344,7 +1410,9 @@ class AssistantService:
                     project_id=_uuid_from_payload(payload, "project_id"),
                     is_write_confirmed=True,
                 )
-                self._reply_move_outcome(user_id, message_id, move_outcome, None, lang, trace_id, channel, scope)
+                outcome = self._reply_move_outcome(
+                    user_id, message_id, move_outcome, None, lang, trace_id, channel, scope
+                )
             elif action == "move_equipment_cancel":
                 # The tap already disabled the choice (SubmitAssistantActionUseCase marks
                 # `payload.answered`); nothing more to say.
@@ -1433,6 +1501,8 @@ class AssistantService:
         except Exception:
             outcome = "error"
             logger.exception("assistant.action trace=%s user=%s action=%s failed", trace_id, user_id, action)
+            # Same reasoning as handle_message's generic except.
+            self._messenger.rollback()
             self._messenger.post_text(
                 user_id,
                 reply.render("error", lang),
@@ -1526,7 +1596,24 @@ class AssistantService:
                     trace_id=trace_id,
                 )
         elif intent in ("ask_project_income", "ask_salary", "ask_own_salary") and self._admin_answers is not None:
-            if intent == "ask_project_income":
+            # This tap is only ever offered from inside the admin channel today (the
+            # options are server-authored by `_dispatch_confidential`, itself gated on
+            # `scope.is_admin_channel`), but that is a property of the CALLER, not of
+            # this handler — re-check here too so a future caller of `pick_project_ctx`
+            # (or a stale tap replayed after being removed from the admin channel) can
+            # never reach a finance/payroll answer outside it.
+            if not scope.is_admin_channel:
+                audit_ctx.refused_reason = "scope"
+                self._messenger.post_text(
+                    user_id,
+                    reply.render("refuse_finance", lang),
+                    reply_to_id=message_id,
+                    trace_id=trace_id,
+                    channel=scope.channel,
+                    scope=scope,
+                )
+                outcome = "refused"
+            elif intent == "ask_project_income":
                 audit_ctx.tools.append("InvoiceRepository")
                 outcome = self._admin_answers.ask_project_income(
                     scope=scope,
@@ -1570,21 +1657,26 @@ class AssistantService:
         channel: ChannelRef,
         scope: ChannelScope,
         audit_ctx: "_AuditContext",
-    ) -> None:
+    ) -> str:
+        """Returns `_dispatch`'s own outcome (instead of discarding it) so a refusal
+        reached through a clarify tap — e.g. a confidential-class intent picked for a
+        non-admin channel — is written to the audit row as `outcome="refused"`, not the
+        caller's `"answered"` default; `ask_audit`'s refusal count depends on it.
+        """
         intent = payload.get("intent")
         if intent not in INTENTS:
-            return
+            return "error"
         original_message_id = _uuid_from_payload(payload, "message_id")
         message = self._messages.find_by_id(original_message_id)
         # Defense in depth (see handle_message's identical check) — never launder
         # another channel's message body through DeepSeek into this caller's conversation.
         if message is None or message.sender_id != user_id:
-            return
+            return "error"
         company_ids = self._channel_company_ids(scope, user_id)
         # An explicitly clarified intent carries no merchant/project/write signal of its
         # own — every downstream gate (is_write in particular) stays conservative.
         decision = RouterDecision(intent=intent, intent_confidence=1.0, intent_probabilities={intent: 1.0})
-        self._dispatch(
+        _extra_calls, outcome = self._dispatch(
             user_id=user_id,
             message_id=message.id,
             message_text=strip_assistant_mention((message.body or "").strip()),
@@ -1596,6 +1688,7 @@ class AssistantService:
             scope=scope,
             audit_ctx=audit_ctx,
         )
+        return outcome
 
 
 def _uuid_from_payload(payload: dict[str, Any], key: str, default: Optional[UUID] = None) -> UUID:
@@ -1605,6 +1698,14 @@ def _uuid_from_payload(payload: dict[str, Any], key: str, default: Optional[UUID
             return default
         raise AssistantError(f"Missing '{key}' in action payload.")
     return UUID(str(value))
+
+
+class AssistantDispatchFailedError(AssistantError):
+    """``SubmitAssistantActionUseCase`` could not hand a tapped action off for
+    processing — the assistant is disabled, or the dispatcher's own enqueue call failed
+    (Redis unreachable, serialization error). By the time this is raised the choice has
+    already been reset back to unanswered, so the caller (the API route) may safely
+    tell the client to retry the same submission."""
 
 
 class SubmitAssistantActionUseCase:
@@ -1664,11 +1765,42 @@ class SubmitAssistantActionUseCase:
         # it commits inside this call. See answer_choice_if_unanswered's docstring.
         if not self._messages.answer_choice_if_unanswered(reply_to_id, action, stored_payload):
             raise AssistantAlreadyAnsweredError(f"Message {reply_to_id} was already answered.")
-        # After that commit: a dispatch failure must never be able to roll back the answer.
         # Dispatch the STORED payload, never the client's — see the class docstring.
-        self._dispatcher.action_received(
-            user_id=actor_id, message_id=reply_to_id, action=action, payload=stored_payload
-        )
+        try:
+            dispatched = self._dispatcher.action_received(
+                user_id=actor_id, message_id=reply_to_id, action=action, payload=stored_payload
+            )
+        except Exception:
+            logger.exception("assistant dispatch: action_received raised message=%s action=%s", reply_to_id, action)
+            dispatched = False
+        # A 202 followed by a silently dropped job (the assistant disabled between the
+        # choice being posted and tapped, or the enqueue itself failing) left the choice
+        # permanently "answered" with no reply ever coming and no way to retry —
+        # `dispatched is False` is the ONLY case that reacts here; `None` (an adapter
+        # that has not been updated to report this) and `True` both mean "go ahead",
+        # keeping this backward compatible with any caller/fake still returning nothing.
+        if dispatched is False:
+            self._reset_answered(reply_to_id, action)
+            raise AssistantDispatchFailedError(
+                f"Could not hand '{action}' on message {reply_to_id} off for processing."
+            )
+
+    def _reset_answered(self, message_id: UUID, action: str) -> None:
+        """Best-effort undo of the answer `execute` just recorded: only clears it back
+        to unanswered when the stored payload still shows THIS request's own action —
+        never a legitimate concurrent answer that raced in in the meantime — so a
+        client retry lands on `answer_choice_if_unanswered` again instead of 409ing
+        forever on a tap whose dispatch never actually ran."""
+        message = self._messages.find_by_id(message_id)
+        if message is None:
+            return
+        current_payload = dict(message.payload or {})
+        if current_payload.get("answered") != action:
+            return
+        current_payload["answered"] = None
+        current_payload["answered_payload"] = None
+        self._messages.update_payload(message_id, current_payload)
+        self._db.commit()
 
 
 def _find_matching_option_payload(options: Any, action: str, payload: dict[str, Any]) -> Optional[dict[str, Any]]:

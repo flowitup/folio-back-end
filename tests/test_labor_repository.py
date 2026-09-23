@@ -13,9 +13,11 @@ from app.infrastructure.database.models import (
     ProjectModel,
     UserModel,
 )
+from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository
 from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
+from app.infrastructure.adapters.sqlalchemy_pending_attendance_query import SQLAlchemyPendingAttendanceQuery
 from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
@@ -870,3 +872,57 @@ class TestGetSummaryBonusRateResolution:
         assert row.daily_rate == Decimal("150.00"), f"expected base rate 150 but got {row.daily_rate}"
         bonus_cost = Decimal(row.banked_hours // 8) * row.daily_rate
         assert bonus_cost == Decimal("150.00")
+
+
+def test_list_pending_for_validator_filters_by_company_and_project_in_sql(session):
+    """A caller scoped to one company/project must have that boundary enforced by the
+    query's own WHERE clause, not by loading rows for every company/project the caller
+    may validate and discarding the wrong ones afterwards (that path can drop a real
+    entry off the far side of the row cap before the filter ever runs)."""
+    now = datetime.now(timezone.utc)
+    validator = UserModel(id=uuid4(), email="ops-pending@test.com", is_active=True, is_platform_ops=True)
+    session.add(validator)
+    session.flush()
+
+    company_a = CompanyModel(
+        id=uuid4(), legal_name="Company A", address="1 rue A", created_by=validator.id, created_at=now, updated_at=now
+    )
+    company_b = CompanyModel(
+        id=uuid4(), legal_name="Company B", address="1 rue B", created_by=validator.id, created_at=now, updated_at=now
+    )
+    session.add_all([company_a, company_b])
+    session.flush()
+
+    project_a = ProjectModel(id=uuid4(), name="Project A", owner_id=validator.id, company_id=company_a.id)
+    project_b = ProjectModel(id=uuid4(), name="Project B", owner_id=validator.id, company_id=company_b.id)
+    session.add_all([project_a, project_b])
+    session.flush()
+
+    worker_a = WorkerModel(
+        id=uuid4(), project_id=project_a.id, name="Worker A", daily_rate=Decimal("100.00"), is_active=True
+    )
+    worker_b = WorkerModel(
+        id=uuid4(), project_id=project_b.id, name="Worker B", daily_rate=Decimal("100.00"), is_active=True
+    )
+    session.add_all([worker_a, worker_b])
+    session.flush()
+
+    entry_a = LaborEntryModel(
+        id=uuid4(), worker_id=worker_a.id, date=date(2026, 9, 20), status="pending", supplement_hours=0
+    )
+    entry_b = LaborEntryModel(
+        id=uuid4(), worker_id=worker_b.id, date=date(2026, 9, 20), status="pending", supplement_hours=0
+    )
+    session.add_all([entry_a, entry_b])
+    session.commit()
+
+    query = SQLAlchemyPendingAttendanceQuery(session)
+
+    only_company_a = query.list_pending_for_validator(validator.id, company_id=company_a.id)
+    assert [item.entry_id for item in only_company_a] == [entry_a.id]
+
+    only_project_b = query.list_pending_for_validator(validator.id, project_id=project_b.id)
+    assert [item.entry_id for item in only_project_b] == [entry_b.id]
+
+    unfiltered = query.list_pending_for_validator(validator.id)
+    assert {item.entry_id for item in unfiltered} == {entry_a.id, entry_b.id}

@@ -13,9 +13,12 @@ installed.
 
 from __future__ import annotations
 
+import asyncio
 import glob
 import logging
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -41,6 +44,27 @@ _LLM_BASE_URL = "https://api.deepseek.com"
 #: — see `app.infrastructure.ai.cost.COST_KINDS`.
 COST_KIND = "deepseek_browser"
 
+#: `agent.run()` has no deadline of its own — browser-use's per-step timeout bounds one
+#: step, not the whole run, so an outer cap avoids a multi-hour worst case; kept below
+#: the worker's `_STUCK_RUNNING_AFTER` reclaim window so a hung run is reported `failed`
+#: here first.
+AGENT_RUN_TIMEOUT_SECONDS = 20 * 60
+
+#: Neither flow ever needs arbitrary JS execution or a file upload; `allowed_domains`
+#: alone does not stop an in-page `fetch()`/XHR an `evaluate` call could issue.
+EXCLUDED_TOOL_ACTIONS = ("evaluate", "upload_file")
+
+#: Bounds for rejecting a downloaded file before trusting it as an invoice (e.g. a
+#: merchant error page saved with a `.pdf` extension, or a runaway download).
+MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024
+_PDF_MAGIC = b"%PDF-"
+
+#: `search_queries` come from DeepSeek's read of an untrusted photo (or a chat message
+#: any channel member can post); bounded the same way other untrusted text is capped
+#: before it is embedded in an agent task prompt.
+MAX_SEARCH_QUERIES = 3
+MAX_SEARCH_QUERY_CHARS = 80
+
 
 @dataclass(frozen=True)
 class FetchOutcome:
@@ -51,14 +75,33 @@ class FetchOutcome:
     pdf_path: Optional[str]
 
 
+def _is_valid_pdf(path: str) -> bool:
+    """Checks the ``%PDF-`` magic bytes and a size cap — a merchant error page or a login
+    wall saved with a ``.pdf`` extension would otherwise pass straight through as done."""
+    try:
+        size = os.path.getsize(path)
+        if size == 0 or size > MAX_PDF_SIZE_BYTES:
+            return False
+        with open(path, "rb") as f:
+            header = f.read(len(_PDF_MAGIC))
+    except OSError:
+        return False
+    return header == _PDF_MAGIC
+
+
 def _newest_pdf(downloads_dir: str, before: set[str]) -> Optional[str]:
     """The most recently modified PDF in ``downloads_dir`` that was not already there
     before this run started (plan section 4: "detect the downloaded PDF by listing
-    downloads_path for new *.pdf files after the run, newest first")."""
+    downloads_path for new *.pdf files after the run, newest first"), discarding it when
+    it fails ``_is_valid_pdf``."""
     candidates = [path for path in glob.glob(os.path.join(downloads_dir, "*.pdf")) if path not in before]
     if not candidates:
         return None
-    return max(candidates, key=os.path.getmtime)
+    newest = max(candidates, key=os.path.getmtime)
+    if not _is_valid_pdf(newest):
+        logger.warning("browser_worker: downloaded file %s failed the PDF sanity check, discarding", newest)
+        return None
+    return newest
 
 
 async def run_fetch(
@@ -85,7 +128,7 @@ async def run_fetch(
     """
     before = set(glob.glob(os.path.join(downloads_dir, "*.pdf")))
     try:
-        from browser_use import Agent, Browser, ChatOpenAI
+        from browser_use import Agent, Browser, ChatOpenAI, Tools
     except Exception as exc:  # pragma: no cover - only unreachable inside the real image
         logger.exception("browser_worker: browser-use is not importable")
         return FetchOutcome(
@@ -111,8 +154,30 @@ async def run_fetch(
             chromium_sandbox=False,
         )
         llm = ChatOpenAI(model=_LLM_MODEL, base_url=_LLM_BASE_URL, api_key=deepseek_api_key)
-        agent = Agent(task=task, llm=llm, browser=browser, use_vision=True, output_model_schema=FetchResult)
-        history = await agent.run(max_steps=MAX_STEPS)
+        # `evaluate`/`upload_file` excluded — see EXCLUDED_TOOL_ACTIONS.
+        tools = Tools(exclude_actions=list(EXCLUDED_TOOL_ACTIONS))
+        agent = Agent(
+            task=task, llm=llm, browser=browser, tools=tools, use_vision=True, output_model_schema=FetchResult
+        )
+        # Bounded by an outer deadline — see AGENT_RUN_TIMEOUT_SECONDS.
+        history = await asyncio.wait_for(agent.run(max_steps=MAX_STEPS), timeout=AGENT_RUN_TIMEOUT_SECONDS)
+    except asyncio.CancelledError:
+        # SIGTERM: the poll loop (`worker.py`) cancels this call and requeues the job
+        # itself — this only owns closing the browser cleanly before the cancellation
+        # propagates back out (never swallowed: the requeue depends on it).
+        logger.info("browser_worker: agent run cancelled (SIGTERM) for job %s, closing the browser", job.id)
+        try:
+            await browser.kill()
+        except Exception:
+            logger.exception("browser_worker: failed to close the browser after a cancelled run for job %s", job.id)
+        raise
+    except asyncio.TimeoutError:
+        logger.error("browser_worker: agent run timed out after %ss for job %s", AGENT_RUN_TIMEOUT_SECONDS, job.id)
+        try:
+            await browser.kill()
+        except Exception:
+            logger.exception("browser_worker: failed to close the browser after a timed-out run for job %s", job.id)
+        return FetchOutcome(result=FetchResult(status="failed", message="Agent run timed out."), pdf_path=None)
     except Exception as exc:
         logger.exception("browser_worker: agent run failed for job %s", job.id)
         return FetchOutcome(result=FetchResult(status="failed", message=str(exc)), pdf_path=None)
@@ -152,6 +217,20 @@ def _browser_agent_cost_usd(history: Any) -> float:
     return steps * BROWSER_AGENT_STEP_ESTIMATE_USD
 
 
+def _clamp_search_queries(queries: list[Any]) -> list[str]:
+    """Bounds untrusted `search_queries` before they reach the agent's task text: at most
+    `MAX_SEARCH_QUERIES` items, each collapsed to a single line and truncated to
+    `MAX_SEARCH_QUERY_CHARS` characters. Duplicates (after truncation) are dropped."""
+    clamped: list[str] = []
+    for raw in queries:
+        text = " ".join(str(raw).split())[:MAX_SEARCH_QUERY_CHARS]
+        if text and text not in clamped:
+            clamped.append(text)
+        if len(clamped) >= MAX_SEARCH_QUERIES:
+            break
+    return clamped
+
+
 async def run_product_search(
     job: AssistantJobRecord,
     *,
@@ -170,19 +249,27 @@ async def run_product_search(
     only the structured ``ProductSearchResult`` the agent's final answer carries.
     """
     try:
-        from browser_use import Agent, Browser, ChatOpenAI
+        from browser_use import Agent, Browser, ChatOpenAI, Tools
     except Exception as exc:  # pragma: no cover - only unreachable inside the real image
         logger.exception("browser_worker: browser-use is not importable")
         return ProductSearchResult(status="failed", message=f"browser-use unavailable: {exc}")
 
     params = job.params or {}
     ident = MaterialIdent.model_validate(params.get("ident") or {})
-    queries = list(params.get("search_queries") or ident.search_queries or [ident.name])
+    raw_queries = params.get("search_queries") or ident.search_queries or [ident.name]
+    queries = _clamp_search_queries(raw_queries) or _clamp_search_queries([ident.name])
     task = build_product_search_task(ident, queries)
+
+    # This flow reads untrusted photo-derived text and visits third-party marketplace
+    # listings (ManoMano sellers) — it must never run inside the merchant-login profile
+    # (`profile_dir`), so a prompt-injected page can never touch a logged-in session. A
+    # fresh, ephemeral, never-logged-in profile per run, removed afterward regardless of
+    # outcome.
+    search_profile_dir = tempfile.mkdtemp(prefix="folio-product-search-")
     try:
         browser = Browser(
             executable_path=chrome_path,
-            user_data_dir=profile_dir,
+            user_data_dir=search_profile_dir,
             headless=False,
             downloads_path=downloads_dir,
             allowed_domains=build_allowed_domains(),
@@ -191,11 +278,42 @@ async def run_product_search(
             chromium_sandbox=False,
         )
         llm = ChatOpenAI(model=_LLM_MODEL, base_url=_LLM_BASE_URL, api_key=deepseek_api_key)
-        agent = Agent(task=task, llm=llm, browser=browser, use_vision=True, output_model_schema=ProductSearchResult)
-        history = await agent.run(max_steps=MAX_STEPS)
+        tools = Tools(exclude_actions=list(EXCLUDED_TOOL_ACTIONS))
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser=browser,
+            tools=tools,
+            use_vision=True,
+            output_model_schema=ProductSearchResult,
+        )
+        history = await asyncio.wait_for(agent.run(max_steps=MAX_STEPS), timeout=AGENT_RUN_TIMEOUT_SECONDS)
+    except asyncio.CancelledError:
+        # See `run_fetch`'s identical handler.
+        logger.info(
+            "browser_worker: product search agent run cancelled (SIGTERM) for job %s, closing the browser", job.id
+        )
+        try:
+            await browser.kill()
+        except Exception:
+            logger.exception("browser_worker: failed to close the browser after a cancelled run for job %s", job.id)
+        raise
+    except asyncio.TimeoutError:
+        logger.error(
+            "browser_worker: product search agent run timed out after %ss for job %s",
+            AGENT_RUN_TIMEOUT_SECONDS,
+            job.id,
+        )
+        try:
+            await browser.kill()
+        except Exception:
+            logger.exception("browser_worker: failed to close the browser after a timed-out run for job %s", job.id)
+        return ProductSearchResult(status="failed", message="Agent run timed out.")
     except Exception as exc:
         logger.exception("browser_worker: product search agent run failed for job %s", job.id)
         return ProductSearchResult(status="failed", message=str(exc))
+    finally:
+        shutil.rmtree(search_profile_dir, ignore_errors=True)
 
     if cost_ledger is not None:
         try:

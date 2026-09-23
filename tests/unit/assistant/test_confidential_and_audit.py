@@ -33,6 +33,13 @@ class FakeAuthzReader:
     def is_platform_ops(self, user_id: UUID) -> bool:
         return self._ops
 
+    def admin_company_ids(self, user_id: UUID) -> list[UUID]:
+        # `accessible_projects` calls this on every `handle_message` now, not only on
+        # the confidential-class/labor/tasks project-resolution path this fake
+        # originally supported — an empty result is a safe "no projects offered"
+        # default for tests that do not care about the router's project hints.
+        return []
+
     def is_assigned(self, user_id: UUID, project_id: UUID) -> bool:
         return True
 
@@ -166,6 +173,122 @@ def test_admin_channel_does_not_trigger_the_router_refusal(world) -> None:  # no
     # non-admin refusal template.
     assert "budget" not in body_lower or "quản trị" not in body_lower
     assert "administration" not in body_lower
+
+
+class _RecordingAdminAnswers:
+    """Just enough of `AdminAnswersFeature` to prove the finance/payroll branches must
+    never be invoked for a `pick_project_ctx` tap outside the admin channel."""
+
+    def __init__(self) -> None:
+        self.ask_project_income_calls: list[dict] = []
+        self.ask_salary_calls: list[dict] = []
+
+    def ask_project_income(self, **kwargs) -> str:
+        self.ask_project_income_calls.append(kwargs)
+        return "answered"
+
+    def ask_salary(self, **kwargs) -> str:
+        self.ask_salary_calls.append(kwargs)
+        return "answered"
+
+    def ask_unpaid_invoices(self, **kwargs) -> str:  # pragma: no cover - unused here
+        return "answered"
+
+    def ask_audit(self, **kwargs) -> str:  # pragma: no cover - unused here
+        return "answered"
+
+
+# ---------------------------------------------------------------------------
+# A `pick_project_ctx` tap re-checks the admin channel for finance/payroll intents
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("intent", ["ask_project_income", "ask_salary", "ask_own_salary"])
+def test_pick_project_ctx_refuses_finance_intents_outside_the_admin_channel(world, intent) -> None:  # noqa: F811
+    """`pick_project_ctx` is only ever server-offered from inside the admin channel
+    (`_dispatch_confidential`'s own gate), but the tap handler must re-check that itself
+    — a stale tap replayed after the asker lost admin-channel access must never reach a
+    finance/payroll answer outside it."""
+    admin_answers = _RecordingAdminAnswers()
+    original = _user_message(world["channel"], world["user_id"], body="chantier")
+    world["message_repo"].add(original)
+    payload = {"project_id": str(world["project"].id), "intent": intent, "text": "chantier"}
+    choice = world["messenger"].post_choice(
+        world["user_id"],
+        "Quel chantier ?",
+        [{"label": "Villa Arcueil", "action": "pick_project_ctx", "payload": payload}],
+        reply_to_id=original.id,
+        channel=world["channel"],
+        scope=None,
+    )
+    service = world["build_service"](ScriptedDecision(), admin_answers=admin_answers)
+
+    service.handle_action(user_id=world["user_id"], message_id=choice.id, action="pick_project_ctx", payload=payload)
+
+    assert admin_answers.ask_project_income_calls == []
+    assert admin_answers.ask_salary_calls == []
+    reply = _last_message(world)
+    assert reply.channel == world["channel"]
+
+
+def test_pick_project_ctx_allows_finance_intents_inside_the_admin_channel(world) -> None:  # noqa: F811
+    admin_channel = ChannelRef(kind="admin", id=world["company_id"])
+    admin_answers = _RecordingAdminAnswers()
+    original = _user_message(admin_channel, world["user_id"], body="chantier")
+    world["message_repo"].add(original)
+    payload = {"project_id": str(world["project"].id), "intent": "ask_project_income", "text": "chantier"}
+    choice = world["messenger"].post_choice(
+        world["user_id"],
+        "Quel chantier ?",
+        [{"label": "Villa Arcueil", "action": "pick_project_ctx", "payload": payload}],
+        reply_to_id=original.id,
+        channel=admin_channel,
+        scope=None,
+    )
+    service = world["build_service"](ScriptedDecision(), admin_answers=admin_answers)
+
+    service.handle_action(user_id=world["user_id"], message_id=choice.id, action="pick_project_ctx", payload=payload)
+
+    assert len(admin_answers.ask_project_income_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# A refusal reached through a `clarify_intent` tap records the real outcome
+# ---------------------------------------------------------------------------
+
+
+def test_clarify_intent_tap_records_a_refusal_in_the_audit_row(world) -> None:  # noqa: F811
+    """`ask_project_income` picked off a low-confidence clarify choice, then tapped
+    from a non-admin channel, must audit as `outcome="refused"` — not the caller's
+    `"answered"` default — since `ask_audit`'s refusal count depends on it."""
+    original = _user_message(world["channel"], world["user_id"], body="chantier")
+    world["message_repo"].add(original)
+    audit = FakeAuditRepo()
+    choice = world["messenger"].post_choice(
+        world["user_id"],
+        "Tu veux faire quoi ?",
+        [
+            {
+                "label": "Finances du chantier",
+                "action": "clarify_intent",
+                "payload": {"message_id": str(original.id), "intent": "ask_project_income"},
+            }
+        ],
+        reply_to_id=original.id,
+        channel=world["channel"],
+        scope=None,
+    )
+    service = world["build_service"](ScriptedDecision(), audit=audit)
+
+    service.handle_action(
+        user_id=world["user_id"],
+        message_id=choice.id,
+        action="clarify_intent",
+        payload={"message_id": str(original.id), "intent": "ask_project_income"},
+    )
+
+    assert audit.rows[-1].outcome == "refused"
+    assert audit.rows[-1].refused_reason == "scope"
 
 
 # ---------------------------------------------------------------------------

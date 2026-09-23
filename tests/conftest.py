@@ -1243,6 +1243,7 @@ def invitation_app():
                 warehouse_repo=_c.inventory_warehouse_repo,
                 project_repo=_c.project_repository,
                 update_item_usecase=_c.inventory_update_item_usecase,
+                authz_reader=_c.authz_reader,
             )
             _feature_handlers = None
             if (

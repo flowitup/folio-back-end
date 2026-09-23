@@ -38,6 +38,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/* /tmp/google-chrome-key.pub
 
+# browser-use's own telemetry defaults to sending fetch/search task text (merchant,
+# purchase amount, product search queries) and visited URLs to PostHog. Set at the image
+# level so no compose file can forget it; __main__.py also sets these via
+# os.environ.setdefault as defence in depth for a non-Docker run.
+ENV ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false
+
 # Project source — same set the main Dockerfile ships (app/reply.py's import chain
 # transitively reaches nearly every application-layer module, e.g.
 # invitations.create_invitation_usecase -> tasks.EmailPayload, so this cannot be

@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.application.assistant.exceptions import AssistantAlreadyAnsweredError
-from app.application.assistant.service import SubmitAssistantActionUseCase
+from app.application.assistant.service import AssistantDispatchFailedError, SubmitAssistantActionUseCase
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 
 
@@ -74,16 +74,21 @@ class FakeSession:
     def commit(self) -> None:
         pass
 
+    def rollback(self) -> None:
+        pass
+
 
 class FakeDispatcher:
-    def __init__(self) -> None:
+    def __init__(self, *, succeeds: bool = True) -> None:
         self.actions_received: list[tuple[UUID, UUID, str, dict[str, Any]]] = []
+        self._succeeds = succeeds
 
     def message_received(self, *, user_id: UUID, message_id: UUID) -> None:  # pragma: no cover - unused here
         pass
 
-    def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
+    def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> bool:
         self.actions_received.append((user_id, message_id, action, payload))
+        return self._succeeds
 
 
 def _choice_message(user_id: UUID) -> ChatMessage:
@@ -147,3 +152,74 @@ def test_lost_update_race_between_read_and_write_never_double_dispatches() -> No
     # our request must never dispatch on top of it.
     assert len(dispatcher.actions_received) == 0
     assert repo.messages[message.id].payload["answered"] == "cancel"
+
+
+def test_dispatch_failure_resets_the_choice_to_unanswered_and_raises() -> None:
+    """A 202 followed by a job that never actually runs (assistant disabled, or the
+    enqueue itself failing) used to leave the choice permanently `answered` with no
+    reply ever coming and no way to retry. `action_received` returning False must undo
+    the just-recorded answer and surface a failure the API route maps to 503."""
+    user_id = uuid4()
+    repo = FakeMessageRepo()
+    message = _choice_message(user_id)
+    repo.add(message)
+    dispatcher = FakeDispatcher(succeeds=False)
+    use_case = SubmitAssistantActionUseCase(repo, FakeDirectory(), FakeSession(), dispatcher)
+
+    with pytest.raises(AssistantDispatchFailedError):
+        use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
+
+    assert repo.messages[message.id].payload["answered"] is None
+    assert repo.messages[message.id].payload.get("answered_payload") is None
+
+    # The reset must be visible to a retry, and a healthy dispatcher lets it through.
+    dispatcher._succeeds = True
+    use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
+    assert repo.messages[message.id].payload["answered"] == "confirm"
+
+
+def test_dispatcher_raising_is_treated_the_same_as_returning_false() -> None:
+    class _RaisingDispatcher:
+        def message_received(self, *, user_id: UUID, message_id: UUID) -> None:  # pragma: no cover
+            pass
+
+        def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> bool:
+            raise RuntimeError("redis is down")
+
+    user_id = uuid4()
+    repo = FakeMessageRepo()
+    message = _choice_message(user_id)
+    repo.add(message)
+    use_case = SubmitAssistantActionUseCase(repo, FakeDirectory(), FakeSession(), _RaisingDispatcher())
+
+    with pytest.raises(AssistantDispatchFailedError):
+        use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
+
+    assert repo.messages[message.id].payload["answered"] is None
+
+
+def test_dispatcher_returning_none_is_still_treated_as_success() -> None:
+    """Backward compatibility: an adapter/fake that has not been updated to report
+    success/failure (still returns `None` implicitly) must behave exactly as before."""
+
+    class _LegacyDispatcher:
+        def __init__(self) -> None:
+            self.actions_received: list[tuple[UUID, UUID, str, dict[str, Any]]] = []
+
+        def message_received(self, *, user_id: UUID, message_id: UUID) -> None:  # pragma: no cover
+            pass
+
+        def action_received(self, *, user_id: UUID, message_id: UUID, action: str, payload: dict[str, Any]) -> None:
+            self.actions_received.append((user_id, message_id, action, payload))
+
+    user_id = uuid4()
+    repo = FakeMessageRepo()
+    message = _choice_message(user_id)
+    repo.add(message)
+    dispatcher = _LegacyDispatcher()
+    use_case = SubmitAssistantActionUseCase(repo, FakeDirectory(), FakeSession(), dispatcher)
+
+    use_case.execute(actor_id=user_id, action="confirm", payload={}, reply_to_id=message.id)
+
+    assert repo.messages[message.id].payload["answered"] == "confirm"
+    assert len(dispatcher.actions_received) == 1

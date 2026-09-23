@@ -7,9 +7,22 @@ package docstring for why this never calls ``app.create_app()``.
 
 from __future__ import annotations
 
+import os
+
+# browser-use's own `ANONYMIZED_TELEMETRY` default is `true` — it ships the fetch/search
+# task text (merchant, purchase amount, product search queries) and every visited URL to
+# PostHog. `Dockerfile.browser` sets both of these at the image level already;
+# `setdefault` here is defence in depth for a `python -m app.infrastructure.browser_worker`
+# run outside that image (a manual repro, a future test harness) — an explicit operator
+# override already in the environment still wins. Must run before `browser_use` is ever
+# imported: it only ever is, lazily, inside `agent.py`'s `run_fetch`/`run_product_search`,
+# well after this module finishes importing and `main()` starts polling — module import
+# order guarantees the ordering.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
+
 import asyncio
 import logging
-import os
 import signal
 import sys
 from types import FrameType
@@ -20,10 +33,12 @@ from rq import Queue
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from config import assistant_flags_enabled
+
 from app.infrastructure.adapters.s3_attachment_storage import S3AttachmentStorage
 from app.infrastructure.ai.cost import RedisCostLedger
 from app.infrastructure.browser_worker.agent import run_fetch, run_product_search
-from app.infrastructure.browser_worker.worker import QUEUE_NAME, run_forever
+from app.infrastructure.browser_worker.worker import QUEUE_NAME, parse_bool_env, run_forever
 from app.infrastructure.database.repositories.sqlalchemy_assistant_job_repository import (
     SqlAlchemyAssistantJobRepository,
 )
@@ -44,10 +59,35 @@ def _require_env(name: str) -> str:
 
 
 def _assistant_enabled() -> bool:
-    """The container-side ``FEATURE_ASSISTANT`` kill switch (review finding NEW-H3):
-    read fresh on every call (``run_forever`` calls this every poll), the same "1" string
-    convention as ``config.Config.FEATURE_ASSISTANT``."""
-    return os.environ.get("FEATURE_ASSISTANT", "0") == "1"
+    """The container-side kill switch: reads fresh on every call (``run_forever`` calls
+    this every poll) through the exact same ``assistant_flags_enabled`` helper
+    ``config.Config.assistant_enabled()`` uses, so flipping ``FEATURE_ASSISTANT`` or
+    pulling either API key stops the web process and this poller identically — pulling
+    only ``TYPESAFE_API_KEY`` must not leave ai-browser claiming jobs and spending
+    DeepSeek. ``TYPESAFE_API_KEY_CONFIGURED`` carries only the *presence* of the web
+    process's TypeSafe key (see ``docker-compose.yml``'s ``ai-browser`` environment —
+    this container never talks to TypeSafe itself and must not receive the real secret)."""
+    return assistant_flags_enabled(
+        _env("FEATURE_ASSISTANT", "0") == "1",
+        _env("DEEPSEEK_API_KEY"),
+        _env("TYPESAFE_API_KEY_CONFIGURED"),
+    )
+
+
+def _disabled_reason() -> str:
+    """Names which of the three `_assistant_enabled()` inputs is missing — never the
+    key values themselves, only their presence — so an idle container's logs say why
+    instead of a single generic "off" that reads the same whether the flag is
+    deliberately off or a deploy shipped this image ahead of the parent compose change
+    that sets `TYPESAFE_API_KEY_CONFIGURED` (an old compose never sets it)."""
+    missing = []
+    if _env("FEATURE_ASSISTANT", "0") != "1":
+        missing.append("FEATURE_ASSISTANT flag is off")
+    if not _env("DEEPSEEK_API_KEY"):
+        missing.append("DEEPSEEK_API_KEY is not configured")
+    if not _env("TYPESAFE_API_KEY_CONFIGURED"):
+        missing.append("TYPESAFE_API_KEY_CONFIGURED is not set")
+    return "; ".join(missing) if missing else "FEATURE_ASSISTANT is off"
 
 
 def main() -> None:
@@ -75,7 +115,7 @@ def main() -> None:
     profile_dir = _env("BROWSER_PROFILE_DIR", "/app/profile")
     downloads_dir = _env("BROWSER_DOWNLOADS_DIR", "/app/data/downloads")
     deepseek_api_key = _env("DEEPSEEK_API_KEY")
-    offpeak_only = _env("JOB_OFFPEAK_ONLY", "false").strip().lower() in ("1", "true")
+    offpeak_only = parse_bool_env(_env("JOB_OFFPEAK_ONLY", "false"))
 
     logger.info(
         "browser_worker: starting (offpeak_only=%s, downloads_dir=%s, profile_dir=%s)",
@@ -87,7 +127,7 @@ def main() -> None:
     stop_event = asyncio.Event()
 
     def _handle_signal(signum: int, _frame: Optional[FrameType]) -> None:
-        logger.info("browser_worker: received signal %s, will stop after the current job", signum)
+        logger.info("browser_worker: received signal %s, cancelling any in-flight job and stopping", signum)
         stop_event.set()
 
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -113,6 +153,7 @@ def main() -> None:
                 offpeak_only=offpeak_only,
                 stop_event=stop_event,
                 assistant_enabled=_assistant_enabled,
+                disabled_reason=_disabled_reason,
                 cost_ledger=cost_ledger,
             )
         )
