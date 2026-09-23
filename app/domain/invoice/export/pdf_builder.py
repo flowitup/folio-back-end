@@ -212,7 +212,7 @@ def _make_styles() -> dict:
 
 
 def _invoice_sort_key(inv: Invoice):
-    return (inv.issue_date, inv.type.value, inv.invoice_number)
+    return (inv.issue_date, inv.ledger_type.value, inv.invoice_number)
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: 
 
     sorted_invoices = sorted(invoices, key=_invoice_sort_key)
     for idx, inv in enumerate(sorted_invoices, start=1):
-        type_label = TYPE_LABEL_EN.get(inv.type.value, inv.type.value.title())
+        type_label = TYPE_LABEL_EN.get(inv.ledger_type.value, inv.ledger_type.value.title())
         table_data.append(
             [
                 str(idx),
@@ -389,7 +389,7 @@ def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: 
 def _render_invoice_page(inv: Invoice, context: InvoiceExportContext, styles: dict, usable_width: float) -> list:
     """Build all story elements for a single polished invoice page."""
     elements: list = []
-    type_label = TYPE_LABEL_EN.get(inv.type.value, inv.type.value.title())
+    type_label = TYPE_LABEL_EN.get(inv.ledger_type.value, inv.ledger_type.value.title())
 
     # --- Header band: project name (left) + "INVOICE" (right) + hairline ---
     header_data = [

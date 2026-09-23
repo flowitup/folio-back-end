@@ -219,3 +219,21 @@ def test_labor_sheet_has_payment_month_column_and_shifted_total():
         # openpyxl reads integral floats back as int.
         assert isinstance(total_cell.value, (int, float))
         assert total_cell.number_format == EUR_FR_FORMAT
+
+
+def test_cash_advance_lands_on_the_others_sheet():
+    """A cash-advance release is written to the Others sheet, not the Released Funds one."""
+    ctx = _make_context()
+    advance = _make_invoice(amount=Decimal("500.00"), recipient="Advance Holder").with_updates(is_cash_advance=True)
+    release = _make_invoice(amount=Decimal("9000.00"), recipient="Bank")
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, _make_bundle([advance, release]))))
+
+    others_sheet = next(name for name in wb.sheetnames if name.startswith("Others"))
+    released_sheet = next(name for name in wb.sheetnames if name.startswith("Released Funds"))
+
+    def _cells(sheet_name):
+        return {c for row in wb[sheet_name].iter_rows(values_only=True) for c in row if c is not None}
+
+    assert "Advance Holder" in _cells(others_sheet)
+    assert "Advance Holder" not in _cells(released_sheet)
+    assert "Bank" in _cells(released_sheet)
