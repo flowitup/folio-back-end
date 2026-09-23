@@ -252,3 +252,32 @@ class TestListInvoicesProjectId:
         calls = repo.list_by_project.call_args_list
         assert calls[0][0][0] == project_a_id
         assert calls[1][0][0] == project_b_id
+
+
+class TestListInvoicesCashAdvanceLedgerType:
+    """A cash advance is stored as released_funds but filtered as others."""
+
+    def _setup(self):
+        repo = MagicMock(spec=IInvoiceRepository)
+        advance = make_invoice(invoice_number="CA-1").with_updates(is_cash_advance=True)
+        release = make_invoice(invoice_number="R-1")
+        other = make_invoice(type_=InvoiceType.OTHERS, invoice_number="O-1")
+        return repo, advance, release, other
+
+    def test_released_funds_filter_leaves_advances_out(self):
+        repo, advance, release, _ = self._setup()
+        repo.list_by_project.return_value = [advance, release]
+        result = ListInvoicesUseCase(repo).execute(
+            ListInvoicesRequest(project_id=uuid4(), invoice_type=InvoiceType.RELEASED_FUNDS)
+        )
+        assert [r.invoice_number for r in result] == ["R-1"]
+
+    def test_others_filter_includes_advances(self):
+        repo, advance, release, other = self._setup()
+        repo.list_by_project.return_value = [advance, release, other]
+        project_id = uuid4()
+        result = ListInvoicesUseCase(repo).execute(
+            ListInvoicesRequest(project_id=project_id, invoice_type=InvoiceType.OTHERS)
+        )
+        assert sorted(r.invoice_number for r in result) == ["CA-1", "O-1"]
+        repo.list_by_project.assert_called_once_with(project_id, None, service_month=None, worker_id=None)

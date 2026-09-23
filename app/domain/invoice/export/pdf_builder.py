@@ -66,7 +66,7 @@ from reportlab.platypus import (
 )
 
 from app.domain.labor.export.format import format_eur_fr
-from app.domain.invoice.export.format import TYPE_LABEL_EN
+from app.domain.invoice.export.format import TYPE_LABEL_EN, invoice_type_label
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext
 from app.domain.entities.invoice import Invoice, InvoiceType
 
@@ -341,7 +341,7 @@ def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: 
 
     sorted_invoices = sorted(invoices, key=_invoice_sort_key)
     for idx, inv in enumerate(sorted_invoices, start=1):
-        type_label = TYPE_LABEL_EN.get(inv.ledger_type.value, inv.ledger_type.value.title())
+        type_label = invoice_type_label(inv)
         table_data.append(
             [
                 str(idx),
@@ -389,7 +389,7 @@ def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: 
 def _render_invoice_page(inv: Invoice, context: InvoiceExportContext, styles: dict, usable_width: float) -> list:
     """Build all story elements for a single polished invoice page."""
     elements: list = []
-    type_label = TYPE_LABEL_EN.get(inv.ledger_type.value, inv.ledger_type.value.title())
+    type_label = invoice_type_label(inv)
 
     # --- Header band: project name (left) + "INVOICE" (right) + hairline ---
     header_data = [

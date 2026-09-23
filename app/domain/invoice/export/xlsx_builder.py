@@ -29,7 +29,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 # Reuse the canonical EUR_FR_FORMAT constant — do not redefine.
 from app.domain.labor.export.xlsx_builder import EUR_FR_FORMAT  # noqa: F401
 
-from app.domain.invoice.export.format import TYPE_LABEL_EN
+from app.domain.invoice.export.format import TYPE_LABEL_EN, invoice_type_label
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext, TypeSubtotal
 from app.domain.entities.invoice import Invoice, InvoiceType
 
@@ -239,7 +239,7 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
     data_row = hdr_row + 1
     for idx, inv in enumerate(sorted_invoices, start=1):
         item_count = len(inv.items)
-        type_label = TYPE_LABEL_EN.get(inv.ledger_type.value, inv.ledger_type.value.title())
+        type_label = invoice_type_label(inv)
         values = [
             idx,
             inv.issue_date,
