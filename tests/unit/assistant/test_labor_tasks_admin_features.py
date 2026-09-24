@@ -36,6 +36,7 @@ from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.domain.entities.project import Project
 from app.domain.entities.task import Task, TaskPriority, TaskStatus
 from app.domain.exceptions.labor_exceptions import InvalidLaborEntryError
+from app.domain.time import business_today
 from tests.fakes.ai import ScriptedVision
 
 
@@ -881,7 +882,7 @@ class TestTasksFeature:
         assert _last(messenger).content_type == "text"
 
     def test_ask_tasks_lists_open_tasks_within_the_week(self) -> None:
-        today = date.today()
+        today = business_today()
         in_window = _task("Poser le carrelage", today + timedelta(days=2))
         out_of_window = _task("Peinture finale", today + timedelta(days=30))
         no_due = _task("Nettoyage chantier", None)
@@ -1163,14 +1164,20 @@ def test_ask_project_income_remaining_matches_the_home_cards_formula() -> None:
     assert "3,000.00" not in body
 
 
-def test_ask_unpaid_invoices_computes_days_late() -> None:
+def test_ask_unpaid_invoices_computes_days_late(monkeypatch: Any) -> None:
+    import app.application.assistant.features.admin_answers as admin_answers_module
+
+    # Pin the business day: an exact day count built from the runner's clock breaks
+    # whenever the runner's date differs from the Europe/Paris date the feature counts in.
+    forced_today = date(2020, 1, 15)
+    monkeypatch.setattr(admin_answers_module, "business_today", lambda: forced_today)
     project = _project("Villa Arcueil")
     overdue_doc = FakeBillingDoc(
         id=uuid4(),
         kind=_Kind("facture"),
         document_number="F-001",
         status=_Kind("overdue"),
-        payment_due_date=date.today() - timedelta(days=10),
+        payment_due_date=forced_today - timedelta(days=10),
     )
     feature = AdminAnswersFeature(
         project_repo=FakeProjectRepo([project]),
@@ -1195,7 +1202,7 @@ def test_ask_unpaid_invoices_computes_days_late() -> None:
     assert outcome == "answered"
     body = _last(messenger).body or ""
     assert "F-001" in body
-    assert "10" in body
+    assert "10 jour(s) de retard" in body
 
 
 def test_ask_audit_groups_by_user() -> None:
@@ -1636,7 +1643,7 @@ def test_ask_tasks_uses_business_today_not_the_server_clock(monkeypatch: Any) ->
 
 
 def test_ask_tasks_includes_overdue_tasks_and_caps_the_listing() -> None:
-    today = date.today()
+    today = business_today()
     overdue = _task("Tâche en retard", today - timedelta(days=2))
     many_in_window = [_task(f"Tâche {i}", today + timedelta(days=1)) for i in range(20)]
     feature = TasksFeature(
@@ -1699,7 +1706,7 @@ def test_ask_unpaid_invoices_excludes_a_project_the_caller_cannot_read() -> None
         kind=_Kind("facture"),
         document_number="F-100",
         status=_Kind("overdue"),
-        payment_due_date=date.today() - timedelta(days=5),
+        payment_due_date=business_today() - timedelta(days=5),
     )
 
     class PartialReadAuthzReader(PermissiveAuthzReader):
@@ -1744,7 +1751,7 @@ def test_ask_unpaid_invoices_caps_lines_and_appends_a_more_count() -> None:
             kind=_Kind("facture"),
             document_number=f"F-{i:03d}",
             status=_Kind("overdue"),
-            payment_due_date=date.today() - timedelta(days=1),
+            payment_due_date=business_today() - timedelta(days=1),
         )
         for i in range(40)
     ]
