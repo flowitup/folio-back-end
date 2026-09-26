@@ -1,7 +1,8 @@
 # AI eval harness
 
-The plan's M0 acceptance bar for the assistant pipeline: S1 (invoice extraction) and A1
-(material identification) accuracy against a small, hand-labelled gold set.
+Measures the assistant's AI pipeline against a small, hand-labelled gold set: S1 (invoice
+extraction) and A1 (material identification). Only the invoice set has a pass/fail bar
+(below); material accuracy is reported, not gated.
 
 ```
 uv run python -m scripts.ai_eval.run_eval --invoices eval/invoices --materials eval/materials [--limit N]
@@ -17,12 +18,15 @@ This repo ships **no real invoices or material photos** (they would either be fa
 data — useless for measuring real-world accuracy — or real documents, which cannot be
 committed). To run the harness for real:
 
-1. Drop `.pdf`/`.jpg`/`.jpeg`/`.png` files into `eval/invoices/` and `eval/materials/`
-   (both directories are gitignored except this README and the two `gold.example.json`
-   files below — your real files and gold labels never get committed).
+1. Drop invoices (`.pdf`/`.jpg`/`.jpeg`/`.png`) into `eval/invoices/` and material photos
+   (`.jpg`/`.jpeg`/`.png`) into `eval/materials/`. Everything under `eval/` is gitignored
+   except this README, the two `gold.example.json` files and the `.gitkeep` placeholders,
+   so your real files and gold labels never get committed. PDF invoices need
+   `poppler-utils` installed.
 2. Copy `eval/invoices/gold.example.json` to `eval/invoices/gold.json` and
    `eval/materials/gold.example.json` to `eval/materials/gold.json`, then fill in the
-   real values for each file you added, keyed by filename.
+   real values for each file you added, keyed by filename. Both `gold.json` files must
+   exist (use `{}` for a set you are not running), or the harness exits 2.
 3. Run the command above.
 
 ## Gold format — `eval/invoices/gold.json`
@@ -60,7 +64,7 @@ Scoring per field:
 Scoring per field: `brand`/`reference` case-insensitive exact match, `name_contains`
 case-insensitive substring match against the identified name.
 
-## Acceptance bar (plan §7, M0)
+## Acceptance bar
 
 The harness exits `1` when either invoice-set threshold is not met (scaled to however
 many files are present — a 10-file set needs the same 95%/85% ratios, not the raw counts):
@@ -68,5 +72,4 @@ many files are present — a 10-file set needs the same 95%/85% ratios, not the 
 - `total_ttc` ≥ 19/20 (95%)
 - `invoice_number` ≥ 17/20 (85%)
 
-If not met: the plan's own next steps are to add auto-crop/deskew before S1, and if still
-not met, flag it for a model change at S1 — do not ship blind.
+(The harness output calls this bar "M0".)
