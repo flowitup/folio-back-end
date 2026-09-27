@@ -389,3 +389,40 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
 
     page_count = resp_pdf.data.count(b"/Type /Page")
     assert page_count >= 4, f"Expected >= 4 /Type /Page markers (1 summary + 3 invoices); got {page_count}"
+
+
+def test_labor_pay_is_exported_in_its_payment_month(inv_export_client, inv_export_app, admin_token):
+    """A labor payment issued in September for August pay is in the August export, as in the list."""
+    import openpyxl
+
+    from app import db
+
+    with inv_export_app.app_context():
+        import uuid
+
+        db.session.add(
+            InvoiceModel(
+                id=uuid4(),
+                project_id=uuid.UUID(inv_export_app._test_project_id),
+                invoice_number="PAYMONTH-L001",
+                type="labor",
+                issue_date=datetime.date(2025, 9, 5),
+                service_month=datetime.date(2025, 8, 1),
+                recipient_name="August pay",
+                items=[{"description": "Pay", "quantity": 1.0, "unit_price": 300.0}],
+            )
+        )
+        db.session.commit()
+
+    def _recipients(month: str) -> set:
+        resp = inv_export_client.get(
+            _export_url(inv_export_app._test_project_id),
+            query_string={"from": month, "to": month, "format": "xlsx"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        wb = openpyxl.load_workbook(BytesIO(resp.data))
+        return {c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row}
+
+    assert "August pay" in _recipients("2025-08")
+    assert "August pay" not in _recipients("2025-09")

@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -214,17 +214,27 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         date_from: date,
         date_to: date,
         type_filter: Optional[InvoiceType] = None,
+        by_payment_month: bool = False,
     ) -> List[Invoice]:
         """Return invoices where issue_date ∈ [date_from, date_to], optionally filtered by type.
 
+        by_payment_month: a labor payment with a payment month (service_month) is
+        placed by that month instead of its issue date — the month the expense
+        list and the labour summaries file it under.
+
         items is stored as a JSONB column (not a relationship), so there is no N+1 risk here.
         """
-        q = (
-            self._session.query(InvoiceModel)
-            .filter(InvoiceModel.project_id == project_id)
-            .filter(InvoiceModel.issue_date >= date_from)
-            .filter(InvoiceModel.issue_date <= date_to)
-        )
+        q = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
+        if by_payment_month:
+            by_month = and_(InvoiceModel.type == InvoiceType.LABOR.value, InvoiceModel.service_month.is_not(None))
+            q = q.filter(
+                or_(
+                    and_(by_month, InvoiceModel.service_month >= date_from, InvoiceModel.service_month <= date_to),
+                    and_(~by_month, InvoiceModel.issue_date >= date_from, InvoiceModel.issue_date <= date_to),
+                )
+            )
+        else:
+            q = q.filter(InvoiceModel.issue_date >= date_from).filter(InvoiceModel.issue_date <= date_to)
         if type_filter is not None:
             q = q.filter(InvoiceModel.type == type_filter.value)
         rows = q.order_by(InvoiceModel.issue_date, InvoiceModel.invoice_number).all()

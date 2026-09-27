@@ -150,9 +150,13 @@ class IInvoiceRepository(ABC):
         date_from: date,
         date_to: date,
         type_filter: Optional[InvoiceType] = None,
+        by_payment_month: bool = False,
     ) -> list[Invoice]:
         """Return invoices for the project where issue_date ∈ [date_from, date_to],
-        optionally filtered by type. Returns [] if none."""
+        optionally filtered by type. Returns [] if none.
+
+        by_payment_month places a labor payment that has a payment month
+        (service_month) by that month instead of its issue date."""
         ...
 
     @abstractmethod

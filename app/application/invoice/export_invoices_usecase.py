@@ -62,6 +62,13 @@ def _parse_yyyy_mm(s: str) -> date:
     return date(int(s[:4]), int(s[5:7]), 1)
 
 
+def _effective_month(inv: Invoice) -> date:
+    """The month an expense is filed under: a labor payment's payment month, else its issue month."""
+    if inv.type == InvoiceType.LABOR and inv.service_month is not None:
+        return inv.service_month.replace(day=1)
+    return inv.issue_date.replace(day=1)
+
+
 def _last_of_month(d: date) -> date:
     """Return last calendar day of the month for the given date."""
     return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
@@ -112,6 +119,8 @@ class ExportInvoicesUseCase:
             date_from=from_d,
             date_to=to_d,
             type_filter=None,
+            # Same month as the expense list: labor by its payment month.
+            by_payment_month=True,
         )
         if req.type_filter is not None:
             invoices = [i for i in invoices if i.ledger_type == req.type_filter]
@@ -120,8 +129,10 @@ class ExportInvoicesUseCase:
         if req.exclude_types:
             invoices = [i for i in invoices if i.type not in req.exclude_types]
 
-        # 4. Sort deterministically: (issue_date, ledger type, invoice_number)
-        invoices.sort(key=lambda inv: (inv.issue_date, inv.ledger_type.value, inv.invoice_number))
+        # 4. Sort deterministically: (effective month, issue_date, ledger type, invoice_number)
+        invoices.sort(
+            key=lambda inv: (_effective_month(inv), inv.issue_date, inv.ledger_type.value, inv.invoice_number)
+        )
 
         # 5. Aggregate per-type subtotals + totals (Decimal-safe)
         subtotals: list[TypeSubtotal] = []
