@@ -41,6 +41,10 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api._helpers.json_provider import FiniteJSONProvider
 
     app.json = FiniteJSONProvider(app)
+    # HTTP errors under /api/ (bad JSON, unknown URL, unhandled 500) answer JSON, not HTML.
+    from app.api._helpers.http_errors import register_json_error_handlers
+
+    register_json_error_handlers(app)
 
     # Production security check — fail fast rather than run with insecure defaults
     _flask_env = os.environ.get("FLASK_ENV", "development")
