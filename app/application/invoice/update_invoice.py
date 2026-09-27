@@ -296,6 +296,22 @@ class UpdateInvoiceUseCase:
                             f"Refund exceeds source invoice amount. Remaining refundable: {remaining:.2f}"
                         )
 
+        # This invoice may itself be the source of linked supplier returns: it
+        # cannot leave materials_services, nor drop below what they already
+        # took back, or the returns would push project spend below zero.
+        if invoice.type == InvoiceType.MATERIALS_SERVICES and (
+            effective_type != InvoiceType.MATERIALS_SERVICES or "items" in updates
+        ):
+            linked_returns = self._repo.sum_refunds_for_source(invoice.id)
+            if linked_returns != 0:
+                if effective_type != InvoiceType.MATERIALS_SERVICES:
+                    raise InvalidInvoiceDataError("Unlink this invoice's returns before changing its type")
+                new_total = sum((item.total for item in updates["items"]), Decimal("0"))
+                if new_total + linked_returns < 0:
+                    raise RefundExceedsSourceError(
+                        f"Invoice total cannot drop below its linked returns: {-linked_returns:.2f}"
+                    )
+
         # settled_via sentinel: absent = keep existing, None = clear, str = set+validate.
         if request.settled_via is not _UNSET:
             if request.settled_via is None:

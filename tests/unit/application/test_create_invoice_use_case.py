@@ -4,6 +4,8 @@ from datetime import date, datetime, timezone
 from typing import Optional
 from unittest.mock import MagicMock, Mock
 from uuid import uuid4
+from decimal import Decimal
+
 import pytest
 
 from app.application.invoice.create_invoice import CreateInvoiceUseCase, CreateInvoiceRequest
@@ -475,6 +477,7 @@ class TestDeleteInvoiceRefundedLock:
 
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
+        inv_repo.sum_refunds_for_source.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -487,6 +490,7 @@ class TestDeleteInvoiceRefundedLock:
 
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
+        inv_repo.sum_refunds_for_source.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -499,16 +503,30 @@ class TestDeleteInvoiceRefundedLock:
 
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
+        inv_repo.sum_refunds_for_source.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
 
         inv_repo.delete.assert_called_once_with(invoice.id)
 
+    # ---------------------------------------------------------------------------
+    # service_month — CreateInvoice / UpdateInvoice
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# service_month — CreateInvoice / UpdateInvoice
-# ---------------------------------------------------------------------------
+    def test_delete_source_of_linked_returns_raises(self):
+        """A purchase with supplier returns linked to it cannot be deleted from under them."""
+        invoice = _make_ms_invoice()
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.sum_refunds_for_source.return_value = Decimal("-80")
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        with pytest.raises(InvalidInvoiceDataError, match="returns first"):
+            use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_not_called()
 
 
 class TestCreateInvoiceServiceMonth:
