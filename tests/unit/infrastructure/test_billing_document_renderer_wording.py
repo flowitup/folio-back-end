@@ -11,7 +11,7 @@ import pytest
 from openpyxl import load_workbook
 
 from app.domain.billing.document import BillingDocument
-from app.domain.billing.document_wording import intro_sentence
+from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.value_objects import BillingDocumentItem
 from app.infrastructure.xlsx.billing_document_xlsx_renderer import OpenpyxlBillingDocumentXlsxRenderer
@@ -55,3 +55,28 @@ def _sheet_texts(doc: BillingDocument) -> list[str]:
 def test_intro_sentence_agrees_with_the_document_kind(kind, expected):
     assert intro_sentence(kind) == expected
     assert expected in _sheet_texts(_doc(kind))
+
+
+@pytest.mark.parametrize(
+    "address,city",
+    [
+        ("9 rue du Test, 75011 Paris, France", "Paris"),
+        ("9 rue du Test, 75011 Paris", "Paris"),
+        ("9 rue du Test, Paris, 75011", "Paris"),
+        ("9 rue du Test\n75011 Paris", "Paris"),
+        ("10 rue A, 69003 Lyon Cedex 03", "Lyon Cedex 03"),
+        ("12 avenue Foch", ""),
+        ("9 rue du Test, 75011", ""),
+        (None, ""),
+    ],
+)
+def test_place_of_issue_reads_the_city_after_the_postcode(address, city):
+    assert place_of_issue(address) == city
+
+
+def test_xlsx_date_line_names_the_city_not_the_country():
+    texts = _sheet_texts(_doc(BillingDocumentKind.FACTURE, issuer_address="9 rue du Test, 75011 Paris, France"))
+    assert "Paris, 27/09/2026" in texts
+    assert "France, 27/09/2026" not in texts
+    no_city = _sheet_texts(_doc(BillingDocumentKind.FACTURE, issuer_address="12 avenue Foch"))
+    assert "27/09/2026" in no_city

@@ -44,7 +44,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from app.domain.billing.document import BillingDocument
-from app.domain.billing.document_wording import intro_sentence
+from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind
 
 
@@ -178,19 +178,8 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             ws.merge_cells(start_row=14, start_column=3, end_row=14, end_column=8)
 
         # ---- 5. Issue date (row 17 B) --------------------------------------
-        # Format: "<City>, DD/MM/YYYY" — issuer_address line 2 (city) is best-effort.
-        city = ""
-        if doc.issuer_address:
-            # Heuristic: take last comma-separated token before postal code
-            addr_parts = [p.strip() for p in doc.issuer_address.split(",")]
-            if addr_parts:
-                # Try last part minus leading postcode
-                last = addr_parts[-1]
-                tokens = last.split()
-                if tokens and tokens[0].isdigit():
-                    city = " ".join(tokens[1:])
-                else:
-                    city = last
+        # Format: "<City>, DD/MM/YYYY" — the city is read from the free-text address.
+        city = place_of_issue(doc.issuer_address)
         date_str = doc.issue_date.strftime("%d/%m/%Y")
         line = f"{city}, {date_str}" if city else date_str
         ws.cell(row=17, column=2, value=line).font = _font(11)
