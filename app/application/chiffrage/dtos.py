@@ -9,6 +9,9 @@ Rounding contract (mirrors app.application.invoice.dtos.money):
 Summing rounded lines (rather than rounding a full-precision sum) is what makes
 the displayed rows add up to the displayed subtotal — an accountant reading the
 table must never find a one-cent discrepancy.
+
+A quote's unit_price_ht is the one exception: it is returned at its stored
+4-decimal precision so an edit form can send it back unchanged.
 """
 
 from __future__ import annotations
@@ -75,7 +78,11 @@ class QuoteResponse:
             supplier_id=str(q.supplier_id) if q.supplier_id else None,
             supplier_name=q.supplier_name,
             library_product_id=(str(q.library_product_id) if q.library_product_id else None),
-            unit_price_ht=money(q.unit_price_ht),
+            # Full stored precision (4 dp): a price entered TTC converts to a
+            # sub-cent HT, and an edit form seeded with a cent-rounded value
+            # would overwrite the stored price on any save. Line totals and
+            # display figures stay rounded to cents.
+            unit_price_ht=float(q.unit_price_ht),
             tva_rate=float(q.tva_rate),
             unit_price_ttc=money(q.unit_price_ttc),
             product_url=q.product_url,

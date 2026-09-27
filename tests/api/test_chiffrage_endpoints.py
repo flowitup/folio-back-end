@@ -364,6 +364,18 @@ class TestPatchDoesNotDropFields:
         assert body["unit"] == "u"
         assert body["note"] == "prévoir 2 de rab"
 
+    def test_quote_price_round_trips_at_stored_precision(self, inv_client, writer_token, project_id, article):
+        """A TTC-entered price is stored with 4 decimals; reading it back must not round it to cents."""
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "Leroy", "9.9917")
+        assert quote["unit_price_ht"] == 9.9917
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"note": "only the note", "unit_price_ht": str(quote["unit_price_ht"])},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["unit_price_ht"] == 9.9917
+
     def test_patching_only_the_price_keeps_the_supplier(self, inv_client, writer_token, project_id, article):
         quote = _add_quote(inv_client, writer_token, project_id, article["id"], "Point P", "12.40")
         resp = inv_client.patch(
