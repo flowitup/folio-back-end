@@ -36,6 +36,7 @@ from app.application.inventory.exceptions import (
     InvalidInventoryInputError,
     InventoryItemNotFoundError,
     WarehouseInUseError,
+    WarehouseNameTakenError,
     WarehouseNotFoundError,
 )
 from app.application.inventory.item_usecases import UNSET as ITEM_UNSET
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 _NOT_MEMBER = "Not a member of this company."
 _NO_PERMISSION = "inventory:manage permission required."
+_NAME_TAKEN = "Another warehouse of this company already has this name."
 
 
 def _err(code: int, error: str, message: str) -> tuple[Response, int]:
@@ -124,6 +126,8 @@ def create_warehouse() -> Any:
         warehouse = get_container().inventory_create_warehouse_usecase.execute(
             requester_id=requester_id, company_id=body.company_id, name=body.name, address=body.address
         )
+    except WarehouseNameTakenError:
+        return _err(409, "Conflict", _NAME_TAKEN)
     except CompanyAccessDeniedError:
         return _err(403, "Forbidden", _NOT_MEMBER)
     except InsufficientPermissionError:
@@ -152,6 +156,8 @@ def update_warehouse(warehouse_id: UUID) -> Any:
         )
     except WarehouseNotFoundError:
         return _err(404, "NotFound", "Warehouse not found.")
+    except WarehouseNameTakenError:
+        return _err(409, "Conflict", _NAME_TAKEN)
     except CompanyAccessDeniedError:
         return _err(403, "Forbidden", _NOT_MEMBER)
     except InsufficientPermissionError:
