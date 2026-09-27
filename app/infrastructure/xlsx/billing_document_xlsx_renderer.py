@@ -44,6 +44,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from app.domain.billing.document import BillingDocument
+from app.domain.billing.document_wording import intro_sentence
 from app.domain.billing.enums import BillingDocumentKind
 
 
@@ -197,12 +198,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
 
         # ---- 6. Greeting (rows 19-21) --------------------------------------
         ws.cell(row=19, column=2, value="Madame, Monsieur,").font = _font(11)
-        intro_subject = "facture" if doc.kind == BillingDocumentKind.FACTURE else "devis"
-        ws.cell(
-            row=20,
-            column=3,
-            value=f"Veuillez trouver ci-après le {intro_subject} relatif à la mission citée en objet.",
-        ).font = _font(11)
+        ws.cell(row=20, column=3, value=intro_sentence(doc.kind)).font = _font(11)
         ws.cell(row=20, column=3).alignment = _align(wrap=True)
         ws.merge_cells(start_row=20, start_column=3, end_row=20, end_column=12)
         ws.cell(

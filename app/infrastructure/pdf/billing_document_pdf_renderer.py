@@ -52,6 +52,7 @@ from reportlab.platypus import (
 )
 
 from app.domain.billing.document import BillingDocument
+from app.domain.billing.document_wording import intro_sentence
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.labor.export.format import format_eur_fr
 
@@ -609,14 +610,10 @@ def _build_greeting_block(doc: BillingDocument, styles: dict) -> list:
 
     Mirrors the source layout (rows 19-21 in the xlsx).
     """
-    intro_subject = "facture" if doc.kind == BillingDocumentKind.FACTURE else "devis"
     return [
         Paragraph("Madame, Monsieur,", styles["body"]),
         Spacer(1, 1 * mm),
-        Paragraph(
-            f"Veuillez trouver ci-après le {intro_subject} relatif à la mission citée en objet.",
-            styles["body"],
-        ),
+        Paragraph(intro_sentence(doc.kind), styles["body"]),
         Paragraph(
             "Je reste à votre disposition pour toute précision ou complément d'information.",
             styles["body"],
