@@ -307,6 +307,8 @@ def bulk_log_attendance(project_id: str):
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
+    except DuplicateEntryError as e:
+        return _error_response("Conflict", str(e), 409)
     except ConflictsNotAcknowledgedError as e:
         return (
             jsonify(

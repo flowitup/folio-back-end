@@ -107,6 +107,11 @@ class BulkLogAttendanceUseCase:
     def execute(self, request: BulkLogAttendanceRequest) -> BulkLogAttendanceResponse:
         if not request.entries:
             return BulkLogAttendanceResponse(created=[], skipped_worker_ids=[])
+        # A worker has one entry per day: a repeated worker would hit the unique
+        # (worker, date) index halfway through, after earlier rows were saved.
+        worker_ids = [e.worker_id for e in request.entries]
+        if len(set(worker_ids)) != len(worker_ids):
+            raise ValueError("Each worker may appear only once in a bulk log")
 
         # 1. Verify each worker belongs to the project. Single-pass —
         # the repo's find_by_id is the same lookup the single
