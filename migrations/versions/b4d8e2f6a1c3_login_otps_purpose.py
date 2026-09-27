@@ -9,7 +9,7 @@ Downgrade deletes the phone-change codes first (short-lived, meaningless to the 
 they would otherwise become usable as sign-in codes), then drops the column.
 
 Revision ID: b4d8e2f6a1c3
-Revises: b6d2f4a8c1e3
+Revises: c3e7a91d5f20
 Create Date: 2026-09-27
 """
 
@@ -18,7 +18,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "b4d8e2f6a1c3"
-down_revision = "b6d2f4a8c1e3"
+down_revision = "c3e7a91d5f20"
 branch_labels = None
 depends_on = None
 
