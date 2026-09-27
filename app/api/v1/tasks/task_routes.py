@@ -190,6 +190,8 @@ def move_task(task_id: str):
     except ValidationError as e:
         return _validation_error(e)
     try:
+        # Captured before the write: a reorder inside the same column is not a move for the assignee.
+        previous_status = get_container().get_task_usecase.execute(UUID(task_id)).status
         result = get_container().move_task_usecase.execute(
             UUID(task_id),
             new_status=TaskStatus(data.status),
@@ -198,7 +200,8 @@ def move_task(task_id: str):
         )
     except TaskNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
-    _notify_task("moved", result, UUID(get_jwt()["sub"]))
+    if result.status != previous_status:
+        _notify_task("moved", result, UUID(get_jwt()["sub"]))
     return jsonify(_serialize(result))
 
 

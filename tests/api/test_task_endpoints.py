@@ -63,3 +63,32 @@ def test_an_invalid_field_is_reported_by_name_without_pydantic_internals(inv_cli
     message = resp.get_json()["message"]
     assert message.startswith("title: ")
     assert "pydantic.dev" not in message and "UpdateTaskSchema" not in message
+
+
+def test_only_a_column_change_sends_the_moved_push(inv_client, admin_token, invitation_app, monkeypatch):
+    from wiring import get_container
+
+    moved = []
+
+    class Recorder:
+        def task_assigned(self, *, task, actor_id):
+            pass
+
+        def task_moved(self, *, task, actor_id):
+            moved.append(task.status.value)
+
+    with invitation_app.app_context():
+        monkeypatch.setattr(get_container(), "task_push_notifier", Recorder())
+    created = _create(
+        inv_client, admin_token, invitation_app._test_project_id, assignee_id=invitation_app._test_member_user_id
+    ).get_json()
+    url = f"/api/v1/tasks/{created['id']}/move"
+
+    reorder = inv_client.patch(url, json={"status": created["status"]}, headers=_auth(admin_token))
+    assert reorder.status_code == 200, reorder.get_data(as_text=True)
+    assert moved == []
+
+    other = "done" if created["status"] != "done" else "todo"
+    change = inv_client.patch(url, json={"status": other}, headers=_auth(admin_token))
+    assert change.status_code == 200, change.get_data(as_text=True)
+    assert moved == [other]

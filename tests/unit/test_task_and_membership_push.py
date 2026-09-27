@@ -96,9 +96,20 @@ def test_unassigned_task_notifies_nobody():
 def test_move_notifies_the_assignee_with_the_new_column():
     d, sender = _dispatcher()
     assignee = uuid4()
-    TaskPushNotifier(d, StubRepo()).task_moved(task=_task(assignee), actor_id=uuid4())
-    assert sender.sent[0].body == "Poser les cloisons → doing · Chantier Arcueil"
+    task = _task(assignee)
+    task.status = Status("in_progress")
+    TaskPushNotifier(d, StubRepo()).task_moved(task=task, actor_id=uuid4())
+    assert sender.sent[0].body == "Poser les cloisons → In progress · Chantier Arcueil"
     assert sender.sent[0].data["kind"] == "task_moved"
+
+
+def test_move_names_the_column_in_the_dispatcher_language():
+    sender = RecordingSender()
+    d = PushDispatcher(devices=StubDevices(), sender=sender, locale="fr", run_async=False)
+    task = _task(uuid4())
+    task.status = Status("done")
+    TaskPushNotifier(d, StubRepo()).task_moved(task=task, actor_id=uuid4())
+    assert sender.sent[0].body == "Poser les cloisons → Terminé · Chantier Arcueil"
 
 
 def test_a_broken_project_lookup_never_raises():
