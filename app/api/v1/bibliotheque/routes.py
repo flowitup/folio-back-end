@@ -21,6 +21,7 @@ from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api._helpers.pagination import MAX_PAGE
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.bibliotheque import bibliotheque_bp
@@ -267,7 +268,7 @@ def import_purchases() -> Any:
     try:
         body = ImportRequestSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -330,7 +331,7 @@ def update_product(product_id: UUID) -> Any:
     try:
         body = UpdateProductSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
 
     # Only forward fields the client actually sent (distinguish omitted from explicit null).
     kwargs = {
@@ -372,7 +373,7 @@ def create_product() -> Any:
     try:
         body = CreateProductSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()
@@ -509,7 +510,7 @@ def fetch_product_image_from_url(product_id: UUID) -> Any:
     try:
         body = ImageFromUrlSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
 
     force = request.args.get("force", "").lower() in ("1", "true", "yes")
     url = str(body.url)

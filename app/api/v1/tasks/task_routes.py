@@ -9,6 +9,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.projects.decorators import (
     require_permission,
@@ -32,7 +33,7 @@ def _error_response(error: str, message: str, status_code: int) -> Tuple[Respons
 
 
 def _validation_error(e: ValidationError) -> Tuple[Response, int]:
-    return _error_response("ValidationError", str(e), 400)
+    return _error_response("ValidationError", validation_message(e), 400)
 
 
 def _notify_task(event: str, task, actor_id: UUID) -> None:

@@ -17,6 +17,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.inventory import inventory_bp
@@ -117,7 +118,7 @@ def create_warehouse() -> Any:
     try:
         body = CreateWarehouseSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
     requester_id = UUID(get_jwt_identity())
     try:
         warehouse = get_container().inventory_create_warehouse_usecase.execute(
@@ -141,7 +142,7 @@ def update_warehouse(warehouse_id: UUID) -> Any:
     try:
         body = UpdateWarehouseSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
     requester_id = UUID(get_jwt_identity())
     try:
         warehouse = get_container().inventory_update_warehouse_usecase.execute(
@@ -237,7 +238,7 @@ def create_item() -> Any:
     try:
         body = CreateInventoryItemSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
     requester_id = UUID(get_jwt_identity())
     try:
         item = get_container().inventory_create_item_usecase.execute(
@@ -293,7 +294,7 @@ def update_item(item_id: UUID) -> Any:
     try:
         body = UpdateInventoryItemSchema.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _err(422, "ValidationError", str(exc))
+        return _err(422, "ValidationError", validation_message(exc))
     fields = (
         "name",
         "category",

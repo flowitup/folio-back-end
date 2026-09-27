@@ -54,3 +54,12 @@ def test_put_with_null_clears_description_assignee_and_due_date(inv_client, admi
 
     untouched = inv_client.put(f"/api/v1/tasks/{created['id']}", json={"title": "Renamed"}, headers=_auth(admin_token))
     assert untouched.get_json()["title"] == "Renamed"
+
+
+def test_an_invalid_field_is_reported_by_name_without_pydantic_internals(inv_client, admin_token, invitation_app):
+    created = _create(inv_client, admin_token, invitation_app._test_project_id).get_json()
+    resp = inv_client.put(f"/api/v1/tasks/{created['id']}", json={"title": ""}, headers=_auth(admin_token))
+    assert resp.status_code == 400
+    message = resp.get_json()["message"]
+    assert message.startswith("title: ")
+    assert "pydantic.dev" not in message and "UpdateTaskSchema" not in message

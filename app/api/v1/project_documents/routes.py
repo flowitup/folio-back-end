@@ -22,6 +22,7 @@ import pydantic
 from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.project_documents import project_documents_bp
 from app.api.v1.project_documents.schemas import (
@@ -100,7 +101,7 @@ def list_project_documents(project_id: str):
     try:
         params = ListQueryParams.model_validate(raw)
     except pydantic.ValidationError as exc:
-        return _error_response("INVALID_PARAMS", str(exc), 422)
+        return _error_response("INVALID_PARAMS", validation_message(exc), 422)
 
     filters = ListFiltersDTO(
         kinds=tuple(params.type),

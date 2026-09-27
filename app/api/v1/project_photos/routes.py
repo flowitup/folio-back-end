@@ -11,6 +11,7 @@ import pydantic
 from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.project_photos import project_photos_bp
 from app.api.v1.project_photos.schemas import ListQueryParams, UpdatePhotoBody
@@ -170,7 +171,7 @@ def list_project_photos(project_id: str):
     try:
         params = ListQueryParams.model_validate(request.args.to_dict())
     except pydantic.ValidationError as exc:
-        return _error_response("INVALID_PARAMS", str(exc), 422)
+        return _error_response("INVALID_PARAMS", validation_message(exc), 422)
 
     container = get_container()
     result = container.list_project_photos_usecase.execute(UUID(project_id), params.page, params.per_page)
@@ -272,7 +273,7 @@ def update_project_photo(project_id: str, photo_id: str):
     try:
         params = UpdatePhotoBody.model_validate(body)
     except pydantic.ValidationError as exc:
-        return _error_response("INVALID_PARAMS", str(exc), 422)
+        return _error_response("INVALID_PARAMS", validation_message(exc), 422)
 
     # A caption sent as null (or blank) clears it, so presence — not value — decides.
     caption_sent = "caption" in params.model_fields_set
