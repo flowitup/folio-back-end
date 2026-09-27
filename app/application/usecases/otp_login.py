@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import math
 import os
 import secrets
 from dataclasses import dataclass
@@ -139,9 +140,21 @@ def _issue_code(
     latest = otps.latest_for_phone(phone)
     if not is_reviewer:
         if latest is not None and (now - latest.created_at) < timedelta(seconds=resend_after):
-            raise OtpThrottledError("A code was sent recently; wait before asking again")
-        if otps.count_created_since(phone, now - timedelta(hours=1)) >= hourly_max:
-            raise OtpThrottledError("Too many codes requested; try again later")
+            wait = timedelta(seconds=resend_after) - (now - latest.created_at)
+            raise OtpThrottledError(
+                "A code was sent recently; wait before asking again",
+                retry_after_seconds=math.ceil(wait.total_seconds()),
+            )
+        window_start = now - timedelta(hours=1)
+        if otps.count_created_since(phone, window_start) >= hourly_max:
+            # The cap lifts when the oldest code of the window leaves it.
+            oldest = otps.oldest_created_since(phone, window_start) or now
+            wait = oldest + timedelta(hours=1) - now
+            raise OtpThrottledError(
+                "Too many codes requested; try again later",
+                retry_after_seconds=math.ceil(wait.total_seconds()),
+                hourly_limit=True,
+            )
     code = f"{secrets.randbelow(10**6):06d}"
     otps.void_active(phone, now)
     otps.save(

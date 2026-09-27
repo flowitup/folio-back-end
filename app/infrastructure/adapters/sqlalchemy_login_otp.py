@@ -59,6 +59,12 @@ class SQLAlchemyLoginOtpRepository:
         ).scalar_one()
         return int(count)
 
+    def oldest_created_since(self, phone: str, since: datetime) -> Optional[datetime]:
+        oldest = self._session.execute(
+            select(func.min(LoginOtpOrm.created_at)).where(LoginOtpOrm.phone == phone, LoginOtpOrm.created_at >= since)
+        ).scalar_one()
+        return _aware(oldest) if oldest is not None else None
+
     def void_active(self, phone: str, now: datetime) -> None:
         self._session.execute(
             update(LoginOtpOrm)

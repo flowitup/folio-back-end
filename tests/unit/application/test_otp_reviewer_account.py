@@ -39,6 +39,10 @@ class FakeOtps:
     def count_created_since(self, phone: str, since: datetime) -> int:
         return sum(1 for r in self.rows if r.phone == phone and r.created_at >= since)
 
+    def oldest_created_since(self, phone: str, since: datetime):
+        created = [r.created_at for r in self.rows if r.phone == phone and r.created_at >= since]
+        return min(created) if created else None
+
     def void_active(self, phone: str, now: datetime) -> None:
         for r in self.rows:
             if r.phone == phone and r.is_active(now):

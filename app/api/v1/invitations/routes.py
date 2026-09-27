@@ -6,6 +6,7 @@ from flask import jsonify, make_response, request
 from flask_jwt_extended import get_jwt_identity, jwt_required, set_access_cookies, set_refresh_cookies
 from pydantic import ValidationError
 
+from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
 from app.api._helpers.validation_error import safe_validation_fields
 
 from app.api.openapi import openapi_doc
@@ -302,7 +303,9 @@ def request_invite_code():
     except PhoneAlreadyRegisteredError:
         return _conflict("phone_registered", "This phone number already has an account.")
     except OtpThrottledError as e:
-        return _err(429, "TooManyRequests", str(e))
+        error, message, headers = otp_throttled(e)
+        body, status = _err(429, error, message)
+        return body, status, headers
     except SmsSendError:
         return _err(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
     except Exception:
@@ -361,7 +364,7 @@ def accept_invitation():
     except OtpInvalidError:
         # The attempt counter moved; persist it so guesses really are limited.
         db.session.commit()
-        return _err(401, "Unauthorized", "Invalid or expired code")
+        return _err(401, "Unauthorized", INVALID_CODE_MESSAGE)
     except PhoneAlreadyRegisteredError:
         db.session.commit()
         return _conflict("phone_registered", "This phone number already has an account.")

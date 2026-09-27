@@ -20,3 +20,7 @@ class LoginOtpRepositoryPort(Protocol):
     def void_active(self, phone: str, now: datetime) -> None:
         """Mark every still-active code of the phone as consumed (a new one replaces them)."""
         ...
+
+    def oldest_created_since(self, phone: str, since: datetime) -> Optional[datetime]:
+        """Creation time of the phone's oldest code created since ``since`` (None if none)."""
+        ...
