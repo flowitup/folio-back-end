@@ -332,6 +332,28 @@ class TestUpdateBillingDocumentStatus:
         assert resp.status_code == 422
 
 
+class TestKindSpecificFields:
+    """A facture takes no validity date, a devis no payment fields — refused before the DB check."""
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"kind": "facture", "validity_until": "2026-12-01"},
+            {"kind": "devis", "payment_due_date": "2026-12-01"},
+            {"kind": "devis", "payment_terms": "30 jours"},
+        ],
+    )
+    def test_create_with_a_field_of_the_other_kind_is_a_400(self, inv_client, billing_token, billing_profile, extra):
+        body = {**_create(billing_profile["company_id"]), "issue_date": "2026-09-27", **extra}
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+
+    def test_siret_longer_than_its_column_is_a_422(self, inv_client, billing_token, billing_profile):
+        body = {**_create(billing_profile["company_id"]), "recipient_siret": "1" * 33}
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 422
+
+
 class TestBillingDocumentDates:
     """Validity and due dates stay on or after the issue date; the issue year matches the number."""
 

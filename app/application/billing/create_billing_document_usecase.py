@@ -27,7 +27,7 @@ from app.application.billing.ports import (
     assert_project_read_access,
     assert_user_company_access,
 )
-from app.domain.billing.dates import validate_document_dates
+from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.exceptions import MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
 
@@ -81,6 +81,8 @@ class CreateBillingDocumentUseCase:
         effective_prefix = _effective_prefix_from_company(company) or ""
         counter_key = inp.company_id
         default_payment_terms = company.default_payment_terms
+
+        validate_kind_fields(inp.kind, inp.validity_until, inp.payment_due_date, inp.payment_terms)
 
         # 3. Validate + convert items
         if not inp.items:

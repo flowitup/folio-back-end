@@ -37,6 +37,7 @@ from app.application.billing.ports import (
     assert_project_read_access,
     assert_user_company_access,
 )
+from app.domain.billing.dates import validate_kind_fields
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import (
@@ -126,6 +127,8 @@ class ImportBillingDocumentUseCase:
             raise ValueError("document_number is required")
         if len(doc_number) > 32:
             raise ValueError("document_number exceeds 32 characters")
+
+        validate_kind_fields(inp.kind, inp.validity_until, inp.payment_due_date, inp.payment_terms)
 
         # 5. Bump counter if doc number parses to year+seq
         parsed = _parse_year_seq(doc_number)

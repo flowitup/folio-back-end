@@ -25,7 +25,7 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
     assert_project_read_access,
 )
-from app.domain.billing.dates import validate_document_dates
+from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.numbering import document_number_year
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
@@ -82,12 +82,7 @@ class UpdateBillingDocumentUseCase:
         _assert_devis_not_locked(self._doc_repo, doc)
 
         # M3: Reject kind-incompatible field updates before touching the DB.
-        if doc.kind == BillingDocumentKind.DEVIS:
-            if inp.payment_due_date is not None or inp.payment_terms is not None:
-                raise ValueError("payment_due_date and payment_terms are only valid on facture documents")
-        if doc.kind == BillingDocumentKind.FACTURE:
-            if inp.validity_until is not None:
-                raise ValueError("validity_until is only valid on devis documents")
+        validate_kind_fields(doc.kind, inp.validity_until, inp.payment_due_date, inp.payment_terms)
 
         # H1: Verify project:read access when explicitly setting a new project_id.
         # update_project_id=True means the caller included the field; project_id may be
