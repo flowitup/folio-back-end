@@ -114,6 +114,7 @@ class CreateInvitationUseCase:
         existing_user = self._user_repo.find_by_email(normalized_email)
         if existing_user is not None:
             if not self._membership_repo.exists(existing_user.id, project_id):
+                self._forbid_manager_adding_a_non_member(inviter_id, existing_user.id, project_id)
                 # Not yet assigned — assign + send notification email.
                 membership = ProjectMembership.create(
                     user_id=existing_user.id,
@@ -201,6 +202,25 @@ class CreateInvitationUseCase:
                 role=self._GRANTED_ROLE,
             )
         )
+
+    def _forbid_manager_adding_a_non_member(self, inviter_id: UUID, user_id: UUID, project_id: UUID) -> None:
+        """Adding an existing account follows the assignment rule.
+
+        A manager may only put plain company members (or people from outside
+        the company, who join as members) on a project; a company manager or
+        admin is added by a company admin, as `PUT /assignments` requires.
+        """
+        reader = self._authz_reader
+        if reader is None:
+            return
+        company_id = reader.project_company_id(project_id)
+        if company_id is None or reader.is_platform_ops(inviter_id):
+            return
+        if reader.company_role_for(inviter_id, company_id) == CompanyRole.ADMIN.value:
+            return
+        target_role = reader.company_role_for(user_id, company_id)
+        if target_role is not None and target_role != CompanyRole.MEMBER.value:
+            raise PermissionDeniedError("A manager may only add a company 'member' to a project")
 
     # ------------------------------------------------------------------
     # Private helpers
