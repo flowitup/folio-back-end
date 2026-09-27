@@ -48,6 +48,7 @@ from app.application.project_documents import (
 )
 from app.application.project_documents.confirm_project_document_upload import (
     DocumentNotInStorageError,
+    StorageKeyMismatchError,
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -298,6 +299,14 @@ def confirm_project_document_upload(project_id: str):
             "File not found in storage — upload may have failed or expired",
             404,
         )
+    except StorageKeyMismatchError as exc:
+        return _error_response("KEY_MISMATCH", str(exc), 400)
+    except EmptyFileError as exc:
+        return _error_response("EMPTY_FILE", str(exc), 400)
+    except DocumentFileTooLargeError as exc:
+        return _error_response("FILE_TOO_LARGE", str(exc), 413)
+    except UnsupportedDocumentTypeError as exc:
+        return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
 
     return jsonify(_serialize(doc)), 201
 

@@ -1375,6 +1375,7 @@ def _configure_di_container() -> None:
             repo=_doc_repo,
             storage=storage,
             db_session=db.session,
+            filename_sanitizer=_filename_sanitizer,
         )
 
     # -----------------------------------------------------------------------
