@@ -361,6 +361,25 @@ class TestImportMembers:
             access = db.session.get(UserCompanyAccessModel, (linked_user_id, target_company))
             assert access is not None and access.role == "member"
 
+    def test_a_person_already_in_the_target_company_is_not_counted_as_imported(self, members_client, members_app):
+        admin_id = _make_user(members_app, "imp_admin_again@test.com")
+        source_company = _make_company(members_app, admin_id, name="Import Source Again")
+        target_company = _make_company(members_app, admin_id, name="Import Target Again")
+        person_id = _make_person(members_app, name="Already Here", phone_normalized="+33611110041")
+        _link_person_to_company(members_app, source_company, person_id, pending=False)
+        _link_person_to_company(members_app, target_company, person_id, pending=False)
+        token = _login(members_client, "imp_admin_again@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{target_company}/members/import",
+            json={"from_company_id": source_company, "person_ids": [person_id]},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["items"] == []
+        assert body["already_member_person_ids"] == [str(person_id)]
+
     def test_import_requires_admin_of_source_company(self, members_client, members_app):
         admin_id = _make_user(members_app, "imp_admin2@test.com")
         other_admin_id = _make_user(members_app, "imp_other_admin2@test.com")

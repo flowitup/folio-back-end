@@ -226,6 +226,7 @@ def import_members(company_id: str):
                     for item in result.items
                 ],
                 "skipped_person_ids": [str(pid) for pid in result.skipped_person_ids],
+                "already_member_person_ids": [str(pid) for pid in result.already_member_person_ids],
             }
         ),
         201,

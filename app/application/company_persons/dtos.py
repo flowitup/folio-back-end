@@ -61,6 +61,8 @@ class ImportMembersResult:
     # person_ids from the request that were skipped: not a member of
     # from_company_id, or the Person row itself no longer exists.
     skipped_person_ids: List[UUID] = field(default_factory=list)
+    # person_ids already in the target company; `items` holds only the people added.
+    already_member_person_ids: List[UUID] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
