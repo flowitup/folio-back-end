@@ -140,7 +140,7 @@ class TestUpdateWorkerUseCase:
         mock_worker_repo.update.side_effect = lambda w: w
 
         result = UpdateWorkerUseCase(mock_worker_repo).execute(
-            UpdateWorkerRequest(worker_id=sample_worker.id, reactivate=True)
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, reactivate=True)
         )
 
         assert result.is_active is True
@@ -151,7 +151,7 @@ class TestUpdateWorkerUseCase:
         mock_worker_repo.update.side_effect = lambda w: w
 
         result = UpdateWorkerUseCase(mock_worker_repo).execute(
-            UpdateWorkerRequest(worker_id=sample_worker.id, name="Renamed")
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed")
         )
 
         assert result.is_active is False
