@@ -129,6 +129,7 @@ def invitation_app():
         project_repo = SQLAlchemyProjectRepository(db.session)
         inv_repo = SqlAlchemyInvitationRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
+        from app.infrastructure.adapters.sqlalchemy_task import SQLAlchemyTaskRepository
 
         configure_container(
             user_repository=user_repo,
@@ -137,6 +138,7 @@ def invitation_app():
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
             project_membership_repo=membership_repo,
+            task_repository=SQLAlchemyTaskRepository(db.session),
         )
 
         # Seed users

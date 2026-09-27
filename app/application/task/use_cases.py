@@ -106,14 +106,23 @@ class GetTaskUseCase:
 
 @dataclass
 class UpdateTaskRequest:
-    """Partial update — only fields that are not None are applied."""
+    """Partial update — only fields that are not None are applied.
+
+    `cleared` names the clearable fields (description, assignee_id, due_date)
+    the client explicitly sent as null: those are set to None instead of being
+    left unchanged.
+    """
 
     title: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[TaskPriority] = None
-    assignee_id: Optional[UUID] = None  # use sentinel via separate fn if you need to clear
+    assignee_id: Optional[UUID] = None
     due_date: Optional[date] = None
     labels: Optional[list[str]] = None
+    cleared: frozenset[str] = frozenset()
+
+
+CLEARABLE_TASK_FIELDS = frozenset({"description", "assignee_id", "due_date"})
 
 
 class UpdateTaskUseCase:
@@ -144,6 +153,8 @@ class UpdateTaskUseCase:
             task.due_date = req.due_date
         if req.labels is not None:
             task.labels = list(req.labels)
+        for name in req.cleared & CLEARABLE_TASK_FIELDS:
+            setattr(task, name, None)
         return self._repo.update(task)
 
 

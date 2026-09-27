@@ -165,6 +165,8 @@ def update_task(task_id: str):
                 assignee_id=data.assignee_id,
                 due_date=data.due_date,
                 labels=data.labels,
+                # An explicit null clears the field; an omitted key leaves it alone.
+                cleared=frozenset(f for f in data.model_fields_set if getattr(data, f) is None),
             ),
         )
     except TaskNotFoundError as e:

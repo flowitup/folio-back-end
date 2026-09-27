@@ -126,3 +126,39 @@ def test_update_accepts_an_assigned_member(reader):
 
 def test_invalid_assignee_is_a_value_error_so_routes_answer_400():
     assert issubclass(InvalidAssigneeError, ValueError)
+
+
+def _task_with_everything(repo, reader):
+    from datetime import date
+
+    return CreateTaskUseCase(repo, reader).execute(
+        CreateTaskRequest(
+            PROJECT, "Pour slab", description="Bring the mixer", assignee_id=ASSIGNED_MEMBER, due_date=date(2026, 10, 1)
+        )
+    )
+
+
+def test_update_clears_the_fields_sent_as_null(reader):
+    repo = _Repo()
+    task = _task_with_everything(repo, reader)
+    updated = UpdateTaskUseCase(repo, reader).execute(
+        task.id, UpdateTaskRequest(cleared=frozenset({"description", "assignee_id", "due_date"}))
+    )
+    assert (updated.description, updated.assignee_id, updated.due_date) == (None, None, None)
+    assert updated.title == "Pour slab"
+
+
+def test_update_leaves_omitted_fields_alone(reader):
+    repo = _Repo()
+    task = _task_with_everything(repo, reader)
+    updated = UpdateTaskUseCase(repo, reader).execute(task.id, UpdateTaskRequest(title="Pour the slab"))
+    assert updated.description == "Bring the mixer"
+    assert updated.assignee_id == ASSIGNED_MEMBER
+    assert updated.due_date is not None
+
+
+def test_title_cannot_be_cleared(reader):
+    repo = _Repo()
+    task = _task_with_everything(repo, reader)
+    updated = UpdateTaskUseCase(repo, reader).execute(task.id, UpdateTaskRequest(cleared=frozenset({"title"})))
+    assert updated.title == "Pour slab"
