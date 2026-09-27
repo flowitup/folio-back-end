@@ -45,6 +45,7 @@ in ReportLab Paragraph objects. Mirrors the labor PDF builder pattern.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import List
@@ -65,7 +66,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from app.domain.labor.export.format import format_eur_fr
+from app.domain.labor.export.format import format_decimal_fr, format_eur_fr
 from app.domain.invoice.export.format import invoice_type_label
 from app.domain.invoice.export.labels import t, type_label
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext
@@ -110,6 +111,15 @@ except Exception as _font_err:  # noqa: BLE001
 # ---------------------------------------------------------------------------
 # Stylesheet
 # ---------------------------------------------------------------------------
+
+
+def _format_quantity(quantity, locale: str) -> str:
+    """'1,5' / '10' in French and Vietnamese, '1.5' / '10' in English — never '10.0'."""
+    if locale != "en":
+        return format_decimal_fr(quantity)
+    d = Decimal(str(quantity))
+    d = d.quantize(Decimal(1)) if d == d.to_integral_value() else d.normalize()
+    return format(d, ",f")
 
 
 def _make_styles() -> dict:
@@ -471,7 +481,7 @@ def _render_invoice_page(inv: Invoice, context: InvoiceExportContext, styles: di
         items_data.append(
             [
                 _xml_escape(item.description),
-                str(item.quantity),
+                _format_quantity(item.quantity, locale),
                 format_eur_fr(item.unit_price),
                 format_eur_fr(item.total),
             ]

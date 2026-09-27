@@ -14,6 +14,7 @@ from app.domain.billing.document import BillingDocument
 from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.value_objects import BillingDocumentItem
+from app.domain.labor.export.format import format_decimal_fr
 from app.infrastructure.xlsx.billing_document_xlsx_renderer import OpenpyxlBillingDocumentXlsxRenderer
 
 
@@ -80,3 +81,48 @@ def test_xlsx_date_line_names_the_city_not_the_country():
     assert "France, 27/09/2026" not in texts
     no_city = _sheet_texts(_doc(BillingDocumentKind.FACTURE, issuer_address="12 avenue Foch"))
     assert "27/09/2026" in no_city
+
+
+@pytest.mark.parametrize(
+    "value,text",
+    [
+        (Decimal("1.5"), "1,5"),
+        (Decimal("5.50"), "5,5"),
+        (Decimal("20"), "20"),
+        (10.0, "10"),
+        (1234.5, "1 234,5"),
+        (Decimal("-0.5"), "-0,5"),
+        (None, "—"),
+    ],
+)
+def test_format_decimal_fr_uses_a_decimal_comma(value, text):
+    assert format_decimal_fr(value) == text
+
+
+def test_pdf_prints_quantities_and_vat_rates_with_a_decimal_comma():
+    from pypdf import PdfReader
+
+    from app.infrastructure.pdf.billing_document_pdf_renderer import ReportLabBillingDocumentPdfRenderer
+
+    doc = _doc(
+        BillingDocumentKind.FACTURE,
+        items=(
+            BillingDocumentItem(
+                description="Peinture", quantity=Decimal("2.5"), unit_price=Decimal("10"), vat_rate=Decimal("5.5")
+            ),
+        ),
+    )
+    pdf = ReportLabBillingDocumentPdfRenderer().render(doc)
+    text = "".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages).replace(" ", " ")
+    assert "2,5" in text
+    assert "TVA 5,5 %" in text
+    assert "2.5" not in text and "5.5" not in text
+
+
+def test_invoice_export_quantity_follows_the_export_language():
+    from app.domain.invoice.export.pdf_builder import _format_quantity
+
+    assert _format_quantity(10.0, "fr") == "10"
+    assert _format_quantity(1.5, "fr") == "1,5"
+    assert _format_quantity(1.5, "vi") == "1,5"
+    assert _format_quantity(1.5, "en") == "1.5"

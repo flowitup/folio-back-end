@@ -1,6 +1,7 @@
 """Pure formatting helpers for labor export output.
 
 format_eur_fr   — Decimal → fr-FR currency string matching FE Intl.NumberFormat
+format_decimal_fr — quantity / rate → fr-FR number with a decimal comma
 slugify_project_name — project name → kebab-case filename-safe slug
 """
 
@@ -27,6 +28,26 @@ def format_eur_fr(value: Decimal | None) -> str:
     # Convert to fr-FR notation: comma → thousand-sep space, period → decimal comma
     s = s.replace(",", "X").replace(".", ",").replace("X", " ")  # narrow no-break space
     return f"{s} €"  # non-breaking space before €
+
+
+def format_decimal_fr(value: Decimal | float | int | None) -> str:
+    """Render a quantity or rate the fr-FR way, without trailing zeros.
+
+    Decimal("1.5") → "1,5", Decimal("5.50") → "5,5", 12.0 → "12", 1234.5 → "1 234,5".
+    Same separators as format_eur_fr, so a line reads consistently next to its amounts.
+    """
+    if value is None:
+        return "—"
+    d = Decimal(str(value))
+    if d == d.to_integral_value():
+        d = d.quantize(Decimal(1))
+    else:
+        d = d.normalize()
+    int_part, _, frac = format(d, "f").partition(".")
+    grouped = f"{int(int_part):,}".replace(",", " ")
+    if int_part.startswith("-") and not grouped.startswith("-"):
+        grouped = "-" + grouped
+    return f"{grouped},{frac}" if frac else grouped
 
 
 def slugify_project_name(name: str, fallback_id: str) -> str:

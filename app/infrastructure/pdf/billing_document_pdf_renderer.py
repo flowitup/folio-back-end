@@ -54,16 +54,12 @@ from reportlab.platypus import (
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.document_wording import intro_sentence
 from app.domain.billing.enums import BillingDocumentKind
-from app.domain.labor.export.format import format_eur_fr
+from app.domain.labor.export.format import format_decimal_fr, format_eur_fr
 
 
 def _fmt_pct(d) -> str:
-    """Format a Decimal percentage without scientific notation: 10 → "10", 5.5 → "5.5"."""
-    s = format(d, "f")
-    # Strip trailing zeros after decimal point + dangling dot.
-    if "." in s:
-        s = s.rstrip("0").rstrip(".")
-    return s or "0"
+    """Format a Decimal percentage the French way: 10 → "10", 5.5 → "5,5"."""
+    return format_decimal_fr(d)
 
 
 logger = logging.getLogger(__name__)
@@ -405,11 +401,7 @@ def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) 
         elif not item.category:
             last_category = None
 
-        qty_str = (
-            str(int(item.quantity))
-            if item.quantity == item.quantity.to_integral_value()
-            else str(item.quantity.normalize())
-        )
+        qty_str = format_decimal_fr(item.quantity)
         table_data.append(
             [
                 Paragraph(_xml_escape(item.description), styles["body_small"]),
@@ -418,7 +410,7 @@ def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) 
                 Paragraph(format_eur_fr(item.unit_price), styles["body_small"]),
                 Paragraph("100%", styles["body_small"]),
                 Paragraph(format_eur_fr(item.total_ht), styles["body_small"]),
-                Paragraph(f"{_fmt_pct(item.vat_rate)}%", styles["body_small"]),
+                Paragraph(f"{_fmt_pct(item.vat_rate)}\u00a0%", styles["body_small"]),
             ]
         )
 
@@ -484,7 +476,7 @@ def _build_totals_block(doc: BillingDocument, styles: dict, usable_width: float)
 
     # VAT per rate (sorted descending by rate)
     for rate, base_ht, tva_amt in doc.vat_breakdown:
-        label = f"TVA {_fmt_pct(rate)} %"
+        label = f"TVA {_fmt_pct(rate)}\u00a0%"
         rows.append(
             [
                 Paragraph(label, styles["body_small"]),
