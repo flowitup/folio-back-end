@@ -168,6 +168,9 @@ class TestUploadProjectPhoto:
         )
         assert resp.status_code == 422
         assert resp.get_json()["error"] == "INVALID_IMAGE"
+        # The decoder's text (Python object reprs) never reaches the client.
+        assert "BytesIO" not in resp.get_json()["message"]
+        assert "thumbnail" not in resp.get_json()["message"]
 
     def test_401_unauthenticated(self, inv_client, invitation_app):
         jpeg = _make_jpeg_bytes()

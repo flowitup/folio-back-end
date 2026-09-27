@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, datetime, timezone
 from typing import Tuple
@@ -38,6 +39,8 @@ from app.application.project_photos.upload_project_photo import (
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+_log = logging.getLogger(__name__)
 
 
 def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
@@ -153,7 +156,9 @@ def upload_project_photo(project_id: str):
     except UnsupportedImageTypeError as exc:
         return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
     except ThumbnailGenerationError as exc:
-        return _error_response("INVALID_IMAGE", str(exc), 422)
+        # The decoder's message names internals (object reprs, limits): log it, send a fixed text.
+        _log.info("photo thumbnail failed project=%s: %s", project_id, exc)
+        return _error_response("INVALID_IMAGE", "The file could not be read as an image or video", 422)
 
     return jsonify(_serialize(photo)), 201
 

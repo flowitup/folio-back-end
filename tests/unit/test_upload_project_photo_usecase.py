@@ -279,6 +279,9 @@ class TestTypeValidation:
             captured_at=None,
         )
         assert result is not None
+        # Stored and served with the type of its extension, not the generic one.
+        assert result.content_type == "image/jpeg"
+        assert storage.put.call_args_list[0].args[2] == "image/jpeg"
 
 
 def _fake_video_thumbnailer():
@@ -305,6 +308,24 @@ class TestVideoUpload:
         assert result.content_type == "video/mp4"
         # Original + poster thumbnail both stored.
         assert storage.put.call_count == 2
+
+    def test_octet_stream_mov_is_thumbnailed_as_a_video(self):
+        """A client that does not tag the MIME still gets a video poster, not a Pillow failure."""
+        thumbnailer = _fake_video_thumbnailer()
+        uc, _, storage, _ = _make_use_case(thumbnailer=thumbnailer)
+        result = uc.execute(
+            project_id=uuid4(),
+            filename="walkthrough.mov",
+            content_type="application/octet-stream",
+            size_bytes=1024,
+            data=b"fake-video-bytes",
+            uploader_user_id=uuid4(),
+            caption=None,
+            captured_at=None,
+        )
+        assert thumbnailer.generate.call_args.args[1] == "video/quicktime"
+        assert result.content_type == "video/quicktime"
+        assert storage.put.call_args_list[0].args[2] == "video/quicktime"
 
     def test_video_uses_larger_cap(self):
         """A 40 MiB video is accepted (over the 25 MiB image cap, under 50 MiB)."""

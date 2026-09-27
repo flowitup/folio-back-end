@@ -35,6 +35,19 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "imag
 ALLOWED_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".webm", ".mov"})
 ALLOWED_VIDEO_MIME_TYPES: frozenset[str] = frozenset({"video/mp4", "video/webm", "video/quicktime"})
 
+# The concrete type of each allowed extension, used when a client sends the
+# generic octet-stream: the thumbnailer picks image or video by MIME type, and
+# the stored object and row should carry a type a browser can render.
+_MIME_BY_EXTENSION: dict[str, str] = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+}
+
 
 def validate_media_type(filename: str, mime_type: str) -> str:
     """Validate the extension + MIME against the image OR video allowlist.
@@ -130,6 +143,8 @@ class UploadProjectPhotoUseCase:
         # --- Type allowlist (defense-in-depth: sanitized name + MIME check) ---
         # Determines media kind, which selects the size cap below.
         kind = validate_media_type(sanitized, content_type)
+        if content_type == "application/octet-stream":
+            content_type = _MIME_BY_EXTENSION[os.path.splitext(sanitized)[1].lower()]
 
         # --- Size validation (per-kind cap: video gets more headroom) ---
         max_bytes = MAX_VIDEO_SIZE_BYTES if kind == "video" else MAX_SIZE_BYTES
