@@ -296,8 +296,9 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             ws.cell(row=row, column=10).alignment = _align("center", "center")
             ws.cell(row=row, column=10).number_format = "0.00%"
             ws.cell(row=row, column=10).border = _thin_box()
-            # K = Montant HT — formula =I*J*H so Excel recomputes if user edits
-            ws.cell(row=row, column=11, value=f"=I{row}*J{row}*H{row}").font = _font(11)
+            # K = Montant HT — formula so Excel recomputes if user edits; rounded to the
+            # cent like the app's line totals, so the SUM matches the document's HT.
+            ws.cell(row=row, column=11, value=f"=ROUND(I{row}*J{row}*H{row},2)").font = _font(11)
             ws.cell(row=row, column=11).alignment = _align("center", "center")
             ws.cell(row=row, column=11).number_format = "#,##0.00"
             ws.cell(row=row, column=11).border = _thin_box()

@@ -80,8 +80,8 @@ class TestComputeTotals:
         assert totals.total_tva == Decimal("15")
         assert totals.total_ttc == Decimal("90")
 
-    def test_decimal_precision_preserved(self):
-        """Decimal precision must not be lost through compute → total pipeline."""
+    def test_line_tva_rounded_half_up_to_the_cent(self):
+        """99.99 × 5.5 % = 5.49945 → 5.50: each line's TVA is rounded to the cent."""
         item = BillingDocumentItem(
             description="Precise",
             quantity=Decimal("1"),
@@ -89,8 +89,30 @@ class TestComputeTotals:
             vat_rate=Decimal("5.5"),
         )
         totals = compute_totals([item])
-        expected_tva = Decimal("99.99") * Decimal("5.5") / Decimal("100")
-        assert totals.total_tva == expected_tva
+        assert totals.total_tva == Decimal("5.50")
+        assert totals.total_ttc == Decimal("105.49")
+
+    def test_half_cent_lines_round_half_up_and_add_up_to_the_totals(self):
+        """The devis QA found showing three different totals on web, PDF and API."""
+        items = [
+            BillingDocumentItem("A", Decimal("1"), Decimal("0.125"), Decimal("20")),
+            BillingDocumentItem("B", Decimal("1"), Decimal("0.125"), Decimal("20")),
+            BillingDocumentItem("C", Decimal("1"), Decimal("62.625"), Decimal("0")),
+            BillingDocumentItem("D", Decimal("2.5"), Decimal("19.99"), Decimal("20")),
+        ]
+        assert [it.total_ht for it in items] == [
+            Decimal("0.13"),
+            Decimal("0.13"),
+            Decimal("62.63"),
+            Decimal("49.98"),
+        ]
+        totals = compute_totals(items)
+        assert totals.total_ht == Decimal("112.87")
+        assert totals.total_ht == sum(it.total_ht for it in items)
+        # TVA per line from the rounded HT: 0.03 + 0.03 + 0 + 10.00
+        assert totals.total_tva == Decimal("10.06")
+        assert totals.total_ttc == Decimal("122.93")
+        assert totals.total_ttc == totals.total_ht + totals.total_tva
 
 
 class TestVatBreakdown:
