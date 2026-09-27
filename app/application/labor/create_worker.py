@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
+from app.application.company_persons.ensure_company_person import ensure_person_profile
 from app.application.labor.ports import IWorkerRepository
 from app.application.labor.role_scope import assert_role_in_project_company
 from app.application.persons.ports import IPersonRepository
@@ -113,6 +114,27 @@ class CreateWorkerUseCase:
         self._company_person_repo = company_person_repo
         self._authz_reader = authz_reader
 
+    def _list_in_project_company(self, person_id: UUID, request: CreateWorkerRequest) -> None:
+        """List a person created inline in the project company's directory.
+
+        Otherwise the company's persons search never finds them again, the next
+        "Add worker" creates a second identity for the same human, and the
+        cross-project double-booking check cannot match the two.
+        """
+        if self._company_person_repo is None or self._authz_reader is None or self._person_repo is None:
+            return
+        company_id = self._authz_reader.project_company_id(request.project_id)
+        person = self._person_repo.find_by_id(person_id)
+        if company_id is None or person is None:
+            return
+        ensure_person_profile(
+            company_persons=self._company_person_repo,
+            company_id=company_id,
+            person=person,
+            created_by_user_id=request.created_by_user_id,
+            now=datetime.now(timezone.utc),
+        )
+
     def set_role_scope(self, labor_role_repo, authz_reader) -> None:
         """Inject what the role check needs; wired after the labor-role repository exists."""
         self._labor_role_repo = labor_role_repo
@@ -189,6 +211,7 @@ class CreateWorkerUseCase:
                     )
                 )
                 person_id = UUID(created_person.id)
+                self._list_in_project_company(person_id, request)
 
         worker = Worker(
             id=uuid4(),
