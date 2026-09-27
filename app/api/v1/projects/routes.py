@@ -135,6 +135,7 @@ def list_projects():
     budget_map: dict = {}
     company_id_map: dict = {}
     prefix_map: dict = {}
+    created_map: dict = {}
     if project_ids:
         rows = (
             db.session.query(
@@ -143,6 +144,7 @@ def list_projects():
                 ProjectModel.budget_source,
                 ProjectModel.company_id,
                 ProjectModel.invoice_prefix,
+                ProjectModel.created_at,
             )
             .filter(ProjectModel.id.in_(project_ids))
             .all()
@@ -151,6 +153,7 @@ def list_projects():
             budget_map[row.id] = (row.budget, row.budget_source)
             company_id_map[row.id] = str(row.company_id) if row.company_id else None
             prefix_map[row.id] = row.invoice_prefix
+            created_map[row.id] = row.created_at.isoformat() if row.created_at else ""
 
     user_uuid = UUID(user_id)
     items = []
@@ -173,7 +176,7 @@ def list_projects():
                 address=p.address,
                 owner_id=p.owner_id,
                 user_count=p.user_count,
-                created_at="",
+                created_at=created_map.get(pid, ""),
                 company_id=company_id_map.get(pid),
                 # Same value the detail endpoint returns, so a client seeding its
                 # settings form from the list shows the saved prefix.
@@ -328,6 +331,7 @@ def create_project():
 
         _db.session.commit()
 
+    new_perms = sorted(_effective_perms_for(UUID(result.id), user_id))
     return (
         jsonify(
             ProjectResponse(
@@ -339,6 +343,7 @@ def create_project():
                 created_at=result.created_at,
                 company_id=result.company_id,
                 invoice_prefix=result.invoice_prefix,
+                my_permissions=new_perms,
                 budget=float(result.budget) if result.budget is not None else None,
                 budget_source=result.budget_source,
                 spent=0,
@@ -346,6 +351,15 @@ def create_project():
         ),
         201,
     )
+
+
+def _company_id_of(project_id: UUID) -> "str | None":
+    """company_id from the DB model (not exposed on the domain entity)."""
+    from app import db
+    from app.infrastructure.database.models.project import ProjectModel
+
+    db_row = db.session.get(ProjectModel, project_id)
+    return str(db_row.company_id) if db_row and db_row.company_id else None
 
 
 @projects_bp.route("/<project_id>", methods=["GET"])
@@ -370,12 +384,7 @@ def get_project(project_id: str):
     if not can_read_project(project, user_id):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
-    # Resolve company_id from the DB model (not exposed on the domain entity).
-    from app import db
-    from app.infrastructure.database.models.project import ProjectModel
-
-    db_row = db.session.get(ProjectModel, project.id)
-    company_id_str = str(db_row.company_id) if db_row and db_row.company_id else None
+    company_id_str = _company_id_of(project.id)
 
     # Compute spent for this single project.
     container = get_container()
@@ -493,7 +502,9 @@ def update_project(project_id: str):
             owner_id=str(result.owner_id),
             user_count=len(result.user_ids),
             created_at=result.created_at.isoformat(),
+            company_id=_company_id_of(result.id),
             invoice_prefix=result.invoice_prefix,
+            my_permissions=perms,
             budget=float(result.budget) if budget_visible and result.budget is not None else None,
             budget_source=result.budget_source if budget_visible else None,
             **_spend_fields(spent_rollup if spend_visible else _NO_SPEND),
