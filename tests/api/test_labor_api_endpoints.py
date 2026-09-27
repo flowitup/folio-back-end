@@ -257,6 +257,47 @@ class TestWorkerRoutes:
         resp = labor_client.delete(_worker_url(pid, str(uuid4())), headers=_auth(admin_token))
         assert resp.status_code == 404
 
+    def test_update_and_delete_worker_through_another_project_404(self, labor_client, admin_token, labor_app):
+        """A worker is only reachable under its own project: the URL project is the one
+        the caller was authorised for, so another project's id must not reach it."""
+        from uuid import UUID
+
+        from app import db
+
+        pid = labor_app._test_project_id
+        create_resp = labor_client.post(
+            _workers_url(pid),
+            json={"name": "Scoped Worker", "daily_rate": 70.0},
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        worker_id = create_resp.get_json()["id"]
+
+        with labor_app.app_context():
+            owner = db.session.get(UserModel, UUID(labor_app._test_admin_user_id))
+            other = ProjectModel(
+                name="Other Labor Project",
+                owner_id=owner.id,
+                company_id=company_for_projects(db.session, owner.id),
+            )
+            db.session.add(other)
+            db.session.commit()
+            other_pid = str(other.id)
+
+        resp = labor_client.put(
+            _worker_url(other_pid, worker_id),
+            json={"name": "Hijacked"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 404
+        resp = labor_client.delete(_worker_url(other_pid, worker_id), headers=_auth(admin_token))
+        assert resp.status_code == 404
+
+        workers = labor_client.get(_workers_url(pid), headers=_auth(admin_token)).get_json()["workers"]
+        mine = next(w for w in workers if w["id"] == worker_id)
+        assert mine["name"] == "Scoped Worker"
+        assert mine["is_active"] is True
+
     def test_list_workers_returns_created_workers(self, labor_client, admin_token, labor_app):
         """GET /workers returns workers after creation — covers list path body."""
         pid = labor_app._test_project_id

@@ -175,6 +175,7 @@ def update_worker(project_id: str, worker_id: str):
         # daily_rate is NOT forwarded: base rate is locked at creation time.
         update_kwargs = dict(
             worker_id=UUID(worker_id),
+            project_id=UUID(project_id),
             name=data.name,
             phone=data.phone,
         )
@@ -203,7 +204,9 @@ def update_worker(project_id: str, worker_id: str):
 def delete_worker(project_id: str, worker_id: str):
     """Soft delete a worker (deactivate)."""
     try:
-        get_container().delete_worker_usecase.execute(DeleteWorkerDTO(worker_id=UUID(worker_id)))
+        get_container().delete_worker_usecase.execute(
+            DeleteWorkerDTO(worker_id=UUID(worker_id), project_id=UUID(project_id))
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError:

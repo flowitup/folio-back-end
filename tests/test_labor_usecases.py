@@ -126,6 +126,7 @@ class TestUpdateWorkerUseCase:
         result = usecase.execute(
             UpdateWorkerRequest(
                 worker_id=sample_worker.id,
+                project_id=sample_worker.project_id,
                 name="Updated Name",
             )
         )
@@ -141,6 +142,7 @@ class TestUpdateWorkerUseCase:
             usecase.execute(
                 UpdateWorkerRequest(
                     worker_id=uuid4(),
+                    project_id=uuid4(),
                     name="New Name",
                 )
             )
@@ -154,7 +156,7 @@ class TestDeleteWorkerUseCase:
         mock_worker_repo.soft_delete.return_value = True
         usecase = DeleteWorkerUseCase(mock_worker_repo)
 
-        usecase.execute(DeleteWorkerRequest(worker_id=sample_worker.id))
+        usecase.execute(DeleteWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id))
 
         mock_worker_repo.soft_delete.assert_called_once_with(sample_worker.id)
 
@@ -163,7 +165,27 @@ class TestDeleteWorkerUseCase:
         usecase = DeleteWorkerUseCase(mock_worker_repo)
 
         with pytest.raises(WorkerNotFoundError):
-            usecase.execute(DeleteWorkerRequest(worker_id=uuid4()))
+            usecase.execute(DeleteWorkerRequest(worker_id=uuid4(), project_id=uuid4()))
+
+
+class TestWorkerProjectScoping:
+    """A worker of another project is treated as not found."""
+
+    def test_update_worker_of_other_project_raises_not_found(self, mock_worker_repo, sample_worker):
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = UpdateWorkerUseCase(mock_worker_repo)
+
+        with pytest.raises(WorkerNotFoundError):
+            usecase.execute(UpdateWorkerRequest(worker_id=sample_worker.id, project_id=uuid4(), name="X"))
+        mock_worker_repo.update.assert_not_called()
+
+    def test_delete_worker_of_other_project_raises_not_found(self, mock_worker_repo, sample_worker):
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = DeleteWorkerUseCase(mock_worker_repo)
+
+        with pytest.raises(WorkerNotFoundError):
+            usecase.execute(DeleteWorkerRequest(worker_id=sample_worker.id, project_id=uuid4()))
+        mock_worker_repo.soft_delete.assert_not_called()
 
 
 class TestLogAttendanceUseCase:
