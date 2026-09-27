@@ -87,9 +87,12 @@ def _worker_response(w) -> WorkerResponse:
 @require_permission("project:read")
 @require_project_access(write=False)
 def list_workers(project_id: str):
-    """List workers for a project."""
+    """List workers for a project: active ones, or all with ?include_inactive=true."""
+    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true")
     try:
-        workers = get_container().list_workers_usecase.execute(ListWorkersRequest(project_id=UUID(project_id)))
+        workers = get_container().list_workers_usecase.execute(
+            ListWorkersRequest(project_id=UUID(project_id), include_inactive=include_inactive)
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
@@ -177,6 +180,7 @@ def update_worker(project_id: str, worker_id: str):
             worker_id=UUID(worker_id),
             name=data.name,
             phone=data.phone,
+            reactivate=data.is_active is True,
         )
         if "role_id" in data.model_fields_set:
             update_kwargs["role_id"] = UUID(data.role_id) if data.role_id else None

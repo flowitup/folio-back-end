@@ -133,6 +133,28 @@ class TestUpdateWorkerUseCase:
         assert result is not None
         mock_worker_repo.update.assert_called_once()
 
+    def test_reactivate_turns_deactivated_worker_back_on(self, mock_worker_repo, sample_worker):
+        sample_worker.is_active = False
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+
+        result = UpdateWorkerUseCase(mock_worker_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, reactivate=True)
+        )
+
+        assert result.is_active is True
+
+    def test_plain_update_leaves_deactivated_worker_off(self, mock_worker_repo, sample_worker):
+        sample_worker.is_active = False
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+
+        result = UpdateWorkerUseCase(mock_worker_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, name="Renamed")
+        )
+
+        assert result.is_active is False
+
     def test_update_worker_not_found_raises_error(self, mock_worker_repo):
         mock_worker_repo.find_by_id.return_value = None
         usecase = UpdateWorkerUseCase(mock_worker_repo)
@@ -445,6 +467,22 @@ class TestListWorkersUseCase:
 
         assert len(result) == 1
         assert result[0].name == sample_worker.name
+
+    def test_list_workers_asks_repo_for_active_only_by_default(self, mock_worker_repo):
+        mock_worker_repo.list_by_project.return_value = []
+        ListWorkersUseCase(mock_worker_repo).execute(ListWorkersRequest(project_id=uuid4()))
+        assert mock_worker_repo.list_by_project.call_args.kwargs["active_only"] is True
+
+    def test_list_workers_include_inactive(self, mock_worker_repo, sample_worker):
+        sample_worker.is_active = False
+        mock_worker_repo.list_by_project.return_value = [sample_worker]
+
+        result = ListWorkersUseCase(mock_worker_repo).execute(
+            ListWorkersRequest(project_id=sample_worker.project_id, include_inactive=True)
+        )
+
+        assert mock_worker_repo.list_by_project.call_args.kwargs["active_only"] is False
+        assert [w.is_active for w in result] == [False]
 
     def test_list_workers_empty_project(self, mock_worker_repo):
         mock_worker_repo.list_by_project.return_value = []

@@ -55,6 +55,9 @@ class UpdateWorkerRequest(BaseModel):
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)
     # App account allowed to self-log attendance for this worker; null unlinks.
     user_id: Optional[str] = Field(None, min_length=36, max_length=36)
+    # true reactivates a deactivated worker. Deactivation stays DELETE, which
+    # also frees the worker's app-account link.
+    is_active: Optional[Literal[True]] = None
 
 
 class LogAttendanceRequest(BaseModel):

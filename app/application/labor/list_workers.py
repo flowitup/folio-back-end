@@ -36,6 +36,9 @@ class WorkerSummary:
 @dataclass
 class ListWorkersRequest:
     project_id: UUID
+    # Deactivated workers are hidden from logging pickers but still have history
+    # and possibly a balance owed; payment and worker-management views ask for them.
+    include_inactive: bool = False
 
 
 class ListWorkersUseCase:
@@ -50,7 +53,7 @@ class ListWorkersUseCase:
         self._rate_change_repo = rate_change_repo
 
     def execute(self, request: ListWorkersRequest) -> List[WorkerSummary]:
-        workers = self._repo.list_by_project(request.project_id, active_only=True)
+        workers = self._repo.list_by_project(request.project_id, active_only=not request.include_inactive)
 
         # Resolve current effective rate for every worker in a single query.
         rate_map = {}
