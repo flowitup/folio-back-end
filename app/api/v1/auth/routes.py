@@ -331,7 +331,11 @@ def _me_payload(container: Any, user: Any) -> UserResponse:
 @jwt_required()
 @limiter.limit("20 per hour", key_func=jwt_user_key)
 def update_current_user():
-    """Self-service profile edit (Settings › Profile). The phone becomes the sign-in identity."""
+    """Self-service profile edit (Settings › Profile).
+
+    The phone is the sign-in identity: it may be re-sent unchanged, but clearing or replacing it
+    is refused (400 ``PhoneChangeNotAllowed``) because no code proves the caller holds a new number.
+    """
     try:
         data = UpdateMeRequest(**(request.get_json(silent=True) or {}))
     except ValidationError:
@@ -345,7 +349,7 @@ def update_current_user():
     if not user:
         return _error(404, "NotFound", "User not found")
 
-    profile_error = apply_profile_fields(user, provided, container.user_repository)
+    profile_error = apply_profile_fields(user, provided, container.user_repository, allow_phone_change=False)
     if profile_error is not None:
         return _error(*profile_error)
 

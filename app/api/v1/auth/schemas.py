@@ -85,8 +85,9 @@ class UserResponse(BaseModel):
 class UpdateMeRequest(BaseModel):
     """PATCH /auth/me — the caller edits their own display name and/or phone.
 
-    The e-mail is deliberately not editable here (platform ops only). ``phone`` is stored in
-    E.164 and must stay unique; null/empty clears it. At least one field must be provided.
+    The e-mail is deliberately not editable here (platform ops only). ``phone`` is the sign-in
+    identity: it may only be sent unchanged (any formatting of the current number); clearing or
+    replacing it answers 400 ``PhoneChangeNotAllowed``. At least one field must be provided.
     """
 
     display_name: Optional[str] = Field(default=None, max_length=255)
