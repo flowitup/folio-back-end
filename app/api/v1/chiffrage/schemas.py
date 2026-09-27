@@ -69,7 +69,8 @@ class ArticleCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
-    quantity: Decimal = Field(ge=0, le=MAX_ARTICLE_QUANTITY)
+    # Stored as Numeric(12, 3): more decimals would be rounded away silently.
+    quantity: Decimal = Field(ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
@@ -79,7 +80,7 @@ class ArticleUpdateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    quantity: Optional[Decimal] = Field(default=None, ge=0, le=MAX_ARTICLE_QUANTITY)
+    quantity: Optional[Decimal] = Field(default=None, ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)

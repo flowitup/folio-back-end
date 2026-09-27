@@ -1347,3 +1347,27 @@ class TestMalformedIds:
         )
         assert resp.status_code == 422
         assert "supplier" in resp.get_json()["message"]
+
+
+class TestQuantityPrecision:
+    @pytest.mark.parametrize("quantity", [1.23456, "0.0001"])
+    def test_more_than_three_decimals_is_refused(self, inv_client, writer_token, project_id, poste, article, quantity):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Câble", "quantity": quantity, "unit": "m"},
+            headers=_auth(writer_token),
+        )
+        patched = inv_client.patch(
+            f"{_base(project_id)}/articles/{article['id']}", json={"quantity": quantity}, headers=_auth(writer_token)
+        )
+        assert created.status_code == 422
+        assert patched.status_code == 422
+
+    def test_three_decimals_round_trip(self, inv_client, writer_token, project_id, poste):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Câble", "quantity": "1.235", "unit": "m"},
+            headers=_auth(writer_token),
+        )
+        assert created.status_code == 201
+        assert float(created.get_json()["quantity"]) == 1.235
