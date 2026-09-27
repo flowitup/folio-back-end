@@ -408,3 +408,20 @@ class FundsReleasePort(Protocol):
     ) -> None: ...
 
     def delete_funds_release(self, source_doc_id: UUID) -> None: ...
+
+    def sync_funds_release(
+        self,
+        project_id: Optional[UUID],
+        source_doc_id: UUID,
+        amount_items: list,
+        recipient_name: str,
+        issue_date: date,
+        created_by: UUID,
+    ) -> None:
+        """Make the facture's release match its current lines, recipient, date and project.
+
+        Updates the release in place when the project is unchanged (keeping its
+        FR number and payment method); moves it when the project changed; removes
+        it when the facture was unlinked from its project.
+        """
+        ...

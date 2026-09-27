@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from app.application.billing._helpers import (
     _assert_billing_doc_access,
     _converted_facture_id,
+    _funds_release_items,
     _items_from_inputs,
 )
 from app.application.billing.dtos import BillingDocumentResponse, UpdateBillingDocumentInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
+    FundsReleasePort,
     ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_project_read_access,
 )
-from app.domain.billing.enums import BillingDocumentKind
+from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
+
+# Facture fields copied onto its released_funds expense.
+_RELEASE_FIELDS = frozenset({"items", "recipient_name", "issue_date", "project_id"})
 
 
 class UpdateBillingDocumentUseCase:
@@ -28,6 +34,9 @@ class UpdateBillingDocumentUseCase:
       kind, document_number, user_id, issuer_* snapshot fields, source_devis_id.
 
     Applies only fields that are explicitly set (not None) in the input DTO.
+
+    A paid facture's auto-generated released_funds expense mirrors its lines,
+    recipient, issue date and project, so it is re-synced when any of them change.
     """
 
     def __init__(
@@ -35,10 +44,12 @@ class UpdateBillingDocumentUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         project_repo: ProjectReadPort = None,  # type: ignore[assignment]
         access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
+        funds_release: Optional[FundsReleasePort] = None,
     ) -> None:
         self._doc_repo = doc_repo
         self._project_repo = project_repo
         self._access_repo = access_repo
+        self._funds_release = funds_release
 
     def execute(
         self,
@@ -113,4 +124,20 @@ class UpdateBillingDocumentUseCase:
         updated = doc.with_updates(**updates)
         saved = self._doc_repo.save(updated)
         db_session.commit()
+
+        if (
+            self._funds_release is not None
+            and saved.kind == BillingDocumentKind.FACTURE
+            and saved.status == BillingDocumentStatus.PAID
+            and _RELEASE_FIELDS.intersection(updates)
+        ):
+            self._funds_release.sync_funds_release(
+                project_id=saved.project_id,
+                source_doc_id=saved.id,
+                amount_items=_funds_release_items(saved),
+                recipient_name=saved.recipient_name,
+                issue_date=saved.issue_date,
+                created_by=saved.user_id,
+            )
+
         return BillingDocumentResponse.from_entity(saved, _converted_facture_id(self._doc_repo, saved))

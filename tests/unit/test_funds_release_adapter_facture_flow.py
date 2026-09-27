@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
@@ -148,3 +149,77 @@ class TestDeleteFundsReleaseFactureFlow:
 
     def test_delete_when_none_exists_is_noop(self, adapter):
         adapter.delete_funds_release(uuid4())  # must not raise
+
+
+class TestSyncFundsReleaseFactureFlow:
+    def _create(self, adapter, project_id, source_doc_id, user_id):
+        adapter.create_funds_release(
+            project_id=project_id,
+            source_doc_id=source_doc_id,
+            amount_items=[{"description": "Old line", "quantity": 3, "unit_price": "0.10", "vat_rate": 20}],
+            recipient_name="Old Recipient",
+            issue_date=date(2026, 4, 1),
+            created_by=user_id,
+        )
+        return session_release(adapter, source_doc_id)
+
+    def test_updates_release_in_place_when_project_unchanged(self, session, repo, adapter):
+        user_id = _make_user(session)
+        project_id = _make_project(session, user_id)
+        source_doc_id = uuid4()
+        before = self._create(adapter, project_id, source_doc_id, user_id)
+
+        adapter.sync_funds_release(
+            project_id=project_id,
+            source_doc_id=source_doc_id,
+            amount_items=[{"description": "New line", "quantity": 10, "unit_price": "100", "vat_rate": 20}],
+            recipient_name="New Recipient",
+            issue_date=date(2026, 5, 2),
+            created_by=user_id,
+        )
+
+        after = session_release(adapter, source_doc_id)
+        assert after.id == before.id
+        assert after.invoice_number == before.invoice_number
+        assert after.total_amount == Decimal("1200")
+        assert after.recipient_name == "New Recipient"
+        assert after.issue_date == date(2026, 5, 2)
+
+    def test_moves_release_when_project_changes(self, session, repo, adapter):
+        user_id = _make_user(session)
+        old_project = _make_project(session, user_id)
+        new_project = _make_project(session, user_id)
+        source_doc_id = uuid4()
+        self._create(adapter, old_project, source_doc_id, user_id)
+
+        adapter.sync_funds_release(
+            project_id=new_project,
+            source_doc_id=source_doc_id,
+            amount_items=[{"description": "Line", "quantity": 1, "unit_price": "50", "vat_rate": 0}],
+            recipient_name="R",
+            issue_date=date(2026, 5, 2),
+            created_by=user_id,
+        )
+
+        assert session_release(adapter, source_doc_id).project_id == new_project
+
+    def test_removes_release_when_facture_unlinked_from_project(self, session, repo, adapter):
+        user_id = _make_user(session)
+        project_id = _make_project(session, user_id)
+        source_doc_id = uuid4()
+        self._create(adapter, project_id, source_doc_id, user_id)
+
+        adapter.sync_funds_release(
+            project_id=None,
+            source_doc_id=source_doc_id,
+            amount_items=[],
+            recipient_name="R",
+            issue_date=date(2026, 5, 2),
+            created_by=user_id,
+        )
+
+        assert session_release(adapter, source_doc_id) is None
+
+
+def session_release(adapter, source_doc_id):
+    return adapter._invoice_repo.find_by_source_billing_document_id(source_doc_id)

@@ -1145,14 +1145,15 @@ def _configure_di_container() -> None:
         company_repo=_company_repo,
         access_repo=_access_repo,
     )
+    from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
+
+    _funds_release_adapter = FundsReleaseAdapter(invoice_repo=_c.invoice_repository) if _c.invoice_repository else None
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
         access_repo=_access_repo,  # company-admin may manage company billing
+        funds_release=_funds_release_adapter,  # keep a paid facture's release in sync
     )
-    from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
-
-    _funds_release_adapter = FundsReleaseAdapter(invoice_repo=_c.invoice_repository) if _c.invoice_repository else None
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
