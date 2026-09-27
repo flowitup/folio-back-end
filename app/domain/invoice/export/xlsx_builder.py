@@ -29,7 +29,8 @@ from openpyxl.worksheet.worksheet import Worksheet
 # Reuse the canonical EUR_FR_FORMAT constant — do not redefine.
 from app.domain.labor.export.xlsx_builder import EUR_FR_FORMAT  # noqa: F401
 
-from app.domain.invoice.export.format import TYPE_LABEL_EN, invoice_type_label
+from app.domain.invoice.export.format import invoice_type_label
+from app.domain.invoice.export.labels import t, type_label
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext, TypeSubtotal
 from app.domain.entities.invoice import Invoice, InvoiceType
 
@@ -37,21 +38,26 @@ from app.domain.entities.invoice import Invoice, InvoiceType
 # Column definitions
 # ---------------------------------------------------------------------------
 
-_INVOICE_HEADERS = ["#", "Date", "Type", "Recipient", "Items", "Total"]
+_INVOICE_HEADERS = ["#", "col_date", "col_type", "col_recipient", "col_items", "col_total"]
 _INVOICE_COL_WIDTHS = [6, 14, 12, 30, 8, 18]
 
-_TYPE_SHEET_HEADERS = ["#", "Date", "Recipient", "Items", "Total"]
+_TYPE_SHEET_HEADERS = ["#", "col_date", "col_recipient", "col_items", "col_total"]
 _TYPE_SHEET_COL_WIDTHS = [6, 14, 30, 8, 18]
 
 # Labor sheet gets an extra "Payment month" column so payroll periods are visible
 # alongside the invoice issue date.
-_LABOR_TYPE_SHEET_HEADERS = ["#", "Date", "Recipient", "Items", "Payment month", "Total"]
+_LABOR_TYPE_SHEET_HEADERS = ["#", "col_date", "col_recipient", "col_items", "col_payment_month", "col_total"]
 _LABOR_TYPE_SHEET_COL_WIDTHS = [6, 14, 30, 8, 16, 18]
 
-_SUBTYPE_HEADERS = ["Type", "Invoice count", "Total"]
+_SUBTYPE_HEADERS = ["col_type", "col_invoice_count", "col_total"]
 _SUBTYPE_COL_WIDTHS = [16, 16, 18]
 
 _KPI_COL_WIDTHS = [22, 30]
+
+
+def _header(locale: str, key: str) -> str:
+    """Column header text: "#" stays as is, every other entry is a label key."""
+    return key if key == "#" else t(locale, key)
 
 
 # ---------------------------------------------------------------------------
@@ -122,15 +128,20 @@ def _write_summary_header_band(ws: Worksheet, context: InvoiceExportContext) -> 
         row=1,
         start_col=1,
         end_col=6,
-        value=f"INVOICE EXPORT — {context.project_name}",
+        value=f"{t(context.locale, 'export_title')} — {context.project_name}",
         font=Font(bold=True, size=14),
     )
 
     # Row 2 — meta
     meta = (
-        f"Range: {from_label} to {to_label}"
-        f" · Generated {context.generated_at.strftime('%Y-%m-%dT%H:%M')}"
-        f" by {context.generated_by_email}"
+        t(context.locale, "range", start=from_label, end=to_label)
+        + " · "
+        + t(
+            context.locale,
+            "generated",
+            at=context.generated_at.strftime("%Y-%m-%dT%H:%M"),
+            email=context.generated_by_email,
+        )
     )
     cell2 = ws.cell(row=2, column=1, value=meta)
     cell2.font = Font(italic=True, size=9)
@@ -145,11 +156,11 @@ def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContex
     to_label = context.range.to_month.strftime("%Y-%m")
 
     kpi_rows = [
-        ("Total invoices", bundle.invoice_count),
-        ("Total expenses", bundle.grand_total),
-        ("Released funds", bundle.released_total),
-        ("From month", from_label),
-        ("To month", to_label),
+        (t(context.locale, "total_invoices"), bundle.invoice_count),
+        (t(context.locale, "total_expenses"), bundle.grand_total),
+        (t(context.locale, "released_funds"), bundle.released_total),
+        (t(context.locale, "from_month"), from_label),
+        (t(context.locale, "to_month"), to_label),
     ]
 
     thin = _thin_border()
@@ -176,19 +187,19 @@ def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContex
     return start_row + len(kpi_rows) + 1  # data rows + 1 blank
 
 
-def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[TypeSubtotal]) -> int:
+def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[TypeSubtotal], locale: str) -> int:
     """Write 'Subtotals by type' heading + header row + data rows. Returns next_row."""
     thin = _thin_border()
     fill = _header_fill()
 
     # Heading
-    heading_cell = ws.cell(row=start_row, column=1, value="Subtotals by type")
+    heading_cell = ws.cell(row=start_row, column=1, value=t(locale, "subtotals_by_type"))
     heading_cell.font = _bold_font(11)
 
     # Header row
     hdr_row = start_row + 1
     for i, label in enumerate(_SUBTYPE_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=label)
+        cell = ws.cell(row=hdr_row, column=i + 1, value=t(locale, label))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -197,8 +208,7 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
     # Data rows
     data_row = hdr_row + 1
     for sub in subtotals:
-        type_label = TYPE_LABEL_EN.get(sub.type.value, sub.type.value.title())
-        cells_data = [type_label, sub.invoice_count, sub.total_amount]
+        cells_data = [type_label(sub.type.value, locale), sub.invoice_count, sub.total_amount]
         for col_idx, val in enumerate(cells_data):
             cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
             cell.border = thin
@@ -213,7 +223,9 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
     return data_row + 1  # blank spacer
 
 
-def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoice], grand_total: Decimal) -> int:
+def _write_invoices_section(
+    ws: Worksheet, start_row: int, invoices: List[Invoice], grand_total: Decimal, locale: str
+) -> int:
     """Write 'Invoices' heading + header + data rows + GRAND TOTAL band. Returns next_row."""
     thin = _thin_border()
     thick = _thick_top_border()
@@ -221,13 +233,13 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
     grand_fill = _grand_total_fill()
 
     # Section heading
-    heading_cell = ws.cell(row=start_row, column=1, value="Invoices")
+    heading_cell = ws.cell(row=start_row, column=1, value=t(locale, "invoices"))
     heading_cell.font = _bold_font(11)
 
     # Header row
     hdr_row = start_row + 1
     for i, label in enumerate(_INVOICE_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=label)
+        cell = ws.cell(row=hdr_row, column=i + 1, value=_header(locale, label))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -238,11 +250,10 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
     data_row = hdr_row + 1
     for idx, inv in enumerate(sorted_invoices, start=1):
         item_count = len(inv.items)
-        type_label = invoice_type_label(inv)
         values = [
             idx,
             inv.issue_date,
-            type_label,
+            invoice_type_label(inv, locale),
             inv.recipient_name,
             item_count,
             float(inv.total_amount),
@@ -268,7 +279,7 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
         cell.fill = grand_fill
         cell.font = _bold_font()
 
-    ws.cell(row=grand_row, column=1, value="TOTAL EXPENSES").font = _bold_font()
+    ws.cell(row=grand_row, column=1, value=t(locale, "grand_total_row")).font = _bold_font()
     ws.cell(row=grand_row, column=1).border = thick
     ws.cell(row=grand_row, column=1).fill = grand_fill
 
@@ -298,7 +309,7 @@ def _write_type_sheet(
     thin = _thin_border()
     thick = _thick_top_border()
     fill = _header_fill()
-    type_label = TYPE_LABEL_EN.get(invoice_type.value, invoice_type.value.title())
+    type_name = type_label(invoice_type.value, context.locale)
 
     is_labor = invoice_type == InvoiceType.LABOR
     headers = _LABOR_TYPE_SHEET_HEADERS if is_labor else _TYPE_SHEET_HEADERS
@@ -314,18 +325,18 @@ def _write_type_sheet(
         row=1,
         start_col=1,
         end_col=5,
-        value=f"{type_label} invoices — {context.project_name}",
+        value=t(context.locale, "type_title", type=type_name, project=context.project_name),
         font=Font(bold=True, size=13),
     )
 
     # Row 2 — meta
-    meta = f"Range: {from_label} to {to_label}"
+    meta = t(context.locale, "range", start=from_label, end=to_label)
     ws.cell(row=2, column=1, value=meta).font = _italic_font(9)
 
     # Row 3 blank → header at row 4
     hdr_row = 4
     for i, label in enumerate(headers):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=label)
+        cell = ws.cell(row=hdr_row, column=i + 1, value=_header(context.locale, label))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -363,7 +374,7 @@ def _write_type_sheet(
         cell.border = thick
         cell.font = _bold_font()
 
-    ws.cell(row=footer_row, column=1, value="TOTAL").font = _bold_font()
+    ws.cell(row=footer_row, column=1, value=t(context.locale, "total_row")).font = _bold_font()
     ws.cell(row=footer_row, column=1).border = thick
 
     total_cell = ws.cell(row=footer_row, column=len(headers), value=float(type_total))
@@ -396,14 +407,16 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     """
     wb = openpyxl.Workbook()
     ws_summary = wb.active
-    ws_summary.title = "Summary"
+    ws_summary.title = t(context.locale, "summary_sheet")
 
     next_row = _write_summary_header_band(ws_summary, context)
 
     if bundle.invoice_count == 0:
         from_label = context.range.from_month.strftime("%Y-%m")
         to_label = context.range.to_month.strftime("%Y-%m")
-        empty_cell = ws_summary.cell(row=next_row, column=1, value=f"No invoices in range {from_label} to {to_label}")
+        empty_cell = ws_summary.cell(
+            row=next_row, column=1, value=t(context.locale, "no_invoices", start=from_label, end=to_label)
+        )
         empty_cell.font = Font(italic=True)
         _set_col_widths(ws_summary, _INVOICE_COL_WIDTHS)
         buf = BytesIO()
@@ -414,10 +427,18 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     next_row = _write_kpi_table(ws_summary, start_row=next_row, context=context, bundle=bundle)
 
     # Subtotals by type
-    next_row = _write_subtotals_section(ws_summary, start_row=next_row, subtotals=bundle.subtotals_by_type)
+    next_row = _write_subtotals_section(
+        ws_summary, start_row=next_row, subtotals=bundle.subtotals_by_type, locale=context.locale
+    )
 
     # Invoices table + grand total
-    _write_invoices_section(ws_summary, start_row=next_row, invoices=bundle.invoices, grand_total=bundle.grand_total)
+    _write_invoices_section(
+        ws_summary,
+        start_row=next_row,
+        invoices=bundle.invoices,
+        grand_total=bundle.grand_total,
+        locale=context.locale,
+    )
 
     _set_col_widths(ws_summary, _INVOICE_COL_WIDTHS)
 
@@ -433,8 +454,8 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
         type_invoices = [inv for inv in bundle.invoices if inv.ledger_type == invoice_type]
         if not type_invoices:
             continue
-        type_label = TYPE_LABEL_EN.get(invoice_type.value, invoice_type.value.replace("_", " ").title())
-        sheet_title = f"{type_label} invoices"
+        # Excel caps sheet titles at 31 characters.
+        sheet_title = t(context.locale, "type_sheet", type=type_label(invoice_type.value, context.locale))[:31]
         ws_type = wb.create_sheet(title=sheet_title)
         _write_type_sheet(ws_type, context, invoice_type, type_invoices)
 

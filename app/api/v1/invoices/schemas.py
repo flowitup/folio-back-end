@@ -189,6 +189,8 @@ class ExportInvoicesQuery(BaseModel):
     to_month: str = Field(alias="to")
     format: Literal["xlsx", "pdf"]
     type: Optional[InvoiceTypeLiteral] = None
+    # Label language of the file; English when omitted.
+    locale: Literal["en", "fr", "vi"] = "en"
 
     model_config = {"populate_by_name": True}
 

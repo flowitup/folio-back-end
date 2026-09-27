@@ -33,6 +33,8 @@ class InvoiceExportContext:
     generated_by_email: str
     # Optional invoice-type scope — None means export all types
     type_filter: Optional[InvoiceType] = field(default=None)
+    # Language of the labels: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass(frozen=True)

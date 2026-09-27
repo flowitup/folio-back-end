@@ -44,6 +44,8 @@ class ExportInvoicesRequest:
     # without `project:view_budget`). Applied after the range query, so the
     # subtotals and grand total below are computed on what the caller can see.
     exclude_types: frozenset = field(default_factory=frozenset)
+    # Label language of the file: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass
@@ -165,6 +167,7 @@ class ExportInvoicesUseCase:
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
             type_filter=req.type_filter,
+            locale=req.locale,
         )
 
         # 7. Dispatch to builder

@@ -152,6 +152,20 @@ def test_unauth_returns_401(inv_export_client, inv_export_app):
     assert resp.status_code == 401
 
 
+def test_locale_renders_french_labels_and_rejects_unknown_locales(inv_export_client, inv_export_app, admin_token):
+    """?locale=fr localises the file; a locale outside en/fr/vi is a 422."""
+    import openpyxl
+
+    url = _export_url(inv_export_app._test_project_id)
+    base = {"from": "2026-01", "to": "2026-01", "format": "xlsx"}
+    resp = inv_export_client.get(url, query_string={**base, "locale": "fr"}, headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert openpyxl.load_workbook(BytesIO(resp.data)).sheetnames[0] == "Synthèse"
+
+    bad = inv_export_client.get(url, query_string={**base, "locale": "de"}, headers=_auth(admin_token))
+    assert bad.status_code == 422
+
+
 def test_missing_format_returns_422(inv_export_client, inv_export_app, admin_token):
     """Missing 'format' param → 422 validation_error."""
     url = _export_url(inv_export_app._test_project_id)
