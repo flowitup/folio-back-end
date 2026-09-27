@@ -36,13 +36,25 @@ from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 
-def _user_id_or_error(raw: str | None):
-    """Resolve a client-supplied user_id; returns (UUID|None, error_response|None)."""
+def _user_id_or_error(raw: str | None, project_id: str):
+    """Resolve a client-supplied user_id; returns (UUID|None, error_response|None).
+
+    The account must be active and attached to the project's company: a worker
+    row never links to someone of another tenant, or to a deactivated account.
+    """
     if not raw:
         return None, None
     user_uuid = UUID(raw)
-    if get_container().user_repository.find_by_id(user_uuid) is None:
+    container = get_container()
+    user = container.user_repository.find_by_id(user_uuid)
+    if user is None or not user.is_active:
         return None, _error_response("ValidationError", "user_id does not reference an existing user", 400)
+    reader = container.authz_reader
+    access_repo = container.user_company_access_repo
+    if reader is not None and access_repo is not None:
+        company_id = reader.project_company_id(UUID(project_id))
+        if company_id is None or access_repo.find(user_uuid, company_id) is None:
+            return None, _error_response("ValidationError", "user_id must be a member of the project's company", 400)
     return user_uuid, None
 
 
@@ -131,7 +143,7 @@ def create_worker(project_id: str):
         return _error_response("ValidationError", "Invalid JWT identity", 401)
 
     try:
-        linked_user_id, err = _user_id_or_error(data.user_id)
+        linked_user_id, err = _user_id_or_error(data.user_id, project_id)
         if err is not None:
             return err
         result = get_container().create_worker_usecase.execute(
@@ -186,7 +198,7 @@ def update_worker(project_id: str, worker_id: str):
         if "role_id" in data.model_fields_set:
             update_kwargs["role_id"] = UUID(data.role_id) if data.role_id else None
         if "user_id" in data.model_fields_set:
-            linked_user_id, err = _user_id_or_error(data.user_id)
+            linked_user_id, err = _user_id_or_error(data.user_id, project_id)
             if err is not None:
                 return err
             update_kwargs["user_id"] = linked_user_id

@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of worker repository."""
 
+import logging
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
@@ -12,6 +13,8 @@ from app.domain.entities.worker import Worker
 from app.domain.exceptions.labor_exceptions import InvalidWorkerDataError
 from app.infrastructure.database.models import WorkerModel
 
+logger = logging.getLogger(__name__)
+
 _USER_ALREADY_LINKED = "This account is already linked to another worker on this project"
 _USER_ID_INVALID = "user_id does not reference an existing user"
 
@@ -23,7 +26,10 @@ def _integrity_error_to_domain(exc: IntegrityError) -> InvalidWorkerDataError:
         return InvalidWorkerDataError(_USER_ALREADY_LINKED)
     if "fk_workers_user_id" in detail:
         return InvalidWorkerDataError(_USER_ID_INVALID)
-    return InvalidWorkerDataError(f"Worker could not be saved: {detail.splitlines()[0][:200]}")
+    # Anything else is a stale reference (e.g. a role deleted meanwhile); the raw
+    # database message names tables and constraints, so it stays in the log.
+    logger.warning("worker save refused by the database: %s", detail.splitlines()[0][:200])
+    return InvalidWorkerDataError("Worker could not be saved: a referenced record no longer exists")
 
 
 class SQLAlchemyWorkerRepository(IWorkerRepository):
