@@ -1169,6 +1169,7 @@ def _configure_di_container() -> None:
     _c.delete_billing_document_usecase = DeleteBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         access_repo=_access_repo,  # company-admin may manage company billing
+        funds_release=_funds_release_adapter,  # a deleted paid facture takes its release with it
     )
     _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
         doc_repo=_billing_doc_repo,
