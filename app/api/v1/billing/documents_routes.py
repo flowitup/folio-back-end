@@ -644,7 +644,7 @@ def import_billing_document():
 
     Error mapping:
       400 — invalid input (ValueError, category/item validation)
-      403 — user not attached to company (CompanyNotAttachedError / PermissionDenied)
+      403 — caller is not an admin of the company, or cannot read project_id
       404 — company not found
       409 — duplicate (company_id, kind, document_number) → BillingDocumentAlreadyExistsError
       422 — Pydantic validation error (unknown fields, wrong types)
@@ -684,6 +684,10 @@ def import_billing_document():
 
     try:
         result = get_container().import_billing_document_usecase.execute(inp, db.session)
+    except ForbiddenCompanyBillingError:
+        return _err("Forbidden", "Company billing requires the admin role for this company", 403)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
     except CompanyNotAttachedError:

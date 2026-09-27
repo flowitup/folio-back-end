@@ -1127,6 +1127,7 @@ def _configure_di_container() -> None:
         counter_repo=_billing_counter_repo,
         company_repo=_company_repo,
         access_repo=_access_repo,
+        project_repo=_project_repo,
     )
     _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
         doc_repo=_billing_doc_repo,
