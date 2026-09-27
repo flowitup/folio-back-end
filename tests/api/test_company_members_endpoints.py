@@ -314,6 +314,31 @@ class TestAddMemberByPhoneMatchOrder:
         assert resp.status_code == 400, resp.get_data(as_text=True)
         assert "French numbers only" in resp.get_json()["message"]
 
+    def test_a_foreign_number_with_an_account_is_refused_too(self, members_client, members_app):
+        """Members sign in with French numbers only: an account holding a foreign one is not attached."""
+        from app import db
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        admin_id = _make_user(members_app, "mab_admin_foreign2@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co foreign 2")
+        foreign_user = _make_user(members_app, "mab_foreign_account@test.com", phone="+84912345679")
+        token = _login(members_client, "mab_admin_foreign2@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "+84 912 345 679", "name": "Has An Account"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "French numbers only" in resp.get_json()["message"]
+        with members_app.app_context():
+            attached = (
+                db.session.query(UserCompanyAccessModel)
+                .filter_by(user_id=foreign_user, company_id=company_id)
+                .one_or_none()
+            )
+            assert attached is None
+
     def test_pending_profile_keeps_the_chosen_role(self, members_client, members_app):
         from app import db
         from app.infrastructure.database.models.company_person import CompanyPersonModel

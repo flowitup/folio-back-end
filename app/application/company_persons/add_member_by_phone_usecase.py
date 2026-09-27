@@ -117,6 +117,10 @@ class AddMemberByPhoneUseCase:
 
         try:
             phone = normalize_phone(inp.phone, default_region=company.default_phone_region)
+            # Members sign in with a French number only (sign-up and sign-in take no other), so a
+            # foreign one is refused whatever it matches — an existing account with a foreign
+            # number included, which must not be attached through the back door.
+            normalize_french_phone(phone)
         except InvalidPhoneNumberError as exc:
             raise ValueError(str(exc)) from exc
 
@@ -164,13 +168,6 @@ class AddMemberByPhoneUseCase:
             return AddMemberByPhoneResult(
                 person_id=person.id, name=_echoed_name(inp.name, phone), phone=phone, pending=False
             )
-
-        # A pending profile only becomes a member when its owner signs up with this
-        # number, and sign-up takes French numbers only: refuse one that never could.
-        try:
-            normalize_french_phone(phone)
-        except InvalidPhoneNumberError as exc:
-            raise ValueError(str(exc)) from exc
 
         # ------------------------------------------------------------------
         # (b)/(c) un-linked Person profiled in a company the caller admins —
