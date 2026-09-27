@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.application.billing._helpers import (
+    _assert_billing_template_access,
     _build_doc_from_inputs,
     _effective_prefix_from_company,
     _snapshot_issuer_from_company,
@@ -29,7 +30,6 @@ from app.application.billing.ports import (
 )
 from app.domain.billing.exceptions import (
     BillingTemplateNotFoundError,
-    ForbiddenBillingDocumentError,
     MissingCompanyProfileError,
 )
 from app.domain.billing.numbering import next_document_number
@@ -43,7 +43,7 @@ class ApplyTemplateToCreateDocumentUseCase:
     The current company supplies: issuer snapshot + payment_terms default.
 
     Validation:
-      - Template must exist and be owned by user.
+      - Template must exist; its author or a company admin of its company may use it.
       - If company_id is None, the user's primary company is resolved automatically.
       - If user has no attached companies, raises MissingCompanyProfileError (409).
       - User must be attached to the resolved company.
@@ -77,8 +77,7 @@ class ApplyTemplateToCreateDocumentUseCase:
         template = self._template_repo.find_by_id(inp.template_id)
         if template is None:
             raise BillingTemplateNotFoundError(inp.template_id)
-        if template.user_id != inp.user_id:
-            raise ForbiddenBillingDocumentError(inp.template_id)
+        _assert_billing_template_access(template, inp.user_id, self._access_repo)
 
         # 3. Resolve company_id — H2: fall back to caller's primary company if None
         company_id = inp.company_id

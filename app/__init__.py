@@ -1221,15 +1221,18 @@ def _configure_di_container() -> None:
     )
     _c.update_billing_template_usecase = UpdateTemplateUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # company templates are shared with its admins
     )
     _c.list_billing_templates_usecase = ListTemplatesUseCase(
         template_repo=_billing_tpl_repo,
     )
     _c.get_billing_template_usecase = GetTemplateUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # company templates are shared with its admins
     )
     _c.delete_billing_template_usecase = DeleteTemplateUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # company templates are shared with its admins
     )
     _c.apply_template_usecase = ApplyTemplateToCreateDocumentUseCase(
         doc_repo=_billing_doc_repo,

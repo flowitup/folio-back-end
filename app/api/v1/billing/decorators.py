@@ -8,7 +8,9 @@ require_billing_document_owner:
   - On success: injects `billing_doc` keyword arg into the wrapped handler.
 
 require_billing_template_owner:
-  - Same pattern for <template_id> → injects `billing_template`.
+  - Same pattern for <template_id> → injects `billing_template`. Company
+    templates are shared: the author, a superadmin or a company-admin of the
+    template's company may access it; a template with no company stays private.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ def _has_superadmin() -> bool:
 
 
 def _can_access_billing_doc(doc, caller_id: UUID, container) -> bool:
-    """Return True if caller may access this billing document.
+    """Return True if caller may access this billing document or template.
 
     Allowed when the caller is a superadmin, owns the document, OR holds the
     'admin' role in the document's company (company-scoped billing sharing).
@@ -92,7 +94,10 @@ def require_billing_document_owner(fn):
 
 
 def require_billing_template_owner(fn):
-    """Decorator: load billing template by <template_id> → verify ownership.
+    """Decorator: load billing template by <template_id> → verify access.
+
+    Same access rule as billing documents (owner, superadmin, or company-admin
+    of the template's company).
 
     Injects `billing_template` into the handler kwargs.
     Returns 404 for both missing and unauthorised access (same leak-prevention pattern).
@@ -116,7 +121,7 @@ def require_billing_template_owner(fn):
             return _not_found(f"Billing template {tpl_id_str} not found")
 
         caller_id = UUID(get_jwt_identity())
-        if tpl.user_id != caller_id and not _has_superadmin():
+        if not _can_access_billing_doc(tpl, caller_id, container):
             return _not_found(f"Billing template {tpl_id_str} not found")
 
         kwargs["billing_template"] = tpl

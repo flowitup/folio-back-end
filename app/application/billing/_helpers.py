@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import DevisLockedByFactureError, ForbiddenBillingDocumentError
+from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.value_objects import BillingDocumentItem
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
@@ -57,6 +58,13 @@ def _assert_billing_doc_access(doc: BillingDocument, user_id: UUID, access_repo=
         if access is not None and access.role == CompanyRole.ADMIN.value:
             return
     raise ForbiddenBillingDocumentError(doc.id)
+
+
+def _assert_billing_template_access(template: BillingDocumentTemplate, user_id: UUID, access_repo=None) -> None:
+    """Company templates are shared: the author OR a company-admin of the template's
+    company may read, edit, apply and delete it (the same rule as company billing
+    documents). A template with no company stays private to its author."""
+    _assert_billing_doc_access(template, user_id, access_repo)  # type: ignore[arg-type]
 
 
 def _converted_facture_id(doc_repo, doc: BillingDocument) -> Optional[UUID]:

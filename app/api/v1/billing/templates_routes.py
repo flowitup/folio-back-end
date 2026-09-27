@@ -3,9 +3,9 @@
 Endpoints (5):
   GET    /billing-document-templates                → list (jwt)
   POST   /billing-document-templates                → create (jwt, 10/min)
-  GET    /billing-document-templates/<template_id>  → get (jwt + owner)
-  PUT    /billing-document-templates/<template_id>  → update (jwt + owner, 30/min)
-  DELETE /billing-document-templates/<template_id>  → delete (jwt + owner)
+  GET    /billing-document-templates/<template_id>  → get (jwt + author or company admin)
+  PUT    /billing-document-templates/<template_id>  → update (jwt + author or company admin, 30/min)
+  DELETE /billing-document-templates/<template_id>  → delete (jwt + author or company admin)
 
 Decorator order: @jwt_required() BEFORE @limiter.limit(...).
 """

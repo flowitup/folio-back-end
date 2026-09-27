@@ -14,7 +14,7 @@ from app.domain.billing.exceptions import (
     ForbiddenBillingDocumentError,
     MissingCompanyProfileError,
 )
-from tests.unit.application.billing.conftest import make_template
+from tests.unit.application.billing.conftest import make_access, make_template
 
 
 @pytest.fixture
@@ -152,3 +152,26 @@ class TestApplyTemplateWithoutLines:
             usecase.execute(_inp(user_id, tpl.id, company_id=company_id), fake_session)
 
         assert counter_repo.next_value(company_id, BillingDocumentKind.FACTURE, 2026) == 1
+
+
+class TestApplySharedCompanyTemplate:
+    def test_another_company_admin_applies_a_company_template(
+        self, usecase, fake_session, template_repo, access_repo, user_id, other_user_id, company_id, seeded_company
+    ):
+        tpl = make_template(user_id=user_id).with_updates(company_id=company_id)
+        template_repo.save(tpl)
+        access_repo.save(make_access(other_user_id, company_id, role="admin"))
+
+        result = usecase.execute(_inp(other_user_id, tpl.id, company_id=company_id), fake_session)
+
+        assert len(result.items) == len(tpl.items)
+
+    def test_a_company_member_cannot_apply_it(
+        self, usecase, fake_session, template_repo, access_repo, user_id, other_user_id, company_id, seeded_company
+    ):
+        tpl = make_template(user_id=user_id).with_updates(company_id=company_id)
+        template_repo.save(tpl)
+        access_repo.save(make_access(other_user_id, company_id, role="member"))
+
+        with pytest.raises(ForbiddenBillingDocumentError):
+            usecase.execute(_inp(other_user_id, tpl.id, company_id=company_id), fake_session)
