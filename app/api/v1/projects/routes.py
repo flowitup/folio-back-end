@@ -595,7 +595,9 @@ def get_project_members(project_id: UUID):
     `member`) — an assignment itself carries no role. It is null when the
     project has no company or the person is no longer attached to it.
     """
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
+
+    from app.infrastructure.database.models.project import ProjectModel
 
     container = get_container()
     user_id = UUID(get_jwt_identity())
@@ -622,7 +624,7 @@ def get_project_members(project_id: UUID):
     rows = db.session.execute(
         text(
             """
-            SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at
+            SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at, u.phone
             FROM user_projects up
             JOIN users u ON u.id = up.user_id
             LEFT JOIN user_company_access uca
@@ -630,8 +632,12 @@ def get_project_members(project_id: UUID):
             WHERE up.project_id = :pid
             ORDER BY up.assigned_at
             """
+        ).bindparams(
+            # Typed binds, so the ids match however the dialect stores a UUID.
+            bindparam("pid", type_=ProjectModel.id.type),
+            bindparam("cid", type_=ProjectModel.company_id.type),
         ),
-        {"pid": str(project_id), "cid": str(company_id) if company_id else None},
+        {"pid": project_id, "cid": company_id},
     ).fetchall()
 
     members = [
@@ -640,7 +646,11 @@ def get_project_members(project_id: UUID):
             "email": row[1],
             "display_name": row[2],
             "role_name": row[3],
-            "joined_at": row[4].isoformat() if row[4] else None,
+            # A raw text() read hands back a string on SQLite and a datetime on Postgres.
+            "joined_at": (row[4].isoformat() if hasattr(row[4], "isoformat") else row[4]) if row[4] else None,
+            # Phone-only accounts carry a placeholder email; the phone is what
+            # identifies them, so clients can show it instead.
+            "phone": row[5],
         }
         for row in rows
     ]
