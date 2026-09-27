@@ -92,6 +92,13 @@ class TestComputeTotals:
         assert totals.total_tva == Decimal("5.50")
         assert totals.total_ttc == Decimal("105.49")
 
+    def test_square_metre_line_rounds_ht_then_tva(self):
+        """2.5 × 19.99 at 20 % → HT 49.975 → 49.98; TVA 9.996 → 10.00; "20.00" is the 20 % bucket."""
+        item = BillingDocumentItem("m2", Decimal("2.5"), Decimal("19.99"), Decimal("20.00"))
+        assert (item.total_ht, item.total_tva, item.total_ttc) == (Decimal("49.98"), Decimal("10.00"), Decimal("59.98"))
+        totals = compute_totals([item, BillingDocumentItem("x", Decimal("1"), Decimal("1"), Decimal("20"))])
+        assert list(totals.total_tva_by_rate) == [Decimal("20")]
+
     def test_half_cent_lines_round_half_up_and_add_up_to_the_totals(self):
         """The devis QA found showing three different totals on web, PDF and API."""
         items = [
