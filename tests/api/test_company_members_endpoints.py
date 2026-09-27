@@ -300,6 +300,20 @@ class TestAddMemberByPhoneMatchOrder:
         # and `pending` is never exposed here (M6; the directory keeps it).
         assert set(body.keys()) == {"person_id", "name", "phone"}
 
+    def test_a_foreign_number_without_an_account_is_refused(self, members_client, members_app):
+        """Sign-up takes French numbers only, so such a pending profile could never become a member."""
+        admin_id = _make_user(members_app, "mab_admin_foreign@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co foreign")
+        token = _login(members_client, "mab_admin_foreign@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "+84 912 345 678", "name": "Never Signs Up"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "French numbers only" in resp.get_json()["message"]
+
     def test_pending_profile_keeps_the_chosen_role(self, members_client, members_app):
         from app import db
         from app.infrastructure.database.models.company_person import CompanyPersonModel

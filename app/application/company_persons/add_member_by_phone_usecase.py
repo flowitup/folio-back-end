@@ -54,7 +54,7 @@ from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.company_person import CompanyPerson
 from app.domain.entities.person import Person
-from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_french_phone, normalize_phone
 
 _PENDING_WINDOW_DAYS = 30
 _ASSIGNABLE_ROLES = (CompanyRole.MEMBER.value, CompanyRole.MANAGER.value)
@@ -164,6 +164,13 @@ class AddMemberByPhoneUseCase:
             return AddMemberByPhoneResult(
                 person_id=person.id, name=_echoed_name(inp.name, phone), phone=phone, pending=False
             )
+
+        # A pending profile only becomes a member when its owner signs up with this
+        # number, and sign-up takes French numbers only: refuse one that never could.
+        try:
+            normalize_french_phone(phone)
+        except InvalidPhoneNumberError as exc:
+            raise ValueError(str(exc)) from exc
 
         # ------------------------------------------------------------------
         # (b)/(c) un-linked Person profiled in a company the caller admins —
