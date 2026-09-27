@@ -126,3 +126,20 @@ def test_invoice_export_quantity_follows_the_export_language():
     assert _format_quantity(1.5, "fr") == "1,5"
     assert _format_quantity(1.5, "vi") == "1,5"
     assert _format_quantity(1.5, "en") == "1.5"
+
+
+def test_xlsx_lines_after_a_section_without_one_get_their_own_heading():
+    def line(desc, category=None):
+        return BillingDocumentItem(
+            description=desc,
+            quantity=Decimal("1"),
+            unit_price=Decimal("10"),
+            vat_rate=Decimal("20"),
+            category=category,
+        )
+
+    texts = _sheet_texts(
+        _doc(BillingDocumentKind.DEVIS, items=(line("Coffrage", "Gros oeuvre"), line("Nettoyage de fin de chantier")))
+    )
+    assert texts.index("Gros oeuvre") < texts.index("Coffrage") < texts.index("Divers")
+    assert texts.index("Divers") < texts.index("Nettoyage de fin de chantier")

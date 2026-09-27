@@ -43,6 +43,7 @@ from typing import Optional
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+from app.domain.billing.sections import section_headings
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind
@@ -235,11 +236,11 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         row = items_header_row + 2  # row 25
         first_item_row = None
         last_item_row = None
-        last_category: Optional[str] = None
-        for item in doc.items:
-            # Insert section header row when category changes
-            if item.category and item.category != last_category:
-                sh = ws.cell(row=row, column=3, value=item.category)
+        headings = section_headings(item.category for item in doc.items)
+        for item, heading in zip(doc.items, headings):
+            # Insert section header row when the section changes
+            if heading is not None:
+                sh = ws.cell(row=row, column=3, value=heading)
                 sh.font = _font(11, bold=True)
                 sh.alignment = _align("center", "center", wrap=True)
                 sh.border = _thin_box()
@@ -248,9 +249,6 @@ class OpenpyxlBillingDocumentXlsxRenderer:
                 for col in [2] + list(range(7, 13)):
                     ws.cell(row=row, column=col).border = _thin_box()
                 row += 1
-                last_category = item.category
-            elif not item.category:
-                last_category = None
 
             # Item row
             if first_item_row is None:

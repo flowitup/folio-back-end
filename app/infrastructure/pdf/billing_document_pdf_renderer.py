@@ -51,6 +51,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.domain.billing.sections import section_headings
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.document_wording import intro_sentence
 from app.domain.billing.enums import BillingDocumentKind
@@ -392,14 +393,11 @@ def _build_items_table(doc: BillingDocument, styles: dict, usable_width: float) 
     project_row_idx = len(table_data)
     table_data.append([Paragraph(_xml_escape(project_label), styles["body"]), "", "", "", "", "", ""])
 
-    last_category: Optional[str] = None
-    for item in doc.items:
-        if item.category and item.category != last_category:
+    headings = section_headings(item.category for item in doc.items)
+    for item, heading in zip(doc.items, headings):
+        if heading is not None:
             section_row_idxs.append(len(table_data))
-            table_data.append([Paragraph(_xml_escape(item.category), styles["section_title"]), "", "", "", "", "", ""])
-            last_category = item.category
-        elif not item.category:
-            last_category = None
+            table_data.append([Paragraph(_xml_escape(heading), styles["section_title"]), "", "", "", "", "", ""])
 
         qty_str = format_decimal_fr(item.quantity)
         table_data.append(
