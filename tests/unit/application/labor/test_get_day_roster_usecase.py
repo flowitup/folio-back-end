@@ -171,3 +171,15 @@ def test_known_shift_types_unaffected():
     by_id = {r.worker_id: r for r in rows}
     assert by_id[worker_full.id].hours == 8.0
     assert by_id[worker_half.id].hours == 4.0
+
+
+def test_roster_shows_the_person_name_like_every_other_screen():
+    absent = _worker("Old Copy")
+    absent.person_name = "Person Name"
+    present = _worker("Old Copy Too")
+    present.person_name = "Other Person"
+    usecase = _make_usecase(workers=[absent, present], entries=[_entry(present.id, shift_type="full")])
+
+    rows = usecase.execute(_request(uuid4()))
+
+    assert {r.worker_id: r.name for r in rows} == {absent.id: "Person Name", present.id: "Other Person"}

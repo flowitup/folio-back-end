@@ -74,6 +74,24 @@ class SqlAlchemyPersonRepository(IPersonRepository):
         self._session.refresh(model)
         return self._to_entity(model)
 
+    def rename(self, person_id: UUID, name: str, *, commit: bool = True) -> Optional[Person]:
+        from app.infrastructure.database.models.worker import WorkerModel
+
+        model = self._session.query(PersonModel).filter_by(id=person_id).first()
+        if model is None:
+            return None
+        model.name = name
+        model.normalized_name = Person.normalize(name)
+        # workers.name is a per-project copy of the person's name; keep every copy in step.
+        for worker in self._session.query(WorkerModel).filter_by(person_id=person_id).all():
+            worker.name = name
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
+        self._session.refresh(model)
+        return self._to_entity(model)
+
     def search(
         self,
         query: str,

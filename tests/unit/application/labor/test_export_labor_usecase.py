@@ -703,6 +703,25 @@ class TestWorkerIdHappyPath:
         result = uc.execute(req)
         assert "antoine-dupont" in result.filename, f"Worker slug not in filename: {result.filename}"
 
+    def test_filename_uses_the_person_name(self):
+        """The worker's shared person name wins over the per-project copy."""
+        pid = uuid4()
+        project = _make_project("Office Tower", project_id=pid)
+        worker = _make_worker(project_id=pid, name="Old Copy")
+        worker.person_name = "Antoine Dupont"
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert "antoine-dupont" in result.filename
+        assert "old-copy" not in result.filename
+
     def test_filename_includes_project_slug_and_range(self):
         """Filename format: labor-{project-slug}-{worker-slug}-{from}-to-{to}.xlsx"""
         pid = uuid4()

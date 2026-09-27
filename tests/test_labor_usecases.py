@@ -156,6 +156,33 @@ class TestUpdateWorkerUseCase:
 
         assert result.is_active is False
 
+    def test_rename_renames_the_linked_person(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        sample_worker.person_name = "Old Name"
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="  New Name ")
+        )
+
+        person_repo.rename.assert_called_once_with(sample_worker.person_id, "New Name", commit=False)
+        assert result.name == "New Name"
+        assert result.person_name == "New Name"
+
+    def test_update_without_name_leaves_the_person_alone(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, phone="0600000000")
+        )
+
+        person_repo.rename.assert_not_called()
+
     def test_update_worker_not_found_raises_error(self, mock_worker_repo):
         mock_worker_repo.find_by_id.return_value = None
         usecase = UpdateWorkerUseCase(mock_worker_repo)

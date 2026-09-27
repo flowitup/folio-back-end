@@ -840,6 +840,9 @@ def _configure_di_container() -> None:
 
     _person_repo = SqlAlchemyPersonRepository(db.session)
     _c.person_repo = _person_repo
+    # Renaming a worker renames the shared Person it is linked to.
+    if _c.update_worker_usecase is not None:
+        _c.update_worker_usecase.set_person_repo(_person_repo)
     _c.create_person_usecase = _CreatePersonUseCase(person_repo=_person_repo)
     _c.search_persons_usecase = _SearchPersonsUseCase(person_repo=_person_repo)
     _c.merge_persons_usecase = _MergePersonsUseCase(

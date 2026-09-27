@@ -58,10 +58,15 @@ class UpdateWorkerResponse:
 class UpdateWorkerUseCase:
     """Update an existing worker."""
 
-    def __init__(self, worker_repo: IWorkerRepository, labor_role_repo=None, authz_reader=None):
+    def __init__(self, worker_repo: IWorkerRepository, labor_role_repo=None, authz_reader=None, person_repo=None):
         self._repo = worker_repo
         self._labor_role_repo = labor_role_repo
         self._authz_reader = authz_reader
+        self._person_repo = person_repo
+
+    def set_person_repo(self, person_repo) -> None:
+        """Inject the Person repository; wired after it exists."""
+        self._person_repo = person_repo
 
     def set_role_scope(self, labor_role_repo, authz_reader) -> None:
         """Inject what the role check needs; wired after the labor-role repository exists."""
@@ -79,6 +84,11 @@ class UpdateWorkerUseCase:
             if len(request.name) > 255:
                 raise InvalidWorkerDataError("Worker name exceeds 255 characters")
             worker.name = request.name.strip()
+            # The name belongs to the shared Person: renaming it here renames the
+            # person in every company and project that uses them.
+            if worker.person_id is not None and self._person_repo is not None:
+                self._person_repo.rename(worker.person_id, worker.name, commit=False)
+                worker.person_name = worker.name
 
         if request.phone is not None:
             worker.phone = request.phone.strip() if request.phone else None

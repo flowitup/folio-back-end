@@ -103,7 +103,13 @@ class GetDayRosterUseCase:
             entry = entry_by_worker_id.get(worker.id)
             if entry is None:
                 rows.append(
-                    RosterRow(worker_id=worker.id, name=worker.name, status=STATUS_ABSENT, hours=0.0, day_type=None)
+                    RosterRow(
+                        worker_id=worker.id,
+                        name=worker.person_name or worker.name,
+                        status=STATUS_ABSENT,
+                        hours=0.0,
+                        day_type=None,
+                    )
                 )
                 continue
             status = STATUS_PENDING if entry.status == STATUS_PENDING else STATUS_PRESENT
@@ -122,7 +128,7 @@ class GetDayRosterUseCase:
             rows.append(
                 RosterRow(
                     worker_id=worker.id,
-                    name=worker.name,
+                    name=worker.person_name or worker.name,
                     status=status,
                     hours=float(base_hours + entry.supplement_hours),
                     day_type=entry.shift_type,

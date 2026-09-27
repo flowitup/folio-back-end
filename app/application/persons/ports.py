@@ -58,6 +58,17 @@ class IPersonRepository(ABC):
         ...
 
     @abstractmethod
+    def rename(self, person_id: UUID, name: str, *, commit: bool = True) -> Optional[Person]:
+        """Rename a Person everywhere it appears.
+
+        Updates `name` + `normalized_name` and the `workers.name` copy on every
+        worker row linked to the person, in any project or company, so every
+        screen shows the same name. Returns the updated Person, or None if
+        `person_id` does not exist. `commit=False` flushes only — see `create`.
+        """
+        ...
+
+    @abstractmethod
     def search(
         self,
         query: str,

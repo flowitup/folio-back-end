@@ -553,6 +553,8 @@ def invitation_app():
         )
 
         _c.person_repo = _PersonRepo(db.session)
+        if _c.update_worker_usecase is not None:
+            _c.update_worker_usecase.set_person_repo(_c.person_repo)
         _c.company_person_repo = _CompanyPersonRepo(db.session)
         # Mirrors app/__init__.py: directly adding an existing user attaches
         # them to the project's company and lists them in its directory.

@@ -233,7 +233,7 @@ class ExportLaborUseCase:
             range=ExportRange(from_month=from_d, to_month=to_d),
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
-            worker_name=worker.name if worker is not None else None,
+            worker_name=(worker.person_name or worker.name) if worker is not None else None,
             worker_daily_rate=self._header_rate(worker, to_d),
             locale=req.locale,
         )
@@ -257,7 +257,7 @@ class ExportLaborUseCase:
         # 7. Generate filename
         project_slug = slugify_project_name(project.name, str(project.id))
         if worker is not None:
-            worker_slug = slugify_worker_name(worker.name, str(worker.id))
+            worker_slug = slugify_worker_name(worker.person_name or worker.name, str(worker.id))
             filename = f"labor-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
         else:
             filename = f"labor-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"
