@@ -25,6 +25,7 @@ import httpx
 
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
+    ImageFetchFailedError,
     ImageTooLargeError,
     InsufficientPermissionError,
     ProductNotFoundError,
@@ -182,9 +183,9 @@ class FetchProductImageFromUrlUseCase:
                 response = client.get(url, headers=_FETCH_HEADERS)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"Remote server returned HTTP {exc.response.status_code} for {url!r}") from exc
+            raise ImageFetchFailedError(f"Upstream returned {exc.response.status_code}.") from exc
         except httpx.RequestError as exc:
-            raise RuntimeError(f"HTTP request to {url!r} failed: {exc}") from exc
+            raise ImageFetchFailedError("Could not reach the image URL.") from exc
 
         # Validate content-type from response headers.
         raw_ct = response.headers.get("content-type", "")

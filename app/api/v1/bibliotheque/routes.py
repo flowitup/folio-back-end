@@ -35,6 +35,7 @@ from app.application.bibliotheque.dtos import ImportRecordDTO, LibraryProductRes
 from app.application.bibliotheque.exceptions import (
     CompanyAccessDeniedError,
     ImageAlreadyExistsError,
+    ImageFetchFailedError,
     ImageTooLargeError,
     InsufficientPermissionError,
     InvalidProductInputError,
@@ -526,6 +527,8 @@ def fetch_product_image_from_url(product_id: UUID) -> Any:
         )
     except SsrfBlockedError as exc:
         return _err(422, "SsrfBlocked", str(exc))
+    except ImageFetchFailedError as exc:
+        return _err(422, "ImageFetchFailed", str(exc))
     except UnsupportedImageTypeError as exc:
         return _err(415, "UnsupportedMediaType", str(exc))
     except ImageTooLargeError as exc:
