@@ -27,6 +27,7 @@ from app.application.billing.ports import (
     assert_project_read_access,
     assert_user_company_access,
 )
+from app.domain.billing.dates import validate_document_dates
 from app.domain.billing.exceptions import MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
 
@@ -93,6 +94,7 @@ class CreateBillingDocumentUseCase:
 
         # 5. Atomically generate document number
         issue_date = inp.issue_date if inp.issue_date is not None else datetime.now(timezone.utc).date()
+        validate_document_dates(issue_date, inp.validity_until, inp.payment_due_date)
         year = issue_date.year
         sequence = self._counter_repo.next_value(counter_key, inp.kind, year)
         document_number = next_document_number(

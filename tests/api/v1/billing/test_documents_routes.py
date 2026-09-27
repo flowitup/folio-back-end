@@ -320,3 +320,42 @@ class TestUpdateBillingDocumentStatus:
             headers=_auth(billing_token),
         )
         assert resp.status_code == 422
+
+
+class TestBillingDocumentDates:
+    """Validity and due dates stay on or after the issue date; the issue year matches the number."""
+
+    def test_devis_validity_before_issue_is_refused(self, inv_client, billing_token, billing_profile):
+        body = {**_create(billing_profile["company_id"]), "issue_date": "2026-09-27", "validity_until": "2026-01-01"}
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+
+    def test_facture_due_before_issue_is_refused(self, inv_client, billing_token, billing_profile):
+        body = {
+            **_create(billing_profile["company_id"]),
+            "kind": "facture",
+            "issue_date": "2026-09-27",
+            "payment_due_date": "2026-09-01",
+        }
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+
+    def test_moving_validity_before_issue_on_update_is_refused(self, inv_client, billing_token, billing_profile):
+        body = {**_create(billing_profile["company_id"]), "issue_date": "2026-09-27", "validity_until": "2026-10-27"}
+        doc = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token)).get_json()
+        resp = inv_client.put(
+            f"/api/v1/billing-documents/{doc['id']}",
+            json={"validity_until": "2026-09-01"},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 400
+
+    def test_issue_date_cannot_leave_the_number_year(self, inv_client, billing_token, billing_profile):
+        body = {**_create(billing_profile["company_id"]), "issue_date": "2026-09-27"}
+        doc = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token)).get_json()
+        assert "-2026-" in doc["document_number"]
+        url = f"/api/v1/billing-documents/{doc['id']}"
+        assert inv_client.put(url, json={"issue_date": "2025-12-31"}, headers=_auth(billing_token)).status_code == 400
+        moved = inv_client.put(url, json={"issue_date": "2026-03-02"}, headers=_auth(billing_token))
+        assert moved.status_code == 200
+        assert "02 Mar 2026" in moved.get_json()["issue_date"]

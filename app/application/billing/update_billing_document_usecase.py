@@ -24,8 +24,21 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
     assert_project_read_access,
 )
+from app.domain.billing.dates import validate_document_dates
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
+from app.domain.billing.numbering import document_number_year
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
+
+_DATE_FIELDS = frozenset({"issue_date", "validity_until", "payment_due_date"})
+
+
+def _check_dates(doc) -> None:
+    """Validity/due dates stay on or after the issue date, which stays in the number's year."""
+    validate_document_dates(doc.issue_date, doc.validity_until, doc.payment_due_date)
+    number_year = document_number_year(doc.document_number)
+    if number_year is not None and doc.issue_date.year != number_year:
+        raise ValueError(f"issue_date must stay in {number_year}, the year of document number {doc.document_number}")
+
 
 # Facture fields copied onto its released_funds expense.
 _RELEASE_FIELDS = frozenset({"items", "recipient_name", "issue_date", "project_id"})
@@ -130,6 +143,8 @@ class UpdateBillingDocumentUseCase:
             updates["issue_date"] = inp.issue_date
 
         updated = doc.with_updates(**updates)
+        if _DATE_FIELDS.intersection(updates):
+            _check_dates(updated)
         saved = self._doc_repo.save(updated)
         db_session.commit()
 
