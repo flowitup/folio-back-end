@@ -203,6 +203,8 @@ class AttachedUserRow(_StrictBase):
     email: Optional[str] = None
     display_name: Optional[str] = None
     phone: Optional[str] = None
+    # False for a deactivated or erased account, so pickers can leave it out.
+    is_active: Optional[bool] = None
     companies: list[CompanySummary] = Field(default_factory=list)
     assigned_project_ids: list[UUID] = Field(default_factory=list)
 

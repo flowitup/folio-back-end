@@ -681,6 +681,7 @@ def _attach_user_identity(items: list[dict]) -> None:
         row["email"] = user.email if user else None
         row["display_name"] = (user.display_name if user else None) or (user.email.split("@", 1)[0] if user else None)
         row["phone"] = user.phone if user else None
+        row["is_active"] = bool(user.is_active and user.deleted_at is None) if user else None
 
 
 def _attach_user_assignments(items: list[dict], company_id: UUID) -> None:

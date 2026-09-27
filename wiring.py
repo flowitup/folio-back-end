@@ -906,10 +906,10 @@ def configure_container(
 
     # Wire task (planning) use cases
     if task_repository:
-        container.create_task_usecase = CreateTaskUseCase(task_repository)
+        container.create_task_usecase = CreateTaskUseCase(task_repository, user_repo=user_repository)
         container.list_tasks_usecase = ListTasksUseCase(task_repository)
         container.get_task_usecase = GetTaskUseCase(task_repository)
-        container.update_task_usecase = UpdateTaskUseCase(task_repository)
+        container.update_task_usecase = UpdateTaskUseCase(task_repository, user_repo=user_repository)
         container.move_task_usecase = MoveTaskUseCase(task_repository)
         container.delete_task_usecase = DeleteTaskUseCase(task_repository)
 

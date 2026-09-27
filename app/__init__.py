@@ -955,6 +955,7 @@ def _configure_di_container() -> None:
             # same use case (and guards) as PATCH /companies/<id>/members/<uid>.
             role_setter=_c.set_member_role_usecase,
             db_session=db.session,
+            user_repo=_c.user_repository,
         )
         _c.unassign_project_member_usecase = _UnassignProjectMemberUseCase(
             authz_reader=_c.authz_reader,

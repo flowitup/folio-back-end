@@ -137,6 +137,21 @@ class TestAdminAssigns:
         )
         assert resp.status_code == 404
 
+    def test_deactivated_account_is_refused(self, assign_client, assign_app):
+        from app import db
+
+        admin_id = _make_user(assign_app, "asg_admin_inactive@test.com")
+        target_id = _make_user(assign_app, "asg_inactive@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, target_id, company_id, "member")
+        with assign_app.app_context():
+            db.session.get(UserModel, target_id).is_active = False
+            db.session.commit()
+        token = _login(assign_client, "asg_admin_inactive@test.com")
+
+        resp = assign_client.put(f"/api/v1/projects/{project_id}/assignments/{target_id}", headers=_auth(token))
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
 
 class TestManagerAssigns:
     def test_manager_assigned_to_project_can_assign_a_company_member(self, assign_client, assign_app):
