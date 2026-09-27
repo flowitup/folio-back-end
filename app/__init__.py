@@ -1208,6 +1208,7 @@ def _configure_di_container() -> None:
     _c.list_project_billing_documents_usecase = ListProjectBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # project:read authorization
+        access_repo=_access_repo,  # company admins read every company project
     )
 
     # Re-wire materials-expenses use-cases with the now-available access_repo

@@ -91,7 +91,7 @@ class ConvertDevisToFactureUseCase:
             raise DevisAlreadyConvertedError(inp.source_devis_id)
 
         # H1: Verify project:read access if source doc has a project_id
-        assert_project_read_access(self._project_repo, source.project_id, inp.user_id)
+        assert_project_read_access(self._project_repo, source.project_id, inp.user_id, self._access_repo)
 
         # 4. Resolve effective company_id: prefer explicit override, then source doc's
         effective_company_id: UUID | None = inp.company_id if inp.company_id is not None else source.company_id

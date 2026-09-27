@@ -680,6 +680,8 @@ def invitation_app():
         )
         _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
             doc_repo=_billing_doc_repo,
+            project_repo=project_repo,  # project:read authorization, as in production
+            access_repo=_access_repo,
         )
         _c.get_billing_document_usecase = GetBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
@@ -734,6 +736,7 @@ def invitation_app():
         _c.list_project_billing_documents_usecase = ListProjectBillingDocumentsUseCase(
             doc_repo=_billing_doc_repo,
             project_repo=project_repo,  # project:read authorization
+            access_repo=_access_repo,  # company admins read every company project
         )
 
         # Wire materials-expenses use-cases (company-scoped refund tracking)

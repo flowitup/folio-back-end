@@ -151,16 +151,21 @@ def list_billing_documents():
 
     user_id = UUID(get_jwt_identity())
     is_superadmin = is_platform_ops()
-    result = get_container().list_billing_documents_usecase.execute(
-        user_id=user_id,
-        kind=kind,
-        status=status,
-        project_id=project_id,
-        company_id=company_id,
-        limit=limit,
-        offset=offset,
-        is_superadmin=is_superadmin,
-    )
+    try:
+        result = get_container().list_billing_documents_usecase.execute(
+            user_id=user_id,
+            kind=kind,
+            status=status,
+            project_id=project_id,
+            company_id=company_id,
+            limit=limit,
+            offset=offset,
+            is_superadmin=is_superadmin,
+        )
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
     return jsonify(
         {
             "items": [_doc_to_json(d) for d in result.items],
