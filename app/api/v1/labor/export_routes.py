@@ -17,7 +17,7 @@ from app.api.v1.projects.decorators import require_permission, require_project_a
 from app.api.v1.projects.labor_scope import labor_scope_for, require_full_project_view, restricted_forbidden
 from app.application.labor.export_labor_usecase import ExportLaborRequest
 from app.api.v1.labor.schemas import ExportLaborQuery
-from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -146,9 +146,6 @@ def export_worker_labor(project_id: str, worker_id: str):
         )
     except ProjectNotFoundError:
         return jsonify({"error": "project_not_found", "message": f"Project {project_id} not found"}), 404
-    except WorkerInactiveError:
-        # Check sub-type first; WorkerInactiveError IS-A WorkerNotFoundError.
-        return jsonify({"error": "worker_inactive", "message": "Worker is inactive"}), 404
     except WorkerNotFoundError:
         return jsonify({"error": "worker_not_found", "message": f"Worker {worker_id} not found"}), 404
 

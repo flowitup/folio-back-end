@@ -354,6 +354,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         self._session.commit()
         return result > 0
 
+    def find_by_source_billing_document_id(self, source_doc_id: UUID) -> Optional[Invoice]:
+        model = (
+            self._session.query(InvoiceModel).filter(InvoiceModel.source_billing_document_id == source_doc_id).first()
+        )
+        return _model_to_entity(model) if model else None
+
     def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
         """Return the auto-generated bank-refund release linked to source_id, or None.
 

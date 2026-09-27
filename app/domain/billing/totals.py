@@ -3,7 +3,8 @@
 compute_totals   — aggregate BillingDocumentItem list into DocumentTotals.
 vat_breakdown    — return (rate, base_ht, tva_amount) tuples sorted by rate descending.
 
-All arithmetic in Decimal; no quantization here (serialisation layer quantizes).
+All arithmetic in Decimal. Line amounts are already rounded to the cent
+(BillingDocumentItem), so these sums are exact cent amounts.
 """
 
 from __future__ import annotations

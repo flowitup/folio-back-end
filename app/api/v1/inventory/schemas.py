@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.api.v1.numeric_bounds import MAX_INT_QUANTITY
 from app.domain.value_objects.inventory import InventoryCategory, InventoryCondition, InventoryLocationType
 
 
@@ -39,7 +40,7 @@ class CreateInventoryItemSchema(BaseModel):
     category: Optional[InventoryCategory] = None
     reference: Optional[str] = Field(default=None, max_length=120)
     description: Optional[str] = Field(default=None, max_length=2000)
-    quantity: int = Field(ge=0, strict=True)
+    quantity: int = Field(ge=0, le=MAX_INT_QUANTITY, strict=True)
     condition: InventoryCondition
     location_type: InventoryLocationType
     warehouse_id: Optional[UUID] = None
@@ -55,7 +56,7 @@ class UpdateInventoryItemSchema(BaseModel):
     category: Optional[InventoryCategory] = None
     reference: Optional[str] = Field(default=None, max_length=120)
     description: Optional[str] = Field(default=None, max_length=2000)
-    quantity: Optional[int] = Field(default=None, ge=0, strict=True)
+    quantity: Optional[int] = Field(default=None, ge=0, le=MAX_INT_QUANTITY, strict=True)
     condition: Optional[InventoryCondition] = None
     location_type: Optional[InventoryLocationType] = None
     warehouse_id: Optional[UUID] = None

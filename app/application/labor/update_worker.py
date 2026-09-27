@@ -30,6 +30,8 @@ class UpdateWorkerRequest:
     role_id: object = _ROLE_SENTINEL
     # Same sentinel semantics: None unlinks the app account, omit to leave unchanged.
     user_id: object = _ROLE_SENTINEL
+    # True turns a deactivated worker back on (no-op for an active one).
+    reactivate: bool = False
 
 
 @dataclass
@@ -82,6 +84,9 @@ class UpdateWorkerUseCase:
                 if linked is not None and linked.id != worker.id:
                     raise InvalidWorkerDataError("This account is already linked to another worker on this project")
             worker.user_id = request.user_id  # type: ignore[assignment]
+
+        if request.reactivate:
+            worker.is_active = True
 
         worker.updated_at = datetime.now(timezone.utc)
         saved = self._repo.update(worker)

@@ -201,6 +201,11 @@ class IInvoiceRepository(ABC):
         ...
 
     @abstractmethod
+    def find_by_source_billing_document_id(self, source_doc_id: UUID) -> Optional[Invoice]:
+        """Return the released_funds invoice auto-created for a paid facture, or None."""
+        ...
+
+    @abstractmethod
     def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
         """Return the auto-generated bank-refund release linked to source_id, or None.
 

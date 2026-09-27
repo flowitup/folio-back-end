@@ -3,6 +3,8 @@
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal, Optional, List
 
+from app.api.v1.numeric_bounds import MAX_DAILY_AMOUNT
+
 # Shift type constraint shared by request and response schemas.
 ShiftTypeLiteral = Literal["full", "half", "overtime"]
 # Validation workflow status of a labor entry.
@@ -31,7 +33,7 @@ class CreateWorkerRequest(BaseModel):
     """
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    daily_rate: Optional[float] = Field(None, gt=0)
+    daily_rate: Optional[float] = Field(None, gt=0, le=float(MAX_DAILY_AMOUNT))
     phone: Optional[str] = Field(None, max_length=50)
     person_id: Optional[str] = Field(None, min_length=36, max_length=36)
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)
@@ -53,6 +55,9 @@ class UpdateWorkerRequest(BaseModel):
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)
     # App account allowed to self-log attendance for this worker; null unlinks.
     user_id: Optional[str] = Field(None, min_length=36, max_length=36)
+    # true reactivates a deactivated worker. Deactivation stays DELETE, which
+    # also frees the worker's app-account link.
+    is_active: Optional[Literal[True]] = None
 
 
 class LogAttendanceRequest(BaseModel):
@@ -69,7 +74,7 @@ class LogAttendanceRequest(BaseModel):
 
     worker_id: str = Field(...)
     date: str = Field(...)  # ISO date YYYY-MM-DD
-    amount_override: Optional[float] = Field(None, ge=0)
+    amount_override: Optional[float] = Field(None, ge=0, le=float(MAX_DAILY_AMOUNT))
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: int = Field(default=0, ge=0, le=12)
@@ -106,7 +111,7 @@ class BulkLogAttendanceEntry(BaseModel):
     """One row inside a bulk-log request body."""
 
     worker_id: str = Field(...)
-    amount_override: Optional[float] = Field(None, ge=0)
+    amount_override: Optional[float] = Field(None, ge=0, le=float(MAX_DAILY_AMOUNT))
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: int = Field(default=0, ge=0, le=12)
@@ -181,7 +186,7 @@ class UpdateAttendanceRequest(BaseModel):
     the validator rejects the combination.
     """
 
-    amount_override: Optional[float] = Field(None, ge=0)
+    amount_override: Optional[float] = Field(None, ge=0, le=float(MAX_DAILY_AMOUNT))
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: Optional[int] = Field(None, ge=0, le=12)

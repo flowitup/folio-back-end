@@ -367,6 +367,38 @@ class TestWorkerRoutes:
         # Base rate must not have changed
         assert data["daily_rate"] == 80.0
 
+    def test_deactivated_worker_is_listable_on_request_and_can_be_reactivated(
+        self, labor_client, admin_token, labor_app
+    ):
+        """A deactivated worker may still be owed money: list it on request, turn it back on."""
+        pid = labor_app._test_project_id
+        worker_id = labor_client.post(
+            _workers_url(pid), json={"name": "Owed Worker", "daily_rate": 70.0}, headers=_auth(admin_token)
+        ).get_json()["id"]
+        assert labor_client.delete(_worker_url(pid, worker_id), headers=_auth(admin_token)).status_code == 204
+
+        def listed(query: str = "") -> dict:
+            resp = labor_client.get(_workers_url(pid) + query, headers=_auth(admin_token))
+            assert resp.status_code == 200
+            return {w["id"]: w["is_active"] for w in resp.get_json()["workers"]}
+
+        assert worker_id not in listed()
+        assert listed("?include_inactive=true")[worker_id] is False
+
+        resp = labor_client.put(_worker_url(pid, worker_id), json={"is_active": True}, headers=_auth(admin_token))
+        assert resp.status_code == 200
+        assert resp.get_json()["is_active"] is True
+        assert listed()[worker_id] is True
+
+    def test_is_active_false_on_put_is_rejected(self, labor_client, admin_token, labor_app):
+        """Deactivation stays DELETE (it also frees the account link); PUT only reactivates."""
+        pid = labor_app._test_project_id
+        worker_id = labor_client.post(
+            _workers_url(pid), json={"name": "Still Active", "daily_rate": 70.0}, headers=_auth(admin_token)
+        ).get_json()["id"]
+        resp = labor_client.put(_worker_url(pid, worker_id), json={"is_active": False}, headers=_auth(admin_token))
+        assert resp.status_code == 400
+
 
 class TestLaborActivityRoutes:
     def test_update_and_delete_activity_through_another_project_404(self, labor_client, admin_token, labor_app):

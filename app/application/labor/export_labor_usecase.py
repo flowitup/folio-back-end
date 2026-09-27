@@ -17,7 +17,7 @@ from app.application.labor.labor_day_description_usecases import (
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
 from app.application.projects.ports import IProjectRepository
-from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
 
@@ -142,8 +142,6 @@ class ExportLaborUseCase:
             ProjectNotFoundError: if project does not exist.
             WorkerNotFoundError: if worker_id is set but worker does not exist or
                 belongs to a different project.
-            WorkerInactiveError: if the resolved worker is inactive (subclass of
-                WorkerNotFoundError; routes receive 404 with ``worker_inactive`` code).
         """
         # 1. Resolve project — raises ProjectNotFoundError if absent
         project = self._project_repo.find_by_id(req.project_id)
@@ -156,8 +154,8 @@ class ExportLaborUseCase:
             worker = self._worker_repo.find_by_id(req.worker_id)
             if worker is None or worker.project_id != req.project_id:
                 raise WorkerNotFoundError(str(req.worker_id))
-            if not worker.is_active:
-                raise WorkerInactiveError(str(req.worker_id))
+            # A deactivated worker stays exportable: their history (and any
+            # balance still owed) is exactly what the export is for.
 
         # 3. Parse month boundaries
         from_d = _parse_yyyy_mm(req.from_month)

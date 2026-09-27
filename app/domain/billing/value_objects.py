@@ -3,13 +3,24 @@
 BillingDocumentItem — a single line item on a billing document.
 DocumentTotals      — aggregated totals computed from a collection of items.
 
-Currency math uses Decimal throughout. Quantization to 2 dp happens only at
-serialisation boundaries (never inside domain logic), to avoid premature rounding.
+Currency math uses Decimal throughout, with one rounding rule shared by the
+API, the PDF and the XLSX export: each line's HT is rounded half-up to the cent,
+then its TVA is rounded half-up to the cent from that rounded HT. Document
+totals are plain sums of those cent amounts, so lines always add up to the
+totals and HT + TVA == TTC exactly.
 """
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Mapping, Optional
+
+
+_CENT = Decimal("0.01")
+
+
+def round_cents(value: Decimal) -> Decimal:
+    """Round a money amount half-up to the cent (0.125 → 0.13)."""
+    return value.quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +28,7 @@ class BillingDocumentItem:
     """Frozen value object representing a single line item on a billing document.
 
     vat_rate is a percentage expressed as a Decimal, e.g. Decimal("20") for 20% VAT.
-    All arithmetic is kept in full Decimal precision; callers quantize at the boundary.
+    Line amounts are rounded to the cent (see the module docstring).
 
     category is an optional free-text section/trade label (max 120 chars, trimmed).
     Empty string is coerced to None on construction via __post_init__.
@@ -42,13 +53,13 @@ class BillingDocumentItem:
 
     @property
     def total_ht(self) -> Decimal:
-        """Line total before VAT (quantity × unit_price)."""
-        return self.quantity * self.unit_price
+        """Line total before VAT (quantity × unit_price), rounded to the cent."""
+        return round_cents(self.quantity * self.unit_price)
 
     @property
     def total_tva(self) -> Decimal:
-        """VAT amount for this line (total_ht × vat_rate / 100)."""
-        return self.total_ht * self.vat_rate / Decimal("100")
+        """VAT amount for this line (total_ht × vat_rate / 100), rounded to the cent."""
+        return round_cents(self.total_ht * self.vat_rate / Decimal("100"))
 
     @property
     def total_ttc(self) -> Decimal:

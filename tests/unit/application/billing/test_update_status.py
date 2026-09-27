@@ -1,6 +1,6 @@
 """Unit tests for UpdateBillingDocumentStatusUseCase."""
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 import pytest
@@ -168,9 +168,10 @@ class TestFundsReleaseBridge:
             items=(make_item(desc="Acompte 3%", qty="1", price="66287.23", vat="20"),),
         )
         total = _expense_total(funds_release.created[0]["amount_items"])
-        # Per-line TTC: 66287.23 × 1.20 = 79544.676 (exact, no rounding needed here)
+        # The expense keeps the facture's lines (66287.23 × 1.20 = 79544.676); the
+        # facture rounds its TVA to the cent, and both show 79544.68.
         assert total == Decimal("79544.676")
-        assert total == doc.total_ttc
+        assert total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == doc.total_ttc == Decimal("79544.68")
 
     def test_multiple_items_with_different_vat_rates(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id

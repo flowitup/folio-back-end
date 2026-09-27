@@ -6,7 +6,11 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from app.application.billing._helpers import _assert_billing_doc_access, _converted_facture_id
+from app.application.billing._helpers import (
+    _assert_billing_doc_access,
+    _converted_facture_id,
+    _funds_release_items,
+)
 from app.application.billing.dtos import BillingDocumentResponse, UpdateStatusInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
@@ -85,21 +89,10 @@ class UpdateBillingDocumentStatusUseCase:
             return
 
         if new_status == BillingDocumentStatus.PAID:
-            # Each billing item carries its own vat_rate — the released-funds expense
-            # mirrors the per-line structure so that its TTC total matches the facture.
-            items_dicts = [
-                {
-                    "description": it.description,
-                    "quantity": str(it.quantity),
-                    "unit_price": str(it.unit_price),
-                    "vat_rate": str(it.vat_rate),
-                }
-                for it in doc.items
-            ]
             self._funds_release.create_funds_release(
                 project_id=doc.project_id,
                 source_doc_id=doc.id,
-                amount_items=items_dicts,
+                amount_items=_funds_release_items(doc),
                 recipient_name=doc.recipient_name,
                 issue_date=doc.issue_date,
                 created_by=doc.user_id,

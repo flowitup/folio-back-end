@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +27,18 @@ log = logging.getLogger(__name__)
 _MAX_NUMBER_CONFLICT_ATTEMPTS = 3
 
 
+def _to_invoice_items(amount_items: list) -> list[InvoiceItem]:
+    return [
+        InvoiceItem(
+            description=it.get("description", ""),
+            quantity=Decimal(str(it.get("quantity", 1))),
+            unit_price=Decimal(str(it.get("unit_price", 0))),
+            vat_rate=Decimal(str(it.get("vat_rate", 0))),
+        )
+        for it in amount_items
+    ]
+
+
 class FundsReleaseAdapter:
     """Create/delete released_funds invoices triggered by billing facture status changes."""
 
@@ -44,16 +56,7 @@ class FundsReleaseAdapter:
     ) -> None:
         invoice_number = self._invoice_repo.next_funds_release_number(project_id)
         now = datetime.now(timezone.utc)
-
-        items = [
-            InvoiceItem(
-                description=it.get("description", ""),
-                quantity=Decimal(str(it.get("quantity", 1))),
-                unit_price=Decimal(str(it.get("unit_price", 0))),
-                vat_rate=Decimal(str(it.get("vat_rate", 0))),
-            )
-            for it in amount_items
-        ]
+        items = _to_invoice_items(amount_items)
 
         invoice = Invoice(
             id=uuid4(),
@@ -80,6 +83,37 @@ class FundsReleaseAdapter:
 
     def delete_funds_release(self, source_doc_id: UUID) -> None:
         self._invoice_repo.delete_by_source_billing_document_id(source_doc_id)
+
+    def sync_funds_release(
+        self,
+        project_id: Optional[UUID],
+        source_doc_id: UUID,
+        amount_items: list,
+        recipient_name: str,
+        issue_date: date,
+        created_by: UUID,
+    ) -> None:
+        existing = self._invoice_repo.find_by_source_billing_document_id(source_doc_id)
+        if existing is not None and existing.project_id == project_id:
+            self._invoice_repo.update(
+                existing.with_updates(
+                    items=_to_invoice_items(amount_items),
+                    recipient_name=recipient_name,
+                    issue_date=issue_date,
+                )
+            )
+            return
+        if existing is not None:
+            self.delete_funds_release(source_doc_id)
+        if project_id is not None:
+            self.create_funds_release(
+                project_id=project_id,
+                source_doc_id=source_doc_id,
+                amount_items=amount_items,
+                recipient_name=recipient_name,
+                issue_date=issue_date,
+                created_by=created_by,
+            )
 
     def create_bank_refund_release(self, source: Invoice, created_by: UUID) -> None:
         """Create the auto-generated released_funds release for a bank-refunded expense.

@@ -124,6 +124,15 @@ class Invoice:
         return sum((item.total for item in self.items), Decimal("0"))
 
     @property
+    def is_orphaned_auto_release(self) -> bool:
+        """An auto-generated release whose source (facture or refunded expense) is gone.
+
+        Both source links are ON DELETE SET NULL, so a release can outlive what
+        created it. Nothing will ever sync or remove it again, so users may delete it.
+        """
+        return self.is_auto_generated and self.source_billing_document_id is None and self.refunds_invoice_id is None
+
+    @property
     def ledger_type(self) -> InvoiceType:
         """The ledger category this row is listed under.
 

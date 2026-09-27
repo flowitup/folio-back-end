@@ -23,6 +23,20 @@ _DEFAULT_VALIDITY_DAYS = 30  # devis
 _DEFAULT_PAYMENT_DAYS = 30  # facture
 
 
+def _funds_release_items(doc: BillingDocument) -> list[dict]:
+    """A facture's lines as released_funds items: one per line, each with its own
+    vat_rate, so the release's TTC total matches the facture's."""
+    return [
+        {
+            "description": it.description,
+            "quantity": str(it.quantity),
+            "unit_price": str(it.unit_price),
+            "vat_rate": str(it.vat_rate),
+        }
+        for it in doc.items
+    ]
+
+
 def _assert_owner(doc: BillingDocument, user_id: UUID) -> None:
     """Raise ForbiddenBillingDocumentError if user_id does not own doc."""
     if doc.user_id != user_id:

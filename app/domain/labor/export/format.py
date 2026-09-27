@@ -6,7 +6,7 @@ slugify_project_name — project name → kebab-case filename-safe slug
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 
 def format_eur_fr(value: Decimal | None) -> str:
@@ -20,8 +20,10 @@ def format_eur_fr(value: Decimal | None) -> str:
     """
     if value is None:
         return "—"  # em dash
-    # Format with thousands comma and 2 decimal places: "1,234.56"
-    s = f"{float(value):,.2f}"
+    # Round half-up in Decimal (a float cast loses digits on large amounts and
+    # rounds 0.125 down), then format with thousands comma and 2 dp: "1,234.56"
+    cents = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    s = f"{cents:,.2f}"
     # Convert to fr-FR notation: comma → thousand-sep space, period → decimal comma
     s = s.replace(",", "X").replace(".", ",").replace("X", " ")  # narrow no-break space
     return f"{s} €"  # non-breaking space before €
