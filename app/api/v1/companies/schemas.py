@@ -15,6 +15,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
+from app.domain.companies.bank_details import normalize_bic, normalize_iban
 from app.domain.companies.masking import is_masked
 
 
@@ -63,6 +64,15 @@ def _validate_logo_url(v: Optional[HttpUrl]) -> Optional[HttpUrl]:
     return v
 
 
+def _validate_iban(v: Optional[str]) -> Optional[str]:
+    """Normalise and check an IBAN; an empty string (clear) and None (unchanged) pass through."""
+    return normalize_iban(v) if v else v
+
+
+def _validate_bic(v: Optional[str]) -> Optional[str]:
+    return normalize_bic(v) if v else v
+
+
 # ---------------------------------------------------------------------------
 # Company request schemas
 # ---------------------------------------------------------------------------
@@ -75,8 +85,8 @@ class CreateCompanyRequest(_StrictBase):
     address: str = Field(..., min_length=1, max_length=2000)
     siret: Optional[str] = Field(None, pattern=r"^\d{14}$")
     tva_number: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{2,16}$")
-    iban: Optional[str] = None
-    bic: Optional[str] = None
+    iban: Optional[str] = Field(None, max_length=64)
+    bic: Optional[str] = Field(None, max_length=64)
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
@@ -85,6 +95,16 @@ class CreateCompanyRequest(_StrictBase):
     @classmethod
     def validate_logo_url(cls, v: Optional[HttpUrl]) -> Optional[HttpUrl]:
         return _validate_logo_url(v)
+
+    @field_validator("iban", mode="after")
+    @classmethod
+    def validate_iban(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iban(v)
+
+    @field_validator("bic", mode="after")
+    @classmethod
+    def validate_bic(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_bic(v)
 
 
 class UpdateCompanyRequest(_StrictBase):
@@ -97,8 +117,8 @@ class UpdateCompanyRequest(_StrictBase):
     address: Optional[str] = Field(None, min_length=1, max_length=2000)
     siret: Optional[str] = Field(None, pattern=r"^\d{14}$")
     tva_number: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{2,16}$")
-    iban: Optional[str] = None
-    bic: Optional[str] = None
+    iban: Optional[str] = Field(None, max_length=64)
+    bic: Optional[str] = Field(None, max_length=64)
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
@@ -114,6 +134,16 @@ class UpdateCompanyRequest(_StrictBase):
     @classmethod
     def validate_logo_url(cls, v: Optional[HttpUrl]) -> Optional[HttpUrl]:
         return _validate_logo_url(v)
+
+    @field_validator("iban", mode="after")
+    @classmethod
+    def validate_iban(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iban(v)
+
+    @field_validator("bic", mode="after")
+    @classmethod
+    def validate_bic(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_bic(v)
 
 
 # ---------------------------------------------------------------------------
