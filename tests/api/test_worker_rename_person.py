@@ -1,4 +1,4 @@
-"""Renaming a worker renames the shared Person behind it.
+"""Renaming a worker — or changing its phone — changes the shared Person behind it.
 
 PUT /projects/<id>/workers/<wid> {name} updates the linked `persons` row, so the
 new name shows on every project and in every company that uses the person —
@@ -167,3 +167,92 @@ def test_changing_only_the_phone_keeps_the_person_name(client, shared_person, re
 
     with rename_app.app_context():
         assert db.session.get(PersonModel, UUID(shared_person["person_id"])).name == "Jean Dupont"
+
+
+def test_changing_a_workers_phone_changes_the_person_in_every_company(client, shared_person, rename_app):
+    token_a = mint_access_token(client, shared_person["admin_a"])
+    token_b = mint_access_token(client, shared_person["admin_b"])
+    worker_a = _add_worker(client, token_a, shared_person["project_a"], shared_person["person_id"])
+    worker_b = _add_worker(client, token_b, shared_person["project_b"], shared_person["person_id"])
+
+    resp = client.put(
+        f"/api/v1/projects/{shared_person['project_a']}/workers/{worker_a['id']}",
+        json={"phone": "06 12 34 56 78"},
+        headers=_auth(token_a),
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.get_json()["phone"] == "06 12 34 56 78"
+    assert resp.get_json()["person_phone"] == "06 12 34 56 78"
+
+    # The other company's project shows the new phone too.
+    listed = client.get(f"/api/v1/projects/{shared_person['project_b']}/workers", headers=_auth(token_b))
+    row = next(w for w in listed.get_json()["workers"] if w["id"] == worker_b["id"])
+    assert row["person_phone"] == "06 12 34 56 78" and row["phone"] == "06 12 34 56 78"
+
+    from app import db
+
+    with rename_app.app_context():
+        person = db.session.get(PersonModel, UUID(shared_person["person_id"]))
+        assert person.phone == "06 12 34 56 78" and person.phone_normalized == "+33612345678"
+        hints = {
+            cp.phone_normalized for cp in db.session.query(CompanyPersonModel).filter_by(person_id=person.id).all()
+        }
+        assert hints == {"+33612345678"}
+
+    # Cleared the same way.
+    cleared = client.put(
+        f"/api/v1/projects/{shared_person['project_a']}/workers/{worker_a['id']}",
+        json={"phone": ""},
+        headers=_auth(token_a),
+    )
+    assert cleared.status_code == 200, cleared.get_data(as_text=True)
+    with rename_app.app_context():
+        db.session.expire_all()
+        assert db.session.get(PersonModel, UUID(shared_person["person_id"])).phone is None
+
+
+def test_a_number_another_profile_holds_in_a_company_is_not_duplicated_there(client, shared_person, rename_app):
+    """The directory allows one active profile per number and company; the person keeps the phone."""
+    from app import db
+
+    token_a = mint_access_token(client, shared_person["admin_a"])
+    worker_a = _add_worker(client, token_a, shared_person["project_a"], shared_person["person_id"])
+    with rename_app.app_context():
+        profile = db.session.query(CompanyPersonModel).filter_by(person_id=UUID(shared_person["person_id"])).first()
+        other = PersonModel(
+            id=uuid4(),
+            name="Other",
+            normalized_name="other",
+            created_by_user_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+            phone="+33687654321",
+        )
+        db.session.add(other)
+        db.session.add(
+            CompanyPersonModel(
+                id=uuid4(),
+                company_id=profile.company_id,
+                person_id=other.id,
+                is_active=True,
+                created_at=datetime.now(timezone.utc),
+                phone_normalized="+33687654321",
+            )
+        )
+        db.session.commit()
+        company_id = profile.company_id
+
+    resp = client.put(
+        f"/api/v1/projects/{shared_person['project_a']}/workers/{worker_a['id']}",
+        json={"phone": "+33687654321"},
+        headers=_auth(token_a),
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    with rename_app.app_context():
+        db.session.expire_all()
+        assert db.session.get(PersonModel, UUID(shared_person["person_id"])).phone == "+33687654321"
+        mine = (
+            db.session.query(CompanyPersonModel)
+            .filter_by(person_id=UUID(shared_person["person_id"]), company_id=company_id)
+            .one()
+        )
+        assert mine.phone_normalized is None

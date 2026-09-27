@@ -183,6 +183,32 @@ class TestUpdateWorkerUseCase:
 
         person_repo.rename.assert_not_called()
 
+    def test_phone_change_changes_the_linked_persons_phone(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        sample_worker.person_phone = "+33600000000"
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, phone=" 0611223344 ")
+        )
+
+        person_repo.change_phone.assert_called_once_with(sample_worker.person_id, "0611223344", commit=False)
+        assert result.phone == "0611223344" and result.person_phone == "0611223344"
+
+    def test_update_without_phone_leaves_the_persons_phone_alone(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed")
+        )
+
+        person_repo.change_phone.assert_not_called()
+
     def test_update_worker_not_found_raises_error(self, mock_worker_repo):
         mock_worker_repo.find_by_id.return_value = None
         usecase = UpdateWorkerUseCase(mock_worker_repo)

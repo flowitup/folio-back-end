@@ -69,6 +69,19 @@ class IPersonRepository(ABC):
         ...
 
     @abstractmethod
+    def change_phone(self, person_id: UUID, phone: Optional[str], *, commit: bool = True) -> Optional[Person]:
+        """Change a Person's phone everywhere it appears (``None`` clears it).
+
+        Updates `phone` + `phone_normalized`, the `workers.phone` copy on every
+        worker row linked to the person, in any project or company, and the
+        person's directory profiles' matching hint (`company_persons.phone_normalized`,
+        left empty in a company where another profile already uses the number).
+        Returns the updated Person, or None if `person_id` does not exist.
+        `commit=False` flushes only — see `create`.
+        """
+        ...
+
+    @abstractmethod
     def search(
         self,
         query: str,

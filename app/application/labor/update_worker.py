@@ -91,7 +91,12 @@ class UpdateWorkerUseCase:
                 worker.person_name = worker.name
 
         if request.phone is not None:
-            worker.phone = request.phone.strip() if request.phone else None
+            worker.phone = request.phone.strip() or None
+            # Like the name, the phone belongs to the shared Person: changing it here changes
+            # it in every company and project that uses them.
+            if worker.person_id is not None and self._person_repo is not None:
+                self._person_repo.change_phone(worker.person_id, worker.phone, commit=False)
+                worker.person_phone = worker.phone
 
         if request.role_id is not _ROLE_SENTINEL:
             if request.role_id != worker.role_id:
