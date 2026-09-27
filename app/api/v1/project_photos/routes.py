@@ -274,7 +274,9 @@ def update_project_photo(project_id: str, photo_id: str):
     except pydantic.ValidationError as exc:
         return _error_response("INVALID_PARAMS", str(exc), 422)
 
-    if params.caption is None and params.captured_at is None:
+    # A caption sent as null (or blank) clears it, so presence — not value — decides.
+    caption_sent = "caption" in params.model_fields_set
+    if not caption_sent and params.captured_at is None:
         return _error_response("MISSING_FIELDS", "At least one of caption or captured_at must be provided", 422)
 
     container = get_container()
@@ -291,8 +293,8 @@ def update_project_photo(project_id: str, photo_id: str):
     # Build sentinel-aware kwargs so omitted fields are not overwritten.
 
     update_kwargs: dict = {}
-    if params.caption is not None:
-        update_kwargs["caption"] = params.caption
+    if caption_sent:
+        update_kwargs["caption"] = params.caption or None
     if params.captured_at is not None:
         # Normalize to UTC if no tzinfo provided
         dt = params.captured_at

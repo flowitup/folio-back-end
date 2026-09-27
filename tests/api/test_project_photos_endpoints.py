@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from uuid import uuid4
 
+import pytest
 from PIL import Image
 
 
@@ -336,6 +337,18 @@ class TestUpdateProjectPhoto:
         assert patched["caption"] == "updated caption"
         # captured_at must NOT change — compare date portion (timezone repr may vary)
         assert patched["captured_at"].startswith("2025-01-20")
+
+    @pytest.mark.parametrize("cleared", [None, "", "   "])
+    def test_200_patch_null_or_blank_caption_clears_it(self, inv_client, admin_token, invitation_app, cleared):
+        pid = invitation_app._test_project_id
+        photo = self._upload(inv_client, admin_token, pid, caption="to be removed", captured_at="2025-01-20")
+
+        patch_resp = inv_client.patch(
+            _photo_url(pid, photo["id"]), json={"caption": cleared}, headers=_auth(admin_token)
+        )
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+        assert patch_resp.get_json()["caption"] is None
+        assert patch_resp.get_json()["captured_at"].startswith("2025-01-20")
 
     def test_200_patch_captured_at_only_leaves_caption_unchanged(self, inv_client, admin_token, invitation_app):
         pid = invitation_app._test_project_id
