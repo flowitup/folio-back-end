@@ -222,7 +222,9 @@ class AddMemberByPhoneUseCase:
     # ----------------------------------------------------------------------
 
     def _create_pending(self, inp, person: Person, phone: str, now: datetime, db_session) -> AddMemberByPhoneResult:
-        self._upsert_company_person(inp.company_id, person.id, inp.caller_id, phone, now, pending=True)
+        self._upsert_company_person(
+            inp.company_id, person.id, inp.caller_id, phone, now, pending=True, pending_role=inp.role
+        )
         db_session.commit()
         return AddMemberByPhoneResult(person_id=person.id, name=person.name, phone=phone, pending=True)
 
@@ -235,17 +237,25 @@ class AddMemberByPhoneUseCase:
         now: datetime,
         *,
         pending: bool,
+        pending_role: Optional[str] = None,
     ) -> CompanyPerson:
+        # The role chosen for someone without an account is kept on the profile
+        # and applied when they sign up; "member" is the default, stored as None.
+        role_to_keep = pending_role if pending and pending_role != CompanyRole.MEMBER.value else None
         existing = self._company_persons.find(company_id, person_id)
         if existing is not None:
             # M1: re-adding a previously-booted member — reactivate rather
             # than silently no-op on a deactivated row. An already-active row
-            # (whether pending or not) is untouched — this is a plain
-            # idempotent resend, not a boot recovery.
+            # (whether pending or not) keeps its state — a plain idempotent
+            # resend — except that a still-pending row takes the role chosen now.
             if not existing.is_active:
                 return self._company_persons.save(
-                    dataclasses.replace(existing, is_active=True, pending_expires_at=None)
+                    dataclasses.replace(
+                        existing, is_active=True, pending_expires_at=None, pending_company_role=role_to_keep
+                    )
                 )
+            if pending and existing.pending_expires_at is not None and existing.pending_company_role != role_to_keep:
+                return self._company_persons.save(dataclasses.replace(existing, pending_company_role=role_to_keep))
             return existing
 
         # H2: at most one ACTIVE company_persons row per (company_id,
@@ -268,5 +278,6 @@ class AddMemberByPhoneUseCase:
                 phone_normalized=phone,
                 pending_expires_at=(now + timedelta(days=_PENDING_WINDOW_DAYS)) if pending else None,
                 created_by_user_id=created_by_user_id,
+                pending_company_role=role_to_keep,
             )
         )

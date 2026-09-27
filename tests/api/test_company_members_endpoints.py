@@ -300,6 +300,24 @@ class TestAddMemberByPhoneMatchOrder:
         # and `pending` is never exposed here (M6; the directory keeps it).
         assert set(body.keys()) == {"person_id", "name", "phone"}
 
+    def test_pending_profile_keeps_the_chosen_role(self, members_client, members_app):
+        from app import db
+        from app.infrastructure.database.models.company_person import CompanyPersonModel
+
+        admin_id = _make_user(members_app, "mab_admin_role@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co role")
+        token = _login(members_client, "mab_admin_role@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "0611110050", "name": "Future Manager", "role": "manager"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        with members_app.app_context():
+            row = db.session.query(CompanyPersonModel).filter_by(phone_normalized="+33611110050").one()
+            assert row.pending_company_role == "manager"
+
 
 class TestImportMembers:
     def test_import_copies_profile_and_attaches_linked_user(self, members_client, members_app):

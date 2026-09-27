@@ -51,6 +51,13 @@ from app.domain.entities.person import Person
 _log = logging.getLogger(__name__)
 
 
+def _signup_role(pending_role: "str | None") -> str:
+    """Company role granted at signup: the pending role when it is assignable, else member."""
+    if pending_role == CompanyRole.MANAGER.value:
+        return pending_role
+    return CompanyRole.MEMBER.value
+
+
 class LinkPersonOnSignupUseCase:
     def __init__(
         self,
@@ -113,10 +120,12 @@ class LinkPersonOnSignupUseCase:
             if person.id != survivor.id:
                 # Repoint this company's profile at the survivor instead of
                 # its own now-redundant Person row.
-                updated_profile = dataclasses.replace(profile, person_id=survivor.id, pending_expires_at=None)
+                updated_profile = dataclasses.replace(
+                    profile, person_id=survivor.id, pending_expires_at=None, pending_company_role=None
+                )
                 duplicate_person_ids.add(person.id)
             else:
-                updated_profile = dataclasses.replace(profile, pending_expires_at=None)
+                updated_profile = dataclasses.replace(profile, pending_expires_at=None, pending_company_role=None)
             self._company_persons.save(updated_profile)
 
             if self._access.find(user_id, profile.company_id) is None:
@@ -126,7 +135,8 @@ class LinkPersonOnSignupUseCase:
                         company_id=profile.company_id,
                         is_primary=len(self._access.list_for_user(user_id)) == 0,
                         attached_at=now,
-                        role=CompanyRole.MEMBER.value,
+                        # The role the admin chose when adding them by phone.
+                        role=_signup_role(profile.pending_company_role),
                     )
                 )
                 linked_company_ids.append(profile.company_id)
