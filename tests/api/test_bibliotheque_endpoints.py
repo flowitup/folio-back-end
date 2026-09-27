@@ -378,6 +378,16 @@ class TestListProductsEndpoint:
         assert "total" in data
         assert "page" in data
 
+    def test_huge_page_is_clamped_not_a_500(self, bib_client, member_token, bibliotheque_app):
+        resp = bib_client.get(
+            f"/api/v1/bibliotheque/products?company_id={bibliotheque_app._test_company_id}"
+            "&page=999999999999999999999",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["items"] == []
+        assert resp.get_json()["page"] == 1_000_000
+
     def test_401_unauthenticated(self, bib_client, bibliotheque_app):
         resp = bib_client.get(f"/api/v1/bibliotheque/products?company_id={bibliotheque_app._test_company_id}")
         assert resp.status_code == 401
@@ -445,6 +455,16 @@ class TestImportPurchasesEndpoint:
         assert result["created"] == 2  # 2 new products
         assert result["purchases_added"] == 2  # 2 purchases inserted
         assert result["skipped"] == 0
+
+    @pytest.mark.parametrize("field,length", [("product_name", 501), ("size", 101)])
+    def test_import_field_longer_than_its_column_is_a_422(
+        self, bib_client, manager_token, bibliotheque_app, field, length
+    ):
+        payload = self._import_payload(bibliotheque_app._test_company_id)
+        payload["records"][1][field] = "x" * length
+        resp = bib_client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(manager_token))
+        assert resp.status_code == 422
+        assert f"records.1.{field}" in resp.get_json()["message"]
 
     def test_IDEMPOTENT_re_import_same_payload_produces_zero_changes(self, bib_client, manager_token, bibliotheque_app):
         """CRITICAL: Idempotency test — re-posting same payload yields 0 new purchases."""
@@ -991,6 +1011,37 @@ class TestFetchProductImageFromUrlEndpoint:
             headers=_auth(manager_token),
         )
         assert resp.status_code == 413
+
+    @pytest.mark.parametrize("failure", ["http_404", "unreachable"])
+    def test_422_when_the_upstream_does_not_return_the_image(
+        self, bib_client, manager_token, bibliotheque_app, monkeypatch, failure
+    ):
+        import httpx
+
+        class _FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def get(self, url, **kwargs):
+                request = httpx.Request("GET", url)
+                if failure == "unreachable":
+                    raise httpx.ConnectError("boom", request=request)
+                return httpx.Response(404, request=request)
+
+        monkeypatch.setattr(httpx, "Client", lambda **kw: _FakeClient())
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku=f"IMG-UP-{failure}"
+        )
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
+            json={"url": "https://media.adeo.com/does-not-exist.png"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "ImageFetchFailed"
 
     def test_200_success_stores_image_and_returns_key(self, bib_client, manager_token, bibliotheque_app, monkeypatch):
         """Happy path: mock fetch returns valid JPEG, key is stored and returned."""

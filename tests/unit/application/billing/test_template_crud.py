@@ -13,7 +13,7 @@ from app.application.billing.update_template_usecase import UpdateTemplateUseCas
 from app.application.billing.dtos import CreateTemplateInput, ItemInput, UpdateTemplateInput
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingTemplateNotFoundError, ForbiddenBillingDocumentError
-from tests.unit.application.billing.conftest import make_template
+from tests.unit.application.billing.conftest import make_access, make_template
 
 
 @pytest.fixture
@@ -179,3 +179,57 @@ class TestListTemplates:
 
         assert len(devis_result) == 1
         assert len(facture_result) == 1
+
+
+class TestCompanyTemplateSharing:
+    """A company template is shared with every admin of its company; nobody else."""
+
+    @pytest.fixture
+    def company_template(self, template_repo, user_id, company_id):
+        tpl = make_template(user_id=user_id).with_updates(company_id=company_id)
+        template_repo.save(tpl)
+        return tpl
+
+    @pytest.fixture
+    def co_admin(self, access_repo, other_user_id, company_id):
+        access_repo.save(make_access(other_user_id, company_id, role="admin"))
+        return other_user_id
+
+    def test_company_admin_gets_updates_and_deletes(
+        self, template_repo, access_repo, fake_session, co_admin, company_template
+    ):
+        got = GetTemplateUseCase(template_repo, access_repo).execute(company_template.id, co_admin)
+        assert got.id == company_template.id
+
+        updated = UpdateTemplateUseCase(template_repo, access_repo).execute(
+            UpdateTemplateInput(id=company_template.id, user_id=co_admin, name="Renamed"), fake_session
+        )
+        assert updated.name == "Renamed"
+        assert updated.user_id == company_template.user_id
+
+        DeleteTemplateUseCase(template_repo, access_repo).execute(company_template.id, co_admin, fake_session)
+        assert template_repo.find_by_id(company_template.id) is None
+
+    @pytest.mark.parametrize("role", ["member", None])
+    def test_member_or_outsider_is_refused(
+        self, template_repo, access_repo, fake_session, other_user_id, company_id, company_template, role
+    ):
+        if role is not None:
+            access_repo.save(make_access(other_user_id, company_id, role=role))
+        with pytest.raises(ForbiddenBillingDocumentError):
+            GetTemplateUseCase(template_repo, access_repo).execute(company_template.id, other_user_id)
+        with pytest.raises(ForbiddenBillingDocumentError):
+            UpdateTemplateUseCase(template_repo, access_repo).execute(
+                UpdateTemplateInput(id=company_template.id, user_id=other_user_id, name="X"), fake_session
+            )
+        with pytest.raises(ForbiddenBillingDocumentError):
+            DeleteTemplateUseCase(template_repo, access_repo).execute(company_template.id, other_user_id, fake_session)
+
+    def test_admin_of_another_company_is_refused(self, template_repo, access_repo, other_user_id, company_template):
+        access_repo.save(make_access(other_user_id, uuid4(), role="admin"))
+        with pytest.raises(ForbiddenBillingDocumentError):
+            GetTemplateUseCase(template_repo, access_repo).execute(company_template.id, other_user_id)
+
+    def test_template_without_company_stays_private(self, template_repo, access_repo, co_admin, saved_template):
+        with pytest.raises(ForbiddenBillingDocumentError):
+            GetTemplateUseCase(template_repo, access_repo).execute(saved_template.id, co_admin)

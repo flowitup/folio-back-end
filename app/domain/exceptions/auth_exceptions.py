@@ -32,13 +32,26 @@ class OtpInvalidError(AuthenticationError):
 
 
 class OtpThrottledError(AuthenticationError):
-    """Too many SMS codes requested for this phone recently."""
+    """Too many SMS codes requested for this phone recently.
 
-    pass
+    ``hourly_limit`` tells the per-hour cap apart from the short gap between two
+    codes; ``retry_after_seconds`` is how long the caller has to wait either way.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: int = 60, hourly_limit: bool = False) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+        self.hourly_limit = hourly_limit
 
 
 class PhoneAlreadyRegisteredError(AuthenticationError):
     """Sign-up with a phone that already belongs to an account."""
+
+    pass
+
+
+class PhoneUnchangedError(AuthenticationError):
+    """Phone-number change to the number the account already signs in with."""
 
     pass
 

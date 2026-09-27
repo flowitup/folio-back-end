@@ -41,6 +41,8 @@ class CreateLaborActivityResponse:
 @dataclass
 class UpdateLaborActivityRequest:
     activity_id: UUID
+    # The project the caller was authorised for; an activity of another project is "not found".
+    project_id: UUID
     title: Optional[str] = None
 
 
@@ -65,6 +67,8 @@ class LaborActivityDetail:
 @dataclass
 class DeleteLaborActivityRequest:
     activity_id: UUID
+    # The project the caller was authorised for; an activity of another project is "not found".
+    project_id: UUID
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +134,7 @@ class UpdateLaborActivityUseCase:
 
     def execute(self, req: UpdateLaborActivityRequest) -> LaborActivityDetail:
         activity = self._repo.find_by_id(req.activity_id)
-        if not activity:
+        if activity is None or activity.project_id != req.project_id:
             raise LaborActivityNotFoundError(req.activity_id)
         if req.title is not None:
             activity.title = req.title.strip()
@@ -144,5 +148,8 @@ class DeleteLaborActivityUseCase:
         self._repo = repo
 
     def execute(self, req: DeleteLaborActivityRequest) -> None:
-        if not self._repo.delete(req.activity_id):
+        activity = self._repo.find_by_id(req.activity_id)
+        if activity is None or activity.project_id != req.project_id:
+            raise LaborActivityNotFoundError(req.activity_id)
+        if not self._repo.delete(activity.id):
             raise LaborActivityNotFoundError(req.activity_id)

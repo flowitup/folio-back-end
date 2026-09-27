@@ -6,11 +6,18 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
+from app.application.project_documents.exceptions import (
+    DocumentFileTooLargeError,
+    EmptyFileError,
+    UnsupportedDocumentTypeError,
+)
 from app.application.project_documents.ports import (
     IDocumentStorage,
+    IFilenameSanitizer,
     IProjectDocumentRepository,
     ITransactionalSession,
 )
+from app.application.project_documents.upload_project_document import MAX_SIZE_BYTES, validate_file_type
 from app.domain.project_document import ProjectDocument
 
 _log = logging.getLogger(__name__)
@@ -18,6 +25,12 @@ _log = logging.getLogger(__name__)
 
 class DocumentNotInStorageError(Exception):
     """Raised when confirm is called but the object is not found in S3."""
+
+    pass
+
+
+class StorageKeyMismatchError(Exception):
+    """Raised when the storage key is not the one presign issued for this doc_id and filename."""
 
     pass
 
@@ -35,10 +48,12 @@ class ConfirmProjectDocumentUploadUseCase:
         repo: IProjectDocumentRepository,
         storage: IDocumentStorage,
         db_session: ITransactionalSession,
+        filename_sanitizer: IFilenameSanitizer,
     ) -> None:
         self._repo = repo
         self._storage = storage
         self._db_session = db_session
+        self._sanitizer = filename_sanitizer
 
     def execute(
         self,
@@ -53,16 +68,36 @@ class ConfirmProjectDocumentUploadUseCase:
     ) -> ProjectDocument:
         """Confirm the upload and return the persisted document.
 
+        The presigned PUT binds neither the size nor the type, so the rules of the
+        multipart path are applied again here, to what actually landed in storage.
+
         Raises:
+            UnsupportedDocumentTypeError: Filename or MIME type not allowed.
+            StorageKeyMismatchError: storage_key is not the key presign issued
+                for this doc_id and filename.
             DocumentNotInStorageError: Object not found at storage_key.
+            EmptyFileError / DocumentFileTooLargeError: The stored object is
+                empty or over MAX_SIZE_BYTES (it is deleted).
         """
+        sanitized = self._sanitizer.sanitize(filename)
+        if not sanitized:
+            raise UnsupportedDocumentTypeError("Invalid filename after sanitation — no safe characters remain")
+        validate_file_type(sanitized, content_type)
+        if storage_key != f"project-documents/{project_id}/{doc_id}/{sanitized}":
+            raise StorageKeyMismatchError("storage_key does not match this document and filename")
+
         # --- Verify the object actually landed in S3 ---
         head = self._storage.head_object(storage_key)
         if head is None:
             raise DocumentNotInStorageError(f"Object not found at key '{storage_key}' — upload may have failed")
 
-        # Use actual size from S3 if available (more reliable than client-declared)
+        # The stored size is the real one; the declared size is only a fallback.
         actual_size = head.get("ContentLength", size_bytes)
+        if actual_size <= 0 or actual_size > MAX_SIZE_BYTES:
+            self._discard(storage_key)
+            if actual_size <= 0:
+                raise EmptyFileError("Uploaded file has no content (size <= 0 bytes)")
+            raise DocumentFileTooLargeError(f"File size {actual_size} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
 
         # --- Build entity with original filename preserved ---
         doc = ProjectDocument(
@@ -83,11 +118,12 @@ class ConfirmProjectDocumentUploadUseCase:
             return saved
         except Exception:
             # Orphan cleanup — same pattern as UploadProjectDocumentUseCase
-            try:
-                self._storage.delete(storage_key)
-            except Exception:
-                _log.warning(
-                    "Failed to clean up orphaned storage object %s after DB commit failure",
-                    storage_key,
-                )
+            self._discard(storage_key)
             raise
+
+    def _discard(self, storage_key: str) -> None:
+        """Delete an object that will never get a DB row; a failure is only logged."""
+        try:
+            self._storage.delete(storage_key)
+        except Exception:
+            _log.warning("Failed to clean up orphaned storage object %s", storage_key)

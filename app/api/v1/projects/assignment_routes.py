@@ -26,6 +26,7 @@ from app.application.projects.assignments import (
     AssignmentForbiddenError,
     AssignProjectMemberInput,
     ProjectCompanyUnresolvedError,
+    TargetInactiveError,
     TargetNotCompanyMemberError,
 )
 from app.domain.companies.exceptions import UserCompanyAccessNotFoundError
@@ -106,6 +107,9 @@ def assign_project_member(project_id: str, user_id: str):
     except TargetNotCompanyMemberError:
         db.session.rollback()
         return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
+    except TargetInactiveError:
+        db.session.rollback()
+        return _err("ValidationError", "This account is deactivated and cannot be assigned", 422)
     except UserCompanyAccessNotFoundError:
         # The access row was detached between the read and the promotion.
         db.session.rollback()

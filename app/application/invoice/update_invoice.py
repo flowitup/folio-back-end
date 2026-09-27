@@ -180,6 +180,13 @@ class UpdateInvoiceUseCase:
                 invoice_items.append(InvoiceItem(description=desc, quantity=qty, unit_price=price, vat_rate=vat))
             updates["items"] = invoice_items
 
+        # A return nets spend down, whether its lines or its type changed (checked only
+        # then, so an older positive return can still be renamed or re-dated).
+        if effective_type == InvoiceType.RETURN and (request.items is not None or invoice.type != InvoiceType.RETURN):
+            items = updates.get("items", invoice.items)
+            if sum((i.total for i in items), Decimal("0")) > 0:
+                raise InvalidInvoiceDataError("A return's total must be zero or negative")
+
         # Payment method: only process if the key was explicitly provided.
         if request.payment_method_id is not _UNSET:
             pm_id = request.payment_method_id  # None or UUID
@@ -295,6 +302,22 @@ class UpdateInvoiceUseCase:
                         raise RefundExceedsSourceError(
                             f"Refund exceeds source invoice amount. Remaining refundable: {remaining:.2f}"
                         )
+
+        # This invoice may itself be the source of linked supplier returns: it
+        # cannot leave materials_services, nor drop below what they already
+        # took back, or the returns would push project spend below zero.
+        if invoice.type == InvoiceType.MATERIALS_SERVICES and (
+            effective_type != InvoiceType.MATERIALS_SERVICES or "items" in updates
+        ):
+            linked_returns = self._repo.sum_refunds_for_source(invoice.id)
+            if linked_returns != 0:
+                if effective_type != InvoiceType.MATERIALS_SERVICES:
+                    raise InvalidInvoiceDataError("Unlink this invoice's returns before changing its type")
+                new_total = sum((item.total for item in updates["items"]), Decimal("0"))
+                if new_total + linked_returns < 0:
+                    raise RefundExceedsSourceError(
+                        f"Invoice total cannot drop below its linked returns: {-linked_returns:.2f}"
+                    )
 
         # settled_via sentinel: absent = keep existing, None = clear, str = set+validate.
         if request.settled_via is not _UNSET:

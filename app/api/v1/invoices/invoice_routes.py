@@ -543,7 +543,7 @@ def get_labor_payments_summary(project_id: str):
 def create_invoice(project_id: str):
     """Create a new invoice for a project."""
     try:
-        data = CreateInvoiceSchema(**request.get_json())
+        data = CreateInvoiceSchema.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -673,7 +673,7 @@ def get_invoice(project_id: str, invoice_id: str):
 def update_invoice(project_id: str, invoice_id: str):
     """Partially update an invoice."""
     try:
-        data = UpdateInvoiceSchema(**request.get_json())
+        data = UpdateInvoiceSchema.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 

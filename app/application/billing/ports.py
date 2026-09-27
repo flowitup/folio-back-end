@@ -72,6 +72,7 @@ class BillingDocumentRepositoryPort(Protocol):
         company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
+        search: Optional[str] = None,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents visible to a caller, with total count.
 
@@ -81,7 +82,8 @@ class BillingDocumentRepositoryPort(Protocol):
         administers (``company_id IN company_ids``).
 
         ``company_id`` is an additional exact filter (e.g. the UI scoping to one
-        company). ``status``/``project_id``/``kind`` filter as usual.
+        company). ``status``/``project_id``/``kind`` filter as usual. ``search``
+        keeps documents whose number or recipient contains it (case-insensitive).
         """
         ...
 
@@ -227,10 +229,13 @@ def assert_project_read_access(
     project_repo: Optional[ProjectReadPort],
     project_id: Optional[UUID],
     user_id: UUID,
+    access_repo: Optional["UserCompanyAccessRepositoryPort"] = None,
 ) -> None:
     """Verify the user has project:read access on *project_id*.
 
-    A user has project:read if they are the project owner or a project member.
+    A user has project:read if they are the project owner, a project member, or an admin of
+    the company the project belongs to (company admins hold project:read on every project of
+    their company, see app.domain.authz.matrix). The admin rule needs *access_repo*.
     Raises ForbiddenProjectAccessError if access is denied.
     Raises ValueError if the project does not exist.
     No-op when project_id is None or project_repo is None (test / no-project context).
@@ -246,6 +251,11 @@ def assert_project_read_access(
         return
     if user_id in (project.user_ids or []):
         return
+    company_id = getattr(project, "company_id", None)
+    if access_repo is not None and company_id is not None:
+        access = access_repo.find(user_id, company_id)
+        if access is not None and access.role == CompanyRole.ADMIN.value:
+            return
     raise ForbiddenProjectAccessError(project_id)
 
 
@@ -408,3 +418,20 @@ class FundsReleasePort(Protocol):
     ) -> None: ...
 
     def delete_funds_release(self, source_doc_id: UUID) -> None: ...
+
+    def sync_funds_release(
+        self,
+        project_id: Optional[UUID],
+        source_doc_id: UUID,
+        amount_items: list,
+        recipient_name: str,
+        issue_date: date,
+        created_by: UUID,
+    ) -> None:
+        """Make the facture's release match its current lines, recipient, date and project.
+
+        Updates the release in place when the project is unchanged (keeping its
+        FR number and payment method); moves it when the project changed; removes
+        it when the facture was unlinked from its project.
+        """
+        ...

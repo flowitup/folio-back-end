@@ -8,7 +8,7 @@ import pytest
 
 from app.application.billing.update_billing_document_usecase import UpdateBillingDocumentUseCase
 from app.application.billing.dtos import ItemInput, UpdateBillingDocumentInput
-from app.domain.billing.enums import BillingDocumentKind
+from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, ForbiddenBillingDocumentError
 from tests.unit.application.billing.conftest import make_doc
 
@@ -217,3 +217,65 @@ class TestUpdateBillingDocumentErrors:
         inp = UpdateBillingDocumentInput(id=saved_doc.id, user_id=user_id, items=[])
         with pytest.raises(ValueError, match="At least one"):
             usecase.execute(inp, fake_session)
+
+
+class _RecordingFundsRelease:
+    def __init__(self):
+        self.synced: list[dict] = []
+
+    def sync_funds_release(self, **kwargs):
+        self.synced.append(kwargs)
+
+
+class TestPaidFactureFundsReleaseSync:
+    def _paid_facture(self, doc_repo, user_id, status=None):
+        doc = make_doc(
+            user_id=user_id,
+            kind=BillingDocumentKind.FACTURE,
+            status=status or BillingDocumentStatus.PAID,
+            doc_number="FAC-2026-008",
+            project_id=uuid4(),
+        )
+        doc_repo.save(doc)
+        return doc
+
+    def test_editing_paid_facture_lines_resyncs_its_release(self, doc_repo, fake_session, user_id):
+        funds = _RecordingFundsRelease()
+        doc = self._paid_facture(doc_repo, user_id)
+        inp = UpdateBillingDocumentInput(
+            id=doc.id,
+            user_id=user_id,
+            recipient_name="changed after paid",
+            items=[
+                ItemInput(description="x", quantity=Decimal("10"), unit_price=Decimal("100"), vat_rate=Decimal("20"))
+            ],
+        )
+
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds).execute(inp, fake_session)
+
+        assert len(funds.synced) == 1
+        call = funds.synced[0]
+        assert call["source_doc_id"] == doc.id
+        assert call["project_id"] == doc.project_id
+        assert call["recipient_name"] == "changed after paid"
+        assert call["amount_items"] == [{"description": "x", "quantity": "10", "unit_price": "100", "vat_rate": "20"}]
+
+    def test_notes_only_edit_does_not_touch_release(self, doc_repo, fake_session, user_id):
+        funds = _RecordingFundsRelease()
+        doc = self._paid_facture(doc_repo, user_id)
+
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds).execute(
+            UpdateBillingDocumentInput(id=doc.id, user_id=user_id, notes="n"), fake_session
+        )
+
+        assert funds.synced == []
+
+    def test_unpaid_facture_has_no_release_to_sync(self, doc_repo, fake_session, user_id):
+        funds = _RecordingFundsRelease()
+        doc = self._paid_facture(doc_repo, user_id, status=BillingDocumentStatus.SENT)
+
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds).execute(
+            UpdateBillingDocumentInput(id=doc.id, user_id=user_id, recipient_name="R"), fake_session
+        )
+
+        assert funds.synced == []

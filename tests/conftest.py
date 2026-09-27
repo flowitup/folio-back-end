@@ -129,6 +129,7 @@ def invitation_app():
         project_repo = SQLAlchemyProjectRepository(db.session)
         inv_repo = SqlAlchemyInvitationRepository(db.session)
         membership_repo = SqlAlchemyProjectMembershipRepository(db.session)
+        from app.infrastructure.adapters.sqlalchemy_task import SQLAlchemyTaskRepository
 
         configure_container(
             user_repository=user_repo,
@@ -137,6 +138,7 @@ def invitation_app():
             session_manager=FlaskSessionManager(),
             invitation_repo=inv_repo,
             project_membership_repo=membership_repo,
+            task_repository=SQLAlchemyTaskRepository(db.session),
         )
 
         # Seed users
@@ -551,7 +553,14 @@ def invitation_app():
         )
 
         _c.person_repo = _PersonRepo(db.session)
+        if _c.update_worker_usecase is not None:
+            _c.update_worker_usecase.set_person_repo(_c.person_repo)
         _c.company_person_repo = _CompanyPersonRepo(db.session)
+        # Mirrors app/__init__.py: directly adding an existing user attaches
+        # them to the project's company and lists them in its directory.
+        if _c.create_invitation_usecase is not None:
+            _c.create_invitation_usecase.set_access_repo(_access_repo)
+            _c.create_invitation_usecase.set_directory_repos(_c.person_repo, _c.company_person_repo)
 
         # Re-wire AcceptInvitationUseCase exactly like app/__init__.py: accepting
         # an invitation attaches the acceptor to the project's company AND lists
@@ -680,6 +689,8 @@ def invitation_app():
         )
         _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
             doc_repo=_billing_doc_repo,
+            project_repo=project_repo,  # project:read authorization, as in production
+            access_repo=_access_repo,
         )
         _c.get_billing_document_usecase = GetBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
@@ -700,15 +711,18 @@ def invitation_app():
         )
         _c.update_billing_template_usecase = UpdateTemplateUseCase(
             template_repo=_billing_tpl_repo,
+            access_repo=_access_repo,
         )
         _c.list_billing_templates_usecase = ListTemplatesUseCase(
             template_repo=_billing_tpl_repo,
         )
         _c.get_billing_template_usecase = GetTemplateUseCase(
             template_repo=_billing_tpl_repo,
+            access_repo=_access_repo,
         )
         _c.delete_billing_template_usecase = DeleteTemplateUseCase(
             template_repo=_billing_tpl_repo,
+            access_repo=_access_repo,
         )
         _c.apply_template_usecase = ApplyTemplateToCreateDocumentUseCase(
             doc_repo=_billing_doc_repo,
@@ -734,6 +748,7 @@ def invitation_app():
         _c.list_project_billing_documents_usecase = ListProjectBillingDocumentsUseCase(
             doc_repo=_billing_doc_repo,
             project_repo=project_repo,  # project:read authorization
+            access_repo=_access_repo,  # company admins read every company project
         )
 
         # Wire materials-expenses use-cases (company-scoped refund tracking)
@@ -883,6 +898,9 @@ def invitation_app():
         _c.update_labor_role_usecase = _UpdateLRUseCase(repo=_labor_role_repo, db_session=db.session)
         _c.delete_labor_role_usecase = _DeleteLRUseCase(repo=_labor_role_repo, db_session=db.session)
         _c.list_labor_roles_usecase = _ListLRUseCase(repo=_labor_role_repo)
+        for _worker_usecase in (_c.create_worker_usecase, _c.update_worker_usecase):
+            if _worker_usecase is not None and hasattr(_worker_usecase, "set_role_scope"):
+                _worker_usecase.set_role_scope(_labor_role_repo, _c.authz_reader)
 
         # ------------------------------------------------------------------
         # Wire project documents use-cases (phase 03)
@@ -1374,6 +1392,11 @@ def invitation_app():
 
         _c.request_signup_otp_usecase = _RequestSignupUC(user_repo, _otp_repo, _sms)
         _c.verify_signup_otp_usecase = _VerifySignupUC(user_repo, _otp_repo, _c.authorization_service, token_issuer)
+        from app.application.usecases.change_phone import ConfirmPhoneChangeUseCase as _ConfirmPhoneChangeUC
+        from app.application.usecases.change_phone import RequestPhoneChangeCodeUseCase as _RequestPhoneChangeUC
+
+        _c.request_phone_change_code_usecase = _RequestPhoneChangeUC(user_repo, _otp_repo, _sms)
+        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(user_repo, _otp_repo)
 
         # Invitation acceptance proves a phone by the same sign-up code flow (phase 02) —
         # mirrors app/__init__.py's wiring, which this fixture had drifted from (the

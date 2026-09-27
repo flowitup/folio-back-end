@@ -7,6 +7,8 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from pydantic import ValidationError
 
+from app.api._helpers.validation_error import safe_validation_fields
+
 from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
@@ -129,9 +131,11 @@ def list_projects():
     if project_ids and container.project_spent_reader is not None:
         spent_map = container.project_spent_reader.sum_spent_by_projects(project_ids)
 
-    # Fetch budget + company_id fields from the DB models (not exposed via ProjectSummary DTO).
+    # Fetch budget, company_id and invoice_prefix from the DB models (not exposed via ProjectSummary DTO).
     budget_map: dict = {}
     company_id_map: dict = {}
+    prefix_map: dict = {}
+    created_map: dict = {}
     if project_ids:
         rows = (
             db.session.query(
@@ -139,6 +143,8 @@ def list_projects():
                 ProjectModel.budget,
                 ProjectModel.budget_source,
                 ProjectModel.company_id,
+                ProjectModel.invoice_prefix,
+                ProjectModel.created_at,
             )
             .filter(ProjectModel.id.in_(project_ids))
             .all()
@@ -146,6 +152,8 @@ def list_projects():
         for row in rows:
             budget_map[row.id] = (row.budget, row.budget_source)
             company_id_map[row.id] = str(row.company_id) if row.company_id else None
+            prefix_map[row.id] = row.invoice_prefix
+            created_map[row.id] = row.created_at.isoformat() if row.created_at else ""
 
     user_uuid = UUID(user_id)
     items = []
@@ -168,8 +176,11 @@ def list_projects():
                 address=p.address,
                 owner_id=p.owner_id,
                 user_count=p.user_count,
-                created_at="",
+                created_at=created_map.get(pid, ""),
                 company_id=company_id_map.get(pid),
+                # Same value the detail endpoint returns, so a client seeding its
+                # settings form from the list shows the saved prefix.
+                invoice_prefix=prefix_map.get(pid),
                 my_permissions=perms,
                 budget=(
                     float(budget_map[pid][0])
@@ -208,9 +219,9 @@ def create_project():
     `GET /projects`.
     """
     try:
-        data = CreateProjectRequest(**request.get_json())
+        data = CreateProjectRequest.model_validate(request.get_json())
     except ValidationError as e:
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
+        error_fields = safe_validation_fields(e)
         return (
             jsonify(
                 ErrorResponse(
@@ -320,6 +331,7 @@ def create_project():
 
         _db.session.commit()
 
+    new_perms = sorted(_effective_perms_for(UUID(result.id), user_id))
     return (
         jsonify(
             ProjectResponse(
@@ -331,6 +343,7 @@ def create_project():
                 created_at=result.created_at,
                 company_id=result.company_id,
                 invoice_prefix=result.invoice_prefix,
+                my_permissions=new_perms,
                 budget=float(result.budget) if result.budget is not None else None,
                 budget_source=result.budget_source,
                 spent=0,
@@ -338,6 +351,15 @@ def create_project():
         ),
         201,
     )
+
+
+def _company_id_of(project_id: UUID) -> "str | None":
+    """company_id from the DB model (not exposed on the domain entity)."""
+    from app import db
+    from app.infrastructure.database.models.project import ProjectModel
+
+    db_row = db.session.get(ProjectModel, project_id)
+    return str(db_row.company_id) if db_row and db_row.company_id else None
 
 
 @projects_bp.route("/<project_id>", methods=["GET"])
@@ -362,12 +384,7 @@ def get_project(project_id: str):
     if not can_read_project(project, user_id):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
-    # Resolve company_id from the DB model (not exposed on the domain entity).
-    from app import db
-    from app.infrastructure.database.models.project import ProjectModel
-
-    db_row = db.session.get(ProjectModel, project.id)
-    company_id_str = str(db_row.company_id) if db_row and db_row.company_id else None
+    company_id_str = _company_id_of(project.id)
 
     # Compute spent for this single project.
     container = get_container()
@@ -410,9 +427,9 @@ def get_project(project_id: str):
 def update_project(project_id: str):
     """Update an existing project."""
     try:
-        data = UpdateProjectRequest(**request.get_json())
+        data = UpdateProjectRequest.model_validate(request.get_json())
     except ValidationError as e:
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
+        error_fields = safe_validation_fields(e)
         return (
             jsonify(
                 ErrorResponse(
@@ -485,7 +502,9 @@ def update_project(project_id: str):
             owner_id=str(result.owner_id),
             user_count=len(result.user_ids),
             created_at=result.created_at.isoformat(),
+            company_id=_company_id_of(result.id),
             invoice_prefix=result.invoice_prefix,
+            my_permissions=perms,
             budget=float(result.budget) if budget_visible and result.budget is not None else None,
             budget_source=result.budget_source if budget_visible else None,
             **_spend_fields(spent_rollup if spend_visible else _NO_SPEND),
@@ -589,7 +608,9 @@ def get_project_members(project_id: UUID):
     `member`) — an assignment itself carries no role. It is null when the
     project has no company or the person is no longer attached to it.
     """
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
+
+    from app.infrastructure.database.models.project import ProjectModel
 
     container = get_container()
     user_id = UUID(get_jwt_identity())
@@ -616,7 +637,7 @@ def get_project_members(project_id: UUID):
     rows = db.session.execute(
         text(
             """
-            SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at
+            SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at, u.phone
             FROM user_projects up
             JOIN users u ON u.id = up.user_id
             LEFT JOIN user_company_access uca
@@ -624,8 +645,12 @@ def get_project_members(project_id: UUID):
             WHERE up.project_id = :pid
             ORDER BY up.assigned_at
             """
+        ).bindparams(
+            # Typed binds, so the ids match however the dialect stores a UUID.
+            bindparam("pid", type_=ProjectModel.id.type),
+            bindparam("cid", type_=ProjectModel.company_id.type),
         ),
-        {"pid": str(project_id), "cid": str(company_id) if company_id else None},
+        {"pid": project_id, "cid": company_id},
     ).fetchall()
 
     members = [
@@ -634,7 +659,11 @@ def get_project_members(project_id: UUID):
             "email": row[1],
             "display_name": row[2],
             "role_name": row[3],
-            "joined_at": row[4].isoformat() if row[4] else None,
+            # A raw text() read hands back a string on SQLite and a datetime on Postgres.
+            "joined_at": (row[4].isoformat() if hasattr(row[4], "isoformat") else row[4]) if row[4] else None,
+            # Phone-only accounts carry a placeholder email; the phone is what
+            # identifies them, so clients can show it instead.
+            "phone": row[5],
         }
         for row in rows
     ]

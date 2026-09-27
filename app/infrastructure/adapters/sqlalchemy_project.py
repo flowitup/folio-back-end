@@ -129,4 +129,5 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             user_ids=[u.id for u in model.users] if model.users else [],
             budget=Decimal(str(model.budget)) if model.budget is not None else None,
             budget_source=model.budget_source,
+            company_id=model.company_id,
         )

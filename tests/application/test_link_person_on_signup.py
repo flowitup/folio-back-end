@@ -336,3 +336,35 @@ class TestLinkPersonOnSignupMultiCompanyMerge:
         saved_profile = company_person_repo.save.call_args.args[0]
         assert saved_profile.person_id == existing_person_id
         person_repo.delete.assert_called_once_with(pending_person_id)
+
+
+class TestPendingCompanyRole:
+    """The role chosen when adding someone by phone survives until they sign up."""
+
+    def _link(self, pending_role):
+        import dataclasses
+
+        user_id, person_id, company_id = uuid4(), uuid4(), uuid4()
+        person_repo = MagicMock()
+        person_repo.find_by_id.return_value = _person(person_id)
+        person_repo.find_by_user_id.return_value = None
+        company_person_repo = MagicMock()
+        pending = dataclasses.replace(_company_person(company_id, person_id), pending_company_role=pending_role)
+        company_person_repo.list_pending_by_phone.return_value = [pending]
+
+        usecase = _usecase(person_repo=person_repo, company_person_repo=company_person_repo)
+        usecase.execute(user_id, "+33612345678")
+        return usecase._access.save.call_args.args[0], company_person_repo.save.call_args.args[0]
+
+    def test_pending_manager_joins_as_manager_and_the_role_is_cleared(self):
+        access, profile = self._link("manager")
+        assert access.role == "manager"
+        assert profile.pending_company_role is None
+
+    def test_no_pending_role_joins_as_member(self):
+        access, _ = self._link(None)
+        assert access.role == "member"
+
+    def test_admin_is_never_granted_from_a_pending_row(self):
+        access, _ = self._link("admin")
+        assert access.role == "member"

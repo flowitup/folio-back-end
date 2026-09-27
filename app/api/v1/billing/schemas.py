@@ -48,7 +48,7 @@ class CreateBillingDocumentRequest(_StrictBase):
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
-    recipient_siret: Optional[str] = None
+    recipient_siret: Optional[str] = Field(None, max_length=32)
     notes: Optional[str] = Field(None, max_length=2000)
     terms: Optional[str] = Field(None, max_length=2000)
     signature_block_text: Optional[str] = Field(None, max_length=500)
@@ -71,7 +71,7 @@ class UpdateBillingDocumentRequest(_StrictBase):
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
-    recipient_siret: Optional[str] = None
+    recipient_siret: Optional[str] = Field(None, max_length=32)
     notes: Optional[str] = Field(None, max_length=2000)
     terms: Optional[str] = Field(None, max_length=2000)
     signature_block_text: Optional[str] = Field(None, max_length=500)
@@ -112,7 +112,7 @@ class ApplyTemplateRequest(_StrictBase):
     company_id: Optional[UUID] = None  # None → resolved to caller's primary company
     recipient_address: Optional[str] = None
     recipient_email: Optional[EmailStr] = None
-    recipient_siret: Optional[str] = None
+    recipient_siret: Optional[str] = Field(None, max_length=32)
     project_id: Optional[UUID] = None
     issue_date: Optional[date] = None
 
@@ -133,7 +133,7 @@ class ImportBillingDocumentRequest(_StrictBase):
     project_id: Optional[UUID] = None
     recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
-    recipient_siret: Optional[str] = None
+    recipient_siret: Optional[str] = Field(None, max_length=32)
     notes: Optional[str] = Field(None, max_length=2000)
     terms: Optional[str] = Field(None, max_length=2000)
     signature_block_text: Optional[str] = Field(None, max_length=500)

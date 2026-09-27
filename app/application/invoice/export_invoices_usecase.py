@@ -21,7 +21,13 @@ from app.domain.invoice.export.models import (
     TypeSubtotal,
 )
 
-_TYPE_ORDER = (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.MATERIALS_SERVICES, InvoiceType.OTHERS)
+_TYPE_ORDER = (
+    InvoiceType.RELEASED_FUNDS,
+    InvoiceType.LABOR,
+    InvoiceType.MATERIALS_SERVICES,
+    InvoiceType.OTHERS,
+    InvoiceType.RETURN,
+)
 
 
 @dataclass
@@ -38,6 +44,8 @@ class ExportInvoicesRequest:
     # without `project:view_budget`). Applied after the range query, so the
     # subtotals and grand total below are computed on what the caller can see.
     exclude_types: frozenset = field(default_factory=frozenset)
+    # Label language of the file: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass
@@ -52,6 +60,13 @@ class ExportInvoicesResult:
 def _parse_yyyy_mm(s: str) -> date:
     """Parse 'YYYY-MM' string to date with day=1."""
     return date(int(s[:4]), int(s[5:7]), 1)
+
+
+def _effective_month(inv: Invoice) -> date:
+    """The month an expense is filed under: a labor payment's payment month, else its issue month."""
+    if inv.type == InvoiceType.LABOR and inv.service_month is not None:
+        return inv.service_month.replace(day=1)
+    return inv.issue_date.replace(day=1)
 
 
 def _last_of_month(d: date) -> date:
@@ -104,6 +119,8 @@ class ExportInvoicesUseCase:
             date_from=from_d,
             date_to=to_d,
             type_filter=None,
+            # Same month as the expense list: labor by its payment month.
+            by_payment_month=True,
         )
         if req.type_filter is not None:
             invoices = [i for i in invoices if i.ledger_type == req.type_filter]
@@ -112,10 +129,12 @@ class ExportInvoicesUseCase:
         if req.exclude_types:
             invoices = [i for i in invoices if i.type not in req.exclude_types]
 
-        # 4. Sort deterministically: (issue_date, ledger type, invoice_number)
-        invoices.sort(key=lambda inv: (inv.issue_date, inv.ledger_type.value, inv.invoice_number))
+        # 4. Sort deterministically: (effective month, issue_date, ledger type, invoice_number)
+        invoices.sort(
+            key=lambda inv: (_effective_month(inv), inv.issue_date, inv.ledger_type.value, inv.invoice_number)
+        )
 
-        # 5. Aggregate per-type subtotals + grand total (Decimal-safe)
+        # 5. Aggregate per-type subtotals + totals (Decimal-safe)
         subtotals: list[TypeSubtotal] = []
         for t in _TYPE_ORDER:
             scoped = [i for i in invoices if i.ledger_type == t]
@@ -128,7 +147,18 @@ class ExportInvoicesUseCase:
                     total_amount=sum((i.total_amount for i in scoped), Decimal("0")),
                 )
             )
-        grand_total = sum((s.total_amount for s in subtotals), Decimal("0"))
+        # Money in and money out are never added together. The total is what the
+        # project spent: every row but the funds released to it, with returns
+        # (negative) netted in. A cash advance is stored as a release and, as in
+        # the app, counts in neither total.
+        grand_total = sum(
+            (i.total_amount for i in invoices if i.type != InvoiceType.RELEASED_FUNDS),
+            Decimal("0"),
+        )
+        released_total = sum(
+            (i.total_amount for i in invoices if i.type == InvoiceType.RELEASED_FUNDS and not i.is_cash_advance),
+            Decimal("0"),
+        )
 
         # 6. Build bundle + context
         bundle = InvoiceBundle(
@@ -136,6 +166,7 @@ class ExportInvoicesUseCase:
             subtotals_by_type=subtotals,
             grand_total=grand_total,
             invoice_count=len(invoices),
+            released_total=released_total,
         )
         context = InvoiceExportContext(
             project_name=project.name,
@@ -147,6 +178,7 @@ class ExportInvoicesUseCase:
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
             type_filter=req.type_filter,
+            locale=req.locale,
         )
 
         # 7. Dispatch to builder

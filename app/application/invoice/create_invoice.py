@@ -103,6 +103,9 @@ class CreateInvoiceUseCase:
                     f"Item unit_price cannot be negative for invoice type '{request.type.value}'"
                 )
             invoice_items.append(InvoiceItem(description=desc, quantity=qty, unit_price=price, vat_rate=vat))
+        # A return nets spend down: its lines may mix signs, but never add up to more than zero.
+        if request.type == InvoiceType.RETURN and sum((i.total for i in invoice_items), Decimal("0")) > 0:
+            raise InvalidInvoiceDataError("A return's total must be zero or negative")
 
         # Resolve payment method if provided
         payment_method_id: Optional[UUID] = None

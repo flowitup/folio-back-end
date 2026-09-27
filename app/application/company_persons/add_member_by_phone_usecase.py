@@ -54,7 +54,7 @@ from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.company_person import CompanyPerson
 from app.domain.entities.person import Person
-from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_french_phone, normalize_phone
 
 _PENDING_WINDOW_DAYS = 30
 _ASSIGNABLE_ROLES = (CompanyRole.MEMBER.value, CompanyRole.MANAGER.value)
@@ -77,6 +77,11 @@ def _display_name_for(explicit_name, user, phone: str) -> str:
     if local and not local.startswith("phone-"):
         return local
     return phone
+
+
+def _echoed_name(explicit_name, phone: str) -> str:
+    """The name returned to the caller: theirs, or the phone they typed."""
+    return (explicit_name or phone).strip()
 
 
 class AddMemberByPhoneUseCase:
@@ -112,6 +117,10 @@ class AddMemberByPhoneUseCase:
 
         try:
             phone = normalize_phone(inp.phone, default_region=company.default_phone_region)
+            # Members sign in with a French number only (sign-up and sign-in take no other), so a
+            # foreign one is refused whatever it matches — an existing account with a foreign
+            # number included, which must not be attached through the back door.
+            normalize_french_phone(phone)
         except InvalidPhoneNumberError as exc:
             raise ValueError(str(exc)) from exc
 
@@ -123,7 +132,7 @@ class AddMemberByPhoneUseCase:
         user = self._users.find_by_phone(phone)
         if user is not None:
             if self._access.find(user.id, inp.company_id) is not None:
-                raise MemberAlreadyAttachedError(f"user {user.id} is already attached to company {inp.company_id}")
+                raise MemberAlreadyAttachedError("This person is already a member of the company")
 
             person = self._persons.find_by_user_id(user.id)
             if person is None:
@@ -153,7 +162,12 @@ class AddMemberByPhoneUseCase:
                 )
             )
             db_session.commit()
-            return AddMemberByPhoneResult(person_id=person.id, name=person.name, phone=phone, pending=False)
+            # Echo what the admin typed (or the phone), exactly like branch (d):
+            # the answer must not reveal that the number has an account, nor
+            # the name its owner chose.
+            return AddMemberByPhoneResult(
+                person_id=person.id, name=_echoed_name(inp.name, phone), phone=phone, pending=False
+            )
 
         # ------------------------------------------------------------------
         # (b)/(c) un-linked Person profiled in a company the caller admins —
@@ -212,7 +226,9 @@ class AddMemberByPhoneUseCase:
     # ----------------------------------------------------------------------
 
     def _create_pending(self, inp, person: Person, phone: str, now: datetime, db_session) -> AddMemberByPhoneResult:
-        self._upsert_company_person(inp.company_id, person.id, inp.caller_id, phone, now, pending=True)
+        self._upsert_company_person(
+            inp.company_id, person.id, inp.caller_id, phone, now, pending=True, pending_role=inp.role
+        )
         db_session.commit()
         return AddMemberByPhoneResult(person_id=person.id, name=person.name, phone=phone, pending=True)
 
@@ -225,17 +241,25 @@ class AddMemberByPhoneUseCase:
         now: datetime,
         *,
         pending: bool,
+        pending_role: Optional[str] = None,
     ) -> CompanyPerson:
+        # The role chosen for someone without an account is kept on the profile
+        # and applied when they sign up; "member" is the default, stored as None.
+        role_to_keep = pending_role if pending and pending_role != CompanyRole.MEMBER.value else None
         existing = self._company_persons.find(company_id, person_id)
         if existing is not None:
             # M1: re-adding a previously-booted member — reactivate rather
             # than silently no-op on a deactivated row. An already-active row
-            # (whether pending or not) is untouched — this is a plain
-            # idempotent resend, not a boot recovery.
+            # (whether pending or not) keeps its state — a plain idempotent
+            # resend — except that a still-pending row takes the role chosen now.
             if not existing.is_active:
                 return self._company_persons.save(
-                    dataclasses.replace(existing, is_active=True, pending_expires_at=None)
+                    dataclasses.replace(
+                        existing, is_active=True, pending_expires_at=None, pending_company_role=role_to_keep
+                    )
                 )
+            if pending and existing.pending_expires_at is not None and existing.pending_company_role != role_to_keep:
+                return self._company_persons.save(dataclasses.replace(existing, pending_company_role=role_to_keep))
             return existing
 
         # H2: at most one ACTIVE company_persons row per (company_id,
@@ -258,5 +282,6 @@ class AddMemberByPhoneUseCase:
                 phone_normalized=phone,
                 pending_expires_at=(now + timedelta(days=_PENDING_WINDOW_DAYS)) if pending else None,
                 created_by_user_id=created_by_user_id,
+                pending_company_role=role_to_keep,
             )
         )

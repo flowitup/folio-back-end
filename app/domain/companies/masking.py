@@ -32,6 +32,15 @@ def _mask(value: str | None) -> str | None:
     return _BULLET + value[-4:]
 
 
+def is_masked(value: str | None) -> bool:
+    """True when ``value`` is (or contains) the mask a read handed out, not a real value.
+
+    Edit forms are seeded from the masked read, so a save can send the mask straight back;
+    no real SIRET, TVA number, IBAN or BIC contains the bullet character.
+    """
+    return value is not None and _BULLET[0] in value
+
+
 def mask_company(company: Company, *, full: bool) -> Company:
     """Return a Company safe to expose to the caller.
 

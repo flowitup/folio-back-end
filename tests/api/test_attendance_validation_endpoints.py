@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -298,6 +298,13 @@ class TestValidateReject:
         assert client.post(f"{base}/{uuid4()}/reject", headers=owner_h).status_code == 404
         assert client.post(f"{base}/{uuid4()}/validate", headers=owner_h).status_code == 404
 
+    def test_malformed_entry_id_is_a_json_400(self, client, owner_h, ids):
+        base = f"/api/v1/projects/{ids['project']}/labor-entries/not-a-uuid"
+        for action in ("reject", "validate"):
+            resp = client.post(f"{base}/{action}", headers=owner_h)
+            assert resp.status_code == 400, action
+            assert resp.is_json
+
     def test_entry_from_other_project_is_404(self, client, linked_h, owner_h, ids):
         entry_id = self._pending_id(client, linked_h, ids)
         other = f"/api/v1/projects/{ids['other_project']}/labor-entries/{entry_id}"
@@ -413,6 +420,43 @@ class TestWorkerUserLink:
         assert "existing user" in r.get_json()["message"]
         r = client.post(base, json={"name": "Ghost", "daily_rate": 50, "user_id": str(uuid4())}, headers=owner_h)
         assert r.status_code == 400
+
+    def test_account_outside_the_company_or_deactivated_cannot_be_linked(self, client, owner_h, ids, monkeypatch):
+        from app import db
+        from app.api.v1.authz_context import get_reader_cache
+        from app.infrastructure.database.models import UserModel
+        from app.infrastructure.database.repositories.sqlalchemy_authz_reader import SqlAlchemyAuthzReader
+        from app.infrastructure.database.repositories.sqlalchemy_user_company_access_repository import (
+            SqlAlchemyUserCompanyAccessRepository,
+        )
+        from wiring import get_container
+
+        # Wired as in production (this fixture's container leaves them out).
+        container = get_container()
+        monkeypatch.setattr(
+            container, "authz_reader", SqlAlchemyAuthzReader(db.session, cache_provider=get_reader_cache)
+        )
+        monkeypatch.setattr(container, "user_company_access_repo", SqlAlchemyUserCompanyAccessRepository(db.session))
+
+        # The fixture keeps one app context (and session) open for every request.
+        outsider = UserModel(email="outsider@av-test.com", is_active=True)
+        db.session.add(outsider)
+        unlinked = db.session.get(UserModel, UUID(ids["unlinked"]))
+        unlinked.is_active = False
+        db.session.commit()
+        outsider_id = str(outsider.id)
+        try:
+            base = f"/api/v1/projects/{ids['project']}/workers"
+            r = client.put(f"{base}/{ids['free_worker']}", json={"user_id": outsider_id}, headers=owner_h)
+            assert r.status_code == 400
+            assert "company" in r.get_json()["message"]
+            r = client.post(base, json={"name": "Out", "daily_rate": 50, "user_id": outsider_id}, headers=owner_h)
+            assert r.status_code == 400
+            r = client.put(f"{base}/{ids['free_worker']}", json={"user_id": ids["unlinked"]}, headers=owner_h)
+            assert r.status_code == 400
+        finally:
+            unlinked.is_active = True
+            db.session.commit()
 
     def test_duplicate_link_on_create_is_400_and_soft_delete_frees_the_slot(self, client, owner_h, ids):
         base = f"/api/v1/projects/{ids['project']}/workers"

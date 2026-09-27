@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from app.api.v1.numeric_bounds import MAX_LIBRARY_AMOUNT
 from app.domain.value_objects.library_category import is_valid_category_slug
 
 
@@ -18,15 +19,15 @@ class ImportRecordSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     supplier_reference: str = Field(min_length=1, max_length=200)
-    product_name: str = Field(min_length=1, max_length=1000)
-    quantity: Decimal = Field(gt=0)
-    unit_price: Decimal = Field(ge=0)
+    product_name: str = Field(min_length=1, max_length=500)
+    quantity: Decimal = Field(gt=0, le=MAX_LIBRARY_AMOUNT)
+    unit_price: Decimal = Field(ge=0, le=MAX_LIBRARY_AMOUNT)
     purchased_at: datetime
     source_document_ref: str = Field(min_length=1, max_length=255)
     source_document_type: Literal["ticket", "commande"]
     line_index: int = Field(ge=0)
-    # Optional enrichment
-    size: Optional[str] = Field(default=None, max_length=200)
+    # Optional enrichment (lengths match the product columns)
+    size: Optional[str] = Field(default=None, max_length=100)
     category: Optional[str] = Field(default=None, max_length=200)
     product_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None, max_length=1000)

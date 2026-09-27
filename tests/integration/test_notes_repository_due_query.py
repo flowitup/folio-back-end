@@ -83,35 +83,78 @@ def pg_session(pg_app):
         connection.close()
 
 
-def _insert_user_and_project(session):
-    """Seed one user + project + membership, return (user_id, project_id)."""
+def _insert_user(session):
+    """Insert one active user; return its UUID."""
     from sqlalchemy import text
 
     user_id = uuid4()
-    project_id = uuid4()
     now = datetime.now(UTC)
-
     session.execute(
         text(
             "INSERT INTO users (id, email, is_active, created_at, updated_at) " "VALUES (:id, :email, true, :now, :now)"
         ),
         {"id": str(user_id), "email": f"{user_id}@test.local", "now": now},
     )
+    return user_id
+
+
+def _insert_company_and_project(session, owner_id):
+    """Insert a company and one of its projects; return (company_id, project_id)."""
+    from sqlalchemy import text
+
+    company_id = uuid4()
+    project_id = uuid4()
+    now = datetime.now(UTC)
     session.execute(
         text(
-            "INSERT INTO projects (id, name, owner_id, created_at, updated_at) "
-            "VALUES (:id, :name, :owner, :now, :now)"
+            "INSERT INTO companies (id, legal_name, address, default_phone_region, created_by, "
+            " created_at, updated_at) "
+            "VALUES (:id, 'Test company', '1 rue Test', 'FR', :owner, :now, :now)"
         ),
-        {"id": str(project_id), "name": "Test project", "owner": str(user_id), "now": now},
+        {"id": str(company_id), "owner": str(owner_id), "now": now},
     )
-    # Assign the user to the project (an assignment carries no role)
+    session.execute(
+        text(
+            "INSERT INTO projects (id, name, owner_id, company_id, created_at, updated_at) "
+            "VALUES (:id, :name, :owner, :cid, :now, :now)"
+        ),
+        {"id": str(project_id), "name": "Test project", "owner": str(owner_id), "cid": str(company_id), "now": now},
+    )
+    return company_id, project_id
+
+
+def _attach(session, user_id, company_id, role):
+    """Give `user_id` a company role."""
+    from sqlalchemy import text
+
+    session.execute(
+        text(
+            "INSERT INTO user_company_access (user_id, company_id, is_primary, role, attached_at) "
+            "VALUES (:uid, :cid, true, :role, :now)"
+        ),
+        {"uid": str(user_id), "cid": str(company_id), "role": role, "now": datetime.now(UTC)},
+    )
+
+
+def _assign(session, user_id, project_id):
+    """Assign `user_id` to `project_id` (an assignment carries no role)."""
+    from sqlalchemy import text
+
     session.execute(
         text(
             "INSERT INTO user_projects (user_id, project_id, assigned_at) "
             "VALUES (:uid, :pid, :now) ON CONFLICT DO NOTHING"
         ),
-        {"uid": str(user_id), "pid": str(project_id), "now": now},
+        {"uid": str(user_id), "pid": str(project_id), "now": datetime.now(UTC)},
     )
+
+
+def _insert_user_and_project(session):
+    """Seed one company member assigned to one project, return (user_id, project_id)."""
+    user_id = _insert_user(session)
+    company_id, project_id = _insert_company_and_project(session, user_id)
+    _attach(session, user_id, company_id, "member")
+    _assign(session, user_id, project_id)
     session.flush()
     return user_id, project_id
 
@@ -303,3 +346,63 @@ class TestFireAtSqlMath:
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=after_fire, limit=2)
         assert len(results) <= 2
+
+
+class TestReminderScope:
+    """Reminders follow the project:read scope of the permission resolver."""
+
+    @staticmethod
+    def _due(session, user_id):
+        from app.infrastructure.database.repositories.sqlalchemy_note_repository import (
+            SqlAlchemyNoteRepository,
+        )
+
+        today = date.today()
+        after_fire = datetime(today.year, today.month, today.day, 9, 1, 0, tzinfo=UTC)
+        return SqlAlchemyNoteRepository(session).list_due_for_user(user_id=user_id, now=after_fire, limit=100)
+
+    def test_company_admin_gets_reminders_of_unassigned_projects(self, pg_session):
+        owner = _insert_user(pg_session)
+        admin = _insert_user(pg_session)
+        company_id, project_id = _insert_company_and_project(pg_session, owner)
+        _attach(pg_session, admin, company_id, "admin")
+        note_id = _insert_note(pg_session, project_id=project_id, user_id=owner, due_date=date.today())
+
+        assert [n.id for n in self._due(pg_session, admin)] == [note_id]
+
+    def test_admin_also_assigned_gets_each_reminder_once(self, pg_session):
+        admin = _insert_user(pg_session)
+        company_id, project_id = _insert_company_and_project(pg_session, admin)
+        _attach(pg_session, admin, company_id, "admin")
+        _assign(pg_session, admin, project_id)
+        note_id = _insert_note(pg_session, project_id=project_id, user_id=admin, due_date=date.today())
+
+        assert [n.id for n in self._due(pg_session, admin)] == [note_id]
+
+    def test_member_gets_no_reminders_of_unassigned_projects(self, pg_session):
+        owner = _insert_user(pg_session)
+        member = _insert_user(pg_session)
+        company_id, project_id = _insert_company_and_project(pg_session, owner)
+        _attach(pg_session, member, company_id, "member")
+        _insert_note(pg_session, project_id=project_id, user_id=owner, due_date=date.today())
+
+        assert self._due(pg_session, member) == []
+
+    def test_assignment_without_company_role_gets_no_reminders(self, pg_session):
+        owner = _insert_user(pg_session)
+        booted = _insert_user(pg_session)
+        _company_id, project_id = _insert_company_and_project(pg_session, owner)
+        _assign(pg_session, booted, project_id)
+        _insert_note(pg_session, project_id=project_id, user_id=owner, due_date=date.today())
+
+        assert self._due(pg_session, booted) == []
+
+    def test_admin_of_another_company_gets_nothing(self, pg_session):
+        owner = _insert_user(pg_session)
+        other_admin = _insert_user(pg_session)
+        _company_id, project_id = _insert_company_and_project(pg_session, owner)
+        other_company_id, _other_project = _insert_company_and_project(pg_session, other_admin)
+        _attach(pg_session, other_admin, other_company_id, "admin")
+        _insert_note(pg_session, project_id=project_id, user_id=owner, due_date=date.today())
+
+        assert self._due(pg_session, other_admin) == []

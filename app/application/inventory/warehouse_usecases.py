@@ -13,6 +13,7 @@ from app.application.inventory.exceptions import (
     CompanyAccessDeniedError,
     InsufficientPermissionError,
     WarehouseInUseError,
+    WarehouseNameTakenError,
     WarehouseNotFoundError,
 )
 from app.application.inventory.ports import (
@@ -38,6 +39,16 @@ def _require_member(membership: ICompanyMembershipReader, requester_id: UUID, co
 def _require_manage(checker: ICompanyPermissionChecker, requester_id: UUID, company_id: UUID) -> None:
     if not checker.has_permission_in_company(requester_id, MANAGE_PERMISSION, company_id):
         raise InsufficientPermissionError(f"User {requester_id} lacks '{MANAGE_PERMISSION}' in company {company_id}.")
+
+
+def _require_free_name(
+    warehouses: IWarehouseRepository, company_id: UUID, name: str, except_id: UUID | None = None
+) -> None:
+    """Two warehouses of one company with the same name cannot be told apart in the pickers."""
+    wanted = name.strip().casefold()
+    for other in warehouses.list_by_company(company_id):
+        if other.id != except_id and other.name.strip().casefold() == wanted:
+            raise WarehouseNameTakenError(f"A warehouse named {name.strip()!r} already exists in this company.")
 
 
 class ListWarehousesUseCase:
@@ -66,6 +77,7 @@ class CreateWarehouseUseCase:
     def execute(self, *, requester_id: UUID, company_id: UUID, name: str, address: str | None = None) -> Warehouse:
         _require_member(self._membership, requester_id, company_id)
         _require_manage(self._checker, requester_id, company_id)
+        _require_free_name(self._warehouses, company_id, name)
         persisted = self._warehouses.add(Warehouse.create(company_id=company_id, name=name, address=address))
         self._db.commit()
         return persisted
@@ -95,6 +107,8 @@ class UpdateWarehouseUseCase:
         updated = warehouse.with_updates(name=name, address=address)
         if updated is warehouse:
             return warehouse
+        if updated.name != warehouse.name:
+            _require_free_name(self._warehouses, warehouse.company_id, updated.name, except_id=warehouse.id)
         persisted = self._warehouses.save(updated)
         self._db.commit()
         return persisted

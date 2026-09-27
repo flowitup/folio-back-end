@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.application.persons.ports import IPersonRepository
 from app.domain.entities.person import Person
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
 from app.infrastructure.database.models import PersonModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 
@@ -67,6 +68,68 @@ class SqlAlchemyPersonRepository(IPersonRepository):
         if model is None:
             return None
         model.user_id = user_id
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
+        self._session.refresh(model)
+        return self._to_entity(model)
+
+    def rename(self, person_id: UUID, name: str, *, commit: bool = True) -> Optional[Person]:
+        from app.infrastructure.database.models.worker import WorkerModel
+
+        model = self._session.query(PersonModel).filter_by(id=person_id).first()
+        if model is None:
+            return None
+        model.name = name
+        model.normalized_name = Person.normalize(name)
+        # workers.name is a per-project copy of the person's name; keep every copy in step.
+        for worker in self._session.query(WorkerModel).filter_by(person_id=person_id).all():
+            worker.name = name
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
+        self._session.refresh(model)
+        return self._to_entity(model)
+
+    def change_phone(self, person_id: UUID, phone: Optional[str], *, commit: bool = True) -> Optional[Person]:
+        from app.infrastructure.database.models.company import CompanyModel
+        from app.infrastructure.database.models.worker import WorkerModel
+
+        model = self._session.query(PersonModel).filter_by(id=person_id).first()
+        if model is None:
+            return None
+        profiles = self._session.query(CompanyPersonModel).filter_by(person_id=person_id).all()
+        region = None
+        if profiles:
+            region = (
+                self._session.query(CompanyModel.default_phone_region)
+                .filter(CompanyModel.id == profiles[0].company_id)
+                .scalar()
+            )
+        normalized = _normalized_or_none(phone, region or "FR")
+
+        model.phone = phone
+        model.phone_normalized = normalized
+        # workers.phone is a per-project copy of the person's phone; keep every copy in step.
+        for worker in self._session.query(WorkerModel).filter_by(person_id=person_id).all():
+            worker.phone = phone
+        for profile in profiles:
+            taken = normalized is not None and (
+                self._session.query(CompanyPersonModel.id)
+                .filter(
+                    CompanyPersonModel.company_id == profile.company_id,
+                    CompanyPersonModel.phone_normalized == normalized,
+                    CompanyPersonModel.person_id != person_id,
+                    CompanyPersonModel.is_active.is_(True),
+                )
+                .first()
+                is not None
+            )
+            # One active profile per number and company (partial unique index): when another
+            # person's profile already holds the number there, this one carries none.
+            profile.phone_normalized = None if taken else normalized
         if commit:
             self._session.commit()
         else:
@@ -141,3 +204,13 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             user_id=model.user_id,
             phone_normalized=model.phone_normalized,
         )
+
+
+def _normalized_or_none(phone: Optional[str], region: str) -> Optional[str]:
+    """E.164 form of ``phone`` for matching, or None when it does not parse (a free-text phone)."""
+    if not phone:
+        return None
+    try:
+        return normalize_phone(phone, default_region=region)
+    except InvalidPhoneNumberError:
+        return None

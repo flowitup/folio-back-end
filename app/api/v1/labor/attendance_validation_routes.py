@@ -75,7 +75,7 @@ def _max_backdate_days() -> int:
 def submit_own_attendance(project_id: str):
     """The calling user must be linked to a worker on this project (workers.user_id)."""
     try:
-        data = SelfLogAttendanceRequest(**(request.get_json() or {}))
+        data = SelfLogAttendanceRequest.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -168,14 +168,18 @@ def reject_attendance(project_id: str, entry_id: str):
     usecase = get_container().reject_attendance_usecase
     if usecase is None:
         raise RuntimeError("reject_attendance_usecase not wired in container")
+    try:
+        entry_uuid = UUID(entry_id)
+    except ValueError as e:
+        return _error_response("ValidationError", str(e), 400)
     # The row is deleted by the use case: capture who/when first for the worker's push.
     entry_repo = get_container().labor_entry_repository
-    doomed = entry_repo.find_by_id(UUID(entry_id)) if entry_repo is not None else None
+    doomed = entry_repo.find_by_id(entry_uuid) if entry_repo is not None else None
 
     try:
         usecase.execute(
             RejectAttendanceDTO(
-                entry_id=UUID(entry_id),
+                entry_id=entry_uuid,
                 project_id=UUID(project_id),
                 actor_user_id=UUID(str(get_jwt_identity())),
             )
@@ -206,7 +210,7 @@ def reject_attendance(project_id: str, entry_id: str):
 def edit_own_attendance(project_id: str, entry_id: str):
     """The entry must belong to the worker linked to the caller (404 otherwise)."""
     try:
-        data = SelfEditAttendanceRequest(**(request.get_json() or {}))
+        data = SelfEditAttendanceRequest.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
     usecase = get_container().edit_own_attendance_usecase

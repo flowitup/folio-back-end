@@ -1305,6 +1305,7 @@ class RealBulkAttendanceWorker:
         self.project_id = project_id
         self.name = name
         self.person_id = None
+        self.is_active = True
 
 
 class RealBulkAttendanceWorkerRepo:

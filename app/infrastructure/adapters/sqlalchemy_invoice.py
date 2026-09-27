@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from app.infrastructure.database.invoice_spend_rules import (
     load_personal_method_ids,
 )
 from app.infrastructure.database.models.invoice import InvoiceModel
+from app.infrastructure.database.models.invoice_number_counter import InvoiceNumberCounterModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
@@ -214,17 +215,27 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         date_from: date,
         date_to: date,
         type_filter: Optional[InvoiceType] = None,
+        by_payment_month: bool = False,
     ) -> List[Invoice]:
         """Return invoices where issue_date ∈ [date_from, date_to], optionally filtered by type.
 
+        by_payment_month: a labor payment with a payment month (service_month) is
+        placed by that month instead of its issue date — the month the expense
+        list and the labour summaries file it under.
+
         items is stored as a JSONB column (not a relationship), so there is no N+1 risk here.
         """
-        q = (
-            self._session.query(InvoiceModel)
-            .filter(InvoiceModel.project_id == project_id)
-            .filter(InvoiceModel.issue_date >= date_from)
-            .filter(InvoiceModel.issue_date <= date_to)
-        )
+        q = self._session.query(InvoiceModel).filter(InvoiceModel.project_id == project_id)
+        if by_payment_month:
+            by_month = and_(InvoiceModel.type == InvoiceType.LABOR.value, InvoiceModel.service_month.is_not(None))
+            q = q.filter(
+                or_(
+                    and_(by_month, InvoiceModel.service_month >= date_from, InvoiceModel.service_month <= date_to),
+                    and_(~by_month, InvoiceModel.issue_date >= date_from, InvoiceModel.issue_date <= date_to),
+                )
+            )
+        else:
+            q = q.filter(InvoiceModel.issue_date >= date_from).filter(InvoiceModel.issue_date <= date_to)
         if type_filter is not None:
             q = q.filter(InvoiceModel.type == type_filter.value)
         rows = q.order_by(InvoiceModel.issue_date, InvoiceModel.invoice_number).all()
@@ -241,23 +252,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         """
         if year is None:
             year = datetime.now(timezone.utc).year
-        prefix = f"FR-{year}-"
-        last = (
-            self._session.query(InvoiceModel)
-            .filter(
-                InvoiceModel.project_id == project_id,
-                InvoiceModel.invoice_number.like(f"{prefix}%"),
-            )
-            .order_by(InvoiceModel.invoice_number.desc())
-            .first()
-        )
-        n = 1
-        if last:
-            try:
-                n = int(last.invoice_number.split("-")[-1]) + 1
-            except (ValueError, IndexError):
-                pass
-        return f"{prefix}{n:04d}"
+        return self._claim_number(project_id, f"FR-{year}-")
 
     def get_labor_payments_summary(self, project_id: UUID) -> List[LaborPaymentsMonthRow]:
         """Aggregate paid amounts per (service_month, worker) for type='labor' invoices.
@@ -353,6 +348,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         self._session.commit()
         return result > 0
+
+    def find_by_source_billing_document_id(self, source_doc_id: UUID) -> Optional[Invoice]:
+        model = (
+            self._session.query(InvoiceModel).filter(InvoiceModel.source_billing_document_id == source_doc_id).first()
+        )
+        return _model_to_entity(model) if model else None
 
     def find_bank_refund_release(self, source_id: UUID) -> Optional[Invoice]:
         """Return the auto-generated bank-refund release linked to source_id, or None.
@@ -709,7 +710,22 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         if refundable is True:
             query = query.filter(InvoiceModel.refundable_status.isnot(None))
         elif refundable is False:
-            query = query.filter(InvoiceModel.refundable_status.is_(None))
+            # Candidates for "Add refundable expense": not tracked yet, and not
+            # paid with a company payment method of the project's company — the
+            # company paid those itself, so SetInvoiceRefundableStatusUseCase
+            # refuses to track them and offering them is a dead end.
+            from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+            query = query.outerjoin(
+                PaymentMethodModel,
+                and_(
+                    InvoiceModel.payment_method_id == PaymentMethodModel.id,
+                    PaymentMethodModel.company_id == ProjectModel.company_id,
+                ),
+            ).filter(
+                InvoiceModel.refundable_status.is_(None),
+                or_(PaymentMethodModel.id.is_(None), PaymentMethodModel.is_company_payment.isnot(True)),
+            )
 
         total: int = query.count()
 
@@ -856,20 +872,39 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         tag = project_row[0] if project_row and project_row[0] else "INV"
 
         year = datetime.now(timezone.utc).year
-        prefix = f"{tag}-{year}-"
-        last = (
-            self._session.query(InvoiceModel)
-            .filter(
-                InvoiceModel.project_id == project_id,
-                InvoiceModel.invoice_number.like(f"{prefix}%"),
-            )
-            .order_by(InvoiceModel.invoice_number.desc())
-            .first()
+        return self._claim_number(project_id, f"{tag}-{year}-")
+
+    def _claim_number(self, project_id: UUID, prefix: str) -> str:
+        """Claim the next number for `prefix` from the project's persisted counter.
+
+        One upsert on invoice_number_counters, inside the caller's transaction:
+        concurrent claims serialize on the row (Postgres row lock until commit),
+        and a deleted number is never handed out again. The stored counter is
+        never allowed to fall behind the highest number already in use (rows
+        from before the counter existed, or a prefix reused later), compared
+        numerically so NNNN past 9999 still sorts right.
+        """
+        rows = (
+            self._session.query(InvoiceModel.invoice_number)
+            .filter(InvoiceModel.project_id == project_id, InvoiceModel.invoice_number.like(f"{prefix}%"))
+            .all()
         )
-        n = 1
-        if last:
-            try:
-                n = int(last.invoice_number.split("-")[-1]) + 1
-            except (ValueError, IndexError):
-                pass
-        return f"{prefix}{n:04d}"
+        suffixes = [r[0][len(prefix) :] for r in rows]
+        highest = max((int(s) for s in suffixes if s.isdigit()), default=0)
+
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+
+        counter = InvoiceNumberCounterModel.__table__
+        stmt = insert(counter).values(project_id=project_id, prefix=prefix, next_value=highest + 2)
+        # On conflict the claim is max(stored next_value, highest in use + 1).
+        floor = stmt.excluded.next_value - 1
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["project_id", "prefix"],
+            set_={"next_value": case((counter.c.next_value > floor, counter.c.next_value), else_=floor) + 1},
+        ).returning(counter.c.next_value)
+        claimed = self._session.execute(stmt).scalar_one() - 1
+        return f"{prefix}{claimed:04d}"

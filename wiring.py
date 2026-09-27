@@ -156,6 +156,7 @@ from app.application.chiffrage.quote_usecases import (
     CreateQuoteUseCase,
     DeleteQuoteUseCase,
     SelectQuoteUseCase,
+    UnselectQuoteUseCase,
     UpdateQuoteUseCase,
 )
 from app.application.chiffrage.article_image_usecases import (
@@ -342,6 +343,9 @@ class Container:
     verify_otp_usecase: Optional[Any] = None
     request_signup_otp_usecase: Optional[Any] = None
     verify_signup_otp_usecase: Optional[Any] = None
+    # Verified sign-in phone change: code texted to the new number (see app/application/usecases/change_phone.py).
+    request_phone_change_code_usecase: Optional[Any] = None
+    confirm_phone_change_usecase: Optional[Any] = None
     # Texts a sign-up code to the phone an invitation acceptor is claiming — gated by the
     # invitation token instead of being open to anyone (see AcceptInvitationUseCase).
     request_invite_otp_usecase: Optional[Any] = None
@@ -386,6 +390,7 @@ class Container:
     update_chiffrage_quote_usecase: Optional[UpdateQuoteUseCase] = None
     delete_chiffrage_quote_usecase: Optional[DeleteQuoteUseCase] = None
     select_chiffrage_quote_usecase: Optional[SelectQuoteUseCase] = None
+    unselect_chiffrage_quote_usecase: Optional[UnselectQuoteUseCase] = None
     list_chiffrage_rooms_usecase: Optional[Any] = None
     create_chiffrage_room_usecase: Optional[CreateRoomUseCase] = None
     update_chiffrage_room_usecase: Optional[UpdateRoomUseCase] = None
@@ -906,10 +911,10 @@ def configure_container(
 
     # Wire task (planning) use cases
     if task_repository:
-        container.create_task_usecase = CreateTaskUseCase(task_repository)
+        container.create_task_usecase = CreateTaskUseCase(task_repository, user_repo=user_repository)
         container.list_tasks_usecase = ListTasksUseCase(task_repository)
         container.get_task_usecase = GetTaskUseCase(task_repository)
-        container.update_task_usecase = UpdateTaskUseCase(task_repository)
+        container.update_task_usecase = UpdateTaskUseCase(task_repository, user_repo=user_repository)
         container.move_task_usecase = MoveTaskUseCase(task_repository)
         container.delete_task_usecase = DeleteTaskUseCase(task_repository)
 
@@ -1084,6 +1089,7 @@ def configure_container(
     container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.unselect_chiffrage_quote_usecase = UnselectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
 
     class _ListRooms:
         """Thin read use-case: the room list needs no rules beyond project access."""
@@ -1139,13 +1145,16 @@ def configure_container(
         container.authorization_service.set_authz_reader(container.authz_reader)
     # Every invitation use-case resolves `project:invite` itself (create, list
     # and revoke), and they are all built above, before the reader exists.
-    for _invitation_usecase in (
+    for _reader_usecase in (
         container.create_invitation_usecase,
         container.list_invitations_usecase,
         container.revoke_invitation_usecase,
+        # Task create/update check the assignee can read the task's project.
+        container.create_task_usecase,
+        container.update_task_usecase,
     ):
-        if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
-            _invitation_usecase.set_authz_reader(container.authz_reader)
+        if _reader_usecase is not None and hasattr(_reader_usecase, "set_authz_reader"):
+            _reader_usecase.set_authz_reader(container.authz_reader)
 
     container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)

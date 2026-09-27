@@ -186,6 +186,48 @@ class TestTreeAndTotals:
         selected = [q["id"] for q in found["quotes"] if q["is_selected"]]
         assert selected == [second["id"]]
 
+    def test_unretaining_a_quote_falls_back_to_the_cheapest(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        _add_quote(inv_client, writer_token, project_id, article["id"], "Cheap", "10.00")
+        dear = _add_quote(inv_client, writer_token, project_id, article["id"], "Dear", "11.00")
+        url = f"{_base(project_id)}/quotes/{dear['id']}/select"
+        inv_client.post(url, headers=_auth(writer_token))
+
+        assert inv_client.delete(url, headers=_auth(reader_token)).status_code == 403
+        resp = inv_client.delete(url, headers=_auth(writer_token))
+        assert resp.status_code == 200
+        assert resp.get_json()["is_selected"] is False
+        assert inv_client.delete(url, headers=_auth(writer_token)).status_code == 200  # idempotent
+
+        found = _article_in_tree(
+            inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), article["id"]
+        )
+        assert found["effective_source"] == "cheapest"
+        assert not any(q["is_selected"] for q in found["quotes"])
+
+        # A cheaper price recorded later now drives the total.
+        _add_quote(inv_client, writer_token, project_id, article["id"], "Cheaper", "9.00")
+        found = _article_in_tree(
+            inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), article["id"]
+        )
+        assert found["total_ht"] == 108.00  # 12 x 9.00
+
+    def test_unretaining_another_quote_keeps_the_retained_one(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        first = _add_quote(inv_client, writer_token, project_id, article["id"], "A", "10.00")
+        second = _add_quote(inv_client, writer_token, project_id, article["id"], "B", "11.00")
+        inv_client.post(f"{_base(project_id)}/quotes/{second['id']}/select", headers=_auth(writer_token))
+
+        resp = inv_client.delete(f"{_base(project_id)}/quotes/{first['id']}/select", headers=_auth(writer_token))
+        assert resp.status_code == 200
+
+        found = _article_in_tree(
+            inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), article["id"]
+        )
+        assert [q["id"] for q in found["quotes"] if q["is_selected"]] == [second["id"]]
+
     def test_deleting_the_retained_quote_falls_back_to_cheapest(
         self, inv_client, writer_token, reader_token, project_id, article
     ):
@@ -363,6 +405,18 @@ class TestPatchDoesNotDropFields:
         assert body["quantity"] == 12.0
         assert body["unit"] == "u"
         assert body["note"] == "prévoir 2 de rab"
+
+    def test_quote_price_round_trips_at_stored_precision(self, inv_client, writer_token, project_id, article):
+        """A TTC-entered price is stored with 4 decimals; reading it back must not round it to cents."""
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "Leroy", "9.9917")
+        assert quote["unit_price_ht"] == 9.9917
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"note": "only the note", "unit_price_ht": str(quote["unit_price_ht"])},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["unit_price_ht"] == 9.9917
 
     def test_patching_only_the_price_keeps_the_supplier(self, inv_client, writer_token, project_id, article):
         quote = _add_quote(inv_client, writer_token, project_id, article["id"], "Point P", "12.40")
@@ -1305,3 +1359,57 @@ class TestPricesByShop:
         assert baskets[full["id"]]["basket_ht"] == 100.0
         # The cheaper but incomplete shop must not head the list.
         assert section_tree["store_baskets"][0]["store_id"] == full["id"]
+
+
+class TestMalformedIds:
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("post", "quotes/not-a-uuid/select"),
+            ("patch", "quotes/not-a-uuid"),
+            ("delete", "quotes/not-a-uuid"),
+            ("patch", "articles/xyz"),
+            ("delete", "articles/xyz"),
+            ("patch", "postes/xyz"),
+            ("delete", "postes/xyz"),
+            ("patch", "rooms/xyz"),
+            ("delete", "units/xyz"),
+        ],
+    )
+    def test_malformed_id_is_a_json_404(self, inv_client, writer_token, project_id, method, path):
+        resp = getattr(inv_client, method)(f"{_base(project_id)}/{path}", json={}, headers=_auth(writer_token))
+        assert resp.status_code == 404
+        assert resp.is_json
+
+    def test_quote_without_supplier_says_why(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/quotes",
+            json={"unit_price_ht": "10"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 422
+        assert "supplier" in resp.get_json()["message"]
+
+
+class TestQuantityPrecision:
+    @pytest.mark.parametrize("quantity", [1.23456, "0.0001"])
+    def test_more_than_three_decimals_is_refused(self, inv_client, writer_token, project_id, poste, article, quantity):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Câble", "quantity": quantity, "unit": "m"},
+            headers=_auth(writer_token),
+        )
+        patched = inv_client.patch(
+            f"{_base(project_id)}/articles/{article['id']}", json={"quantity": quantity}, headers=_auth(writer_token)
+        )
+        assert created.status_code == 422
+        assert patched.status_code == 422
+
+    def test_three_decimals_round_trip(self, inv_client, writer_token, project_id, poste):
+        created = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Câble", "quantity": "1.235", "unit": "m"},
+            headers=_auth(writer_token),
+        )
+        assert created.status_code == 201
+        assert float(created.get_json()["quantity"]) == 1.235

@@ -79,7 +79,7 @@ def list_worker_rate_changes(project_id: str, worker_id: str):
 def set_worker_rate_change(project_id: str, worker_id: str):
     """Create or update an effective-dated rate change for a worker (upsert by date)."""
     try:
-        data = CreateRateChangeRequest(**request.get_json())
+        data = CreateRateChangeRequest.model_validate(request.get_json())
     except ValidationError as exc:
         return _validation_error_response(exc)
 

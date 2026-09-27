@@ -176,3 +176,26 @@ class TestBulkLogWithConflicts:
             )
         )
         assert len(result.created) == 1
+
+
+class TestBulkLogRepeatedWorker:
+    def test_a_worker_twice_is_refused_before_anything_is_saved(self, session, owner, company):
+        worker_repo = SQLAlchemyWorkerRepository(session)
+        entry_repo = SQLAlchemyLaborEntryRepository(session)
+        usecase = BulkLogAttendanceUseCase(worker_repo, entry_repo, session)
+
+        a = _proj(session, owner, company, "Dup")
+        w = _worker(worker_repo, a, _person(session, owner, "Hugo"))
+
+        with pytest.raises(ValueError):
+            usecase.execute(
+                BulkLogAttendanceRequest(
+                    project_id=a.id,
+                    date=date(2026, 9, 24),
+                    entries=[
+                        BulkLogAttendanceEntry(worker_id=w.id, shift_type="full"),
+                        BulkLogAttendanceEntry(worker_id=w.id, shift_type="half"),
+                    ],
+                )
+            )
+        assert entry_repo.list_by_project(project_id=a.id, date_from=date(2026, 9, 24), date_to=date(2026, 9, 24)) == []

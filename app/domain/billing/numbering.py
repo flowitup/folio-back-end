@@ -19,6 +19,9 @@ kind_to_token(kind) -> str
 
 from __future__ import annotations
 
+import re
+from typing import Optional
+
 from app.domain.billing.enums import BillingDocumentKind
 
 _KIND_TOKENS: dict[BillingDocumentKind, str] = {
@@ -58,3 +61,16 @@ def next_document_number(
     if prefix_override:
         return f"{prefix_override}-{token}-{year}-{seq_str}"
     return f"{token}-{year}-{seq_str}"
+
+
+_NUMBER_YEAR = re.compile(r"(?:^|-)(?:DEV|FAC)-(\d{4})-\d+$")
+
+
+def document_number_year(document_number: str) -> Optional[int]:
+    """Return the year encoded in a canonical document number, or None.
+
+    Imported documents may carry a number in another format; those have no
+    year to enforce.
+    """
+    match = _NUMBER_YEAR.search(document_number or "")
+    return int(match.group(1)) if match else None

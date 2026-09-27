@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import case as sa_case, func, select
+from sqlalchemy import Numeric, cast, case as sa_case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -149,7 +149,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            eff_rate * shift_multiplier,
+            # Each entry rounded to the cent, as LaborEntry.effective_cost does.
+            func.round(cast(eff_rate * shift_multiplier, Numeric(14, 4)), 2),
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),
@@ -206,6 +207,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             query = query.filter(WorkerModel.id == worker_id)
 
         rows = query.order_by(display_name).all()
+        banked_months = self._banked_hours_by_month(project_id, date_from, date_to, worker_id)
 
         return [
             LaborSummaryRow(
@@ -215,9 +217,54 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 total_cost=Decimal(str(row.total_cost)) if row.total_cost else Decimal("0"),
                 banked_hours=int(row.banked_hours) if row.banked_hours else 0,
                 daily_rate=Decimal(str(row.daily_rate)) if row.daily_rate else Decimal("0"),
+                banked_months=banked_months.get(row.worker_id, []),
             )
             for row in rows
         ]
+
+    def _banked_hours_by_month(
+        self,
+        project_id: UUID,
+        date_from: Optional[date],
+        date_to: Optional[date],
+        worker_id: Optional[UUID],
+    ) -> dict:
+        """Map worker_id -> [(banked hours, bonus rate)] per calendar month of the period.
+
+        Same filters as ``get_summary``; each month's bonus rate is the one the monthly
+        rollup uses (rate as of that month's last day), so a summary over several months
+        equals the sum of its months.
+        """
+        year_expr = func.extract("year", LaborEntryModel.date)
+        month_expr = func.extract("month", LaborEntryModel.date)
+        query = (
+            self._session.query(
+                year_expr.label("year"),
+                month_expr.label("month"),
+                WorkerModel.id.label("worker_id"),
+                WorkerModel.daily_rate.label("base_rate"),
+                func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
+            )
+            .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
+            .filter(WorkerModel.project_id == project_id, LaborEntryModel.status == "validated")
+            .group_by(year_expr, month_expr, WorkerModel.id, WorkerModel.daily_rate)
+        )
+        if date_from:
+            query = query.filter(LaborEntryModel.date >= date_from)
+        if date_to:
+            query = query.filter(LaborEntryModel.date <= date_to)
+        if worker_id:
+            query = query.filter(WorkerModel.id == worker_id)
+
+        rows = query.all()
+        rates = self._bonus_rates_by_worker_month(rows)
+        result: dict = {}
+        for row in rows:
+            banked = int(row.banked_hours) if row.banked_hours else 0
+            if banked:
+                key = (int(row.year), int(row.month))
+                result.setdefault(row.worker_id, []).append((banked, rates[(row.worker_id, key)]))
+        return result
 
     def get_monthly_summary(self, project_id: UUID) -> List[MonthlyLaborSummaryRow]:
         # Same effective_cost expression as get_summary, but rolled up per
@@ -244,7 +291,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            eff_rate * shift_multiplier,
+            # Each entry rounded to the cent, as LaborEntry.effective_cost does.
+            func.round(cast(eff_rate * shift_multiplier, Numeric(14, 4)), 2),
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),

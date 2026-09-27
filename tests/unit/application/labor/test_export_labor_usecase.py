@@ -32,7 +32,7 @@ from app.application.labor.labor_activity_usecases import LaborActivityDetail, L
 from app.application.labor.list_labor_entries import LaborEntryDetail, ListLaborEntriesRequest, ListLaborEntriesUseCase
 from app.domain.entities.project import Project
 from app.domain.entities.worker import Worker
-from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 
 
@@ -703,6 +703,25 @@ class TestWorkerIdHappyPath:
         result = uc.execute(req)
         assert "antoine-dupont" in result.filename, f"Worker slug not in filename: {result.filename}"
 
+    def test_filename_uses_the_person_name(self):
+        """The worker's shared person name wins over the per-project copy."""
+        pid = uuid4()
+        project = _make_project("Office Tower", project_id=pid)
+        worker = _make_worker(project_id=pid, name="Old Copy")
+        worker.person_name = "Antoine Dupont"
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert "antoine-dupont" in result.filename
+        assert "old-copy" not in result.filename
+
     def test_filename_includes_project_slug_and_range(self):
         """Filename format: labor-{project-slug}-{worker-slug}-{from}-to-{to}.xlsx"""
         pid = uuid4()
@@ -844,18 +863,16 @@ class TestWorkerIdNotFound:
 
 
 # ---------------------------------------------------------------------------
-# M-5 — inactive worker blocked
+# Deactivated worker stays exportable
 # ---------------------------------------------------------------------------
 
 
-class TestInactiveWorkerBlocked:
-    """Inactive worker must raise WorkerInactiveError (subclass of WorkerNotFoundError)."""
+class TestInactiveWorkerExport:
+    """A deactivated worker's history (and any balance still owed) can be exported."""
 
-    def test_inactive_worker_raises_worker_inactive_error(self):
-        """Active=False worker → WorkerInactiveError, not a plain WorkerNotFoundError."""
+    def test_inactive_worker_exports(self):
         pid = uuid4()
         project = _make_project(project_id=pid)
-        # Build an inactive worker in the correct project
         inactive_worker = _make_worker(project_id=pid, name="Jean Dupont")
         object.__setattr__(inactive_worker, "is_active", False)
 
@@ -868,27 +885,8 @@ class TestInactiveWorkerBlocked:
             format="xlsx",
             acting_user_email="user@example.com",
         )
-        with pytest.raises(WorkerInactiveError):
-            uc.execute(req)
-
-    def test_worker_inactive_error_is_subclass_of_worker_not_found(self):
-        """WorkerInactiveError must be catchable as WorkerNotFoundError."""
-        pid = uuid4()
-        project = _make_project(project_id=pid)
-        inactive_worker = _make_worker(project_id=pid)
-        object.__setattr__(inactive_worker, "is_active", False)
-
-        uc = _build_usecase_with_worker(project, inactive_worker)
-        req = ExportLaborRequest(
-            project_id=pid,
-            worker_id=inactive_worker.id,
-            from_month="2026-01",
-            to_month="2026-01",
-            format="xlsx",
-            acting_user_email="user@example.com",
-        )
-        with pytest.raises(WorkerNotFoundError):
-            uc.execute(req)
+        result = uc.execute(req)
+        assert result.content[:4] == b"PK\x03\x04"
 
     def test_active_worker_does_not_raise(self):
         """Explicitly active worker (is_active=True) passes through without error."""

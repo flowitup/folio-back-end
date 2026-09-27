@@ -157,3 +157,27 @@ class SelectQuoteUseCase:
         self._repo.save_quote(selected)
         self._db.commit()
         return selected
+
+
+class UnselectQuoteUseCase:
+    """Stop retaining a quote: its article falls back to the cheapest quote again.
+
+    Idempotent. Only this quote's retention is cleared: when another quote of the
+    article is the retained one, nothing changes. The article row is locked like in
+    SelectQuoteUseCase so a concurrent selection is not lost.
+    """
+
+    def __init__(self, repo: ChiffrageRepositoryPort, db_session: TransactionalSessionPort) -> None:
+        self._repo = repo
+        self._db = db_session
+
+    def execute(self, *, project_id: UUID, quote_id: UUID) -> ChiffrageQuote:
+        quote = owned_quote(self._repo, quote_id, project_id)
+
+        if self._repo.find_article_for_update(quote.article_id) is None:
+            raise ArticleNotFoundError(f"Article {quote.article_id} not found.")
+
+        if quote.is_selected:
+            self._repo.clear_selection(quote.article_id)
+            self._db.commit()
+        return quote.with_selection(False)

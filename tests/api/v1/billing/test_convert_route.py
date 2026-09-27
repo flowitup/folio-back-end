@@ -134,3 +134,48 @@ class TestConvertedToFactureId:
         )
         assert detail.status_code == 200
         assert detail.get_json()["converted_to_facture_id"] is None
+
+
+class TestConvertedDevisIsLocked:
+    """A devis with a live facture made from it cannot be reverted or edited."""
+
+    def _convert(self, client, token, devis_id):
+        resp = client.post(f"/api/v1/billing-documents/{devis_id}/convert-to-facture", json={}, headers=_auth(token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def _status(self, client, token, doc_id, status):
+        return client.patch(
+            f"/api/v1/billing-documents/{doc_id}/status", json={"new_status": status}, headers=_auth(token)
+        )
+
+    def test_converted_devis_cannot_go_back_to_sent(self, inv_client, billing_token, seeded_accepted_devis):
+        self._convert(inv_client, billing_token, seeded_accepted_devis["id"])
+        resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "sent")
+        assert resp.status_code == 409, resp.get_data(as_text=True)
+        doc = inv_client.get(
+            f"/api/v1/billing-documents/{seeded_accepted_devis['id']}", headers=_auth(billing_token)
+        ).get_json()
+        assert doc["status"] == "accepted"
+
+    def test_converted_devis_cannot_be_edited(self, inv_client, billing_token, seeded_accepted_devis):
+        self._convert(inv_client, billing_token, seeded_accepted_devis["id"])
+        resp = inv_client.put(
+            f"/api/v1/billing-documents/{seeded_accepted_devis['id']}",
+            json={"notes": "changed after invoicing"},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 409
+
+    def test_cancelling_the_facture_releases_the_devis(self, inv_client, billing_token, seeded_accepted_devis):
+        facture = self._convert(inv_client, billing_token, seeded_accepted_devis["id"])
+        assert self._status(inv_client, billing_token, facture["id"], "sent").status_code == 200
+        assert self._status(inv_client, billing_token, facture["id"], "cancelled").status_code == 200
+        resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "sent")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_unconverted_accepted_devis_can_still_go_back_to_sent(
+        self, inv_client, billing_token, seeded_accepted_devis
+    ):
+        resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "sent")
+        assert resp.status_code == 200

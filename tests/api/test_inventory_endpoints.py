@@ -282,6 +282,28 @@ class TestWarehouses:
         assert client.delete(f"/api/v1/inventory/items/{item.get_json()['id']}", headers=admin).status_code == 204
         assert client.delete(f"/api/v1/inventory/warehouses/{warehouse['id']}", headers=admin).status_code == 204
 
+    def test_a_second_warehouse_with_the_same_name_is_refused(self, client, admin, inventory_app):
+        cid = inventory_app._inv["company_id"]
+        first = _warehouse(client, admin, cid, name="Kho Trùng Tên")
+        other = _warehouse(client, admin, cid, name="Kho Khác")
+
+        again = client.post(
+            "/api/v1/inventory/warehouses", json={"company_id": cid, "name": " kho trùng tên "}, headers=admin
+        )
+        assert again.status_code == 409
+        renamed = client.patch(
+            f"/api/v1/inventory/warehouses/{other['id']}", json={"name": "KHO TRÙNG TÊN"}, headers=admin
+        )
+        assert renamed.status_code == 409
+        # Re-saving a warehouse under its own name is not a clash.
+        same = client.patch(
+            f"/api/v1/inventory/warehouses/{first['id']}", json={"name": "Kho trùng tên"}, headers=admin
+        )
+        assert same.status_code == 200
+
+        for w in (first, other):
+            assert client.delete(f"/api/v1/inventory/warehouses/{w['id']}", headers=admin).status_code == 204
+
     def test_422_on_bad_body(self, client, admin, inventory_app):
         resp = client.post(
             "/api/v1/inventory/warehouses",

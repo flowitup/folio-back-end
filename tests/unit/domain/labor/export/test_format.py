@@ -30,6 +30,15 @@ class TestFormatEurFr:
     def test_none_returns_em_dash(self):
         assert format_eur_fr(None) == "—"
 
+    def test_half_cent_rounds_half_up(self):
+        """0.125 → 0,13 (a float cast gave 0,12 and disagreed with the app)."""
+        assert format_eur_fr(Decimal("0.125")) == "0,13\xa0€"
+        assert format_eur_fr(Decimal("62.625")) == "62,63\xa0€"
+
+    def test_large_amount_keeps_every_digit(self):
+        result = format_eur_fr(Decimal("9999998990000000.01"))
+        assert result == "9\xa0999\xa0998\xa0990\xa0000\xa0000,01\xa0€", f"Got: {result!r}"
+
     def test_fractional_two_places(self):
         result = format_eur_fr(Decimal("100.5"))
         assert result == "100,50\xa0€", f"Got: {result!r}"

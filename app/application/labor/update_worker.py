@@ -6,6 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository
+from app.application.labor.role_scope import assert_role_in_project_company
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
@@ -18,6 +19,8 @@ _ROLE_SENTINEL = object()
 @dataclass
 class UpdateWorkerRequest:
     worker_id: UUID
+    # The project the caller was authorised for; a worker of another project is "not found".
+    project_id: UUID
     name: Optional[str] = None
     phone: Optional[str] = None
     # daily_rate is intentionally absent: base rate is immutable after creation.
@@ -28,6 +31,8 @@ class UpdateWorkerRequest:
     role_id: object = _ROLE_SENTINEL
     # Same sentinel semantics: None unlinks the app account, omit to leave unchanged.
     user_id: object = _ROLE_SENTINEL
+    # True turns a deactivated worker back on (no-op for an active one).
+    reactivate: bool = False
 
 
 @dataclass
@@ -53,12 +58,24 @@ class UpdateWorkerResponse:
 class UpdateWorkerUseCase:
     """Update an existing worker."""
 
-    def __init__(self, worker_repo: IWorkerRepository):
+    def __init__(self, worker_repo: IWorkerRepository, labor_role_repo=None, authz_reader=None, person_repo=None):
         self._repo = worker_repo
+        self._labor_role_repo = labor_role_repo
+        self._authz_reader = authz_reader
+        self._person_repo = person_repo
+
+    def set_person_repo(self, person_repo) -> None:
+        """Inject the Person repository; wired after it exists."""
+        self._person_repo = person_repo
+
+    def set_role_scope(self, labor_role_repo, authz_reader) -> None:
+        """Inject what the role check needs; wired after the labor-role repository exists."""
+        self._labor_role_repo = labor_role_repo
+        self._authz_reader = authz_reader
 
     def execute(self, request: UpdateWorkerRequest) -> UpdateWorkerResponse:
         worker = self._repo.find_by_id(request.worker_id)
-        if not worker:
+        if worker is None or worker.project_id != request.project_id:
             raise WorkerNotFoundError(str(request.worker_id))
 
         if request.name is not None:
@@ -67,11 +84,25 @@ class UpdateWorkerUseCase:
             if len(request.name) > 255:
                 raise InvalidWorkerDataError("Worker name exceeds 255 characters")
             worker.name = request.name.strip()
+            # The name belongs to the shared Person: renaming it here renames the
+            # person in every company and project that uses them.
+            if worker.person_id is not None and self._person_repo is not None:
+                self._person_repo.rename(worker.person_id, worker.name, commit=False)
+                worker.person_name = worker.name
 
         if request.phone is not None:
-            worker.phone = request.phone.strip() if request.phone else None
+            worker.phone = request.phone.strip() or None
+            # Like the name, the phone belongs to the shared Person: changing it here changes
+            # it in every company and project that uses them.
+            if worker.person_id is not None and self._person_repo is not None:
+                self._person_repo.change_phone(worker.person_id, worker.phone, commit=False)
+                worker.person_phone = worker.phone
 
         if request.role_id is not _ROLE_SENTINEL:
+            if request.role_id != worker.role_id:
+                assert_role_in_project_company(
+                    self._labor_role_repo, self._authz_reader, request.role_id, worker.project_id  # type: ignore[arg-type]
+                )
             worker.role_id = request.role_id  # type: ignore[assignment]
 
         if request.user_id is not _ROLE_SENTINEL:
@@ -80,6 +111,9 @@ class UpdateWorkerUseCase:
                 if linked is not None and linked.id != worker.id:
                     raise InvalidWorkerDataError("This account is already linked to another worker on this project")
             worker.user_id = request.user_id  # type: ignore[assignment]
+
+        if request.reactivate:
+            worker.is_active = True
 
         worker.updated_at = datetime.now(timezone.utc)
         saved = self._repo.update(worker)

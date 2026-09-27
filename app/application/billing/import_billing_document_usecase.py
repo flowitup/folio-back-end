@@ -30,10 +30,14 @@ from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingNumberCounterRepositoryPort,
     CompanyRepositoryPort,
+    ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
+    assert_company_admin,
+    assert_project_read_access,
     assert_user_company_access,
 )
+from app.domain.billing.dates import validate_kind_fields
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import (
@@ -64,7 +68,9 @@ class ImportBillingDocumentUseCase:
     """Import a historical billing document with a pre-supplied number.
 
     Pre-conditions:
-      - company_id is required; user must be attached to that company.
+      - company_id is required; user must be an admin of that company, the
+        same rule as creating a document.
+      - project_id, when given, must be a project the user can read.
       - At least one line item required.
       - document_number is accepted verbatim (1..32 chars, non-empty after strip).
       - Duplicate (company_id, kind, document_number) → BillingDocumentAlreadyExistsError.
@@ -76,24 +82,32 @@ class ImportBillingDocumentUseCase:
         counter_repo: BillingNumberCounterRepositoryPort,
         company_repo: CompanyRepositoryPort,
         access_repo: UserCompanyAccessRepositoryPort,
+        project_repo: ProjectReadPort | None = None,
     ) -> None:
         self._doc_repo = doc_repo
         self._counter_repo = counter_repo
         self._company_repo = company_repo
         self._access_repo = access_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
         inp: ImportBillingDocumentInput,
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
-        # 1. company_id required — validate attachment and snapshot issuer
+        # 1. An imported document may only link a project the caller can read
+        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+
+        # 2. company_id required — validate attachment and snapshot issuer
         if inp.company_id is None:
             raise MissingCompanyProfileError(inp.user_id)
 
         company = assert_user_company_access(self._access_repo, self._company_repo, inp.user_id, inp.company_id)
         if company is None:
             raise MissingCompanyProfileError(inp.user_id)
+
+        # Importing writes the company's billing, exactly like creating: admins only.
+        assert_company_admin(self._access_repo, inp.user_id, inp.company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
 
@@ -113,6 +127,8 @@ class ImportBillingDocumentUseCase:
             raise ValueError("document_number is required")
         if len(doc_number) > 32:
             raise ValueError("document_number exceeds 32 characters")
+
+        validate_kind_fields(inp.kind, inp.validity_until, inp.payment_due_date, inp.payment_terms)
 
         # 5. Bump counter if doc number parses to year+seq
         parsed = _parse_year_seq(doc_number)

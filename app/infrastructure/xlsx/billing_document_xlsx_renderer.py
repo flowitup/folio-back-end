@@ -43,7 +43,9 @@ from typing import Optional
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+from app.domain.billing.sections import section_headings
 from app.domain.billing.document import BillingDocument
+from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind
 
 
@@ -177,19 +179,8 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             ws.merge_cells(start_row=14, start_column=3, end_row=14, end_column=8)
 
         # ---- 5. Issue date (row 17 B) --------------------------------------
-        # Format: "<City>, DD/MM/YYYY" — issuer_address line 2 (city) is best-effort.
-        city = ""
-        if doc.issuer_address:
-            # Heuristic: take last comma-separated token before postal code
-            addr_parts = [p.strip() for p in doc.issuer_address.split(",")]
-            if addr_parts:
-                # Try last part minus leading postcode
-                last = addr_parts[-1]
-                tokens = last.split()
-                if tokens and tokens[0].isdigit():
-                    city = " ".join(tokens[1:])
-                else:
-                    city = last
+        # Format: "<City>, DD/MM/YYYY" — the city is read from the free-text address.
+        city = place_of_issue(doc.issuer_address)
         date_str = doc.issue_date.strftime("%d/%m/%Y")
         line = f"{city}, {date_str}" if city else date_str
         ws.cell(row=17, column=2, value=line).font = _font(11)
@@ -197,12 +188,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
 
         # ---- 6. Greeting (rows 19-21) --------------------------------------
         ws.cell(row=19, column=2, value="Madame, Monsieur,").font = _font(11)
-        intro_subject = "facture" if doc.kind == BillingDocumentKind.FACTURE else "devis"
-        ws.cell(
-            row=20,
-            column=3,
-            value=f"Veuillez trouver ci-après le {intro_subject} relatif à la mission citée en objet.",
-        ).font = _font(11)
+        ws.cell(row=20, column=3, value=intro_sentence(doc.kind)).font = _font(11)
         ws.cell(row=20, column=3).alignment = _align(wrap=True)
         ws.merge_cells(start_row=20, start_column=3, end_row=20, end_column=12)
         ws.cell(
@@ -250,11 +236,11 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         row = items_header_row + 2  # row 25
         first_item_row = None
         last_item_row = None
-        last_category: Optional[str] = None
-        for item in doc.items:
-            # Insert section header row when category changes
-            if item.category and item.category != last_category:
-                sh = ws.cell(row=row, column=3, value=item.category)
+        headings = section_headings(item.category for item in doc.items)
+        for item, heading in zip(doc.items, headings):
+            # Insert section header row when the section changes
+            if heading is not None:
+                sh = ws.cell(row=row, column=3, value=heading)
                 sh.font = _font(11, bold=True)
                 sh.alignment = _align("center", "center", wrap=True)
                 sh.border = _thin_box()
@@ -263,9 +249,6 @@ class OpenpyxlBillingDocumentXlsxRenderer:
                 for col in [2] + list(range(7, 13)):
                     ws.cell(row=row, column=col).border = _thin_box()
                 row += 1
-                last_category = item.category
-            elif not item.category:
-                last_category = None
 
             # Item row
             if first_item_row is None:
@@ -296,8 +279,9 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             ws.cell(row=row, column=10).alignment = _align("center", "center")
             ws.cell(row=row, column=10).number_format = "0.00%"
             ws.cell(row=row, column=10).border = _thin_box()
-            # K = Montant HT — formula =I*J*H so Excel recomputes if user edits
-            ws.cell(row=row, column=11, value=f"=I{row}*J{row}*H{row}").font = _font(11)
+            # K = Montant HT — formula so Excel recomputes if user edits; rounded to the
+            # cent like the app's line totals, so the SUM matches the document's HT.
+            ws.cell(row=row, column=11, value=f"=ROUND(I{row}*J{row}*H{row},2)").font = _font(11)
             ws.cell(row=row, column=11).alignment = _align("center", "center")
             ws.cell(row=row, column=11).number_format = "#,##0.00"
             ws.cell(row=row, column=11).border = _thin_box()

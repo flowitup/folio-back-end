@@ -57,6 +57,14 @@ class DevisAlreadyConvertedError(BillingDomainError):
         super().__init__(f"Devis {devis_id} was already converted to a facture")
 
 
+class DevisLockedByFactureError(BillingDomainError):
+    """Raised when a devis already converted to a live facture would be edited or moved off accepted."""
+
+    def __init__(self, devis_id: UUID) -> None:
+        self.devis_id = devis_id
+        super().__init__(f"Devis {devis_id} was converted to a facture: cancel the facture before changing the devis")
+
+
 class ForbiddenBillingDocumentError(BillingDomainError):
     """Raised when a user attempts to access a billing document they do not own."""
 

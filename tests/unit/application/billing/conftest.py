@@ -80,6 +80,7 @@ class InMemoryBillingDocumentRepository:
         company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
+        search: Optional[str] = None,
     ) -> tuple[list[BillingDocument], int]:
         company_ids = company_ids or []
         docs = []
@@ -97,6 +98,9 @@ class InMemoryBillingDocumentRepository:
             docs = [d for d in docs if d.status == status]
         if project_id is not None:
             docs = [d for d in docs if d.project_id == project_id]
+        if search:
+            needle = search.lower()
+            docs = [d for d in docs if needle in d.document_number.lower() or needle in d.recipient_name.lower()]
         total = len(docs)
         return docs[offset : offset + limit], total
 

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 from uuid import UUID
 
@@ -133,7 +133,9 @@ class LaborEntry:
         if self.amount_override is not None:
             return self.amount_override
         multiplier = Decimal(str(SHIFT_MULTIPLIERS.get(self.shift_type, 1.0)))
-        return daily_rate * multiplier
+        # Rounded to the cent here, once: a half day at 125,25 € is 62,63 € on every
+        # screen and export, and sums add up cents rather than thousandths.
+        return (daily_rate * multiplier).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, LaborEntry):

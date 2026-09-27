@@ -192,7 +192,7 @@ def rename_attachment(attachment_id: str):
         return _error_response("INVALID_ID", "Invalid attachment id", 400)
 
     body = request.get_json(silent=True)
-    if not body or "filename" not in body:
+    if not isinstance(body, dict) or "filename" not in body:
         return _error_response("MISSING_FILENAME", "Request body must include 'filename'", 400)
 
     new_filename = body["filename"]

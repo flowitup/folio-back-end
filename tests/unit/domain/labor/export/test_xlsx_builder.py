@@ -372,3 +372,14 @@ class TestMultipleWorkers:
         assert ws.cell(row=8, column=1).value == "Bảo"
         # Row 9 = TOTAL footer
         assert ws.cell(row=9, column=1).value == "TOTAL"
+
+
+def test_money_cells_are_rounded_half_up_to_the_cent():
+    from decimal import Decimal
+
+    from app.domain.labor.export.xlsx_builder import _money
+
+    # The float sum 830.3049999999999 stands for 830.305 and must show 830,31, not 830,30.
+    assert _money(830.3049999999999) == 830.31
+    assert _money(62.625) == 62.63
+    assert _money(Decimal("62.625")) == 62.63

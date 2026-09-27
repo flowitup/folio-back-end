@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
 from app.domain.entities.labor_entry import LaborEntry
-from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 
 
 @dataclass
@@ -50,6 +50,8 @@ class LogAttendanceUseCase:
         worker = self._worker_repo.find_by_id(request.worker_id)
         if not worker or worker.project_id != request.project_id:
             raise WorkerNotFoundError(str(request.worker_id))
+        if not worker.is_active:
+            raise WorkerInactiveError(str(request.worker_id))
 
         entry = LaborEntry(
             id=uuid4(),

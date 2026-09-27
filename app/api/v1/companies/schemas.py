@@ -15,6 +15,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
+from app.domain.companies.bank_details import normalize_bic, normalize_iban
+from app.domain.companies.masking import is_masked
+
 
 class _StrictBase(BaseModel):
     model_config = {"extra": "forbid"}
@@ -61,6 +64,22 @@ def _validate_logo_url(v: Optional[HttpUrl]) -> Optional[HttpUrl]:
     return v
 
 
+def _validate_iban(v: Optional[str]) -> Optional[str]:
+    """Normalise and check an IBAN; an empty string (clear) and None (unchanged) pass through."""
+    return normalize_iban(v) if v else v
+
+
+def _validate_bic(v: Optional[str]) -> Optional[str]:
+    return normalize_bic(v) if v else v
+
+
+def _reject_blank(v: Optional[str]) -> Optional[str]:
+    """A name or address of spaces only is as empty as ''."""
+    if v is not None and not v.strip():
+        raise ValueError("must not be blank")
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Company request schemas
 # ---------------------------------------------------------------------------
@@ -73,16 +92,31 @@ class CreateCompanyRequest(_StrictBase):
     address: str = Field(..., min_length=1, max_length=2000)
     siret: Optional[str] = Field(None, pattern=r"^\d{14}$")
     tva_number: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{2,16}$")
-    iban: Optional[str] = None
-    bic: Optional[str] = None
+    iban: Optional[str] = Field(None, max_length=64)
+    bic: Optional[str] = Field(None, max_length=64)
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+
+    @field_validator("legal_name", "address", mode="after")
+    @classmethod
+    def reject_blank(cls, v: Optional[str]) -> Optional[str]:
+        return _reject_blank(v)
 
     @field_validator("logo_url", mode="after")
     @classmethod
     def validate_logo_url(cls, v: Optional[HttpUrl]) -> Optional[HttpUrl]:
         return _validate_logo_url(v)
+
+    @field_validator("iban", mode="after")
+    @classmethod
+    def validate_iban(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iban(v)
+
+    @field_validator("bic", mode="after")
+    @classmethod
+    def validate_bic(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_bic(v)
 
 
 class UpdateCompanyRequest(_StrictBase):
@@ -95,16 +129,38 @@ class UpdateCompanyRequest(_StrictBase):
     address: Optional[str] = Field(None, min_length=1, max_length=2000)
     siret: Optional[str] = Field(None, pattern=r"^\d{14}$")
     tva_number: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{2,16}$")
-    iban: Optional[str] = None
-    bic: Optional[str] = None
+    iban: Optional[str] = Field(None, max_length=64)
+    bic: Optional[str] = Field(None, max_length=64)
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+
+    @field_validator("siret", "tva_number", "iban", "bic", mode="before")
+    @classmethod
+    def masked_means_unchanged(cls, v):
+        # A form seeded from the masked read sends "····0189" back; treat it as
+        # "leave unchanged" instead of failing the SIRET/TVA pattern or storing it.
+        return None if isinstance(v, str) and is_masked(v) else v
+
+    @field_validator("legal_name", "address", mode="after")
+    @classmethod
+    def reject_blank(cls, v: Optional[str]) -> Optional[str]:
+        return _reject_blank(v)
 
     @field_validator("logo_url", mode="after")
     @classmethod
     def validate_logo_url(cls, v: Optional[HttpUrl]) -> Optional[HttpUrl]:
         return _validate_logo_url(v)
+
+    @field_validator("iban", mode="after")
+    @classmethod
+    def validate_iban(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iban(v)
+
+    @field_validator("bic", mode="after")
+    @classmethod
+    def validate_bic(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_bic(v)
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +203,8 @@ class AttachedUserRow(_StrictBase):
     email: Optional[str] = None
     display_name: Optional[str] = None
     phone: Optional[str] = None
+    # False for a deactivated or erased account, so pickers can leave it out.
+    is_active: Optional[bool] = None
     companies: list[CompanySummary] = Field(default_factory=list)
     assigned_project_ids: list[UUID] = Field(default_factory=list)
 

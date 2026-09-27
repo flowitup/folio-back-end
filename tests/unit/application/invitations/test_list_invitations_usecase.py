@@ -214,3 +214,40 @@ class TestListInvitations:
         )
         result = uc.execute(requester_id=requester.id, project_id=project_id)
         assert len(result) == 3
+
+
+class TestExpiryIsReadFromTheDate:
+    """An invite nobody opened keeps the stored status PENDING past its expiry."""
+
+    def _setup(self, pending, expired=()):
+        requester = _make_user()
+        project_id = uuid4()
+        inv_repo = MagicMock()
+        inv_repo.list_by_project.side_effect = lambda pid, status=None: list(
+            pending if status == InvitationStatus.PENDING else expired
+        )
+        user_repo = MagicMock()
+        user_repo.find_by_id.side_effect = lambda uid: (
+            requester if uid == requester.id else MagicMock(display_or_email="Inviter")
+        )
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, authz_reader=_reader(project_id))
+        return uc, requester.id, project_id
+
+    @staticmethod
+    def _lapsed():
+        inv = _make_inv()
+        inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        return inv
+
+    def test_a_lapsed_invite_is_not_pending(self):
+        live, lapsed = _make_inv(), self._lapsed()
+        uc, requester_id, project_id = self._setup([live, lapsed])
+        result = uc.execute(requester_id=requester_id, project_id=project_id, status_filter="pending")
+        assert [r.id for r in result] == [live.id]
+
+    def test_a_lapsed_invite_is_listed_as_expired(self):
+        lapsed, stored_expired = self._lapsed(), _make_inv(status=InvitationStatus.EXPIRED)
+        uc, requester_id, project_id = self._setup([_make_inv(), lapsed], [stored_expired])
+        result = uc.execute(requester_id=requester_id, project_id=project_id, status_filter="expired")
+        assert {r.id for r in result} == {lapsed.id, stored_expired.id}
+        assert all(r.status == InvitationStatus.EXPIRED for r in result)

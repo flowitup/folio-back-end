@@ -56,6 +56,10 @@ class TargetNotCompanyMemberError(AssignmentError):
     """The named user has no `user_company_access` row for this project's company."""
 
 
+class TargetInactiveError(AssignmentError):
+    """The named user's account is deactivated (or erased): they cannot be newly assigned."""
+
+
 @dataclass(frozen=True)
 class AssignProjectMemberInput:
     caller_id: UUID
@@ -105,12 +109,14 @@ class AssignProjectMemberUseCase:
         membership_repo: "ProjectMembershipRepositoryPort",
         role_setter: Any = None,  # SetMemberRoleUseCase — needed for role="manager"
         db_session: Any = None,  # TransactionalSessionPort, handed to the role setter
+        user_repo: Any = None,  # anything with is_sign_in_allowed(user_id) -> bool
     ) -> None:
         self._authz = authz_reader
         self._access = access_repo
         self._membership = membership_repo
         self._role_setter = role_setter
         self._db = db_session
+        self._users = user_repo
 
     def execute(self, inp: AssignProjectMemberInput) -> str:
         """Assign the target and return their company role afterwards.
@@ -129,6 +135,8 @@ class AssignProjectMemberUseCase:
         access = self._access.find(inp.target_user_id, company_id)
         if access is None:
             raise TargetNotCompanyMemberError(f"user {inp.target_user_id} is not a member of company {company_id}")
+        if self._users is not None and not self._users.is_sign_in_allowed(inp.target_user_id):
+            raise TargetInactiveError(f"user {inp.target_user_id} is deactivated")
 
         _forbid_manager_on_a_non_member(self._authz, caller_role, inp.target_user_id, company_id)
 

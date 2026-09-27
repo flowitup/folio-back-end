@@ -197,3 +197,39 @@ class TestApplyTemplate:
         )
         # other_token doesn't own the template → 404 (ownership checked first)
         assert resp.status_code == 404
+
+
+class TestTemplateLineSections:
+    """A template line keeps its section (`category`) on create, update and apply."""
+
+    def _line(self, category):
+        return {"description": "Tiling", "quantity": "2", "unit_price": "40", "vat_rate": "10", "category": category}
+
+    def test_category_round_trips_through_create_get_update_and_apply(self, inv_client, billing_token, billing_profile):
+        created = inv_client.post(
+            "/api/v1/billing-document-templates",
+            json={"kind": "devis", "name": f"Sections {uuid.uuid4().hex[:6]}", "items": [self._line("Bathroom")]},
+            headers=_auth(billing_token),
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        tpl_id = created.get_json()["id"]
+        assert created.get_json()["items"][0]["category"] == "Bathroom"
+
+        fetched = inv_client.get(f"/api/v1/billing-document-templates/{tpl_id}", headers=_auth(billing_token))
+        assert fetched.get_json()["items"][0]["category"] == "Bathroom"
+
+        updated = inv_client.put(
+            f"/api/v1/billing-document-templates/{tpl_id}",
+            json={"items": [self._line("Kitchen"), self._line("Hall")]},
+            headers=_auth(billing_token),
+        )
+        assert updated.status_code == 200, updated.get_data(as_text=True)
+        assert [it["category"] for it in updated.get_json()["items"]] == ["Kitchen", "Hall"]
+
+        applied = inv_client.post(
+            f"/api/v1/billing-documents/from-template/{tpl_id}",
+            json={"recipient_name": "Client", "company_id": billing_profile["company_id"]},
+            headers=_auth(billing_token),
+        )
+        assert applied.status_code == 201, applied.get_data(as_text=True)
+        assert [it["category"] for it in applied.get_json()["items"]] == ["Kitchen", "Hall"]

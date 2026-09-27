@@ -6,6 +6,7 @@ Broader tests land in phase 08.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -15,7 +16,12 @@ import pytest
 from app.application.billing.import_billing_document_usecase import ImportBillingDocumentUseCase
 from app.application.billing.dtos import ImportBillingDocumentInput, ItemInput
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
-from app.domain.billing.exceptions import BillingDocumentAlreadyExistsError, MissingCompanyProfileError
+from app.domain.billing.exceptions import (
+    BillingDocumentAlreadyExistsError,
+    ForbiddenCompanyBillingError,
+    ForbiddenProjectAccessError,
+    MissingCompanyProfileError,
+)
 
 from tests.unit.application.billing.conftest import (
     InMemoryBillingDocumentRepository,
@@ -194,3 +200,62 @@ class TestImportBillingDocumentUseCase:
         )
         with pytest.raises(MissingCompanyProfileError):
             setup["uc"].execute(inp, setup["session"])
+
+
+class _Project:
+    def __init__(self, owner_id, user_ids=None):
+        self.id = uuid4()
+        self.owner_id = owner_id
+        self.user_ids = user_ids or []
+
+
+class _ProjectRepo:
+    def __init__(self, *projects):
+        self._store = {p.id: p for p in projects}
+
+    def find_by_id(self, project_id):
+        return self._store.get(project_id)
+
+
+class TestImportAuthorization:
+    """Importing writes the company's billing, so it follows the create rules."""
+
+    def _usecase(self, access_role="admin", projects=()):
+        user_id, company_id = uuid4(), uuid4()
+        company_repo = InMemoryCompanyRepository()
+        company_repo.save(make_company(owner_id=user_id, company_id=company_id))
+        access_repo = InMemoryUserCompanyAccessRepository()
+        access_repo.save(make_access(user_id, company_id, role=access_role))
+        uc = ImportBillingDocumentUseCase(
+            doc_repo=InMemoryBillingDocumentRepository(),
+            counter_repo=InMemoryBillingNumberCounterRepository(),
+            company_repo=company_repo,
+            access_repo=access_repo,
+            project_repo=_ProjectRepo(*projects),
+        )
+        return uc, user_id, company_id
+
+    def test_member_of_the_company_cannot_import(self):
+        uc, user_id, company_id = self._usecase(access_role="member")
+        with pytest.raises(ForbiddenCompanyBillingError):
+            uc.execute(_minimal_input(user_id, company_id), _FakeSession())
+
+    def test_project_the_caller_cannot_read_is_refused(self):
+        foreign = _Project(owner_id=uuid4())
+        uc, user_id, company_id = self._usecase(projects=[foreign])
+        inp = replace(_minimal_input(user_id, company_id), project_id=foreign.id)
+        with pytest.raises(ForbiddenProjectAccessError):
+            uc.execute(inp, _FakeSession())
+
+    def test_unknown_project_is_a_validation_error_not_a_crash(self):
+        uc, user_id, company_id = self._usecase()
+        inp = replace(_minimal_input(user_id, company_id), project_id=uuid4())
+        with pytest.raises(ValueError):
+            uc.execute(inp, _FakeSession())
+
+    def test_admin_can_import_into_a_project_they_belong_to(self):
+        uc, user_id, company_id = self._usecase()
+        project = _Project(owner_id=uuid4(), user_ids=[user_id])
+        uc._project_repo = _ProjectRepo(project)
+        inp = replace(_minimal_input(user_id, company_id), project_id=project.id)
+        assert uc.execute(inp, _FakeSession()).document_number == "FAC2025001"

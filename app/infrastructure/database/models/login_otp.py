@@ -1,4 +1,4 @@
-"""ORM row for a one-time SMS login code."""
+"""ORM row for a one-time SMS code (sign-in / sign-up, or phone-number change)."""
 
 from __future__ import annotations
 
@@ -27,3 +27,5 @@ class LoginOtpOrm(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # OtpPurpose value; a code only works for the flow it was issued for.
+    purpose: Mapped[str] = mapped_column(String(20), nullable=False, default="sign_in", server_default="sign_in")

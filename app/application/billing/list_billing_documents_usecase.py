@@ -56,9 +56,10 @@ class ListBillingDocumentsUseCase:
         limit: int = 50,
         offset: int = 0,
         is_superadmin: bool = False,
+        search: Optional[str] = None,
     ) -> ListBillingDocumentsResult:
         # H1: Verify project:read access before filtering by project_id
-        assert_project_read_access(self._project_repo, project_id, user_id)
+        assert_project_read_access(self._project_repo, project_id, user_id, self._access_repo)
 
         docs, total = self._doc_repo.list_visible(
             kind,
@@ -70,6 +71,7 @@ class ListBillingDocumentsUseCase:
             company_id=company_id,
             limit=limit,
             offset=offset,
+            search=(search or "").strip() or None,
         )
         # One batch query for the whole page: a devis carries the facture it became.
         converted = (

@@ -33,6 +33,8 @@ class InvoiceExportContext:
     generated_by_email: str
     # Optional invoice-type scope — None means export all types
     type_filter: Optional[InvoiceType] = field(default=None)
+    # Language of the labels: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,10 @@ class InvoiceBundle:
     """The full data set passed to builders."""
 
     invoices: List[Invoice]  # sorted by (issue_date, type, invoice_number)
-    subtotals_by_type: List[TypeSubtotal]  # in the order RELEASED_FUNDS, LABOR, MATERIALS_SERVICES (skip empty)
+    # In the order RELEASED_FUNDS, LABOR, MATERIALS_SERVICES, OTHERS, RETURN (skip empty).
+    subtotals_by_type: List[TypeSubtotal]
+    # Total expenses: every row except released funds (money in); returns net in.
     grand_total: Decimal
     invoice_count: int
+    # Funds released to the project (money in), shown apart from the expenses.
+    released_total: Decimal = Decimal("0")

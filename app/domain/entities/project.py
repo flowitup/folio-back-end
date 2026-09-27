@@ -27,6 +27,8 @@ class Project:
     budget: Optional[Decimal] = None
     # Free-text source / funding description for the budget (e.g. "Client contract").
     budget_source: Optional[str] = None
+    # Owning company; its admins can read every project of the company without an assignment.
+    company_id: Optional[UUID] = None
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Project):

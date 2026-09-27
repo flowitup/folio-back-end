@@ -50,6 +50,7 @@ class ImportMembersUseCase:
         now = datetime.now(timezone.utc)
         items: list[ImportedMember] = []
         skipped_person_ids: list = []
+        already_member_person_ids: list = []
 
         for person_id in inp.person_ids:
             source_profile = self._company_persons.find(inp.from_company_id, person_id)
@@ -65,6 +66,7 @@ class ImportMembersUseCase:
                 continue
 
             target_profile = self._company_persons.find(inp.company_id, person_id)
+            added = target_profile is None
             if target_profile is None:
                 target_profile = self._company_persons.save(
                     CompanyPerson(
@@ -90,6 +92,13 @@ class ImportMembersUseCase:
                         role=CompanyRole.MEMBER.value,
                     )
                 )
+                added = True
+
+            if not added:
+                # Already in the target company's directory (and attached, when linked):
+                # nothing was imported, so it is not counted as imported.
+                already_member_person_ids.append(person_id)
+                continue
 
             items.append(
                 ImportedMember(
@@ -101,4 +110,8 @@ class ImportMembersUseCase:
             )
 
         db_session.commit()
-        return ImportMembersResult(items=items, skipped_person_ids=skipped_person_ids)
+        return ImportMembersResult(
+            items=items,
+            skipped_person_ids=skipped_person_ids,
+            already_member_person_ids=already_member_person_ids,
+        )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, datetime, timezone
 from typing import Tuple
@@ -11,6 +12,7 @@ import pydantic
 from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.project_photos import project_photos_bp
 from app.api.v1.project_photos.schemas import ListQueryParams, UpdatePhotoBody
@@ -37,6 +39,8 @@ from app.application.project_photos.upload_project_photo import (
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+_log = logging.getLogger(__name__)
 
 
 def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
@@ -152,7 +156,9 @@ def upload_project_photo(project_id: str):
     except UnsupportedImageTypeError as exc:
         return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
     except ThumbnailGenerationError as exc:
-        return _error_response("INVALID_IMAGE", str(exc), 422)
+        # The decoder's message names internals (object reprs, limits): log it, send a fixed text.
+        _log.info("photo thumbnail failed project=%s: %s", project_id, exc)
+        return _error_response("INVALID_IMAGE", "The file could not be read as an image or video", 422)
 
     return jsonify(_serialize(photo)), 201
 
@@ -170,7 +176,7 @@ def list_project_photos(project_id: str):
     try:
         params = ListQueryParams.model_validate(request.args.to_dict())
     except pydantic.ValidationError as exc:
-        return _error_response("INVALID_PARAMS", str(exc), 422)
+        return _error_response("INVALID_PARAMS", validation_message(exc), 422)
 
     container = get_container()
     result = container.list_project_photos_usecase.execute(UUID(project_id), params.page, params.per_page)
@@ -272,9 +278,11 @@ def update_project_photo(project_id: str, photo_id: str):
     try:
         params = UpdatePhotoBody.model_validate(body)
     except pydantic.ValidationError as exc:
-        return _error_response("INVALID_PARAMS", str(exc), 422)
+        return _error_response("INVALID_PARAMS", validation_message(exc), 422)
 
-    if params.caption is None and params.captured_at is None:
+    # A caption sent as null (or blank) clears it, so presence — not value — decides.
+    caption_sent = "caption" in params.model_fields_set
+    if not caption_sent and params.captured_at is None:
         return _error_response("MISSING_FIELDS", "At least one of caption or captured_at must be provided", 422)
 
     container = get_container()
@@ -291,8 +299,8 @@ def update_project_photo(project_id: str, photo_id: str):
     # Build sentinel-aware kwargs so omitted fields are not overwritten.
 
     update_kwargs: dict = {}
-    if params.caption is not None:
-        update_kwargs["caption"] = params.caption
+    if caption_sent:
+        update_kwargs["caption"] = params.caption or None
     if params.captured_at is not None:
         # Normalize to UTC if no tzinfo provided
         dt = params.captured_at

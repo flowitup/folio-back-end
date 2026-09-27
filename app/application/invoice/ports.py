@@ -150,9 +150,13 @@ class IInvoiceRepository(ABC):
         date_from: date,
         date_to: date,
         type_filter: Optional[InvoiceType] = None,
+        by_payment_month: bool = False,
     ) -> list[Invoice]:
         """Return invoices for the project where issue_date ∈ [date_from, date_to],
-        optionally filtered by type. Returns [] if none."""
+        optionally filtered by type. Returns [] if none.
+
+        by_payment_month places a labor payment that has a payment month
+        (service_month) by that month instead of its issue date."""
         ...
 
     @abstractmethod
@@ -198,6 +202,11 @@ class IInvoiceRepository(ABC):
         Each bucket keeps its own independent rules and floor-at-0 exactly as
         sum_company_spent / sum_personal_spent define them.
         """
+        ...
+
+    @abstractmethod
+    def find_by_source_billing_document_id(self, source_doc_id: UUID) -> Optional[Invoice]:
+        """Return the released_funds invoice auto-created for a paid facture, or None."""
         ...
 
     @abstractmethod

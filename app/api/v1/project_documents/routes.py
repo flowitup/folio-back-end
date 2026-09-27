@@ -22,6 +22,7 @@ import pydantic
 from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.project_documents import project_documents_bp
 from app.api.v1.project_documents.schemas import (
@@ -47,6 +48,7 @@ from app.application.project_documents import (
 )
 from app.application.project_documents.confirm_project_document_upload import (
     DocumentNotInStorageError,
+    StorageKeyMismatchError,
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -100,7 +102,7 @@ def list_project_documents(project_id: str):
     try:
         params = ListQueryParams.model_validate(raw)
     except pydantic.ValidationError as exc:
-        return _error_response("INVALID_PARAMS", str(exc), 422)
+        return _error_response("INVALID_PARAMS", validation_message(exc), 422)
 
     filters = ListFiltersDTO(
         kinds=tuple(params.type),
@@ -179,7 +181,7 @@ def upload_project_document(project_id: str):
 def presign_project_document(project_id: str):
     """Generate a presigned PUT URL for direct-to-S3 browser upload."""
     body = request.get_json(silent=True)
-    if not body:
+    if not isinstance(body, dict) or not body:
         return _error_response("INVALID_BODY", "Request body must be JSON with filename, content_type, size_bytes", 400)
 
     filename = body.get("filename")
@@ -240,7 +242,7 @@ def presign_project_document(project_id: str):
 def confirm_project_document_upload(project_id: str):
     """Confirm a presigned upload — verify S3 object exists and persist DB row."""
     body = request.get_json(silent=True)
-    if not body:
+    if not isinstance(body, dict) or not body:
         return _error_response("INVALID_BODY", "Request body must be JSON", 400)
 
     doc_id_str = body.get("doc_id")
@@ -297,6 +299,14 @@ def confirm_project_document_upload(project_id: str):
             "File not found in storage — upload may have failed or expired",
             404,
         )
+    except StorageKeyMismatchError as exc:
+        return _error_response("KEY_MISMATCH", str(exc), 400)
+    except EmptyFileError as exc:
+        return _error_response("EMPTY_FILE", str(exc), 400)
+    except DocumentFileTooLargeError as exc:
+        return _error_response("FILE_TOO_LARGE", str(exc), 413)
+    except UnsupportedDocumentTypeError as exc:
+        return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
 
     return jsonify(_serialize(doc)), 201
 
@@ -390,7 +400,7 @@ def rename_project_document(project_id: str, document_id: str):
         return _error_response("INVALID_ID", "Invalid document id", 400)
 
     body = request.get_json(silent=True)
-    if not body or "filename" not in body:
+    if not isinstance(body, dict) or "filename" not in body:
         return _error_response("MISSING_FILENAME", "Request body must include 'filename'", 400)
 
     new_filename = body["filename"]
@@ -478,7 +488,7 @@ def update_document_tags(project_id: str, document_id: str):
         return _error_response("INVALID_ID", "Invalid document id", 400)
 
     body = request.get_json(silent=True)
-    if not body or "tags" not in body:
+    if not isinstance(body, dict) or "tags" not in body:
         return _error_response("MISSING_TAGS", "Request body must include 'tags'", 400)
 
     raw_tags = body["tags"]

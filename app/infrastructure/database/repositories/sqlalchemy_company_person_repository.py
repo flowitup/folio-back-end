@@ -122,6 +122,7 @@ class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
         row.is_active = profile.is_active
         row.phone_normalized = profile.phone_normalized
         row.pending_expires_at = profile.pending_expires_at
+        row.pending_company_role = profile.pending_company_role
         row.created_by_user_id = profile.created_by_user_id
         row.created_at = profile.created_at
 
@@ -138,4 +139,5 @@ class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
             phone_normalized=row.phone_normalized,
             pending_expires_at=_ensure_utc(row.pending_expires_at),
             created_by_user_id=row.created_by_user_id,
+            pending_company_role=row.pending_company_role,
         )

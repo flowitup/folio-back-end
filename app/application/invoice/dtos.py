@@ -1,7 +1,7 @@
 """Shared response DTOs for the invoice application layer."""
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Optional
 
 from app.domain.entities.invoice import Invoice
@@ -18,8 +18,16 @@ def money(value: Decimal) -> float:
     Domain totals keep full precision (TTC with per-line VAT can carry
     sub-cent digits); money leaves the API rounded to 2 dp HALF_UP, matching
     how billing documents display their totals.
+
+    The precision is widened to the value's size: at the default 28 digits,
+    quantize() raises on a larger amount, which made a single oversized expense
+    fail every read of its project's ledger.
     """
-    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    if not value.is_finite():
+        return float(value)
+    with localcontext() as ctx:
+        ctx.prec = max(ctx.prec, value.adjusted() + 3)
+        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 @dataclass

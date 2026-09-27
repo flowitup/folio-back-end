@@ -152,6 +152,20 @@ def test_unauth_returns_401(inv_export_client, inv_export_app):
     assert resp.status_code == 401
 
 
+def test_locale_renders_french_labels_and_rejects_unknown_locales(inv_export_client, inv_export_app, admin_token):
+    """?locale=fr localises the file; a locale outside en/fr/vi is a 422."""
+    import openpyxl
+
+    url = _export_url(inv_export_app._test_project_id)
+    base = {"from": "2026-01", "to": "2026-01", "format": "xlsx"}
+    resp = inv_export_client.get(url, query_string={**base, "locale": "fr"}, headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert openpyxl.load_workbook(BytesIO(resp.data)).sheetnames[0] == "Synthèse"
+
+    bad = inv_export_client.get(url, query_string={**base, "locale": "de"}, headers=_auth(admin_token))
+    assert bad.status_code == 422
+
+
 def test_missing_format_returns_422(inv_export_client, inv_export_app, admin_token):
     """Missing 'format' param → 422 validation_error."""
     url = _export_url(inv_export_app._test_project_id)
@@ -286,7 +300,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
     - openpyxl opens successfully
     - Sheet names include Summary, Released Funds invoices, Labor invoices
     - "Materials & Services invoices" sheet absent (no materials & services invoices seeded)
-    - Summary sheet contains GRAND TOTAL label
+    - Summary sheet contains TOTAL EXPENSES label
 
     pdf assertions:
     - 200, pdf content-type, %PDF- magic bytes
@@ -357,11 +371,11 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
         "Materials & Services invoices" not in sheet_names
     ), f"Unexpected 'Materials & Services invoices' sheet (none seeded); got: {sheet_names}"
 
-    # Summary sheet must contain GRAND TOTAL label somewhere
+    # Summary sheet must contain the TOTAL EXPENSES label somewhere
     ws_summary = wb["Summary"]
     all_summary_values = [ws_summary.cell(row=r, column=1).value for r in range(1, 30)]
-    has_grand_total = any(v and "GRAND TOTAL" in str(v).upper() for v in all_summary_values)
-    assert has_grand_total, f"GRAND TOTAL label not found in Summary col A: {all_summary_values}"
+    has_grand_total = any(v and "TOTAL EXPENSES" in str(v).upper() for v in all_summary_values)
+    assert has_grand_total, f"TOTAL EXPENSES label not found in Summary col A: {all_summary_values}"
 
     # --- pdf ---
     resp_pdf = inv_export_client.get(
@@ -375,3 +389,40 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
 
     page_count = resp_pdf.data.count(b"/Type /Page")
     assert page_count >= 4, f"Expected >= 4 /Type /Page markers (1 summary + 3 invoices); got {page_count}"
+
+
+def test_labor_pay_is_exported_in_its_payment_month(inv_export_client, inv_export_app, admin_token):
+    """A labor payment issued in September for August pay is in the August export, as in the list."""
+    import openpyxl
+
+    from app import db
+
+    with inv_export_app.app_context():
+        import uuid
+
+        db.session.add(
+            InvoiceModel(
+                id=uuid4(),
+                project_id=uuid.UUID(inv_export_app._test_project_id),
+                invoice_number="PAYMONTH-L001",
+                type="labor",
+                issue_date=datetime.date(2025, 9, 5),
+                service_month=datetime.date(2025, 8, 1),
+                recipient_name="August pay",
+                items=[{"description": "Pay", "quantity": 1.0, "unit_price": 300.0}],
+            )
+        )
+        db.session.commit()
+
+    def _recipients(month: str) -> set:
+        resp = inv_export_client.get(
+            _export_url(inv_export_app._test_project_id),
+            query_string={"from": month, "to": month, "format": "xlsx"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        wb = openpyxl.load_workbook(BytesIO(resp.data))
+        return {c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row}
+
+    assert "August pay" in _recipients("2025-08")
+    assert "August pay" not in _recipients("2025-09")

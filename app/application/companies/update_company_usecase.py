@@ -17,6 +17,7 @@ from app.application.companies.ports import (
     TransactionalSessionPort,
 )
 from app.domain.companies.exceptions import CompanyNotFoundError
+from app.domain.companies.masking import SENSITIVE_FIELDS, is_masked, mask_company
 
 
 class UpdateCompanyUseCase:
@@ -62,10 +63,17 @@ class UpdateCompanyUseCase:
         # (handled at Pydantic schema level in phase 04).
         for field in ("siret", "tva_number", "iban", "bic", "logo_url", "default_payment_terms"):
             val = getattr(inp, field)
-            if val is not None:
-                updates[field] = val
+            if val is None:
+                continue
+            if field in SENSITIVE_FIELDS and is_masked(val):
+                # The masked value a read returned came back unchanged: keep the stored one.
+                continue
+            updates[field] = val
 
         updated = company.with_updates(**updates)
         saved = self._company_repo.save(updated)
         db_session.commit()
-        return CompanyResponse.from_entity(saved)
+        # Same masking as a read (GET /companies/<id>): only platform admins see bank details in full.
+        return CompanyResponse.from_entity(
+            mask_company(saved, full=self._role_checker.is_platform_admin(inp.caller_id))
+        )

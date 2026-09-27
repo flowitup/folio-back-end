@@ -58,6 +58,8 @@ class CompanyPersonModel(Base):
     # same convention as persons.ix_persons_phone).
     phone_normalized = Column(String(32), nullable=True)
     pending_expires_at = Column(DateTime(timezone=True), nullable=True)
+    # Company role chosen for a pending person, applied at signup (see CompanyPerson).
+    pending_company_role = Column(String(16), nullable=True)
     created_by_user_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

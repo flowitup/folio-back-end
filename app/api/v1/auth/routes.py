@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
+from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
 from app.api.v1.auth.schemas import (
@@ -28,6 +29,9 @@ from app.api.v1.auth.schemas import (
     OtpRequestBody,
     OtpRequestResponse,
     OtpVerifyBody,
+    PhoneChangeConfirmBody,
+    PhoneChangeConfirmResponse,
+    PhoneChangeRequestBody,
     RefreshResponse,
     SignupRequestBody,
     SignupVerifyBody,
@@ -48,6 +52,7 @@ from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
     OtpThrottledError,
     PhoneAlreadyRegisteredError,
+    PhoneUnchangedError,
     UserInactiveError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
@@ -135,7 +140,7 @@ def _login_response(container, result: LoginResult):
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
-        data = OtpRequestBody(**(request.get_json(silent=True) or {}))
+        data = OtpRequestBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone")
     container = get_container()
@@ -145,8 +150,10 @@ def request_otp():
         result = container.request_otp_usecase.execute(data.phone)
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
-    except OtpThrottledError:
-        return _error(429, "TooManyRequests", "A code was sent recently. Wait a minute and try again.")
+    except OtpThrottledError as exc:
+        error, message, headers = otp_throttled(exc)
+        body, status = _error(429, error, message)
+        return body, status, headers
     except SmsSendError:
         return _error(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
     from app import db
@@ -166,7 +173,7 @@ def request_otp():
 @limiter.limit("5 per minute")
 def verify_otp():
     try:
-        data = OtpVerifyBody(**(request.get_json(silent=True) or {}))
+        data = OtpVerifyBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone, code")
     container = get_container()
@@ -181,7 +188,7 @@ def verify_otp():
     except (OtpInvalidError, UserInactiveError):
         # The attempt counter moved; persist it so guesses really are limited.
         db.session.commit()
-        return _error(401, "Unauthorized", "Invalid or expired code")
+        return _error(401, "Unauthorized", INVALID_CODE_MESSAGE)
     db.session.commit()
     return _login_response(container, result)
 
@@ -331,9 +338,14 @@ def _me_payload(container: Any, user: Any) -> UserResponse:
 @jwt_required()
 @limiter.limit("20 per hour", key_func=jwt_user_key)
 def update_current_user():
-    """Self-service profile edit (Settings › Profile). The phone becomes the sign-in identity."""
+    """Self-service profile edit (Settings › Profile).
+
+    The phone is the sign-in identity: it may be re-sent unchanged, but clearing or replacing it
+    is refused (400 ``PhoneChangeNotAllowed``) because no code proves the caller holds a new number;
+    ``/auth/me/phone/request-code`` + ``/auth/me/phone/confirm`` do that.
+    """
     try:
-        data = UpdateMeRequest(**(request.get_json(silent=True) or {}))
+        data = UpdateMeRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: display_name, phone")
     provided = data.model_dump(exclude_unset=True)
@@ -345,7 +357,7 @@ def update_current_user():
     if not user:
         return _error(404, "NotFound", "User not found")
 
-    profile_error = apply_profile_fields(user, provided, container.user_repository)
+    profile_error = apply_profile_fields(user, provided, container.user_repository, allow_phone_change=False)
     if profile_error is not None:
         return _error(*profile_error)
 
@@ -354,6 +366,118 @@ def update_current_user():
 
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())
+
+
+_PHONE_TAKEN = "This phone number is already used by another account."
+
+
+@auth_bp.route("/me/phone/request-code", methods=["POST"])
+@openapi_doc(
+    summary="Text a code to the new phone number the current user wants to sign in with",
+    request=PhoneChangeRequestBody,
+    responses={202: OtpRequestResponse},
+    tags=["auth"],
+)
+@jwt_required()
+@limiter.limit("5 per minute", key_func=jwt_user_key)
+def request_phone_change_code():
+    """Step 1 of a verified number change: the code goes to the NEW number, never the current one.
+
+    Same rules as sign-in codes (French numbers only, TTL, resend throttle, hourly cap). 409 when
+    another account already signs in with that number (whose is never revealed), 400
+    ``PhoneUnchanged`` when it is already the caller's number.
+    """
+    try:
+        data = PhoneChangeRequestBody(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: phone")
+    container = get_container()
+    usecase = container.request_phone_change_code_usecase
+    if usecase is None:
+        return _error(500, "ServerError", "Phone change not configured")
+    try:
+        result = usecase.execute(UUID(get_jwt_identity()), data.phone)
+    except InvalidPhoneNumberError:
+        return _error(400, "ValidationError", "Invalid phone number")
+    except PhoneUnchangedError:
+        return _error(400, "PhoneUnchanged", "This is already your phone number.")
+    except PhoneAlreadyRegisteredError:
+        return _error(409, "Conflict", _PHONE_TAKEN)
+    except UserInactiveError:
+        return _error(401, "Unauthorized", "User account is deactivated")
+    except OtpThrottledError:
+        return _error(429, "TooManyRequests", "A code was sent recently. Wait a minute and try again.")
+    except SmsSendError:
+        return _error(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
+    from app import db
+
+    db.session.commit()
+    return jsonify(OtpRequestResponse(expires_in=result.expires_in).model_dump()), 202
+
+
+@auth_bp.route("/me/phone/confirm", methods=["POST"])
+@openapi_doc(
+    summary="Switch the current user's sign-in phone to the new number once its SMS code checks out",
+    request=PhoneChangeConfirmBody,
+    responses={200: PhoneChangeConfirmResponse},
+    tags=["auth"],
+)
+@jwt_required()
+@limiter.limit("5 per minute", key_func=jwt_user_key)
+def confirm_phone_change():
+    """Step 2: swap the number and sign the account out of every other device.
+
+    Every token issued before the change is refused from then on, the caller's included; the
+    caller stays signed in with the fresh pair this response carries (body, plus cookies for
+    browsers). The refresh token is persistent under the same policy as sign-in.
+
+    400 ``InvalidCode`` for a wrong, expired, used-up or sign-in code (attempts are persisted so
+    guesses stay limited). Not 401: the caller IS authenticated, and clients treat a 401 on an
+    authenticated route as an expired session (refresh and replay, which would spend a second
+    attempt). 409 if another account took the number in the meantime.
+    """
+    try:
+        data = PhoneChangeConfirmBody(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: phone, code")
+    container = get_container()
+    usecase = container.confirm_phone_change_usecase
+    if usecase is None:
+        return _error(500, "ServerError", "Phone change not configured")
+    from app import db
+
+    try:
+        user = usecase.execute(UUID(get_jwt_identity()), data.phone, data.code)
+    except InvalidPhoneNumberError:
+        return _error(400, "ValidationError", "Invalid phone number")
+    except PhoneUnchangedError:
+        return _error(400, "PhoneUnchanged", "This is already your phone number.")
+    except PhoneAlreadyRegisteredError:
+        return _error(409, "Conflict", _PHONE_TAKEN)
+    except UserInactiveError:
+        return _error(401, "Unauthorized", "User account is deactivated")
+    except OtpInvalidError:
+        # The attempt counter moved; persist it so guesses really are limited.
+        db.session.commit()
+        return _error(400, "InvalidCode", "Invalid or expired code")
+    db.session.commit()
+
+    token_issuer = container.token_issuer
+    # The cut-off has whole-second precision; revoke the caller's own old tokens by JTI too, so
+    # they die even when issued within the same second as the change.
+    old_jti = get_jwt().get("jti")
+    if old_jti:
+        token_issuer.revoke_token(old_jti, token_type="access")
+    _revoke_presented_refresh_tokens(token_issuer)
+    access_token = token_issuer.create_access_token(user.id)
+    refresh_token = token_issuer.create_refresh_token(user.id, persistent=_persistent_sessions())
+    body = PhoneChangeConfirmResponse(
+        **_me_payload(container, user).model_dump(), access_token=access_token, refresh_token=refresh_token
+    )
+    response = make_response(jsonify(body.model_dump(mode="json")))
+    set_access_cookies(response, access_token)
+    set_refresh_cookies(response, refresh_token)
+    return response
 
 
 @auth_bp.route("/me", methods=["DELETE"])
@@ -431,7 +555,7 @@ def delete_current_user():
 @limiter.limit("5 per minute")
 def request_signup_otp():
     try:
-        data = SignupRequestBody(**(request.get_json(silent=True) or {}))
+        data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone")
     container = get_container()
@@ -443,8 +567,10 @@ def request_signup_otp():
         return _error(400, "ValidationError", "Invalid phone number")
     except PhoneAlreadyRegisteredError:
         return _error(409, "Conflict", "This phone number already has an account. Sign in instead.")
-    except OtpThrottledError:
-        return _error(429, "TooManyRequests", "A code was sent recently. Wait a minute and try again.")
+    except OtpThrottledError as exc:
+        error, message, headers = otp_throttled(exc)
+        body, status = _error(429, error, message)
+        return body, status, headers
     except SmsSendError:
         return _error(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
     from app import db
@@ -464,7 +590,7 @@ def request_signup_otp():
 @limiter.limit("5 per minute")
 def verify_signup_otp():
     try:
-        data = SignupVerifyBody(**(request.get_json(silent=True) or {}))
+        data = SignupVerifyBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone, code, display_name")
     container = get_container()
@@ -480,7 +606,7 @@ def verify_signup_otp():
         return _error(400, "ValidationError", "Invalid phone number")
     except OtpInvalidError:
         db.session.commit()
-        return _error(401, "Unauthorized", "Invalid or expired code")
+        return _error(401, "Unauthorized", INVALID_CODE_MESSAGE)
     except PhoneAlreadyRegisteredError:
         db.session.commit()
         return _error(409, "Conflict", "This phone number already has an account. Sign in instead.")

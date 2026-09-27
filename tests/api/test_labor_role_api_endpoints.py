@@ -100,6 +100,9 @@ def role_app():
         _c.update_labor_role_usecase = _UpdateLRUC(repo=_labor_role_repo, db_session=db.session)
         _c.delete_labor_role_usecase = _DeleteLRUC(repo=_labor_role_repo, db_session=db.session)
         _c.list_labor_roles_usecase = _ListLRUC(repo=_labor_role_repo)
+        # Mirrors app/__init__.py: a worker's role must belong to the project's company.
+        for _worker_usecase in (_c.create_worker_usecase, _c.update_worker_usecase):
+            _worker_usecase.set_role_scope(_labor_role_repo, _c.authz_reader)
 
         test_app._test_admin_email = "lradmin@test.com"
         test_app._test_admin_password = "Admin1234!"
@@ -343,6 +346,13 @@ class TestDeleteLaborRole:
         resp = role_client.delete(_role_url(str(uuid4())), headers=_auth(admin_token))
         assert resp.status_code == 404
 
+    def test_malformed_role_id_is_a_json_404(self, role_client, admin_token):
+        patch = role_client.patch(_role_url("not-a-uuid"), json={"name": "x"}, headers=_auth(admin_token))
+        delete = role_client.delete(_role_url("not-a-uuid"), headers=_auth(admin_token))
+        for resp in (patch, delete):
+            assert resp.status_code == 404
+            assert resp.is_json
+
     def test_delete_requires_auth(self, role_client, admin_token):
         role_id = self._create_role(role_client, admin_token, "UnauthDelete")
         resp = role_client.delete(_role_url(role_id))
@@ -489,3 +499,59 @@ class TestWorkerRoleIntegration:
         assert data["name"] == "Preserve Worker Updated"
         # role must still be set (not cleared by omission)
         assert data["role_id"] == role_id
+
+
+class TestWorkerRoleCompanyScope:
+    """A worker's role must belong to the project's company: not another company's, not a legacy one."""
+
+    @pytest.fixture(scope="class")
+    def outside_roles(self, role_app):
+        from datetime import datetime, timezone
+        from uuid import UUID, uuid4
+
+        from app import db
+        from app.infrastructure.database.models.company import CompanyModel
+        from app.infrastructure.database.models.labor_role import LaborRoleModel
+
+        with role_app.app_context():
+            now = datetime.now(timezone.utc)
+            other = CompanyModel(
+                id=uuid4(),
+                legal_name="Other Roles SARL",
+                address="3 rue Ailleurs",
+                created_by=UUID(role_app._test_admin_user_id),
+                created_at=now,
+                updated_at=now,
+            )
+            db.session.add(other)
+            db.session.flush()
+            foreign = LaborRoleModel(company_id=other.id, name="Foreign secret role", color="#2563EB")
+            legacy = LaborRoleModel(company_id=None, name="Legacy role", color="#16A34A")
+            db.session.add_all([foreign, legacy])
+            db.session.commit()
+            return {"foreign": str(foreign.id), "legacy": str(legacy.id), "unknown": str(uuid4())}
+
+    @pytest.mark.parametrize("which", ["foreign", "legacy", "unknown"])
+    def test_create_refuses_a_role_outside_the_project_company(
+        self, role_client, admin_token, role_app, outside_roles, which
+    ):
+        resp = role_client.post(
+            _workers_url(role_app._test_project_id),
+            json={"name": f"Wk {which}", "daily_rate": 100.0, "role_id": outside_roles[which]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "Foreign secret role" not in resp.get_data(as_text=True)
+
+    def test_update_refuses_a_foreign_role(self, role_client, admin_token, role_app, outside_roles):
+        pid = role_app._test_project_id
+        created = role_client.post(
+            _workers_url(pid), json={"name": "Wk scope update", "daily_rate": 100.0}, headers=_auth(admin_token)
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        resp = role_client.put(
+            _worker_url(pid, created.get_json()["id"]),
+            json={"role_id": outside_roles["foreign"]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)

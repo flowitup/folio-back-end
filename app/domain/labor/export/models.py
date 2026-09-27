@@ -41,6 +41,8 @@ class ExportContext:
     # Optional single-worker scope — None means project-wide export
     worker_name: Optional[str] = field(default=None)
     worker_daily_rate: Optional[Decimal] = field(default=None)
+    # Language of the labels: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass(frozen=True)

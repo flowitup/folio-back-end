@@ -8,6 +8,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.application.task.ports import ITaskRepository
+from app.domain.authz.resolver import effective_permissions
 from app.domain.entities.task import Task, TaskPriority, TaskStatus
 
 # Step size used when appending a new task to the end of a column. Gaps between
@@ -17,6 +18,30 @@ POSITION_STEP = 1000
 
 class TaskNotFoundError(LookupError):
     """Raised when a task id has no matching record."""
+
+
+class InvalidAssigneeError(ValueError):
+    """Raised when a task is assigned to someone who cannot read its project."""
+
+
+def _assert_assignee_can_read(authz_reader, assignee_id: Optional[UUID], project_id: UUID, user_repo=None) -> None:
+    """A task may only be assigned to a user holding `project:read` on its project.
+
+    That covers an unknown user id, a user of another company and a company
+    member who is not on the project: none of them could open the task, and
+    the assignment push would show them its title and the project name.
+    Without a reader (unit tests that wire only the repository) there is no
+    check.
+    """
+    if assignee_id is None:
+        return
+    # A deactivated account keeps its company role but can no longer sign in.
+    if user_repo is not None and not user_repo.is_sign_in_allowed(assignee_id):
+        raise InvalidAssigneeError("Assignee's account is deactivated")
+    if authz_reader is None:
+        return
+    if "project:read" not in effective_permissions(authz_reader, assignee_id, project_id=project_id):
+        raise InvalidAssigneeError("Assignee must be a member of this project")
 
 
 @dataclass
@@ -33,12 +58,18 @@ class CreateTaskRequest:
 
 
 class CreateTaskUseCase:
-    def __init__(self, repo: ITaskRepository) -> None:
+    def __init__(self, repo: ITaskRepository, authz_reader=None, user_repo=None) -> None:
         self._repo = repo
+        self._authz_reader = authz_reader
+        self._user_repo = user_repo
+
+    def set_authz_reader(self, authz_reader) -> None:
+        self._authz_reader = authz_reader
 
     def execute(self, req: CreateTaskRequest) -> Task:
         if not req.title.strip():
             raise ValueError("Task title is required")
+        _assert_assignee_can_read(self._authz_reader, req.assignee_id, req.project_id, self._user_repo)
         # Append: position = (current max in this lane) + STEP, leaving room above.
         next_position = self._repo.max_position(req.project_id, req.status) + POSITION_STEP
         now = datetime.now(timezone.utc)
@@ -81,19 +112,33 @@ class GetTaskUseCase:
 
 @dataclass
 class UpdateTaskRequest:
-    """Partial update — only fields that are not None are applied."""
+    """Partial update — only fields that are not None are applied.
+
+    `cleared` names the clearable fields (description, assignee_id, due_date)
+    the client explicitly sent as null: those are set to None instead of being
+    left unchanged.
+    """
 
     title: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[TaskPriority] = None
-    assignee_id: Optional[UUID] = None  # use sentinel via separate fn if you need to clear
+    assignee_id: Optional[UUID] = None
     due_date: Optional[date] = None
     labels: Optional[list[str]] = None
+    cleared: frozenset[str] = frozenset()
+
+
+CLEARABLE_TASK_FIELDS = frozenset({"description", "assignee_id", "due_date"})
 
 
 class UpdateTaskUseCase:
-    def __init__(self, repo: ITaskRepository) -> None:
+    def __init__(self, repo: ITaskRepository, authz_reader=None, user_repo=None) -> None:
         self._repo = repo
+        self._authz_reader = authz_reader
+        self._user_repo = user_repo
+
+    def set_authz_reader(self, authz_reader) -> None:
+        self._authz_reader = authz_reader
 
     def execute(self, task_id: UUID, req: UpdateTaskRequest) -> Task:
         task = self._repo.find_by_id(task_id)
@@ -108,11 +153,15 @@ class UpdateTaskUseCase:
         if req.priority is not None:
             task.priority = req.priority
         if req.assignee_id is not None:
+            if req.assignee_id != task.assignee_id:
+                _assert_assignee_can_read(self._authz_reader, req.assignee_id, task.project_id, self._user_repo)
             task.assignee_id = req.assignee_id
         if req.due_date is not None:
             task.due_date = req.due_date
         if req.labels is not None:
             task.labels = list(req.labels)
+        for name in req.cleared & CLEARABLE_TASK_FIELDS:
+            setattr(task, name, None)
         return self._repo.update(task)
 
 

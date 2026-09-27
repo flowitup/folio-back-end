@@ -5,12 +5,16 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+from app.api.v1.numeric_bounds import MAX_DAILY_AMOUNT
+
 
 class CreateRateChangeRequest(BaseModel):
     """Request body for POST .../rate-changes."""
 
     effective_date: date
-    daily_rate: float = Field(..., gt=0, description="Daily rate in currency units; must be > 0")
+    daily_rate: float = Field(
+        ..., gt=0, le=float(MAX_DAILY_AMOUNT), description="Daily rate in currency units; must be > 0"
+    )
 
 
 class RateChangeResponse(BaseModel):

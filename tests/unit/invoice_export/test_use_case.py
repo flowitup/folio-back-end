@@ -188,7 +188,9 @@ def test_cash_advance_exports_under_others_not_released_funds(monkeypatch):
 
     released = _export_bundle(monkeypatch, project, invoices, type_filter=InvoiceType.RELEASED_FUNDS)
     assert [i.invoice_number for i in released.invoices] == ["R1"]
-    assert released.grand_total == Decimal("9000.00")
+    # Released funds are money in: reported apart, never in the expenses total.
+    assert released.grand_total == Decimal("0")
+    assert released.released_total == Decimal("9000.00")
 
     others = _export_bundle(monkeypatch, project, invoices, type_filter=InvoiceType.OTHERS)
     assert sorted(i.invoice_number for i in others.invoices) == ["CA1", "O1"]
@@ -292,7 +294,8 @@ def test_exclude_types_defaults_to_nothing_excluded(monkeypatch):
     uc.execute(_base_request(pid))
 
     assert captured["bundle"].invoice_count == 2
-    assert captured["bundle"].grand_total == Decimal("1000.00")
+    assert captured["bundle"].grand_total == Decimal("100.00")
+    assert captured["bundle"].released_total == Decimal("900.00")
 
 
 def test_subtotal_computation_per_type():
@@ -321,7 +324,15 @@ def test_grand_total_decimal_precision():
     """Grand total uses Decimal arithmetic — 3 × 0.10 == 0.30 exactly."""
     project = _make_project("Precision Project")
     pid = project.id
-    invoices = [_make_invoice(project_id=pid, amount=Decimal("0.10"), invoice_number=f"INV-{i}") for i in range(3)]
+    invoices = [
+        _make_invoice(
+            project_id=pid,
+            invoice_type=InvoiceType.MATERIALS_SERVICES,
+            amount=Decimal("0.10"),
+            invoice_number=f"INV-{i}",
+        )
+        for i in range(3)
+    ]
     # Inject a custom invoice_repo that also captures the bundle grand_total
     project_repo = MagicMock(spec=IProjectRepository)
     project_repo.find_by_id.return_value = project
@@ -428,3 +439,26 @@ def test_pdf_dispatch_returns_pdf_mime():
     result = uc.execute(_base_request(project.id, format="pdf"))
     assert result.mime_type == "application/pdf"
     assert result.content[:5] == b"%PDF-"
+
+
+def test_total_is_expenses_only_with_returns_netted_and_advances_left_out(monkeypatch):
+    """Money in is never added to money out; returns get a subtotal and reduce the expenses."""
+    project = _make_project("Totals Project")
+    pid = project.id
+    invoices = [
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("5000.00"), invoice_number="R1"
+        ),
+        _make_invoice(project_id=pid, invoice_type=InvoiceType.LABOR, amount=Decimal("300.00"), invoice_number="L1"),
+        _make_invoice(
+            project_id=pid, invoice_type=InvoiceType.MATERIALS_SERVICES, amount=Decimal("200.00"), invoice_number="M1"
+        ),
+        _make_invoice(project_id=pid, invoice_type=InvoiceType.RETURN, amount=Decimal("-50.00"), invoice_number="T1"),
+        _cash_advance(pid),
+    ]
+
+    bundle = _export_bundle(monkeypatch, project, invoices)
+
+    assert bundle.grand_total == Decimal("450.00")
+    assert bundle.released_total == Decimal("5000.00")
+    assert {s.type: s.total_amount for s in bundle.subtotals_by_type}[InvoiceType.RETURN] == Decimal("-50.00")

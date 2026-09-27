@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.api.v1.numeric_bounds import MAX_BUDGET
+
 
 class CreateProjectRequest(BaseModel):
     """Request body for creating a project."""
@@ -13,7 +15,7 @@ class CreateProjectRequest(BaseModel):
     # falls back to the address when omitted or blank.
     address: str = Field(..., min_length=1, max_length=500)
     name: Optional[str] = Field(None, max_length=255)
-    budget: Optional[Decimal] = Field(None, ge=0)
+    budget: Optional[Decimal] = Field(None, ge=0, le=MAX_BUDGET)
     budget_source: Optional[str] = Field(None, max_length=120)
     # Target company (tenant). Must be a company where the caller is admin —
     # otherwise 403. Omitted → the route falls back to the caller's primary
@@ -34,7 +36,7 @@ class UpdateProjectRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     address: Optional[str] = Field(None, max_length=500)
     invoice_prefix: Optional[str] = Field(None, max_length=8)
-    budget: Optional[Decimal] = Field(None, ge=0)
+    budget: Optional[Decimal] = Field(None, ge=0, le=MAX_BUDGET)
     budget_source: Optional[str] = Field(None, max_length=120)
 
 

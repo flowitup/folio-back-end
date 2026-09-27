@@ -64,7 +64,25 @@ class ListInvitationsUseCase:
                 # Unknown status value — return empty list rather than crashing
                 return []
 
-        invitations = self._inv_repo.list_by_project(project_id, status=status_enum)
+        # Stored status flips to EXPIRED only when someone opens the link, so an invite
+        # nobody opened stays PENDING past its expiry. Read it by its expiry instead.
+        if status_enum == InvitationStatus.PENDING:
+            invitations = [
+                i for i in self._inv_repo.list_by_project(project_id, status=InvitationStatus.PENDING) if i.is_usable()
+            ]
+        elif status_enum == InvitationStatus.EXPIRED:
+            lapsed = [
+                i
+                for i in self._inv_repo.list_by_project(project_id, status=InvitationStatus.PENDING)
+                if not i.is_usable()
+            ]
+            invitations = sorted(
+                self._inv_repo.list_by_project(project_id, status=InvitationStatus.EXPIRED) + lapsed,
+                key=lambda i: i.created_at,
+                reverse=True,
+            )
+        else:
+            invitations = self._inv_repo.list_by_project(project_id, status=status_enum)
 
         result: list[InvitationListItemDto] = []
         for inv in invitations:
@@ -78,7 +96,11 @@ class ListInvitationsUseCase:
                     # Every pending invitation grants the same thing: company
                     # `member` plus an assignment to the invited project.
                     role_name=CompanyRole.MEMBER.value,
-                    status=inv.status,
+                    status=(
+                        InvitationStatus.EXPIRED
+                        if inv.status == InvitationStatus.PENDING and not inv.is_usable()
+                        else inv.status
+                    ),
                     expires_at=inv.expires_at,
                     created_at=inv.created_at,
                     invited_by_name=inviter_name,

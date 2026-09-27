@@ -29,6 +29,13 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
     },
 }
 
+# Column names as the board shows them (web messages `tasks.column`, plus backlog).
+_STATUS_LABELS: Dict[str, Dict[str, str]] = {
+    "vi": {"backlog": "Backlog", "todo": "Cần làm", "in_progress": "Đang làm", "blocked": "Bị chặn", "done": "Xong"},
+    "fr": {"backlog": "Backlog", "todo": "À faire", "in_progress": "En cours", "blocked": "Bloqué", "done": "Terminé"},
+    "en": {"backlog": "Backlog", "todo": "To do", "in_progress": "In progress", "blocked": "Blocked", "done": "Done"},
+}
+
 
 class ProjectNameReader(Protocol):
     def find_by_id(self, project_id: UUID): ...
@@ -53,8 +60,10 @@ class TaskPushNotifier:
             if assignee is None or assignee == actor_id:
                 return
             project = self._projects.find_by_id(task.project_id)
-            title, body = _TEXT[event][self._dispatcher.locale]
+            locale = self._dispatcher.locale
+            title, body = _TEXT[event][locale]
             status = getattr(getattr(task, "status", None), "value", "") or ""
+            status = _STATUS_LABELS.get(locale, {}).get(status, status)
             self._dispatcher.dispatch(
                 category=NotificationCategory.TASKS.value,
                 recipients=[assignee],

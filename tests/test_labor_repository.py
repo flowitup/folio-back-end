@@ -926,3 +926,76 @@ def test_list_pending_for_validator_filters_by_company_and_project_in_sql(sessio
 
     unfiltered = query.list_pending_for_validator(validator.id)
     assert {item.entry_id for item in unfiltered} == {entry_a.id, entry_b.id}
+
+
+class TestBankedHoursBonusPerMonth:
+    """Banked hours are rounded into bonus days month by month, so a summary over
+    several months equals the sum of its months (and the monthly rollup/export)."""
+
+    def test_a_multi_month_summary_does_not_pool_banked_hours(self, entry_repo, worker_repo, sample_project, session):
+        from app.application.labor.get_labor_summary import GetLaborSummaryRequest, GetLaborSummaryUseCase
+
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Pooled Hours Worker",
+            daily_rate=Decimal("80.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+        for day, hours in ((date(2026, 8, 3), 3), (date(2026, 8, 4), 3), (date(2026, 9, 1), 2)):
+            session.add(
+                LaborEntryModel(
+                    id=uuid4(),
+                    worker_id=worker.id,
+                    date=day,
+                    shift_type=None,
+                    supplement_hours=hours,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        session.commit()
+
+        use_case = GetLaborSummaryUseCase(entry_repo)
+
+        def bonus(date_from, date_to):
+            row = use_case.execute(GetLaborSummaryRequest(sample_project.id, date_from, date_to)).rows[0]
+            return row.banked_hours, row.bonus_full_days, row.bonus_half_days, row.bonus_cost
+
+        assert bonus(date(2026, 8, 1), date(2026, 8, 31)) == (6, 0, 1, 40.0)
+        assert bonus(date(2026, 9, 1), date(2026, 9, 30)) == (2, 0, 0, 0.0)
+        assert bonus(date(2026, 8, 1), date(2026, 9, 30)) == (8, 0, 1, 40.0)
+        assert bonus(None, None) == (8, 0, 1, 40.0)
+
+
+class TestLabourCostRoundedToTheCent:
+    """A priced entry is worth a whole number of cents, rounded half-up once, so the
+    API, the web and the PDF/XLSX exports all show the same amount."""
+
+    # 62.625 is exact in binary, so SQLite (float maths) and Postgres (numeric) agree.
+    @pytest.mark.parametrize("rate, expected", [("125.25", "62.63")])
+    def test_a_half_day_is_rounded_half_up(self, entry_repo, worker_repo, sample_project, session, rate, expected):
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Half Rate Worker",
+            daily_rate=Decimal(rate),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+        entry = LaborEntry(
+            id=uuid4(),
+            worker_id=worker.id,
+            date=date(2026, 9, 3),
+            shift_type="half",
+            created_at=datetime.now(timezone.utc),
+        )
+        entry_repo.create(entry)
+
+        assert entry.effective_cost(Decimal(rate)) == Decimal(expected)
+        (row,) = entry_repo.get_summary(sample_project.id)
+        assert row.total_cost == Decimal(expected)
+        (month,) = entry_repo.get_monthly_summary(sample_project.id)
+        assert month.total_cost == Decimal(expected)

@@ -168,6 +168,65 @@ class TestUpdateCompany:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         assert resp.get_json()["legal_name"] == "Company A Renamed"
 
+    def test_saving_the_masked_form_keeps_real_bank_details(
+        self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token
+    ):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}"
+        real = {"siret": "12345678900011", "iban": "FR7630006000011234567890189", "bic": "BNPAFRPP"}
+        assert cadm_client.put(url, json=real, headers=_auth(company_a_admin_token)).status_code == 200
+
+        # The company admin's read is masked; the edit form sends it straight back.
+        shown = cadm_client.get(url, headers=_auth(company_a_admin_token)).get_json()
+        assert shown["iban"].startswith("····")
+        form = {k: shown[k] for k in ("legal_name", "siret", "iban", "bic")}
+        resp = cadm_client.put(url, json=form, headers=_auth(company_a_admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        stored = cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()
+        assert {k: stored[k] for k in real} == real
+
+    @pytest.mark.parametrize(
+        "bank",
+        [
+            {"iban": "FR76XXXX"},
+            {"iban": "hello world <b>"},
+            {"iban": "FR7630006000011234567890188"},  # wrong check digits
+            {"iban": "FR76" + "1" * 68},
+            {"bic": "NOT A BIC"},
+        ],
+    )
+    def test_invalid_bank_details_are_refused(self, cadm_client, cadm_app, company_a_admin_token, bank):
+        resp = cadm_client.put(
+            f"/api/v1/companies/{cadm_app._test_company_a_id}", json=bank, headers=_auth(company_a_admin_token)
+        )
+        assert resp.status_code in (400, 422), resp.get_data(as_text=True)
+
+    @pytest.mark.parametrize("body", [{"legal_name": "   "}, {"address": "  "}])
+    def test_blank_name_or_address_is_a_validation_error(self, cadm_client, cadm_app, company_a_admin_token, body):
+        resp = cadm_client.put(
+            f"/api/v1/companies/{cadm_app._test_company_a_id}", json=body, headers=_auth(company_a_admin_token)
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
+    @pytest.mark.parametrize("body", [{"legal_name": "   ", "address": "x"}, {"legal_name": "QA x", "address": "   "}])
+    def test_blank_name_or_address_is_refused_on_create(self, cadm_client, company_a_admin_token, body):
+        resp = cadm_client.post("/api/v1/companies", json=body, headers=_auth(company_a_admin_token))
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
+    def test_update_answers_with_the_same_masking_as_a_read(
+        self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token
+    ):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}"
+        resp = cadm_client.put(
+            url,
+            json={"iban": "fr76 3000 6000 0112 3456 7890 189", "bic": "bnpa frpp"},
+            headers=_auth(company_a_admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["iban"] == "····0189"
+        stored = cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()
+        assert (stored["iban"], stored["bic"]) == ("FR7630006000011234567890189", "BNPAFRPP")
+
     def test_company_admin_403_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
         resp = cadm_client.put(
             f"/api/v1/companies/{cadm_app._test_company_b_id}",

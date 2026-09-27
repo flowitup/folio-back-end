@@ -85,6 +85,12 @@ class SqlAlchemyNoteRepository:
         journal rows that have NULL due_date/status). Single SQL statement
         — no Python-side filtering, no N+1 queries.
 
+        The project scope is the one `project:read` grants through the
+        permission resolver: every project of a company the user administers,
+        plus the projects they are assigned to in a company they still belong
+        to. A set (IN) rather than a join, so an admin who is also assigned
+        does not get the same reminder twice.
+
         fire_at formula:
             (due_date::timestamp + TIME '09:00:00') AT TIME ZONE 'UTC'
             - (lead_time_minutes * INTERVAL '1 minute')
@@ -101,8 +107,17 @@ class SqlAlchemyNoteRepository:
                 n.created_at,
                 n.updated_at
             FROM notes n
-            INNER JOIN user_projects m ON m.project_id = n.project_id
-            WHERE m.user_id = :user_id
+            WHERE n.project_id IN (
+                SELECT p.id
+                FROM projects p
+                JOIN user_company_access uca
+                  ON uca.company_id = p.company_id AND uca.user_id = :user_id
+                WHERE uca.role = 'admin'
+                   OR EXISTS (
+                       SELECT 1 FROM user_projects m
+                       WHERE m.project_id = p.id AND m.user_id = :user_id
+                   )
+            )
               AND n.status = 'open'
               AND n.due_date IS NOT NULL
               AND n.lead_time_minutes IS NOT NULL

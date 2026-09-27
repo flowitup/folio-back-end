@@ -9,6 +9,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.projects.decorators import (
     require_permission,
@@ -32,7 +33,7 @@ def _error_response(error: str, message: str, status_code: int) -> Tuple[Respons
 
 
 def _validation_error(e: ValidationError) -> Tuple[Response, int]:
-    return _error_response("ValidationError", str(e), 400)
+    return _error_response("ValidationError", validation_message(e), 400)
 
 
 def _notify_task(event: str, task, actor_id: UUID) -> None:
@@ -93,7 +94,7 @@ def list_tasks(project_id: str):
 @require_project_access(write=False)
 def create_task(project_id: str):
     try:
-        data = CreateTaskSchema(**(request.get_json() or {}))
+        data = CreateTaskSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error(e)
 
@@ -143,7 +144,7 @@ def get_task(task_id: str):
 @require_task_access(write=False)  # any project member may edit task content (kept lenient)
 def update_task(task_id: str):
     try:
-        data = UpdateTaskSchema(**(request.get_json() or {}))
+        data = UpdateTaskSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error(e)
 
@@ -165,6 +166,8 @@ def update_task(task_id: str):
                 assignee_id=data.assignee_id,
                 due_date=data.due_date,
                 labels=data.labels,
+                # An explicit null clears the field; an omitted key leaves it alone.
+                cleared=frozenset(f for f in data.model_fields_set if getattr(data, f) is None),
             ),
         )
     except TaskNotFoundError as e:
@@ -183,10 +186,12 @@ def update_task(task_id: str):
 @require_task_access(write=False)
 def move_task(task_id: str):
     try:
-        data = MoveTaskSchema(**(request.get_json() or {}))
+        data = MoveTaskSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error(e)
     try:
+        # Captured before the write: a reorder inside the same column is not a move for the assignee.
+        previous_status = get_container().get_task_usecase.execute(UUID(task_id)).status
         result = get_container().move_task_usecase.execute(
             UUID(task_id),
             new_status=TaskStatus(data.status),
@@ -195,7 +200,8 @@ def move_task(task_id: str):
         )
     except TaskNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
-    _notify_task("moved", result, UUID(get_jwt()["sub"]))
+    if result.status != previous_status:
+        _notify_task("moved", result, UUID(get_jwt()["sub"]))
     return jsonify(_serialize(result))
 
 

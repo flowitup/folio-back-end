@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.application.billing._helpers import _items_from_inputs
+from app.application.billing._helpers import _assert_billing_template_access, _items_from_inputs
 from app.application.billing.dtos import BillingTemplateResponse, UpdateTemplateInput
 from app.application.billing.ports import BillingTemplateRepositoryPort, TransactionalSessionPort
-from app.domain.billing.exceptions import BillingTemplateNotFoundError, ForbiddenBillingDocumentError
+from app.domain.billing.exceptions import BillingTemplateNotFoundError
 
 
 class UpdateTemplateUseCase:
@@ -15,10 +15,12 @@ class UpdateTemplateUseCase:
 
     Immutable fields: id, user_id, kind, created_at.
     Applies only fields explicitly set (not None) in the input DTO.
+    The author or a company admin of the template's company may update it.
     """
 
-    def __init__(self, template_repo: BillingTemplateRepositoryPort) -> None:
+    def __init__(self, template_repo: BillingTemplateRepositoryPort, access_repo=None) -> None:
         self._template_repo = template_repo
+        self._access_repo = access_repo
 
     def execute(
         self,
@@ -28,8 +30,7 @@ class UpdateTemplateUseCase:
         template = self._template_repo.find_by_id(inp.id)
         if template is None:
             raise BillingTemplateNotFoundError(inp.id)
-        if template.user_id != inp.user_id:
-            raise ForbiddenBillingDocumentError(inp.id)
+        _assert_billing_template_access(template, inp.user_id, self._access_repo)
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
 

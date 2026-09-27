@@ -17,7 +17,7 @@ from app.application.labor.labor_day_description_usecases import (
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
 from app.application.projects.ports import IProjectRepository
-from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
 
@@ -33,6 +33,8 @@ class ExportLaborRequest:
     acting_user_email: str
     # Optional: when set, scopes entire export to a single worker
     worker_id: Optional[UUID] = field(default=None)
+    # Label language of the file: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass
@@ -142,8 +144,6 @@ class ExportLaborUseCase:
             ProjectNotFoundError: if project does not exist.
             WorkerNotFoundError: if worker_id is set but worker does not exist or
                 belongs to a different project.
-            WorkerInactiveError: if the resolved worker is inactive (subclass of
-                WorkerNotFoundError; routes receive 404 with ``worker_inactive`` code).
         """
         # 1. Resolve project — raises ProjectNotFoundError if absent
         project = self._project_repo.find_by_id(req.project_id)
@@ -156,8 +156,8 @@ class ExportLaborUseCase:
             worker = self._worker_repo.find_by_id(req.worker_id)
             if worker is None or worker.project_id != req.project_id:
                 raise WorkerNotFoundError(str(req.worker_id))
-            if not worker.is_active:
-                raise WorkerInactiveError(str(req.worker_id))
+            # A deactivated worker stays exportable: their history (and any
+            # balance still owed) is exactly what the export is for.
 
         # 3. Parse month boundaries
         from_d = _parse_yyyy_mm(req.from_month)
@@ -233,8 +233,9 @@ class ExportLaborUseCase:
             range=ExportRange(from_month=from_d, to_month=to_d),
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
-            worker_name=worker.name if worker is not None else None,
+            worker_name=(worker.person_name or worker.name) if worker is not None else None,
             worker_daily_rate=self._header_rate(worker, to_d),
+            locale=req.locale,
         )
 
         # 6. Dispatch to builder
@@ -256,7 +257,7 @@ class ExportLaborUseCase:
         # 7. Generate filename
         project_slug = slugify_project_name(project.name, str(project.id))
         if worker is not None:
-            worker_slug = slugify_worker_name(worker.name, str(worker.id))
+            worker_slug = slugify_worker_name(worker.person_name or worker.name, str(worker.id))
             filename = f"labor-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
         else:
             filename = f"labor-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"

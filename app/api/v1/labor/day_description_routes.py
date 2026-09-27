@@ -158,7 +158,7 @@ def set_labor_day_description(project_id: str):
     Otherwise the row is created or updated and the full row is returned.
     """
     try:
-        data = SetDayDescriptionSchema(**(request.get_json() or {}))
+        data = SetDayDescriptionSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 

@@ -36,13 +36,25 @@ from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
 
-def _user_id_or_error(raw: str | None):
-    """Resolve a client-supplied user_id; returns (UUID|None, error_response|None)."""
+def _user_id_or_error(raw: str | None, project_id: str):
+    """Resolve a client-supplied user_id; returns (UUID|None, error_response|None).
+
+    The account must be active and attached to the project's company: a worker
+    row never links to someone of another tenant, or to a deactivated account.
+    """
     if not raw:
         return None, None
     user_uuid = UUID(raw)
-    if get_container().user_repository.find_by_id(user_uuid) is None:
+    container = get_container()
+    user = container.user_repository.find_by_id(user_uuid)
+    if user is None or not user.is_active:
         return None, _error_response("ValidationError", "user_id does not reference an existing user", 400)
+    reader = container.authz_reader
+    access_repo = container.user_company_access_repo
+    if reader is not None and access_repo is not None:
+        company_id = reader.project_company_id(UUID(project_id))
+        if company_id is None or access_repo.find(user_uuid, company_id) is None:
+            return None, _error_response("ValidationError", "user_id must be a member of the project's company", 400)
     return user_uuid, None
 
 
@@ -87,9 +99,12 @@ def _worker_response(w) -> WorkerResponse:
 @require_permission("project:read")
 @require_project_access(write=False)
 def list_workers(project_id: str):
-    """List workers for a project."""
+    """List workers for a project: active ones, or all with ?include_inactive=true."""
+    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true")
     try:
-        workers = get_container().list_workers_usecase.execute(ListWorkersRequest(project_id=UUID(project_id)))
+        workers = get_container().list_workers_usecase.execute(
+            ListWorkersRequest(project_id=UUID(project_id), include_inactive=include_inactive)
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
@@ -115,7 +130,7 @@ def list_workers(project_id: str):
 def create_worker(project_id: str):
     """Create a new worker for a project."""
     try:
-        data = CreateWorkerRequest(**request.get_json())
+        data = CreateWorkerRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -128,7 +143,7 @@ def create_worker(project_id: str):
         return _error_response("ValidationError", "Invalid JWT identity", 401)
 
     try:
-        linked_user_id, err = _user_id_or_error(data.user_id)
+        linked_user_id, err = _user_id_or_error(data.user_id, project_id)
         if err is not None:
             return err
         result = get_container().create_worker_usecase.execute(
@@ -165,7 +180,7 @@ def create_worker(project_id: str):
 def update_worker(project_id: str, worker_id: str):
     """Update an existing worker."""
     try:
-        data = UpdateWorkerRequest(**request.get_json())
+        data = UpdateWorkerRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -175,13 +190,15 @@ def update_worker(project_id: str, worker_id: str):
         # daily_rate is NOT forwarded: base rate is locked at creation time.
         update_kwargs = dict(
             worker_id=UUID(worker_id),
+            project_id=UUID(project_id),
             name=data.name,
             phone=data.phone,
+            reactivate=data.is_active is True,
         )
         if "role_id" in data.model_fields_set:
             update_kwargs["role_id"] = UUID(data.role_id) if data.role_id else None
         if "user_id" in data.model_fields_set:
-            linked_user_id, err = _user_id_or_error(data.user_id)
+            linked_user_id, err = _user_id_or_error(data.user_id, project_id)
             if err is not None:
                 return err
             update_kwargs["user_id"] = linked_user_id
@@ -203,7 +220,9 @@ def update_worker(project_id: str, worker_id: str):
 def delete_worker(project_id: str, worker_id: str):
     """Soft delete a worker (deactivate)."""
     try:
-        get_container().delete_worker_usecase.execute(DeleteWorkerDTO(worker_id=UUID(worker_id)))
+        get_container().delete_worker_usecase.execute(
+            DeleteWorkerDTO(worker_id=UUID(worker_id), project_id=UUID(project_id))
+        )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError:

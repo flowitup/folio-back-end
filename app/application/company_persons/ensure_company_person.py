@@ -90,6 +90,39 @@ def ensure_company_person(
     )
 
 
+def ensure_person_profile(
+    *,
+    company_persons: Any,
+    company_id: UUID,
+    person,
+    created_by_user_id: Optional[UUID],
+    now: datetime,
+) -> None:
+    """Give an existing `Person` an active directory profile in `company_id`.
+
+    Used where a person is created on the fly for a company (a worker added
+    inline): without a profile the person is invisible to that company's
+    persons search and pickers, and is created again the next time.
+    Idempotent; an archived profile is reactivated.
+    """
+    existing = company_persons.find(company_id, person.id)
+    if existing is not None:
+        if not existing.is_active:
+            company_persons.save(dataclasses.replace(existing, is_active=True, pending_expires_at=None))
+        return
+    company_persons.save(
+        CompanyPerson(
+            id=uuid4(),
+            company_id=company_id,
+            person_id=person.id,
+            created_at=now,
+            is_active=True,
+            phone_normalized=_free_phone(company_persons, company_id, person),
+            created_by_user_id=created_by_user_id,
+        )
+    )
+
+
 def _free_phone(company_persons: Any, company_id: UUID, person) -> Optional[str]:
     """The person's phone, or None when this company already has a profile using it.
 

@@ -14,6 +14,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.api.v1.numeric_bounds import MAX_ARTICLE_QUANTITY, MAX_QUOTE_UNIT_PRICE
+
 
 class PosteCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -67,7 +69,8 @@ class ArticleCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
-    quantity: Decimal = Field(ge=0)
+    # Stored as Numeric(12, 3): more decimals would be rounded away silently.
+    quantity: Decimal = Field(ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
@@ -77,7 +80,7 @@ class ArticleUpdateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    quantity: Optional[Decimal] = Field(default=None, ge=0)
+    quantity: Optional[Decimal] = Field(default=None, ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
@@ -86,7 +89,7 @@ class ArticleUpdateBody(BaseModel):
 class QuoteCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    unit_price_ht: Decimal = Field(ge=0)
+    unit_price_ht: Decimal = Field(ge=0, le=MAX_QUOTE_UNIT_PRICE)
     tva_rate: Decimal = Field(default=Decimal("20"), ge=0, le=100)
     store_id: Optional[UUID] = None
     supplier_id: Optional[UUID] = None
@@ -111,7 +114,7 @@ class QuoteCreateBody(BaseModel):
 class QuoteUpdateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    unit_price_ht: Optional[Decimal] = Field(default=None, ge=0)
+    unit_price_ht: Optional[Decimal] = Field(default=None, ge=0, le=MAX_QUOTE_UNIT_PRICE)
     tva_rate: Optional[Decimal] = Field(default=None, ge=0, le=100)
     store_id: Optional[UUID] = None
     supplier_id: Optional[UUID] = None

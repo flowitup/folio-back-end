@@ -49,6 +49,19 @@ class SignupVerifyBody(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=80)
 
 
+class PhoneChangeRequestBody(BaseModel):
+    """POST /auth/me/phone/request-code — text a code to the new number the caller wants to use."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+
+
+class PhoneChangeConfirmBody(BaseModel):
+    """POST /auth/me/phone/confirm — the new number and the code texted to it."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+
+
 class LogoutBody(BaseModel):
     """Optional body of POST /auth/logout: Bearer clients pass their refresh token so it is revoked too."""
 
@@ -85,12 +98,26 @@ class UserResponse(BaseModel):
 class UpdateMeRequest(BaseModel):
     """PATCH /auth/me — the caller edits their own display name and/or phone.
 
-    The e-mail is deliberately not editable here (platform ops only). ``phone`` is stored in
-    E.164 and must stay unique; null/empty clears it. At least one field must be provided.
+    The e-mail is deliberately not editable here (platform ops only). ``phone`` is the sign-in
+    identity: it may only be sent unchanged (any formatting of the current number); clearing or
+    replacing it answers 400 ``PhoneChangeNotAllowed`` — a new number goes through the verified
+    ``/auth/me/phone/request-code`` + ``/auth/me/phone/confirm`` flow. At least one field must be provided.
     """
 
     display_name: Optional[str] = Field(default=None, max_length=255)
     phone: Optional[str] = Field(default=None, max_length=32)
+
+
+class PhoneChangeConfirmResponse(UserResponse):
+    """POST /auth/me/phone/confirm — the updated user plus fresh tokens for this session.
+
+    The change signs the account out of every other device and every token issued before it,
+    including the ones the caller used: browsers get the new pair as cookies, Bearer clients
+    must store these two in place of their old ones.
+    """
+
+    access_token: str
+    refresh_token: str
 
 
 class LoginResponse(BaseModel):

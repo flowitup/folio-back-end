@@ -29,11 +29,13 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
+from app.api._helpers.pagination import parse_limit_offset
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_documents_bp
 from app.api.v1.billing.decorators import require_billing_document_owner
+from app.api.v1.billing.item_inputs import items_from_schema
 from app.api.v1.billing.schemas import (
     ActivitySuggestionsQuery,
     ApplyTemplateRequest,
@@ -50,12 +52,12 @@ from app.application.billing import (
     CompanyNotAttachedError,
     ConvertDevisToFactureInput,
     CreateBillingDocumentInput,
-    ItemInput,
     UpdateBillingDocumentInput,
     UpdateStatusInput,
     BillingDocumentNotFoundError,
     BillingTemplateNotFoundError,
     DevisAlreadyConvertedError,
+    DevisLockedByFactureError,
     ForbiddenBillingDocumentError,
     ForbiddenProjectAccessError,
     InvalidStatusTransitionError,
@@ -74,19 +76,6 @@ from wiring import get_container
 
 def _err(error: str, message: str, status: int) -> Tuple[Response, int]:
     return jsonify({"error": error, "message": message}), status
-
-
-def _items_from_schema(raw_items) -> list[ItemInput]:
-    return [
-        ItemInput(
-            description=it.description,
-            quantity=it.quantity,
-            unit_price=it.unit_price,
-            vat_rate=it.vat_rate,
-            category=getattr(it, "category", None),
-        )
-        for it in raw_items
-    ]
 
 
 def _doc_to_json(dto) -> dict:
@@ -111,7 +100,7 @@ def list_billing_documents():
     """List billing documents for the authenticated user.
 
     Required query param: kind (devis | facture).
-    Optional: status, project_id, limit, offset.
+    Optional: status, project_id, limit, offset, q (number or recipient contains).
     """
     kind_str = request.args.get("kind", "").strip()
     try:
@@ -144,23 +133,28 @@ def list_billing_documents():
             return _err("ValidationError", "Invalid company_id", 400)
 
     try:
-        limit = min(int(request.args.get("limit", 50)), 200)  # clamp to 200 max (H5)
-        offset = int(request.args.get("offset", 0))
-    except ValueError:
-        return _err("ValidationError", "limit and offset must be integers", 400)
+        limit, offset = parse_limit_offset(request.args)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
 
     user_id = UUID(get_jwt_identity())
     is_superadmin = is_platform_ops()
-    result = get_container().list_billing_documents_usecase.execute(
-        user_id=user_id,
-        kind=kind,
-        status=status,
-        project_id=project_id,
-        company_id=company_id,
-        limit=limit,
-        offset=offset,
-        is_superadmin=is_superadmin,
-    )
+    try:
+        result = get_container().list_billing_documents_usecase.execute(
+            user_id=user_id,
+            kind=kind,
+            status=status,
+            project_id=project_id,
+            company_id=company_id,
+            limit=limit,
+            offset=offset,
+            is_superadmin=is_superadmin,
+            search=(request.args.get("q") or "")[:100],
+        )
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
     return jsonify(
         {
             "items": [_doc_to_json(d) for d in result.items],
@@ -196,7 +190,7 @@ def create_billing_document():
         user_id=user_id,
         kind=BillingDocumentKind(body.kind),
         recipient_name=body.recipient_name,
-        items=_items_from_schema(body.items),
+        items=items_from_schema(body.items),
         company_id=body.company_id,
         project_id=body.project_id,
         recipient_address=body.recipient_address,
@@ -276,7 +270,7 @@ def update_billing_document(doc_id: str, billing_doc):
         recipient_address=body.recipient_address,
         recipient_email=str(body.recipient_email) if body.recipient_email else None,
         recipient_siret=body.recipient_siret,
-        items=_items_from_schema(body.items) if body.items is not None else None,
+        items=items_from_schema(body.items) if body.items is not None else None,
         notes=body.notes,
         terms=body.terms,
         signature_block_text=body.signature_block_text,
@@ -288,6 +282,8 @@ def update_billing_document(doc_id: str, billing_doc):
         # Tri-state: True when the caller explicitly included project_id in the body
         # (even as null to unlink). model_fields_set tracks Pydantic-validated fields.
         update_project_id="project_id" in body.model_fields_set,
+        # An optional field sent as null is cleared; an omitted one is left alone.
+        cleared=frozenset(f for f in body.model_fields_set if getattr(body, f) is None),
     )
 
     from app import db
@@ -300,6 +296,8 @@ def update_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
+    except DevisLockedByFactureError as exc:
+        return _err("Conflict", str(exc), 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -479,7 +477,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
-    except InvalidStatusTransitionError as exc:
+    except (InvalidStatusTransitionError, DevisLockedByFactureError) as exc:
         return _err("Conflict", str(exc), 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
@@ -644,7 +642,7 @@ def import_billing_document():
 
     Error mapping:
       400 — invalid input (ValueError, category/item validation)
-      403 — user not attached to company (CompanyNotAttachedError / PermissionDenied)
+      403 — caller is not an admin of the company, or cannot read project_id
       404 — company not found
       409 — duplicate (company_id, kind, document_number) → BillingDocumentAlreadyExistsError
       422 — Pydantic validation error (unknown fields, wrong types)
@@ -662,7 +660,7 @@ def import_billing_document():
         user_id=user_id,
         kind=BillingDocumentKind(body.kind),
         recipient_name=body.recipient_name,
-        items=_items_from_schema(body.items),
+        items=items_from_schema(body.items),
         company_id=body.company_id,
         document_number=body.document_number,
         status=BillingDocumentStatus(body.status),
@@ -684,6 +682,10 @@ def import_billing_document():
 
     try:
         result = get_container().import_billing_document_usecase.execute(inp, db.session)
+    except ForbiddenCompanyBillingError:
+        return _err("Forbidden", "Company billing requires the admin role for this company", 403)
+    except ForbiddenProjectAccessError:
+        return _err("Forbidden", "You do not have access to the specified project", 403)
     except MissingCompanyProfileError:
         return jsonify({"error": "Conflict", "reason": "company_profile_missing"}), 409
     except CompanyNotAttachedError:
@@ -785,9 +787,8 @@ def _summary_to_json(s) -> dict:
 def list_project_billing_documents(project_id: str):
     """List all billing documents linked to a project.
 
-    Access gated by project:read (owner or project member).
-    Returns docs of any kind, any status, and any owner as long as
-    they are linked to the specified project.
+    Access gated by project:read (owner or project member). A company admin
+    sees every document linked to the project, anyone else only their own.
     """
     try:
         project_uuid = UUID(project_id)
@@ -800,6 +801,7 @@ def list_project_billing_documents(project_id: str):
         summaries = get_container().list_project_billing_documents_usecase.execute(
             project_id=project_uuid,
             user_id=user_id,
+            is_platform_ops=is_platform_ops(),
         )
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have read access to this project", 403)

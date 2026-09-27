@@ -126,12 +126,88 @@ class TestUpdateWorkerUseCase:
         result = usecase.execute(
             UpdateWorkerRequest(
                 worker_id=sample_worker.id,
+                project_id=sample_worker.project_id,
                 name="Updated Name",
             )
         )
 
         assert result is not None
         mock_worker_repo.update.assert_called_once()
+
+    def test_reactivate_turns_deactivated_worker_back_on(self, mock_worker_repo, sample_worker):
+        sample_worker.is_active = False
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+
+        result = UpdateWorkerUseCase(mock_worker_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, reactivate=True)
+        )
+
+        assert result.is_active is True
+
+    def test_plain_update_leaves_deactivated_worker_off(self, mock_worker_repo, sample_worker):
+        sample_worker.is_active = False
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+
+        result = UpdateWorkerUseCase(mock_worker_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed")
+        )
+
+        assert result.is_active is False
+
+    def test_rename_renames_the_linked_person(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        sample_worker.person_name = "Old Name"
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="  New Name ")
+        )
+
+        person_repo.rename.assert_called_once_with(sample_worker.person_id, "New Name", commit=False)
+        assert result.name == "New Name"
+        assert result.person_name == "New Name"
+
+    def test_update_without_name_leaves_the_person_alone(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, phone="0600000000")
+        )
+
+        person_repo.rename.assert_not_called()
+
+    def test_phone_change_changes_the_linked_persons_phone(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        sample_worker.person_phone = "+33600000000"
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, phone=" 0611223344 ")
+        )
+
+        person_repo.change_phone.assert_called_once_with(sample_worker.person_id, "0611223344", commit=False)
+        assert result.phone == "0611223344" and result.person_phone == "0611223344"
+
+    def test_update_without_phone_leaves_the_persons_phone_alone(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        person_repo = Mock()
+
+        UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed")
+        )
+
+        person_repo.change_phone.assert_not_called()
 
     def test_update_worker_not_found_raises_error(self, mock_worker_repo):
         mock_worker_repo.find_by_id.return_value = None
@@ -141,6 +217,7 @@ class TestUpdateWorkerUseCase:
             usecase.execute(
                 UpdateWorkerRequest(
                     worker_id=uuid4(),
+                    project_id=uuid4(),
                     name="New Name",
                 )
             )
@@ -154,7 +231,7 @@ class TestDeleteWorkerUseCase:
         mock_worker_repo.soft_delete.return_value = True
         usecase = DeleteWorkerUseCase(mock_worker_repo)
 
-        usecase.execute(DeleteWorkerRequest(worker_id=sample_worker.id))
+        usecase.execute(DeleteWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id))
 
         mock_worker_repo.soft_delete.assert_called_once_with(sample_worker.id)
 
@@ -163,7 +240,27 @@ class TestDeleteWorkerUseCase:
         usecase = DeleteWorkerUseCase(mock_worker_repo)
 
         with pytest.raises(WorkerNotFoundError):
-            usecase.execute(DeleteWorkerRequest(worker_id=uuid4()))
+            usecase.execute(DeleteWorkerRequest(worker_id=uuid4(), project_id=uuid4()))
+
+
+class TestWorkerProjectScoping:
+    """A worker of another project is treated as not found."""
+
+    def test_update_worker_of_other_project_raises_not_found(self, mock_worker_repo, sample_worker):
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = UpdateWorkerUseCase(mock_worker_repo)
+
+        with pytest.raises(WorkerNotFoundError):
+            usecase.execute(UpdateWorkerRequest(worker_id=sample_worker.id, project_id=uuid4(), name="X"))
+        mock_worker_repo.update.assert_not_called()
+
+    def test_delete_worker_of_other_project_raises_not_found(self, mock_worker_repo, sample_worker):
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        usecase = DeleteWorkerUseCase(mock_worker_repo)
+
+        with pytest.raises(WorkerNotFoundError):
+            usecase.execute(DeleteWorkerRequest(worker_id=sample_worker.id, project_id=uuid4()))
+        mock_worker_repo.soft_delete.assert_not_called()
 
 
 class TestLogAttendanceUseCase:
@@ -445,6 +542,22 @@ class TestListWorkersUseCase:
 
         assert len(result) == 1
         assert result[0].name == sample_worker.name
+
+    def test_list_workers_asks_repo_for_active_only_by_default(self, mock_worker_repo):
+        mock_worker_repo.list_by_project.return_value = []
+        ListWorkersUseCase(mock_worker_repo).execute(ListWorkersRequest(project_id=uuid4()))
+        assert mock_worker_repo.list_by_project.call_args.kwargs["active_only"] is True
+
+    def test_list_workers_include_inactive(self, mock_worker_repo, sample_worker):
+        sample_worker.is_active = False
+        mock_worker_repo.list_by_project.return_value = [sample_worker]
+
+        result = ListWorkersUseCase(mock_worker_repo).execute(
+            ListWorkersRequest(project_id=sample_worker.project_id, include_inactive=True)
+        )
+
+        assert mock_worker_repo.list_by_project.call_args.kwargs["active_only"] is False
+        assert [w.is_active for w in result] == [False]
 
     def test_list_workers_empty_project(self, mock_worker_repo):
         mock_worker_repo.list_by_project.return_value = []
@@ -838,3 +951,9 @@ def test_mixed_priced_plus_supplement_cost(mock_entry_repo):
     assert Decimal(str(row.bonus_cost)).quantize(Decimal("0.01")) == Decimal("100.00")
     # total_cost = priced(200) + bonus(100) = 300
     assert Decimal(str(row.total_cost)).quantize(Decimal("0.01")) == Decimal("300.00")
+
+
+def test_a_half_bonus_day_is_rounded_to_the_cent():
+    from app.domain.labor.banked_hours_bonus import bonus_for_banked_hours
+
+    assert bonus_for_banked_hours(4, Decimal("125.25")).cost == Decimal("62.63")

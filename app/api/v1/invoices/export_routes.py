@@ -45,6 +45,7 @@ def export_invoices(project_id: str):
         to     (str, YYYY-MM) — end month, inclusive
         format (str)          — "xlsx" or "pdf"
         type   (str, optional) — "released_funds", "labor", or "materials_services"
+        locale (str, optional) — label language: "en" (default), "fr" or "vi"
 
     Returns:
         200: binary file stream with Content-Disposition: attachment
@@ -76,6 +77,7 @@ def export_invoices(project_id: str):
                 exclude_types=(
                     frozenset() if caller_sees_budget(project_id) else frozenset({InvoiceType.RELEASED_FUNDS})
                 ),
+                locale=query.locale,
             )
         )
     except ProjectNotFoundError:

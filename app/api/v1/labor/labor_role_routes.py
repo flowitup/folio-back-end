@@ -134,7 +134,7 @@ def list_labor_roles():
 def create_labor_role():
     """Create a new labor role, scoped to the caller's company."""
     try:
-        data = CreateLaborRoleRequest(**request.get_json())
+        data = CreateLaborRoleRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -161,7 +161,7 @@ def create_labor_role():
     return jsonify(_role_response(role).model_dump()), 201
 
 
-@labor_bp.route("/labor/roles/<role_id>", methods=["PATCH"])
+@labor_bp.route("/labor/roles/<uuid:role_id>", methods=["PATCH"])
 @openapi_doc(
     summary="Update name and/or color of a labor role",
     request=UpdateLaborRoleRequest,
@@ -170,15 +170,15 @@ def create_labor_role():
 )
 @jwt_required()
 @limiter.limit("10 per minute")
-def update_labor_role(role_id: str):
+def update_labor_role(role_id: UUID):
     """Update name and/or color of a labor role (company admin or manager)."""
     try:
-        data = UpdateLaborRoleRequest(**request.get_json())
+        data = UpdateLaborRoleRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
     container = get_container()
-    existing = container.labor_role_repository.find_by_id(UUID(role_id))
+    existing = container.labor_role_repository.find_by_id(role_id)
     if existing is None:
         return _error_response("NotFound", f"Labor role {role_id} not found", 404)
 
@@ -189,7 +189,7 @@ def update_labor_role(role_id: str):
 
     try:
         role = container.update_labor_role_usecase.execute(
-            role_id=UUID(role_id),
+            role_id=role_id,
             name=data.name,
             color=data.color,
         )
@@ -203,15 +203,15 @@ def update_labor_role(role_id: str):
     return jsonify(_role_response(role).model_dump())
 
 
-@labor_bp.route("/labor/roles/<role_id>", methods=["DELETE"])
+@labor_bp.route("/labor/roles/<uuid:role_id>", methods=["DELETE"])
 @openapi_doc(summary="Delete a labor role", tags=["labor"])
 @jwt_required()
 @limiter.limit("10 per minute")
-def delete_labor_role(role_id: str):
+def delete_labor_role(role_id: UUID):
     """Delete a labor role (company admin or manager). Workers referencing it
     will have their role cleared."""
     container = get_container()
-    existing = container.labor_role_repository.find_by_id(UUID(role_id))
+    existing = container.labor_role_repository.find_by_id(role_id)
     if existing is None:
         return _error_response("NotFound", f"Labor role {role_id} not found", 404)
 
@@ -221,7 +221,7 @@ def delete_labor_role(role_id: str):
         return auth_error
 
     try:
-        container.delete_labor_role_usecase.execute(role_id=UUID(role_id))
+        container.delete_labor_role_usecase.execute(role_id=role_id)
     except LaborRoleNotFoundError:
         return _error_response("NotFound", f"Labor role {role_id} not found", 404)
     except ValueError as e:

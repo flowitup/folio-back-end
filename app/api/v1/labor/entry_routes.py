@@ -46,6 +46,7 @@ from app.application.labor import (
     GetMonthlyLaborSummaryRequest,
 )
 from app.domain.exceptions.labor_exceptions import (
+    WorkerInactiveError,
     WorkerNotFoundError,
     LaborEntryNotFoundError,
     DuplicateEntryError,
@@ -160,7 +161,7 @@ def list_labor_entries(project_id: str):
 def log_attendance(project_id: str):
     """Log daily attendance for a worker."""
     try:
-        data = LogAttendanceRequest(**request.get_json())
+        data = LogAttendanceRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -178,6 +179,8 @@ def log_attendance(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    except WorkerInactiveError as e:
+        return _error_response("WorkerInactive", str(e), 409)
     except WorkerNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
     except DuplicateEntryError as e:
@@ -281,7 +284,7 @@ def bulk_log_attendance(project_id: str):
     toast. Cross-project conflict warn is Phase 4.
     """
     try:
-        data = BulkLogAttendanceRequest(**(request.get_json() or {}))
+        data = BulkLogAttendanceRequest.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -305,8 +308,12 @@ def bulk_log_attendance(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    except WorkerInactiveError as e:
+        return _error_response("WorkerInactive", str(e), 409)
     except WorkerNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
+    except DuplicateEntryError as e:
+        return _error_response("Conflict", str(e), 409)
     except ConflictsNotAcknowledgedError as e:
         return (
             jsonify(
@@ -360,7 +367,7 @@ def bulk_log_attendance(project_id: str):
 def update_attendance(project_id: str, entry_id: str):
     """Update an existing labor entry."""
     try:
-        data = UpdateAttendanceRequest(**request.get_json())
+        data = UpdateAttendanceRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 

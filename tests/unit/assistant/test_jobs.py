@@ -240,7 +240,31 @@ class TestFeatureFlagOn:
 # ---------------------------------------------------------------------------
 
 
+def _assert_deferred_to_next_paris_midnight(deferred: datetime, before: datetime, after: datetime) -> None:
+    # The cap resets at the next Paris-local midnight, not after a fixed delay — at
+    # 23:50 Paris that is ten minutes away. `before`/`after` bracket the call so a run
+    # that straddles midnight still matches.
+    assert deferred > after
+    assert deferred in {jobs._next_paris_midnight(before), jobs._next_paris_midnight(after)}
+
+
 class TestCostCapOnBrowserResults:
+    @pytest.mark.parametrize(
+        ("now", "expected"),
+        [
+            # Ten minutes before Paris midnight (CEST): the reset is ten minutes away.
+            (datetime(2026, 9, 23, 21, 50, tzinfo=timezone.utc), datetime(2026, 9, 23, 22, 0, tzinfo=timezone.utc)),
+            # Exactly Paris midnight: strictly after, so the following one.
+            (datetime(2026, 9, 23, 22, 0, tzinfo=timezone.utc), datetime(2026, 9, 24, 22, 0, tzinfo=timezone.utc)),
+            # Winter time (CET, UTC+1).
+            (datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc), datetime(2026, 1, 15, 23, 0, tzinfo=timezone.utc)),
+            # The day the clocks go back: that midnight is still CEST.
+            (datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc), datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc)),
+        ],
+    )
+    def test_next_paris_midnight(self, now: datetime, expected: datetime) -> None:
+        assert jobs._next_paris_midnight(now) == expected
+
     def test_process_fetched_invoice_skips_on_result_over_cap(
         self, monkeypatch: pytest.MonkeyPatch, fake_container: _FakeContainer
     ) -> None:
@@ -250,7 +274,9 @@ class TestCostCapOnBrowserResults:
         job = _job_record(status_message_id=status_message_id, channel_key=f"company:{uuid4()}")
         fake_container.assistant_job_repo = _FakeJobRepo([job])
 
+        before = datetime.now(timezone.utc)
         jobs.process_fetched_invoice(str(job.id))
+        after = datetime.now(timezone.utc)
 
         assert fake_container.assistant_invoice_fetch_feature.on_result_calls == []
         assert fake_container.assistant_messenger.updates
@@ -266,7 +292,7 @@ class TestCostCapOnBrowserResults:
         # filter); only `run_after` moves, past the window this poll already checked.
         assert fake_container.assistant_job_repo.status_updates == [(job.id, job.status)]
         deferred = fake_container.assistant_job_repo._jobs[job.id].run_after
-        assert deferred > datetime.now(timezone.utc) + timedelta(hours=1)
+        _assert_deferred_to_next_paris_midnight(deferred, before, after)
 
     def test_process_product_search_skips_on_result_over_cap(
         self, monkeypatch: pytest.MonkeyPatch, fake_container: _FakeContainer
@@ -276,12 +302,14 @@ class TestCostCapOnBrowserResults:
         job = _job_record(job_type="find_product", status_message_id=uuid4(), channel_key=f"company:{uuid4()}")
         fake_container.assistant_job_repo = _FakeJobRepo([job])
 
+        before = datetime.now(timezone.utc)
         jobs.process_product_search(str(job.id))
+        after = datetime.now(timezone.utc)
 
         assert fake_container.assistant_material_feature.on_result_calls == []
         assert fake_container.assistant_messenger.updates[-1]["state"] == "queued"
         deferred = fake_container.assistant_job_repo._jobs[job.id].run_after
-        assert deferred > datetime.now(timezone.utc) + timedelta(hours=1)
+        _assert_deferred_to_next_paris_midnight(deferred, before, after)
 
     def test_process_fetched_invoice_runs_normally_under_the_cap(
         self, monkeypatch: pytest.MonkeyPatch, fake_container: _FakeContainer

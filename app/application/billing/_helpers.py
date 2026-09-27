@@ -13,7 +13,8 @@ from uuid import UUID, uuid4
 
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
-from app.domain.billing.exceptions import ForbiddenBillingDocumentError
+from app.domain.billing.exceptions import DevisLockedByFactureError, ForbiddenBillingDocumentError
+from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.value_objects import BillingDocumentItem
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
@@ -21,6 +22,20 @@ from app.application.billing.dtos import ItemInput
 
 _DEFAULT_VALIDITY_DAYS = 30  # devis
 _DEFAULT_PAYMENT_DAYS = 30  # facture
+
+
+def _funds_release_items(doc: BillingDocument) -> list[dict]:
+    """A facture's lines as released_funds items: one per line, each with its own
+    vat_rate, so the release's TTC total matches the facture's."""
+    return [
+        {
+            "description": it.description,
+            "quantity": str(it.quantity),
+            "unit_price": str(it.unit_price),
+            "vat_rate": str(it.vat_rate),
+        }
+        for it in doc.items
+    ]
 
 
 def _assert_owner(doc: BillingDocument, user_id: UUID) -> None:
@@ -45,6 +60,13 @@ def _assert_billing_doc_access(doc: BillingDocument, user_id: UUID, access_repo=
     raise ForbiddenBillingDocumentError(doc.id)
 
 
+def _assert_billing_template_access(template: BillingDocumentTemplate, user_id: UUID, access_repo=None) -> None:
+    """Company templates are shared: the author OR a company-admin of the template's
+    company may read, edit, apply and delete it (the same rule as company billing
+    documents). A template with no company stays private to its author."""
+    _assert_billing_doc_access(template, user_id, access_repo)  # type: ignore[arg-type]
+
+
 def _converted_facture_id(doc_repo, doc: BillingDocument) -> Optional[UUID]:
     """Id of the facture created from *doc*, or None.
 
@@ -55,6 +77,20 @@ def _converted_facture_id(doc_repo, doc: BillingDocument) -> Optional[UUID]:
         return None
     facture = doc_repo.find_by_source_devis_id(doc.id)
     return facture.id if facture is not None else None
+
+
+def _assert_devis_not_locked(doc_repo, doc: BillingDocument) -> None:
+    """A devis with a facture made from it stays as it is while that facture is live.
+
+    Reverting it to sent, rejected or draft, or editing it, would leave a facture
+    pointing at a devis that no longer says what was invoiced. Cancelling the
+    facture releases the devis.
+    """
+    if doc.kind != BillingDocumentKind.DEVIS:
+        return
+    facture = doc_repo.find_by_source_devis_id(doc.id)
+    if facture is not None and facture.status != BillingDocumentStatus.CANCELLED:
+        raise DevisLockedByFactureError(doc.id)
 
 
 def _snapshot_issuer_from_company(company: Company) -> dict:

@@ -28,6 +28,9 @@ class CompanyPerson:
     phone_normalized: Optional[str] = None
     pending_expires_at: Optional[datetime] = None
     created_by_user_id: Optional[UUID] = None
+    # Company role ("member" or "manager") the admin chose for a person who has
+    # no account yet; applied when they sign up and link, then cleared.
+    pending_company_role: Optional[str] = None
 
     def is_pending(self, now: datetime) -> bool:
         """Return True if this profile was created ahead of a signed-up user

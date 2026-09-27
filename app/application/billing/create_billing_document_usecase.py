@@ -27,6 +27,7 @@ from app.application.billing.ports import (
     assert_project_read_access,
     assert_user_company_access,
 )
+from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.exceptions import MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
 
@@ -62,7 +63,7 @@ class CreateBillingDocumentUseCase:
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
         # 1. Verify project:read access if project_id supplied (H1 — auth boundary)
-        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         # 2. company_id is required — validate attachment and snapshot from Company entity
         if inp.company_id is None:
@@ -81,6 +82,8 @@ class CreateBillingDocumentUseCase:
         counter_key = inp.company_id
         default_payment_terms = company.default_payment_terms
 
+        validate_kind_fields(inp.kind, inp.validity_until, inp.payment_due_date, inp.payment_terms)
+
         # 3. Validate + convert items
         if not inp.items:
             raise ValueError("At least one line item is required")
@@ -93,6 +96,7 @@ class CreateBillingDocumentUseCase:
 
         # 5. Atomically generate document number
         issue_date = inp.issue_date if inp.issue_date is not None else datetime.now(timezone.utc).date()
+        validate_document_dates(issue_date, inp.validity_until, inp.payment_due_date)
         year = issue_date.year
         sequence = self._counter_repo.next_value(counter_key, inp.kind, year)
         document_number = next_document_number(

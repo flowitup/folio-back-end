@@ -734,3 +734,53 @@ def test_legacy_refund_type_alias_normalizes_to_return(cs_client, cs_app, admin_
     assert listed.status_code == 200, listed.get_data(as_text=True)
     listed_types = {inv["type"] for inv in listed.get_json()["invoices"]}
     assert listed_types == {"return"}, listed_types
+
+
+def test_source_of_a_linked_return_keeps_the_cap(cs_client, cs_app, admin_token):
+    """Editing, retyping or deleting a purchase cannot undo the cap its linked returns rely on."""
+    pid = cs_app._test_project_with_company_id
+
+    def _post(body):
+        resp = cs_client.post(f"/api/v1/projects/{pid}/invoices", headers=_auth(admin_token), json=body)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()["id"]
+
+    src_id = _post(
+        {
+            "type": "materials_services",
+            "issue_date": "2026-06-14",
+            "recipient_name": "ACME",
+            "items": [{"description": "Cement", "quantity": 1, "unit_price": 100, "vat_rate": 0}],
+        }
+    )
+    _post(
+        {
+            "type": "return",
+            "issue_date": "2026-06-15",
+            "recipient_name": "ACME",
+            "refunds_invoice_id": src_id,
+            "items": [{"description": "Cement back", "quantity": 1, "unit_price": -80, "vat_rate": 0}],
+        }
+    )
+    url = f"/api/v1/projects/{pid}/invoices/{src_id}"
+
+    too_small = cs_client.put(
+        url,
+        headers=_auth(admin_token),
+        json={"items": [{"description": "Cement", "quantity": 1, "unit_price": 10, "vat_rate": 0}]},
+    )
+    assert too_small.status_code == 400, too_small.get_data(as_text=True)
+    assert too_small.get_json()["error"] == "RefundExceedsSource"
+
+    still_covers = cs_client.put(
+        url,
+        headers=_auth(admin_token),
+        json={"items": [{"description": "Cement", "quantity": 1, "unit_price": 90, "vat_rate": 0}]},
+    )
+    assert still_covers.status_code == 200, still_covers.get_data(as_text=True)
+
+    retyped = cs_client.put(url, headers=_auth(admin_token), json={"type": "others"})
+    assert retyped.status_code == 400, retyped.get_data(as_text=True)
+
+    deleted = cs_client.delete(url, headers=_auth(admin_token))
+    assert deleted.status_code == 400, deleted.get_data(as_text=True)

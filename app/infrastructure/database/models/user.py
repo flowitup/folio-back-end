@@ -28,6 +28,9 @@ class UserModel(Base):
     # survives anonymized because company data references it; this is the audit
     # trail of when the erasure happened.
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+    # Tokens issued before this instant are refused (see jwt_handlers): set when the user proves a
+    # new sign-in phone, which signs them out of every other device. NULL = no cut-off.
+    tokens_valid_after = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,

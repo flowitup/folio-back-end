@@ -25,5 +25,9 @@ class WarehouseInUseError(InventoryError):
     """The warehouse still holds rows; move or remove them first. HTTP 409."""
 
 
+class WarehouseNameTakenError(InventoryError):
+    """Another warehouse of the company already has this name. HTTP 409."""
+
+
 class InvalidInventoryInputError(InventoryError):
     """The row would violate an invariant, or points at a place outside the company. HTTP 422."""

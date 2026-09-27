@@ -475,3 +475,49 @@ def test_update_project_explicit_null_address_is_rejected(inv_client, admin_toke
 
     status, resp = _update_project(inv_client, admin_token, body["id"], {"address": None})
     assert status == 400, resp
+
+
+def test_invoice_prefix_is_listed_and_null_clears_it(inv_client, admin_token):
+    """The list carries the saved invoice prefix (like the detail), and an explicit null resets it."""
+    status, created = _create_project(inv_client, admin_token, name="Prefix Project")
+    assert status == 201, created
+    pid = created["id"]
+
+    status, updated = _update_project(inv_client, admin_token, pid, {"invoice_prefix": "abc1"})
+    assert status == 200, updated
+    listed = {p["id"]: p for p in inv_client.get("/api/v1/projects", headers=_auth(admin_token)).get_json()["projects"]}
+    assert listed[pid]["invoice_prefix"] == "ABC1"
+
+    status, cleared = _update_project(inv_client, admin_token, pid, {"invoice_prefix": None})
+    assert status == 200, cleared
+    assert cleared["invoice_prefix"] is None
+
+    status, kept = _update_project(inv_client, admin_token, pid, {"name": "Prefix Project renamed"})
+    assert status == 200 and kept["invoice_prefix"] is None
+
+
+def test_project_members_carry_the_phone(inv_client, admin_token, invitation_app):
+    """A phone-only member (placeholder email) is listed with their phone."""
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models import UserModel
+    from app.infrastructure.database.models.associations import user_projects
+
+    project_id = invitation_app._test_project_2_id
+    with invitation_app.app_context():
+        user = UserModel(
+            email=f"phone-33611119999-{uuid4().hex[:4]}@no-email.folio.flowitup.com",
+            phone="+33611119999",
+            is_active=True,
+        )
+        db.session.add(user)
+        db.session.flush()
+        db.session.execute(user_projects.insert().values(user_id=user.id, project_id=UUID(project_id)))
+        db.session.commit()
+        user_id = str(user.id)
+
+    resp = inv_client.get(f"/api/v1/projects/{project_id}/members", headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    member = next(m for m in resp.get_json()["members"] if m["user_id"].replace("-", "") == user_id.replace("-", ""))
+    assert member["phone"] == "+33611119999"

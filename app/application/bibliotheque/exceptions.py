@@ -43,6 +43,12 @@ class SsrfBlockedError(BibliothequeError):
     pass
 
 
+class ImageFetchFailedError(BibliothequeError):
+    """Raised when the supplier's server does not return the image (HTTP error or unreachable)."""
+
+    pass
+
+
 class ImageAlreadyExistsError(BibliothequeError):
     """Raised when the product already has an image and force=True was not requested."""
 

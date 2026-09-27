@@ -158,13 +158,41 @@ class TestAddMemberByPhoneExistingAccount:
         # M6: response shape never exposes `pending` — identical whether the
         # phone matched an existing account or a brand new profile.
         assert set(body.keys()) == {"person_id", "name", "phone"}
-        assert body["name"] == "Target One"
+        # The account's own display name is never echoed: the answer would tell
+        # the caller the number is registered, and whose it is.
+        assert body["name"] == "+33611110001"
 
         from app import db
 
         with members_app.app_context():
             access = db.session.get(UserCompanyAccessModel, (target_id, company_id))
             assert access is not None and access.role == "member"
+
+    def test_registered_and_unregistered_numbers_answer_alike(self, members_client, members_app):
+        admin_id = _make_user(members_app, "mab_admin_enum@test.com")
+        _make_user(members_app, "mab_target_enum@test.com", phone="+33611110041", display_name="Secret Name")
+        company_id = _make_company(members_app, admin_id, name="MAB Co enum")
+        token = _login(members_client, "mab_admin_enum@test.com")
+
+        bodies = []
+        for phone in ("0611110041", "0611110042"):  # registered, then not
+            resp = members_client.post(
+                f"/api/v1/companies/{company_id}/members", json={"phone": phone}, headers=_auth(token)
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+            body = resp.get_json()
+            bodies.append({k: v for k, v in body.items() if k != "person_id"})
+        assert bodies == [
+            {"name": "+33611110041", "phone": "+33611110041"},
+            {"name": "+33611110042", "phone": "+33611110042"},
+        ]
+
+        again = members_client.post(
+            f"/api/v1/companies/{company_id}/members", json={"phone": "0611110041"}, headers=_auth(token)
+        )
+        assert again.status_code == 409
+        assert "Secret" not in again.get_data(as_text=True)
+        assert "-" not in again.get_json()["message"]  # no account id in the message
 
     def test_admin_role_rejected(self, members_client, members_app):
         admin_id = _make_user(members_app, "mab_admin2@test.com")
@@ -272,6 +300,63 @@ class TestAddMemberByPhoneMatchOrder:
         # and `pending` is never exposed here (M6; the directory keeps it).
         assert set(body.keys()) == {"person_id", "name", "phone"}
 
+    def test_a_foreign_number_without_an_account_is_refused(self, members_client, members_app):
+        """Sign-up takes French numbers only, so such a pending profile could never become a member."""
+        admin_id = _make_user(members_app, "mab_admin_foreign@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co foreign")
+        token = _login(members_client, "mab_admin_foreign@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "+84 912 345 678", "name": "Never Signs Up"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "French numbers only" in resp.get_json()["message"]
+
+    def test_a_foreign_number_with_an_account_is_refused_too(self, members_client, members_app):
+        """Members sign in with French numbers only: an account holding a foreign one is not attached."""
+        from app import db
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        admin_id = _make_user(members_app, "mab_admin_foreign2@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co foreign 2")
+        foreign_user = _make_user(members_app, "mab_foreign_account@test.com", phone="+84912345679")
+        token = _login(members_client, "mab_admin_foreign2@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "+84 912 345 679", "name": "Has An Account"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "French numbers only" in resp.get_json()["message"]
+        with members_app.app_context():
+            attached = (
+                db.session.query(UserCompanyAccessModel)
+                .filter_by(user_id=foreign_user, company_id=company_id)
+                .one_or_none()
+            )
+            assert attached is None
+
+    def test_pending_profile_keeps_the_chosen_role(self, members_client, members_app):
+        from app import db
+        from app.infrastructure.database.models.company_person import CompanyPersonModel
+
+        admin_id = _make_user(members_app, "mab_admin_role@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co role")
+        token = _login(members_client, "mab_admin_role@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "0611110050", "name": "Future Manager", "role": "manager"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        with members_app.app_context():
+            row = db.session.query(CompanyPersonModel).filter_by(phone_normalized="+33611110050").one()
+            assert row.pending_company_role == "manager"
+
 
 class TestImportMembers:
     def test_import_copies_profile_and_attaches_linked_user(self, members_client, members_app):
@@ -300,6 +385,25 @@ class TestImportMembers:
         with members_app.app_context():
             access = db.session.get(UserCompanyAccessModel, (linked_user_id, target_company))
             assert access is not None and access.role == "member"
+
+    def test_a_person_already_in_the_target_company_is_not_counted_as_imported(self, members_client, members_app):
+        admin_id = _make_user(members_app, "imp_admin_again@test.com")
+        source_company = _make_company(members_app, admin_id, name="Import Source Again")
+        target_company = _make_company(members_app, admin_id, name="Import Target Again")
+        person_id = _make_person(members_app, name="Already Here", phone_normalized="+33611110041")
+        _link_person_to_company(members_app, source_company, person_id, pending=False)
+        _link_person_to_company(members_app, target_company, person_id, pending=False)
+        token = _login(members_client, "imp_admin_again@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{target_company}/members/import",
+            json={"from_company_id": source_company, "person_ids": [person_id]},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert body["items"] == []
+        assert body["already_member_person_ids"] == [str(person_id)]
 
     def test_import_requires_admin_of_source_company(self, members_client, members_app):
         admin_id = _make_user(members_app, "imp_admin2@test.com")

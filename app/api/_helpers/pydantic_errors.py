@@ -6,6 +6,18 @@ from flask import jsonify
 from pydantic import ValidationError
 
 
+def validation_message(exc: ValidationError) -> str:
+    """One line per failed field ("field: reason"), without the input or docs links.
+
+    ``str(exc)`` would echo the submitted value, the model name and an
+    errors.pydantic.dev URL to the end user.
+    """
+    return "; ".join(
+        f"{'.'.join(str(loc) for loc in e['loc']) or 'value'}: {e['msg'].removeprefix('Value error, ')}"
+        for e in exc.errors()
+    )
+
+
 def format_validation_error(exc: ValidationError) -> Tuple[object, int]:
     """Return a (response, status_code) tuple for a 422 JSON response.
 

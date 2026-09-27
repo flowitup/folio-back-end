@@ -26,7 +26,7 @@ def _bad_request(message: str):
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def register_push_device():
     try:
-        data = RegisterPushDeviceRequest(**(request.get_json(silent=True) or {}))
+        data = RegisterPushDeviceRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
         return _bad_request(exc.errors()[0].get("msg", "invalid body"))
     repo = get_container().push_device_repository
@@ -42,7 +42,7 @@ def register_push_device():
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def unregister_push_device():
     try:
-        data = UnregisterPushDeviceRequest(**(request.get_json(silent=True) or {}))
+        data = UnregisterPushDeviceRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
         return _bad_request(exc.errors()[0].get("msg", "invalid body"))
     repo = get_container().push_device_repository

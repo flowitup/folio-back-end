@@ -37,6 +37,14 @@ def create_app(config_class: type = Config) -> Flask:
     """
     app = Flask(__name__)
     app.config.from_object(config_class)
+    # Responses must stay valid JSON even if a stored amount overflows a float.
+    from app.api._helpers.json_provider import FiniteJSONProvider
+
+    app.json = FiniteJSONProvider(app)
+    # HTTP errors under /api/ (bad JSON, unknown URL, unhandled 500) answer JSON, not HTML.
+    from app.api._helpers.http_errors import register_json_error_handlers
+
+    register_json_error_handlers(app)
 
     # Production security check — fail fast rather than run with insecure defaults
     _flask_env = os.environ.get("FLASK_ENV", "development")
@@ -610,6 +618,22 @@ def _configure_di_container() -> None:
             _c.token_issuer,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
         )
+        # Verified change of the sign-in phone: same code store and limits, PHONE_CHANGE purpose.
+        from app.application.usecases.change_phone import ConfirmPhoneChangeUseCase, RequestPhoneChangeCodeUseCase
+
+        _c.request_phone_change_code_usecase = RequestPhoneChangeCodeUseCase(
+            _c.user_repository,
+            _otp_repo,
+            _sms,
+            ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
+            resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
+            hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
+        )
+        _c.confirm_phone_change_usecase = ConfirmPhoneChangeUseCase(
+            _c.user_repository,
+            _otp_repo,
+            max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+        )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
         # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
         # use case instance, gated by the invitation token instead of being open to
@@ -816,6 +840,9 @@ def _configure_di_container() -> None:
 
     _person_repo = SqlAlchemyPersonRepository(db.session)
     _c.person_repo = _person_repo
+    # Renaming a worker renames the shared Person it is linked to.
+    if _c.update_worker_usecase is not None:
+        _c.update_worker_usecase.set_person_repo(_person_repo)
     _c.create_person_usecase = _CreatePersonUseCase(person_repo=_person_repo)
     _c.search_persons_usecase = _SearchPersonsUseCase(person_repo=_person_repo)
     _c.merge_persons_usecase = _MergePersonsUseCase(
@@ -829,6 +856,8 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+    if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_directory_repos"):
+        _c.create_invitation_usecase.set_directory_repos(_person_repo, _c.company_person_repo)
 
     # Onboarding use cases (Phase 2 slice B): add member by phone, import
     # from another company, company directory, and the derived "new members"
@@ -945,6 +974,7 @@ def _configure_di_container() -> None:
             # same use case (and guards) as PATCH /companies/<id>/members/<uid>.
             role_setter=_c.set_member_role_usecase,
             db_session=db.session,
+            user_repo=_c.user_repository,
         )
         _c.unassign_project_member_usecase = _UnassignProjectMemberUseCase(
             authz_reader=_c.authz_reader,
@@ -1039,6 +1069,10 @@ def _configure_di_container() -> None:
     _c.update_labor_role_usecase = _UpdateLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.delete_labor_role_usecase = _DeleteLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.list_labor_roles_usecase = _ListLaborRolesUseCase(repo=_labor_role_repo)
+    # A worker's role must belong to the project's company.
+    for _worker_usecase in (_c.create_worker_usecase, _c.update_worker_usecase):
+        if _worker_usecase is not None and hasattr(_worker_usecase, "set_role_scope"):
+            _worker_usecase.set_role_scope(_labor_role_repo, _c.authz_reader)
 
     # Default role roster for a newly created company (Phase 2 onboarding
     # slice wires this into company creation; exposed here so seeds/tests
@@ -1127,6 +1161,7 @@ def _configure_di_container() -> None:
         counter_repo=_billing_counter_repo,
         company_repo=_company_repo,
         access_repo=_access_repo,
+        project_repo=_project_repo,
     )
     _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
         doc_repo=_billing_doc_repo,
@@ -1145,14 +1180,15 @@ def _configure_di_container() -> None:
         company_repo=_company_repo,
         access_repo=_access_repo,
     )
+    from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
+
+    _funds_release_adapter = FundsReleaseAdapter(invoice_repo=_c.invoice_repository) if _c.invoice_repository else None
     _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # H1 — project:read authorization
         access_repo=_access_repo,  # company-admin may manage company billing
+        funds_release=_funds_release_adapter,  # keep a paid facture's release in sync
     )
-    from app.infrastructure.adapters.funds_release_adapter import FundsReleaseAdapter
-
-    _funds_release_adapter = FundsReleaseAdapter(invoice_repo=_c.invoice_repository) if _c.invoice_repository else None
     _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
@@ -1169,6 +1205,7 @@ def _configure_di_container() -> None:
     _c.delete_billing_document_usecase = DeleteBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
         access_repo=_access_repo,  # company-admin may manage company billing
+        funds_release=_funds_release_adapter,  # a deleted paid facture takes its release with it
     )
     _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
         doc_repo=_billing_doc_repo,
@@ -1187,15 +1224,18 @@ def _configure_di_container() -> None:
     )
     _c.update_billing_template_usecase = UpdateTemplateUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # company templates are shared with its admins
     )
     _c.list_billing_templates_usecase = ListTemplatesUseCase(
         template_repo=_billing_tpl_repo,
     )
     _c.get_billing_template_usecase = GetTemplateUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # company templates are shared with its admins
     )
     _c.delete_billing_template_usecase = DeleteTemplateUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # company templates are shared with its admins
     )
     _c.apply_template_usecase = ApplyTemplateToCreateDocumentUseCase(
         doc_repo=_billing_doc_repo,
@@ -1208,6 +1248,7 @@ def _configure_di_container() -> None:
     _c.list_project_billing_documents_usecase = ListProjectBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
         project_repo=_project_repo,  # project:read authorization
+        access_repo=_access_repo,  # company admins read every company project
     )
 
     # Re-wire materials-expenses use-cases with the now-available access_repo
@@ -1356,6 +1397,7 @@ def _configure_di_container() -> None:
             repo=_doc_repo,
             storage=storage,
             db_session=db.session,
+            filename_sanitizer=_filename_sanitizer,
         )
 
     # -----------------------------------------------------------------------

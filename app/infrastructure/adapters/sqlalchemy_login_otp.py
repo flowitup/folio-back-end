@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.domain.entities.login_otp import LoginOtp
+from app.domain.entities.login_otp import LoginOtp, OtpPurpose
 from app.infrastructure.database.models.login_otp import LoginOtpOrm
 
 
@@ -27,6 +27,7 @@ def _to_entity(row: LoginOtpOrm) -> LoginOtp:
         created_at=_aware(row.created_at),
         attempts=row.attempts,
         consumed_at=_aware(row.consumed_at) if row.consumed_at else None,
+        purpose=OtpPurpose(row.purpose),
     )
 
 
@@ -37,7 +38,13 @@ class SQLAlchemyLoginOtpRepository:
     def save(self, otp: LoginOtp) -> None:
         row = self._session.get(LoginOtpOrm, otp.id)
         if row is None:
-            row = LoginOtpOrm(id=otp.id, user_id=otp.user_id, phone=otp.phone, created_at=otp.created_at)
+            row = LoginOtpOrm(
+                id=otp.id,
+                user_id=otp.user_id,
+                phone=otp.phone,
+                created_at=otp.created_at,
+                purpose=otp.purpose.value,
+            )
             self._session.add(row)
         row.code_hash = otp.code_hash
         row.expires_at = otp.expires_at
@@ -45,10 +52,11 @@ class SQLAlchemyLoginOtpRepository:
         row.consumed_at = otp.consumed_at
         self._session.flush()
 
-    def latest_for_phone(self, phone: str) -> Optional[LoginOtp]:
-        row = self._session.execute(
-            select(LoginOtpOrm).where(LoginOtpOrm.phone == phone).order_by(LoginOtpOrm.created_at.desc()).limit(1)
-        ).scalar_one_or_none()
+    def latest_for_phone(self, phone: str, purpose: Optional[OtpPurpose] = None) -> Optional[LoginOtp]:
+        query = select(LoginOtpOrm).where(LoginOtpOrm.phone == phone)
+        if purpose is not None:
+            query = query.where(LoginOtpOrm.purpose == purpose.value)
+        row = self._session.execute(query.order_by(LoginOtpOrm.created_at.desc()).limit(1)).scalar_one_or_none()
         return _to_entity(row) if row is not None else None
 
     def count_created_since(self, phone: str, since: datetime) -> int:
@@ -59,10 +67,20 @@ class SQLAlchemyLoginOtpRepository:
         ).scalar_one()
         return int(count)
 
-    def void_active(self, phone: str, now: datetime) -> None:
+    def oldest_created_since(self, phone: str, since: datetime) -> Optional[datetime]:
+        oldest = self._session.execute(
+            select(func.min(LoginOtpOrm.created_at)).where(LoginOtpOrm.phone == phone, LoginOtpOrm.created_at >= since)
+        ).scalar_one()
+        return _aware(oldest) if oldest is not None else None
+
+    def void_active(self, phone: str, now: datetime, purpose: OtpPurpose = OtpPurpose.SIGN_IN) -> None:
         self._session.execute(
             update(LoginOtpOrm)
-            .where(LoginOtpOrm.phone == phone, LoginOtpOrm.consumed_at.is_(None))
+            .where(
+                LoginOtpOrm.phone == phone,
+                LoginOtpOrm.purpose == purpose.value,
+                LoginOtpOrm.consumed_at.is_(None),
+            )
             .values(consumed_at=now)
         )
         self._session.flush()

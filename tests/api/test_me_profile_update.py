@@ -18,7 +18,14 @@ def test_requires_auth(inv_client):
     assert inv_client.patch("/api/v1/auth/me", json={"phone": "06 00 00 00 99"}).status_code == 401
 
 
-def test_updates_display_name_and_normalises_phone(inv_client, superadmin_token, me):
+def _give_phone(client, token: str, user_id: str, phone: str) -> None:
+    """Set the caller's sign-in phone the only way allowed: through platform ops."""
+    resp = client.patch(f"/api/v1/admin/users/{user_id}", json={"phone": phone}, headers=_auth(token))
+    assert resp.status_code == 200, resp.get_json()
+
+
+def test_updates_display_name_and_accepts_the_current_phone_in_any_format(inv_client, superadmin_token, me):
+    _give_phone(inv_client, superadmin_token, me["id"], "06 00 00 00 99")
     resp = inv_client.patch(
         "/api/v1/auth/me",
         json={"display_name": "  Camille  ", "phone": "06 00 00 00 99"},
@@ -32,15 +39,39 @@ def test_updates_display_name_and_normalises_phone(inv_client, superadmin_token,
     assert body["email"] == me["email"]  # e-mail is never editable here
     assert "permissions" in body and "companies" in body
 
+    same = inv_client.patch("/api/v1/auth/me", json={"phone": "+33600000099"}, headers=_auth(superadmin_token))
+    assert same.status_code == 200
+
+
+@pytest.mark.parametrize("phone", [None, "", "   "])
+def test_refuses_to_clear_the_sign_in_phone(inv_client, superadmin_token, me, phone):
+    _give_phone(inv_client, superadmin_token, me["id"], "06 00 00 00 98")
+    resp = inv_client.patch("/api/v1/auth/me", json={"phone": phone}, headers=_auth(superadmin_token))
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "PhoneChangeNotAllowed"
     again = inv_client.get("/api/v1/auth/me", headers=_auth(superadmin_token)).get_json()
-    assert again["phone"] == "+33600000099"
+    assert again["phone"] == "+33600000098"
 
 
-def test_clears_phone_with_null(inv_client, superadmin_token):
-    inv_client.patch("/api/v1/auth/me", json={"phone": "06 00 00 00 98"}, headers=_auth(superadmin_token))
-    resp = inv_client.patch("/api/v1/auth/me", json={"phone": None}, headers=_auth(superadmin_token))
+@pytest.mark.parametrize("phone", ["06 00 00 00 96", "+447700900999"])
+def test_refuses_an_unverified_new_phone(inv_client, superadmin_token, me, phone):
+    _give_phone(inv_client, superadmin_token, me["id"], "06 00 00 00 98")
+    resp = inv_client.patch(
+        "/api/v1/auth/me", json={"display_name": "Kept?", "phone": phone}, headers=_auth(superadmin_token)
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "PhoneChangeNotAllowed"
+    again = inv_client.get("/api/v1/auth/me", headers=_auth(superadmin_token)).get_json()
+    assert again["phone"] == "+33600000098"
+    assert again["display_name"] != "Kept?"  # nothing is saved when the request is refused
+
+
+def test_platform_ops_can_still_clear_a_phone(inv_client, superadmin_token, me):
+    _give_phone(inv_client, superadmin_token, me["id"], "06 00 00 00 95")
+    resp = inv_client.patch(f"/api/v1/admin/users/{me['id']}", json={"phone": None}, headers=_auth(superadmin_token))
     assert resp.status_code == 200
-    assert resp.get_json()["phone"] is None
+    again = inv_client.get("/api/v1/auth/me", headers=_auth(superadmin_token)).get_json()
+    assert again["phone"] is None
 
 
 def test_rejects_invalid_phone_and_empty_body(inv_client, superadmin_token):
@@ -51,18 +82,15 @@ def test_rejects_invalid_phone_and_empty_body(inv_client, superadmin_token):
     assert inv_client.patch("/api/v1/auth/me", json={}, headers=_auth(superadmin_token)).status_code == 400
 
 
-def test_phone_taken_by_another_user_is_a_conflict(inv_client, superadmin_token, invitation_app):
+def test_phone_taken_by_another_user_is_refused_too(inv_client, superadmin_token, invitation_app):
     search = inv_client.get(
         "/api/v1/admin/users",
         query_string={"search": invitation_app._test_member_email},
         headers=_auth(superadmin_token),
     ).get_json()
     member_id = next(u["id"] for u in search["items"] if u["email"] == invitation_app._test_member_email)
-    given = inv_client.patch(
-        f"/api/v1/admin/users/{member_id}", json={"phone": "06 00 00 00 97"}, headers=_auth(superadmin_token)
-    )
-    assert given.status_code == 200, given.get_json()
+    _give_phone(inv_client, superadmin_token, member_id, "06 00 00 00 97")
 
     resp = inv_client.patch("/api/v1/auth/me", json={"phone": "+33600000097"}, headers=_auth(superadmin_token))
-    assert resp.status_code == 409
-    assert resp.get_json()["message"] == "Phone already in use"
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "PhoneChangeNotAllowed"

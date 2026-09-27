@@ -167,6 +167,16 @@ def test_export_xlsx_200_returns_pk_magic(export_client, export_app, admin_token
     assert resp.data[:4] == b"PK\x03\x04", "Expected xlsx (ZIP) magic bytes"
 
 
+def test_export_locale_param_is_validated(export_client, export_app, admin_token):
+    """?locale=vi is accepted; anything outside en/fr/vi is a 422."""
+    url = f"/api/v1/projects/{export_app._test_project_id}/labor-export"
+    base = {"from": "2026-01", "to": "2026-01", "format": "pdf"}
+    ok = export_client.get(url, query_string={**base, "locale": "vi"}, headers=_auth(admin_token))
+    assert ok.status_code == 200, ok.get_data(as_text=True)
+    bad = export_client.get(url, query_string={**base, "locale": "de"}, headers=_auth(admin_token))
+    assert bad.status_code == 422
+
+
 def test_export_pdf_200_returns_pdf_magic(export_client, export_app, admin_token):
     """pdf bytes start with %PDF-."""
     url = _export_url(export_app._test_project_id)
@@ -906,14 +916,10 @@ class TestWorkerLaborExportEndpoint:
 
     # --- Case 14: 200 empty range — file has empty-state message; no crash ---
 
-    # --- Case 13.5 (M-5): 404 inactive worker blocked at backend ---
+    # --- Deactivated worker: history and balance owed stay exportable ---
 
-    def test_404_inactive_worker_blocked(self, worker_export_client, worker_export_app, we_admin_token):
-        """Inactive worker → 404 with error code 'worker_inactive' (hard backend block).
-
-        The FE hides the export button for inactive workers, but a direct API call
-        must also be refused so the protection is not purely UI-gated.
-        """
+    def test_200_inactive_worker_exports(self, worker_export_client, worker_export_app, we_admin_token):
+        """A deactivated worker can still be exported (they may still be owed money)."""
         url = _worker_export_url(
             worker_export_app._test_project_id,
             worker_export_app._test_inactive_worker_id,
@@ -923,9 +929,8 @@ class TestWorkerLaborExportEndpoint:
             query_string={"from": "2026-01", "to": "2026-01", "format": "xlsx"},
             headers=_auth(we_admin_token),
         )
-        assert resp.status_code == 404, resp.get_data(as_text=True)
-        body = resp.get_json()
-        assert body["error"] == "worker_inactive", f"Expected 'worker_inactive', got: {body}"
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.data[:4] == b"PK\x03\x04"
 
     def test_200_empty_range_xlsx_valid_bytes(self, worker_export_client, worker_export_app, we_admin_token):
         """Empty date range (no entries) → 200 with valid xlsx magic bytes, no crash."""
