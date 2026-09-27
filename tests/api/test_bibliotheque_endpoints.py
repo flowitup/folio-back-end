@@ -456,6 +456,16 @@ class TestImportPurchasesEndpoint:
         assert result["purchases_added"] == 2  # 2 purchases inserted
         assert result["skipped"] == 0
 
+    @pytest.mark.parametrize("field,length", [("product_name", 501), ("size", 101)])
+    def test_import_field_longer_than_its_column_is_a_422(
+        self, bib_client, manager_token, bibliotheque_app, field, length
+    ):
+        payload = self._import_payload(bibliotheque_app._test_company_id)
+        payload["records"][1][field] = "x" * length
+        resp = bib_client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(manager_token))
+        assert resp.status_code == 422
+        assert f"records.1.{field}" in resp.get_json()["message"]
+
     def test_IDEMPOTENT_re_import_same_payload_produces_zero_changes(self, bib_client, manager_token, bibliotheque_app):
         """CRITICAL: Idempotency test — re-posting same payload yields 0 new purchases."""
         payload = self._import_payload(bibliotheque_app._test_company_id)
