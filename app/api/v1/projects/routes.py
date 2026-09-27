@@ -129,9 +129,10 @@ def list_projects():
     if project_ids and container.project_spent_reader is not None:
         spent_map = container.project_spent_reader.sum_spent_by_projects(project_ids)
 
-    # Fetch budget + company_id fields from the DB models (not exposed via ProjectSummary DTO).
+    # Fetch budget, company_id and invoice_prefix from the DB models (not exposed via ProjectSummary DTO).
     budget_map: dict = {}
     company_id_map: dict = {}
+    prefix_map: dict = {}
     if project_ids:
         rows = (
             db.session.query(
@@ -139,6 +140,7 @@ def list_projects():
                 ProjectModel.budget,
                 ProjectModel.budget_source,
                 ProjectModel.company_id,
+                ProjectModel.invoice_prefix,
             )
             .filter(ProjectModel.id.in_(project_ids))
             .all()
@@ -146,6 +148,7 @@ def list_projects():
         for row in rows:
             budget_map[row.id] = (row.budget, row.budget_source)
             company_id_map[row.id] = str(row.company_id) if row.company_id else None
+            prefix_map[row.id] = row.invoice_prefix
 
     user_uuid = UUID(user_id)
     items = []
@@ -170,6 +173,9 @@ def list_projects():
                 user_count=p.user_count,
                 created_at="",
                 company_id=company_id_map.get(pid),
+                # Same value the detail endpoint returns, so a client seeding its
+                # settings form from the list shows the saved prefix.
+                invoice_prefix=prefix_map.get(pid),
                 my_permissions=perms,
                 budget=(
                     float(budget_map[pid][0])

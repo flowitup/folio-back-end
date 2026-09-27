@@ -78,7 +78,10 @@ class UpdateProjectUseCase:
             # No custom label: an address-only change keeps the label in sync.
             project.name = address_label(project.address)
 
-        if invoice_prefix is not None:
+        if invoice_prefix is None and "invoice_prefix" in provided_fields:
+            # An explicit null clears the prefix (back to the default), like "".
+            project.invoice_prefix = None
+        elif invoice_prefix is not None:
             cleaned = invoice_prefix.strip().upper()
             if cleaned == "":
                 project.invoice_prefix = None

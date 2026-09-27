@@ -475,3 +475,22 @@ def test_update_project_explicit_null_address_is_rejected(inv_client, admin_toke
 
     status, resp = _update_project(inv_client, admin_token, body["id"], {"address": None})
     assert status == 400, resp
+
+
+def test_invoice_prefix_is_listed_and_null_clears_it(inv_client, admin_token):
+    """The list carries the saved invoice prefix (like the detail), and an explicit null resets it."""
+    status, created = _create_project(inv_client, admin_token, name="Prefix Project")
+    assert status == 201, created
+    pid = created["id"]
+
+    status, updated = _update_project(inv_client, admin_token, pid, {"invoice_prefix": "abc1"})
+    assert status == 200, updated
+    listed = {p["id"]: p for p in inv_client.get("/api/v1/projects", headers=_auth(admin_token)).get_json()["projects"]}
+    assert listed[pid]["invoice_prefix"] == "ABC1"
+
+    status, cleared = _update_project(inv_client, admin_token, pid, {"invoice_prefix": None})
+    assert status == 200, cleared
+    assert cleared["invoice_prefix"] is None
+
+    status, kept = _update_project(inv_client, admin_token, pid, {"name": "Prefix Project renamed"})
+    assert status == 200 and kept["invoice_prefix"] is None
