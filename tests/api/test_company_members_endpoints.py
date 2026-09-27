@@ -158,13 +158,41 @@ class TestAddMemberByPhoneExistingAccount:
         # M6: response shape never exposes `pending` — identical whether the
         # phone matched an existing account or a brand new profile.
         assert set(body.keys()) == {"person_id", "name", "phone"}
-        assert body["name"] == "Target One"
+        # The account's own display name is never echoed: the answer would tell
+        # the caller the number is registered, and whose it is.
+        assert body["name"] == "+33611110001"
 
         from app import db
 
         with members_app.app_context():
             access = db.session.get(UserCompanyAccessModel, (target_id, company_id))
             assert access is not None and access.role == "member"
+
+    def test_registered_and_unregistered_numbers_answer_alike(self, members_client, members_app):
+        admin_id = _make_user(members_app, "mab_admin_enum@test.com")
+        _make_user(members_app, "mab_target_enum@test.com", phone="+33611110041", display_name="Secret Name")
+        company_id = _make_company(members_app, admin_id, name="MAB Co enum")
+        token = _login(members_client, "mab_admin_enum@test.com")
+
+        bodies = []
+        for phone in ("0611110041", "0611110042"):  # registered, then not
+            resp = members_client.post(
+                f"/api/v1/companies/{company_id}/members", json={"phone": phone}, headers=_auth(token)
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+            body = resp.get_json()
+            bodies.append({k: v for k, v in body.items() if k != "person_id"})
+        assert bodies == [
+            {"name": "+33611110041", "phone": "+33611110041"},
+            {"name": "+33611110042", "phone": "+33611110042"},
+        ]
+
+        again = members_client.post(
+            f"/api/v1/companies/{company_id}/members", json={"phone": "0611110041"}, headers=_auth(token)
+        )
+        assert again.status_code == 409
+        assert "Secret" not in again.get_data(as_text=True)
+        assert "-" not in again.get_json()["message"]  # no account id in the message
 
     def test_admin_role_rejected(self, members_client, members_app):
         admin_id = _make_user(members_app, "mab_admin2@test.com")

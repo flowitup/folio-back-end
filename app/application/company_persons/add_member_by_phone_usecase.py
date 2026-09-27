@@ -79,6 +79,11 @@ def _display_name_for(explicit_name, user, phone: str) -> str:
     return phone
 
 
+def _echoed_name(explicit_name, phone: str) -> str:
+    """The name returned to the caller: theirs, or the phone they typed."""
+    return (explicit_name or phone).strip()
+
+
 class AddMemberByPhoneUseCase:
     def __init__(
         self,
@@ -123,7 +128,7 @@ class AddMemberByPhoneUseCase:
         user = self._users.find_by_phone(phone)
         if user is not None:
             if self._access.find(user.id, inp.company_id) is not None:
-                raise MemberAlreadyAttachedError(f"user {user.id} is already attached to company {inp.company_id}")
+                raise MemberAlreadyAttachedError("This person is already a member of the company")
 
             person = self._persons.find_by_user_id(user.id)
             if person is None:
@@ -153,7 +158,12 @@ class AddMemberByPhoneUseCase:
                 )
             )
             db_session.commit()
-            return AddMemberByPhoneResult(person_id=person.id, name=person.name, phone=phone, pending=False)
+            # Echo what the admin typed (or the phone), exactly like branch (d):
+            # the answer must not reveal that the number has an account, nor
+            # the name its owner chose.
+            return AddMemberByPhoneResult(
+                person_id=person.id, name=_echoed_name(inp.name, phone), phone=phone, pending=False
+            )
 
         # ------------------------------------------------------------------
         # (b)/(c) un-linked Person profiled in a company the caller admins —
