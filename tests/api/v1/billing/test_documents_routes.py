@@ -6,6 +6,8 @@ All fixtures from tests/api/v1/billing/conftest.py and tests/conftest.py.
 
 from __future__ import annotations
 
+import uuid
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -359,3 +361,36 @@ class TestBillingDocumentDates:
         moved = inv_client.put(url, json={"issue_date": "2026-03-02"}, headers=_auth(billing_token))
         assert moved.status_code == 200
         assert "02 Mar 2026" in moved.get_json()["issue_date"]
+
+
+class TestBillingDocumentSearch:
+    """?q= filters on the server, so documents beyond the loaded page are found."""
+
+    def test_q_matches_recipient_or_number_across_pages(self, inv_client, billing_token, billing_profile):
+        tag = uuid.uuid4().hex[:6]
+        body = {**_create(billing_profile["company_id"]), "recipient_name": f"Needle {tag} SARL"}
+        target = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token)).get_json()
+        for _ in range(3):  # newer documents push the target off the first page
+            inv_client.post(
+                "/api/v1/billing-documents", json=_create(billing_profile["company_id"]), headers=_auth(billing_token)
+            )
+
+        by_name = inv_client.get(
+            "/api/v1/billing-documents",
+            query_string={"kind": "devis", "q": f"needle {tag}", "limit": 1},
+            headers=_auth(billing_token),
+        ).get_json()
+        assert [d["id"] for d in by_name["items"]] == [target["id"]]
+        assert by_name["total"] == 1
+
+        by_number = inv_client.get(
+            "/api/v1/billing-documents",
+            query_string={"kind": "devis", "q": target["document_number"].lower()},
+            headers=_auth(billing_token),
+        ).get_json()
+        assert target["id"] in {d["id"] for d in by_number["items"]}
+
+        wildcard = inv_client.get(
+            "/api/v1/billing-documents", query_string={"kind": "devis", "q": "%"}, headers=_auth(billing_token)
+        ).get_json()
+        assert wildcard["total"] == 0

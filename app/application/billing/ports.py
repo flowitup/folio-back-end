@@ -72,6 +72,7 @@ class BillingDocumentRepositoryPort(Protocol):
         company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
+        search: Optional[str] = None,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents visible to a caller, with total count.
 
@@ -81,7 +82,8 @@ class BillingDocumentRepositoryPort(Protocol):
         administers (``company_id IN company_ids``).
 
         ``company_id`` is an additional exact filter (e.g. the UI scoping to one
-        company). ``status``/``project_id``/``kind`` filter as usual.
+        company). ``status``/``project_id``/``kind`` filter as usual. ``search``
+        keeps documents whose number or recipient contains it (case-insensitive).
         """
         ...
 

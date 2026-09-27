@@ -99,7 +99,7 @@ def list_billing_documents():
     """List billing documents for the authenticated user.
 
     Required query param: kind (devis | facture).
-    Optional: status, project_id, limit, offset.
+    Optional: status, project_id, limit, offset, q (number or recipient contains).
     """
     kind_str = request.args.get("kind", "").strip()
     try:
@@ -149,6 +149,7 @@ def list_billing_documents():
             limit=limit,
             offset=offset,
             is_superadmin=is_superadmin,
+            search=(request.args.get("q") or "")[:100],
         )
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)

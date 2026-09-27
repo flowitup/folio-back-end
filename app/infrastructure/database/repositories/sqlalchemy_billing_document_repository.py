@@ -99,6 +99,7 @@ class SqlAlchemyBillingDocumentRepository:
         company_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
+        search: Optional[str] = None,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents visible to a caller, with unfiltered count.
 
@@ -123,6 +124,17 @@ class SqlAlchemyBillingDocumentRepository:
             base = base.where(BillingDocumentModel.status == status.value)
         if project_id is not None:
             base = base.where(BillingDocumentModel.project_id == project_id)
+        if search:
+            # Case-insensitive substring on number or recipient, before count and
+            # paging, so a search reaches documents beyond the loaded pages.
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            base = base.where(
+                or_(
+                    BillingDocumentModel.document_number.ilike(pattern, escape="\\"),
+                    BillingDocumentModel.recipient_name.ilike(pattern, escape="\\"),
+                )
+            )
 
         count_stmt = select(func.count()).select_from(base.subquery())
         total: int = self._session.execute(count_stmt).scalar_one()
