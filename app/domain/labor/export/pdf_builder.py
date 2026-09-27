@@ -96,8 +96,10 @@ _BREAKDOWN_HEADERS = [
     "Total (priced + bonus)",
 ]
 
-# Relative column widths for breakdown table (sum normalised to page width in builder)
-_BREAKDOWN_COL_WEIGHTS = [4, 1.5, 1.5, 1.5, 1.5, 2, 2, 2.5]
+# Relative column widths for breakdown table (sum normalised to page width in builder).
+# Headers are wrapped Paragraphs (see _header_cells), so a long label breaks onto a
+# second line inside its column instead of running into the next one.
+_BREAKDOWN_COL_WEIGHTS = [3, 1.4, 1.5, 1.5, 1.5, 2.2, 2.2, 2.7]
 
 # KPI labels and attribute names for aggregation
 _KPI_LABELS = [
@@ -205,7 +207,24 @@ def _make_styles() -> dict:
         fontSize=8,
         leading=10,
     )
+    # Table header cells: wrap inside the column, centred, bold.
+    th = ParagraphStyle(
+        "th",
+        fontName="DejaVu-Bold",
+        fontSize=7.5,
+        leading=9,
+        alignment=1,  # centre
+    )
+    # Body cell holding free text (worker name) that must wrap.
+    cell = ParagraphStyle(
+        "cell",
+        fontName="DejaVu",
+        fontSize=8,
+        leading=10,
+    )
     return {
+        "th": th,
+        "cell": cell,
         "h1": h1,
         "h2": h2,
         "body": body,
@@ -271,6 +290,11 @@ def _aggregate_across_buckets(buckets: List[MonthBucket]) -> List[_AggRow]:
 # ---------------------------------------------------------------------------
 # Render helpers
 # ---------------------------------------------------------------------------
+
+
+def _header_cells(labels: List[str], styles: dict) -> list:
+    """Header labels as Paragraphs, so ReportLab wraps them within their column."""
+    return [Paragraph(_xml_escape(label), styles["th"]) for label in labels]
 
 
 def _render_header(context: ExportContext, styles: dict) -> list:
@@ -369,13 +393,12 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
     col_widths = [usable_width * (w / total_weight) for w in _BREAKDOWN_COL_WEIGHTS]
 
     # Build table data: header row + one row per worker
-    header_row = _BREAKDOWN_HEADERS[:]
-    table_data = [header_row]
+    table_data = [_header_cells(_BREAKDOWN_HEADERS, styles)]
 
     for agg in agg_rows:
         table_data.append(
             [
-                agg.worker_name,
+                Paragraph(_xml_escape(agg.worker_name), styles["cell"]),
                 _format_days(agg.days_worked),
                 str(agg.banked_hours),
                 str(agg.bonus_full_days),
@@ -491,8 +514,7 @@ def _render_day_log_section(
         elements.append(Paragraph(f"Day log — {_xml_escape(month_label)}", styles[_DAY_LOG_SECTION_HEADER_STYLE_NAME]))
 
         # Table header + data rows
-        header_row = ["Date", "Activity", "Description"]
-        table_data = [header_row]
+        table_data = [_header_cells(["Date", "Activity", "Description"], styles)]
 
         for iso_date in all_dates:
             # Reformat ISO 'YYYY-MM-DD' → 'dd/mm/YYYY' for visual consistency
