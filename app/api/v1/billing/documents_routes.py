@@ -280,6 +280,8 @@ def update_billing_document(doc_id: str, billing_doc):
         # Tri-state: True when the caller explicitly included project_id in the body
         # (even as null to unlink). model_fields_set tracks Pydantic-validated fields.
         update_project_id="project_id" in body.model_fields_set,
+        # An optional field sent as null is cleared; an omitted one is left alone.
+        cleared=frozenset(f for f in body.model_fields_set if getattr(body, f) is None),
     )
 
     from app import db

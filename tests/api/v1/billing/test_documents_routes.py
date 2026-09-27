@@ -221,6 +221,26 @@ class TestUpdateBillingDocument:
         )
         assert resp.status_code == 422
 
+    def test_null_clears_optional_fields_and_omitted_ones_stay(self, inv_client, billing_token, seeded_doc):
+        url = f"/api/v1/billing-documents/{seeded_doc['id']}"
+        filled = {
+            "recipient_address": "1 rue du Client",
+            "recipient_email": "client@example.com",
+            "recipient_siret": "12345678901234",
+            "notes": "A note",
+            "terms": "Some terms",
+            "signature_block_text": "Signed",
+        }
+        assert inv_client.put(url, json=filled, headers=_auth(billing_token)).status_code == 200
+
+        cleared = ["notes", "terms", "signature_block_text", "recipient_address", "recipient_email"]
+        resp = inv_client.put(url, json={f: None for f in cleared}, headers=_auth(billing_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert all(body[f] is None for f in cleared)
+        assert body["recipient_siret"] == "12345678901234"
+        assert body["recipient_name"] == seeded_doc["recipient_name"]
+
     def test_update_wrong_owner_returns_404(self, inv_client, other_token, seeded_doc):
         resp = inv_client.put(
             f"/api/v1/billing-documents/{seeded_doc['id']}",

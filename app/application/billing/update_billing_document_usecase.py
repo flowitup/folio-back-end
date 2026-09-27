@@ -11,7 +11,11 @@ from app.application.billing._helpers import (
     _funds_release_items,
     _items_from_inputs,
 )
-from app.application.billing.dtos import BillingDocumentResponse, UpdateBillingDocumentInput
+from app.application.billing.dtos import (
+    CLEARABLE_BILLING_FIELDS,
+    BillingDocumentResponse,
+    UpdateBillingDocumentInput,
+)
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     FundsReleasePort,
@@ -33,7 +37,8 @@ class UpdateBillingDocumentUseCase:
     Immutable fields (never changed by this use-case):
       kind, document_number, user_id, issuer_* snapshot fields, source_devis_id.
 
-    Applies only fields that are explicitly set (not None) in the input DTO.
+    Applies only fields that are explicitly set (not None) in the input DTO,
+    and clears the optional fields named in `inp.cleared`.
 
     A paid facture's auto-generated released_funds expense mirrors its lines,
     recipient, issue date and project, so it is re-synced when any of them change.
@@ -114,6 +119,9 @@ class UpdateBillingDocumentUseCase:
 
         if inp.payment_terms is not None:
             updates["payment_terms"] = inp.payment_terms
+
+        for name in inp.cleared & CLEARABLE_BILLING_FIELDS:
+            updates[name] = None
 
         if inp.update_project_id:
             updates["project_id"] = inp.project_id  # may be None to unlink

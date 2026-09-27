@@ -113,6 +113,24 @@ class UpdateBillingDocumentInput:
     # Tri-state: True means caller explicitly set project_id (even if None to unlink).
     # False means the field was omitted — do not touch project_id on the document.
     update_project_id: bool = False
+    # Optional fields the caller explicitly sent as null: they are cleared, while
+    # an omitted field is left unchanged. Only CLEARABLE_BILLING_FIELDS apply.
+    cleared: frozenset[str] = frozenset()
+
+
+CLEARABLE_BILLING_FIELDS = frozenset(
+    {
+        "recipient_address",
+        "recipient_email",
+        "recipient_siret",
+        "notes",
+        "terms",
+        "signature_block_text",
+        "validity_until",
+        "payment_due_date",
+        "payment_terms",
+    }
+)
 
 
 @dataclass(frozen=True)
