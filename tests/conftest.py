@@ -555,9 +555,10 @@ def invitation_app():
         _c.person_repo = _PersonRepo(db.session)
         _c.company_person_repo = _CompanyPersonRepo(db.session)
         # Mirrors app/__init__.py: directly adding an existing user attaches
-        # them to the project's company.
+        # them to the project's company and lists them in its directory.
         if _c.create_invitation_usecase is not None:
             _c.create_invitation_usecase.set_access_repo(_access_repo)
+            _c.create_invitation_usecase.set_directory_repos(_c.person_repo, _c.company_person_repo)
 
         # Re-wire AcceptInvitationUseCase exactly like app/__init__.py: accepting
         # an invitation attaches the acceptor to the project's company AND lists

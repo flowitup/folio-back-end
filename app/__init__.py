@@ -833,6 +833,8 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+    if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_directory_repos"):
+        _c.create_invitation_usecase.set_directory_repos(_person_repo, _c.company_person_repo)
 
     # Onboarding use cases (Phase 2 slice B): add member by phone, import
     # from another company, company directory, and the derived "new members"

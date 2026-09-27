@@ -92,3 +92,11 @@ def test_manager_can_add_a_plain_member_by_email(inv_client, invitation_app, peo
 def test_admin_can_add_a_company_manager_by_email(inv_client, admin_token, people):
     resp = _invite(inv_client, admin_token, people["project_id"], people["other_manager"][1])
     assert resp.status_code == 201, resp.get_data(as_text=True)
+
+
+def test_directly_added_outsider_is_listed_in_the_company_directory(inv_client, admin_token, invitation_app, people):
+    from tests.api.test_company_attachment_directory_invariant import _profiles
+
+    resp = _invite(inv_client, admin_token, people["project_id"], people["stranger"][1])
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    assert people["stranger"][0].replace("-", "") in _profiles(invitation_app, people["company_id"])

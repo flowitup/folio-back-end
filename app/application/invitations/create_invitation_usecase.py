@@ -44,6 +44,8 @@ class CreateInvitationUseCase:
         project_invite_daily_cap: int = 50,
         authz_reader: Any = None,  # AuthzReaderPort — resolves project:invite
         access_repo: Any = None,  # UserCompanyAccessRepositoryPort — company attachment
+        person_repo: Any = None,  # PersonRepositoryPort — directory profile on attach
+        company_person_repo: Any = None,  # CompanyPersonRepositoryPort — directory profile on attach
     ) -> None:
         self._inv_repo = invitation_repo
         self._membership_repo = project_membership_repo
@@ -57,6 +59,8 @@ class CreateInvitationUseCase:
         self._daily_cap = project_invite_daily_cap
         self._authz_reader = authz_reader
         self._access_repo = access_repo
+        self._person_repo = person_repo
+        self._company_person_repo = company_person_repo
 
     def set_authz_reader(self, reader: Any) -> None:
         """Inject the resolver read port after construction.
@@ -69,6 +73,11 @@ class CreateInvitationUseCase:
     def set_access_repo(self, access_repo: Any) -> None:
         """Inject the company-access repository after construction (same reason)."""
         self._access_repo = access_repo
+
+    def set_directory_repos(self, person_repo: Any, company_person_repo: Any) -> None:
+        """Inject the company-directory repositories after construction (same reason)."""
+        self._person_repo = person_repo
+        self._company_person_repo = company_person_repo
 
     # ------------------------------------------------------------------
 
@@ -193,14 +202,27 @@ class CreateInvitationUseCase:
         company_id = self._authz_reader.project_company_id(project_id)
         if company_id is None or self._access_repo.find(user_id, company_id) is not None:
             return
+        now = datetime.now(timezone.utc)
         self._access_repo.save(
             UserCompanyAccess(
                 user_id=user_id,
                 company_id=company_id,
                 is_primary=len(self._access_repo.list_for_user(user_id)) == 0,
-                attached_at=datetime.now(timezone.utc),
+                attached_at=now,
                 role=self._GRANTED_ROLE,
             )
+        )
+        # Attached ⇒ listed in the company directory, like every other attach
+        # path: the assign-member pickers read the directory.
+        from app.application.company_persons.ensure_company_person import ensure_company_person
+
+        ensure_company_person(
+            persons=self._person_repo,
+            company_persons=self._company_person_repo,
+            users=self._user_repo,
+            user_id=user_id,
+            company_id=company_id,
+            now=now,
         )
 
     def _forbid_manager_adding_a_non_member(self, inviter_id: UUID, user_id: UUID, project_id: UUID) -> None:
