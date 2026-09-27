@@ -21,7 +21,13 @@ from app.domain.invoice.export.models import (
     TypeSubtotal,
 )
 
-_TYPE_ORDER = (InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR, InvoiceType.MATERIALS_SERVICES, InvoiceType.OTHERS)
+_TYPE_ORDER = (
+    InvoiceType.RELEASED_FUNDS,
+    InvoiceType.LABOR,
+    InvoiceType.MATERIALS_SERVICES,
+    InvoiceType.OTHERS,
+    InvoiceType.RETURN,
+)
 
 
 @dataclass
@@ -115,7 +121,7 @@ class ExportInvoicesUseCase:
         # 4. Sort deterministically: (issue_date, ledger type, invoice_number)
         invoices.sort(key=lambda inv: (inv.issue_date, inv.ledger_type.value, inv.invoice_number))
 
-        # 5. Aggregate per-type subtotals + grand total (Decimal-safe)
+        # 5. Aggregate per-type subtotals + totals (Decimal-safe)
         subtotals: list[TypeSubtotal] = []
         for t in _TYPE_ORDER:
             scoped = [i for i in invoices if i.ledger_type == t]
@@ -128,7 +134,18 @@ class ExportInvoicesUseCase:
                     total_amount=sum((i.total_amount for i in scoped), Decimal("0")),
                 )
             )
-        grand_total = sum((s.total_amount for s in subtotals), Decimal("0"))
+        # Money in and money out are never added together. The total is what the
+        # project spent: every row but the funds released to it, with returns
+        # (negative) netted in. A cash advance is stored as a release and, as in
+        # the app, counts in neither total.
+        grand_total = sum(
+            (i.total_amount for i in invoices if i.type != InvoiceType.RELEASED_FUNDS),
+            Decimal("0"),
+        )
+        released_total = sum(
+            (i.total_amount for i in invoices if i.type == InvoiceType.RELEASED_FUNDS and not i.is_cash_advance),
+            Decimal("0"),
+        )
 
         # 6. Build bundle + context
         bundle = InvoiceBundle(
@@ -136,6 +153,7 @@ class ExportInvoicesUseCase:
             subtotals_by_type=subtotals,
             grand_total=grand_total,
             invoice_count=len(invoices),
+            released_total=released_total,
         )
         context = InvoiceExportContext(
             project_name=project.name,

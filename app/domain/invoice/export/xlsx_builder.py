@@ -140,13 +140,14 @@ def _write_summary_header_band(ws: Worksheet, context: InvoiceExportContext) -> 
 
 
 def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContext, bundle: InvoiceBundle) -> int:
-    """Write 2-col KPI table (4 rows). Returns next_row after blank spacer."""
+    """Write 2-col KPI table. Returns next_row after blank spacer."""
     from_label = context.range.from_month.strftime("%Y-%m")
     to_label = context.range.to_month.strftime("%Y-%m")
 
     kpi_rows = [
         ("Total invoices", bundle.invoice_count),
-        ("Grand total", bundle.grand_total),
+        ("Total expenses", bundle.grand_total),
+        ("Released funds", bundle.released_total),
         ("From month", from_label),
         ("To month", to_label),
     ]
@@ -161,9 +162,8 @@ def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContex
         label_cell.fill = fill
         label_cell.border = thin
 
-        if i == 1:  # Grand total row — write float once, apply currency format
-            cell_value = float(bundle.grand_total)
-            val_cell = ws.cell(row=r, column=2, value=cell_value)
+        if isinstance(value, Decimal):  # money rows — write float once, apply currency format
+            val_cell = ws.cell(row=r, column=2, value=float(value))
             val_cell.number_format = EUR_FR_FORMAT
         else:
             val_cell = ws.cell(row=r, column=2, value=value)
@@ -173,8 +173,7 @@ def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContex
     ws.column_dimensions["A"].width = _KPI_COL_WIDTHS[0]
     ws.column_dimensions["B"].width = _KPI_COL_WIDTHS[1]
 
-    # Return row 9 (start_row=4, 4 kpi rows = rows 4-7, row 8 blank => row 9)
-    return start_row + 4 + 1  # +4 data rows +1 blank
+    return start_row + len(kpi_rows) + 1  # data rows + 1 blank
 
 
 def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[TypeSubtotal]) -> int:
@@ -214,7 +213,7 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
     return data_row + 1  # blank spacer
 
 
-def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoice]) -> int:
+def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoice], grand_total: Decimal) -> int:
     """Write 'Invoices' heading + header + data rows + GRAND TOTAL band. Returns next_row."""
     thin = _thin_border()
     thick = _thick_top_border()
@@ -261,15 +260,15 @@ def _write_invoices_section(ws: Worksheet, start_row: int, invoices: List[Invoic
         data_row += 1
 
     # GRAND TOTAL band
+    # The same total as the KPI table: expenses only, released funds left out.
     grand_row = data_row
-    grand_total = sum((inv.total_amount for inv in invoices), Decimal("0"))
     for col in range(1, len(_INVOICE_HEADERS) + 1):
         cell = ws.cell(row=grand_row, column=col)
         cell.border = thick
         cell.fill = grand_fill
         cell.font = _bold_font()
 
-    ws.cell(row=grand_row, column=1, value="GRAND TOTAL").font = _bold_font()
+    ws.cell(row=grand_row, column=1, value="TOTAL EXPENSES").font = _bold_font()
     ws.cell(row=grand_row, column=1).border = thick
     ws.cell(row=grand_row, column=1).fill = grand_fill
 
@@ -418,7 +417,7 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     next_row = _write_subtotals_section(ws_summary, start_row=next_row, subtotals=bundle.subtotals_by_type)
 
     # Invoices table + grand total
-    _write_invoices_section(ws_summary, start_row=next_row, invoices=bundle.invoices)
+    _write_invoices_section(ws_summary, start_row=next_row, invoices=bundle.invoices, grand_total=bundle.grand_total)
 
     _set_col_widths(ws_summary, _INVOICE_COL_WIDTHS)
 

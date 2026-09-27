@@ -7,7 +7,7 @@ Layout (A4 portrait, 15mm margins)
 Page 1 — Summary:
   1. Header band — project name (24pt bold) + "INVOICE EXPORT" subtitle
   2. Meta line — range, generated datetime, generated_by email (9pt grey)
-  3. KPI strip (4 cells) — Total invoices | Grand total | From | To
+  3. KPI strip (5 cells) — Total invoices | Total expenses | Released funds | From | To
   4. "Subtotals by type" heading + table (Type | Count | Total)
   5. "Invoices" heading + table (# | Date | Type | Recipient | Total)
 
@@ -263,20 +263,22 @@ def _render_summary_header(context: InvoiceExportContext, styles: dict) -> list:
 
 
 def _render_kpi_strip(bundle: InvoiceBundle, context: InvoiceExportContext, styles: dict) -> list:
-    """4-cell KPI strip: Total invoices | Grand total | From | To."""
+    """KPI strip: Total invoices | Total expenses | Released funds | From | To."""
     from_label = context.range.from_month.strftime("%Y-%m")
     to_label = context.range.to_month.strftime("%Y-%m")
 
     kpi_data = [
         [
             Paragraph("Total invoices", styles["kpi_label"]),
-            Paragraph("Grand total", styles["kpi_label"]),
+            Paragraph("Total expenses", styles["kpi_label"]),
+            Paragraph("Released funds", styles["kpi_label"]),
             Paragraph("From", styles["kpi_label"]),
             Paragraph("To", styles["kpi_label"]),
         ],
         [
             Paragraph(str(bundle.invoice_count), styles["kpi_value"]),
             Paragraph(format_eur_fr(bundle.grand_total), styles["kpi_value"]),
+            Paragraph(format_eur_fr(bundle.released_total), styles["kpi_value"]),
             Paragraph(from_label, styles["kpi_value"]),
             Paragraph(to_label, styles["kpi_value"]),
         ],

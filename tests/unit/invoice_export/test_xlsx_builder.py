@@ -154,7 +154,7 @@ def test_currency_cells_are_floats_with_eur_format():
 
 
 def test_grand_total_row_present():
-    """Summary sheet has a 'GRAND TOTAL' row in the invoices section."""
+    """Summary sheet has a 'TOTAL EXPENSES' row in the invoices section."""
     ctx = _make_context()
     invoices = [
         _make_invoice(invoice_number="INV-001", amount=Decimal("100.00")),
@@ -165,7 +165,7 @@ def test_grand_total_row_present():
     ws = wb["Summary"]
 
     all_values = [cell.value for row in ws.iter_rows() for cell in row]
-    assert "GRAND TOTAL" in all_values, "Expected 'GRAND TOTAL' text in Summary sheet"
+    assert "TOTAL EXPENSES" in all_values, "Expected 'TOTAL EXPENSES' text in Summary sheet"
 
 
 def test_empty_range_only_summary_sheet():

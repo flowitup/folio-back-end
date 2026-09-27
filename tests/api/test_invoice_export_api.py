@@ -286,7 +286,7 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
     - openpyxl opens successfully
     - Sheet names include Summary, Released Funds invoices, Labor invoices
     - "Materials & Services invoices" sheet absent (no materials & services invoices seeded)
-    - Summary sheet contains GRAND TOTAL label
+    - Summary sheet contains TOTAL EXPENSES label
 
     pdf assertions:
     - 200, pdf content-type, %PDF- magic bytes
@@ -357,11 +357,11 @@ def test_multi_invoice_xlsx_and_pdf_smoke(inv_export_client, inv_export_app, adm
         "Materials & Services invoices" not in sheet_names
     ), f"Unexpected 'Materials & Services invoices' sheet (none seeded); got: {sheet_names}"
 
-    # Summary sheet must contain GRAND TOTAL label somewhere
+    # Summary sheet must contain the TOTAL EXPENSES label somewhere
     ws_summary = wb["Summary"]
     all_summary_values = [ws_summary.cell(row=r, column=1).value for r in range(1, 30)]
-    has_grand_total = any(v and "GRAND TOTAL" in str(v).upper() for v in all_summary_values)
-    assert has_grand_total, f"GRAND TOTAL label not found in Summary col A: {all_summary_values}"
+    has_grand_total = any(v and "TOTAL EXPENSES" in str(v).upper() for v in all_summary_values)
+    assert has_grand_total, f"TOTAL EXPENSES label not found in Summary col A: {all_summary_values}"
 
     # --- pdf ---
     resp_pdf = inv_export_client.get(
