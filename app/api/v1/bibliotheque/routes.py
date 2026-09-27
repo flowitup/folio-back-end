@@ -21,6 +21,7 @@ from flask import Response, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pagination import MAX_PAGE
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.bibliotheque import bibliotheque_bp
 from app.api.v1.bibliotheque.schemas import (
@@ -158,6 +159,8 @@ def list_products() -> Any:
         page = int(request.args.get("page", 1))
     except ValueError:
         page = 1
+    # An absurd page overflows the SQL OFFSET; past the last page is simply empty.
+    page = min(max(page, 1), MAX_PAGE)
 
     requester_id = UUID(get_jwt_identity())
     c = get_container()

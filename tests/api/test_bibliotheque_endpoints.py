@@ -378,6 +378,16 @@ class TestListProductsEndpoint:
         assert "total" in data
         assert "page" in data
 
+    def test_huge_page_is_clamped_not_a_500(self, bib_client, member_token, bibliotheque_app):
+        resp = bib_client.get(
+            f"/api/v1/bibliotheque/products?company_id={bibliotheque_app._test_company_id}"
+            "&page=999999999999999999999",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["items"] == []
+        assert resp.get_json()["page"] == 1_000_000
+
     def test_401_unauthenticated(self, bib_client, bibliotheque_app):
         resp = bib_client.get(f"/api/v1/bibliotheque/products?company_id={bibliotheque_app._test_company_id}")
         assert resp.status_code == 401

@@ -18,6 +18,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import BaseModel, field_validator
 
+from app.api._helpers.pagination import parse_limit_offset
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_documents_bp
@@ -113,10 +114,9 @@ def list_materials_expenses():
             return _err("ValidationError", "Invalid company_id", 400)
 
     try:
-        limit = min(int(request.args.get("limit", 50)), 200)
-        offset = int(request.args.get("offset", 0))
-    except ValueError:
-        return _err("ValidationError", "limit and offset must be integers", 400)
+        limit, offset = parse_limit_offset(request.args)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
 
     user_id = UUID(get_jwt_identity())
     is_superadmin = is_platform_ops()

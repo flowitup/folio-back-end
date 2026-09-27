@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -157,6 +159,12 @@ class TestListBillingDocuments:
         data = resp.get_json()
         assert len(data["items"]) <= 2
         assert "total" in data
+
+    @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "offset=-1", "offset=99999999999999999999"])
+    def test_list_out_of_range_pagination_returns_400(self, inv_client, billing_token, query):
+        resp = inv_client.get(f"/api/v1/billing-documents?kind=facture&{query}", headers=_auth(billing_token))
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "ValidationError"
 
 
 # ---------------------------------------------------------------------------
