@@ -118,6 +118,22 @@ def labor_app():
             db_session=db.session,
         )
 
+        # configure_container() replaces the container create_app() wired the
+        # activity use cases on, so wire them again here.
+        from app.application.labor.labor_activity_usecases import (
+            CreateLaborActivityUseCase as _CreateActUC,
+            DeleteLaborActivityUseCase as _DeleteActUC,
+            ListLaborActivitiesUseCase as _ListActUC,
+            UpdateLaborActivityUseCase as _UpdateActUC,
+        )
+        from app.infrastructure.adapters.sqlalchemy_labor_activity import SQLAlchemyLaborActivityRepository
+
+        _activity_repo = SQLAlchemyLaborActivityRepository(db.session)
+        _c.create_labor_activity_usecase = _CreateActUC(_activity_repo)
+        _c.list_labor_activities_usecase = _ListActUC(_activity_repo)
+        _c.update_labor_activity_usecase = _UpdateActUC(_activity_repo)
+        _c.delete_labor_activity_usecase = _DeleteActUC(_activity_repo)
+
         test_app._test_admin_email = "laboradmin@test.com"
         test_app._test_admin_password = "Admin1234!"
         test_app._test_project_id = str(project.id)
@@ -350,6 +366,44 @@ class TestWorkerRoutes:
         assert data["name"] == "Rate Immutable Worker Updated"
         # Base rate must not have changed
         assert data["daily_rate"] == 80.0
+
+
+class TestLaborActivityRoutes:
+    def test_update_and_delete_activity_through_another_project_404(self, labor_client, admin_token, labor_app):
+        """An activity is only reachable under its own project."""
+        from uuid import UUID
+
+        from app import db
+
+        pid = labor_app._test_project_id
+        url = f"/api/v1/projects/{pid}/labor-activities"
+        created = labor_client.post(url, json={"date": "2026-09-25", "title": "Pour slab"}, headers=_auth(admin_token))
+        assert created.status_code == 201
+        activity_id = created.get_json()["id"]
+
+        with labor_app.app_context():
+            owner = db.session.get(UserModel, UUID(labor_app._test_admin_user_id))
+            other = ProjectModel(
+                name="Other Activity Project",
+                owner_id=owner.id,
+                company_id=company_for_projects(db.session, owner.id),
+            )
+            db.session.add(other)
+            db.session.commit()
+            other_url = f"/api/v1/projects/{other.id}/labor-activities/{activity_id}"
+
+        resp = labor_client.put(other_url, json={"title": "Hijacked"}, headers=_auth(admin_token))
+        assert resp.status_code == 404
+        resp = labor_client.delete(other_url, headers=_auth(admin_token))
+        assert resp.status_code == 404
+
+        listed = labor_client.get(url, headers=_auth(admin_token)).get_json()
+        items = listed if isinstance(listed, list) else listed.get("activities", listed.get("items", []))
+        assert [a["title"] for a in items if a["id"] == activity_id] == ["Pour slab"]
+
+        own = labor_client.put(f"{url}/{activity_id}", json={"title": "Pour slab 2"}, headers=_auth(admin_token))
+        assert own.status_code == 200
+        assert labor_client.delete(f"{url}/{activity_id}", headers=_auth(admin_token)).status_code == 204
 
 
 # ---------------------------------------------------------------------------

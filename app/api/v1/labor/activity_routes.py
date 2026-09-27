@@ -176,6 +176,7 @@ def update_labor_activity(project_id: str, activity_id: str):
         result = get_container().update_labor_activity_usecase.execute(
             UpdateLaborActivityRequest(
                 activity_id=UUID(activity_id),
+                project_id=UUID(project_id),
                 title=data.title,
             )
         )
@@ -195,7 +196,11 @@ def update_labor_activity(project_id: str, activity_id: str):
 def delete_labor_activity(project_id: str, activity_id: str):
     """Delete a labor activity."""
     try:
-        get_container().delete_labor_activity_usecase.execute(DeleteLaborActivityRequest(activity_id=UUID(activity_id)))
+        get_container().delete_labor_activity_usecase.execute(
+            DeleteLaborActivityRequest(activity_id=UUID(activity_id), project_id=UUID(project_id))
+        )
+    except ValueError as e:
+        return _error_response("ValidationError", str(e), 400)
     except LaborActivityNotFoundError:
         return _error_response("NotFound", f"Labor activity {activity_id} not found", 404)
 
