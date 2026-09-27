@@ -7,6 +7,8 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from pydantic import ValidationError
 
+from app.api._helpers.validation_error import safe_validation_fields
+
 from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
@@ -214,9 +216,9 @@ def create_project():
     `GET /projects`.
     """
     try:
-        data = CreateProjectRequest(**request.get_json())
+        data = CreateProjectRequest.model_validate(request.get_json())
     except ValidationError as e:
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
+        error_fields = safe_validation_fields(e)
         return (
             jsonify(
                 ErrorResponse(
@@ -416,9 +418,9 @@ def get_project(project_id: str):
 def update_project(project_id: str):
     """Update an existing project."""
     try:
-        data = UpdateProjectRequest(**request.get_json())
+        data = UpdateProjectRequest.model_validate(request.get_json())
     except ValidationError as e:
-        error_fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
+        error_fields = safe_validation_fields(e)
         return (
             jsonify(
                 ErrorResponse(

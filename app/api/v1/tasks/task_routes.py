@@ -93,7 +93,7 @@ def list_tasks(project_id: str):
 @require_project_access(write=False)
 def create_task(project_id: str):
     try:
-        data = CreateTaskSchema(**(request.get_json() or {}))
+        data = CreateTaskSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error(e)
 
@@ -143,7 +143,7 @@ def get_task(task_id: str):
 @require_task_access(write=False)  # any project member may edit task content (kept lenient)
 def update_task(task_id: str):
     try:
-        data = UpdateTaskSchema(**(request.get_json() or {}))
+        data = UpdateTaskSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error(e)
 
@@ -185,7 +185,7 @@ def update_task(task_id: str):
 @require_task_access(write=False)
 def move_task(task_id: str):
     try:
-        data = MoveTaskSchema(**(request.get_json() or {}))
+        data = MoveTaskSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error(e)
     try:

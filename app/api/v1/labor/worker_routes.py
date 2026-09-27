@@ -118,7 +118,7 @@ def list_workers(project_id: str):
 def create_worker(project_id: str):
     """Create a new worker for a project."""
     try:
-        data = CreateWorkerRequest(**request.get_json())
+        data = CreateWorkerRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -168,7 +168,7 @@ def create_worker(project_id: str):
 def update_worker(project_id: str, worker_id: str):
     """Update an existing worker."""
     try:
-        data = UpdateWorkerRequest(**request.get_json())
+        data = UpdateWorkerRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 

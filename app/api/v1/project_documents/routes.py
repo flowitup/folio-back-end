@@ -179,7 +179,7 @@ def upload_project_document(project_id: str):
 def presign_project_document(project_id: str):
     """Generate a presigned PUT URL for direct-to-S3 browser upload."""
     body = request.get_json(silent=True)
-    if not body:
+    if not isinstance(body, dict) or not body:
         return _error_response("INVALID_BODY", "Request body must be JSON with filename, content_type, size_bytes", 400)
 
     filename = body.get("filename")
@@ -240,7 +240,7 @@ def presign_project_document(project_id: str):
 def confirm_project_document_upload(project_id: str):
     """Confirm a presigned upload — verify S3 object exists and persist DB row."""
     body = request.get_json(silent=True)
-    if not body:
+    if not isinstance(body, dict) or not body:
         return _error_response("INVALID_BODY", "Request body must be JSON", 400)
 
     doc_id_str = body.get("doc_id")
@@ -390,7 +390,7 @@ def rename_project_document(project_id: str, document_id: str):
         return _error_response("INVALID_ID", "Invalid document id", 400)
 
     body = request.get_json(silent=True)
-    if not body or "filename" not in body:
+    if not isinstance(body, dict) or "filename" not in body:
         return _error_response("MISSING_FILENAME", "Request body must include 'filename'", 400)
 
     new_filename = body["filename"]
@@ -478,7 +478,7 @@ def update_document_tags(project_id: str, document_id: str):
         return _error_response("INVALID_ID", "Invalid document id", 400)
 
     body = request.get_json(silent=True)
-    if not body or "tags" not in body:
+    if not isinstance(body, dict) or "tags" not in body:
         return _error_response("MISSING_TAGS", "Request body must include 'tags'", 400)
 
     raw_tags = body["tags"]

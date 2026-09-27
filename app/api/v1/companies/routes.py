@@ -498,8 +498,8 @@ def set_member_role(company_id: str, target_user_id: str):
     except ValueError:
         return _err("NotFound", f"User {target_user_id} not found", 404)
 
-    body = request.get_json(force=True, silent=True) or {}
-    role = body.get("role")
+    body = request.get_json(force=True, silent=True)
+    role = body.get("role") if isinstance(body, dict) else None
     if not role:
         return _err("ValidationError", "role is required", 400)
 
@@ -598,7 +598,7 @@ def revoke_join_code(company_id: str):
 def join_company_by_code():
     """Attach the caller to the company owning the code (role member; primary when it is their first)."""
     try:
-        body = JoinCompanyRequest(**(request.get_json(silent=True) or {}))
+        body = JoinCompanyRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
         # format_validation_error already returns a (response, status) pair — wrapping it in
         # _err() would embed a Response inside a dict and make jsonify raise (500 instead of 422).

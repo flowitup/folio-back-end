@@ -136,7 +136,7 @@ def create_labor_activity(project_id: str):
     entry. Returns 201 with the created activity.
     """
     try:
-        data = CreateActivitySchema(**(request.get_json() or {}))
+        data = CreateActivitySchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -168,7 +168,7 @@ def create_labor_activity(project_id: str):
 def update_labor_activity(project_id: str, activity_id: str):
     """Update the title of an existing labor activity by its ID."""
     try:
-        data = UpdateActivitySchema(**(request.get_json() or {}))
+        data = UpdateActivitySchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 

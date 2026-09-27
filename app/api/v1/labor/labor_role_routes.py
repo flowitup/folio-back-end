@@ -134,7 +134,7 @@ def list_labor_roles():
 def create_labor_role():
     """Create a new labor role, scoped to the caller's company."""
     try:
-        data = CreateLaborRoleRequest(**request.get_json())
+        data = CreateLaborRoleRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -173,7 +173,7 @@ def create_labor_role():
 def update_labor_role(role_id: str):
     """Update name and/or color of a labor role (company admin or manager)."""
     try:
-        data = UpdateLaborRoleRequest(**request.get_json())
+        data = UpdateLaborRoleRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 

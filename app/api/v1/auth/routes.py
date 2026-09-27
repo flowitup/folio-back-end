@@ -135,7 +135,7 @@ def _login_response(container, result: LoginResult):
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
-        data = OtpRequestBody(**(request.get_json(silent=True) or {}))
+        data = OtpRequestBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone")
     container = get_container()
@@ -166,7 +166,7 @@ def request_otp():
 @limiter.limit("5 per minute")
 def verify_otp():
     try:
-        data = OtpVerifyBody(**(request.get_json(silent=True) or {}))
+        data = OtpVerifyBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone, code")
     container = get_container()
@@ -337,7 +337,7 @@ def update_current_user():
     is refused (400 ``PhoneChangeNotAllowed``) because no code proves the caller holds a new number.
     """
     try:
-        data = UpdateMeRequest(**(request.get_json(silent=True) or {}))
+        data = UpdateMeRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: display_name, phone")
     provided = data.model_dump(exclude_unset=True)
@@ -435,7 +435,7 @@ def delete_current_user():
 @limiter.limit("5 per minute")
 def request_signup_otp():
     try:
-        data = SignupRequestBody(**(request.get_json(silent=True) or {}))
+        data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone")
     container = get_container()
@@ -468,7 +468,7 @@ def request_signup_otp():
 @limiter.limit("5 per minute")
 def verify_signup_otp():
     try:
-        data = SignupVerifyBody(**(request.get_json(silent=True) or {}))
+        data = SignupVerifyBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone, code, display_name")
     container = get_container()

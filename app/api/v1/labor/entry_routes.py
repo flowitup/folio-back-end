@@ -160,7 +160,7 @@ def list_labor_entries(project_id: str):
 def log_attendance(project_id: str):
     """Log daily attendance for a worker."""
     try:
-        data = LogAttendanceRequest(**request.get_json())
+        data = LogAttendanceRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -281,7 +281,7 @@ def bulk_log_attendance(project_id: str):
     toast. Cross-project conflict warn is Phase 4.
     """
     try:
-        data = BulkLogAttendanceRequest(**(request.get_json() or {}))
+        data = BulkLogAttendanceRequest.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -360,7 +360,7 @@ def bulk_log_attendance(project_id: str):
 def update_attendance(project_id: str, entry_id: str):
     """Update an existing labor entry."""
     try:
-        data = UpdateAttendanceRequest(**request.get_json())
+        data = UpdateAttendanceRequest.model_validate(request.get_json())
     except ValidationError as e:
         return _validation_error_response(e)
 

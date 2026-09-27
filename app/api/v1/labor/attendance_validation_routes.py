@@ -75,7 +75,7 @@ def _max_backdate_days() -> int:
 def submit_own_attendance(project_id: str):
     """The calling user must be linked to a worker on this project (workers.user_id)."""
     try:
-        data = SelfLogAttendanceRequest(**(request.get_json() or {}))
+        data = SelfLogAttendanceRequest.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -206,7 +206,7 @@ def reject_attendance(project_id: str, entry_id: str):
 def edit_own_attendance(project_id: str, entry_id: str):
     """The entry must belong to the worker linked to the caller (404 otherwise)."""
     try:
-        data = SelfEditAttendanceRequest(**(request.get_json() or {}))
+        data = SelfEditAttendanceRequest.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
     usecase = get_container().edit_own_attendance_usecase

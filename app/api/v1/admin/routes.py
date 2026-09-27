@@ -7,6 +7,8 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.validation_error import safe_validation_fields
+
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
 from app.api.openapi import openapi_doc
 from app.api.v1.ops_context import is_platform_ops
@@ -47,7 +49,7 @@ def _err(code: int, error: str, message: str):
 
 
 def _validation_err(e: ValidationError):
-    fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
+    fields = safe_validation_fields(e)
     return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
 
 
@@ -89,7 +91,7 @@ def bulk_add_memberships(user_id: UUID):
         return guard
 
     try:
-        data = BulkAddRequest(**request.get_json(silent=True) or {})
+        data = BulkAddRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as e:
         return _validation_err(e)
 
@@ -214,7 +216,7 @@ def update_user(user_id: str):
         return _err(400, "BadRequest", "Invalid user id")
 
     try:
-        data = UpdateUserRequest(**(request.get_json(silent=True) or {}))
+        data = UpdateUserRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as e:
         return _validation_err(e)
 

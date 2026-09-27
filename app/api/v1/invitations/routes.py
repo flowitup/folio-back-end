@@ -6,6 +6,8 @@ from flask import jsonify, make_response, request
 from flask_jwt_extended import get_jwt_identity, jwt_required, set_access_cookies, set_refresh_cookies
 from pydantic import ValidationError
 
+from app.api._helpers.validation_error import safe_validation_fields
+
 from app.api.openapi import openapi_doc
 from app.api.v1.invitations import invitations_bp
 from app.api.v1.invitations.schemas import (
@@ -69,7 +71,7 @@ def _conflict(reason: str, message: str):
 
 
 def _validation_err(e: ValidationError):
-    fields = [err.get("loc", ["unknown"])[-1] for err in e.errors()]
+    fields = safe_validation_fields(e)
     return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
 
 
@@ -90,7 +92,7 @@ def _validation_err(e: ValidationError):
 def create_invitation():
     """Create an invitation (or directly add existing user) to a project."""
     try:
-        data = CreateInviteRequest(**request.get_json(silent=True) or {})
+        data = CreateInviteRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as e:
         return _validation_err(e)
 
@@ -277,7 +279,7 @@ def verify_invitation(token: str):
 def request_invite_code():
     """Text a sign-up code to the phone being claimed. Public: the invitation token is the authorisation."""
     try:
-        data = RequestInviteCodeRequest(**request.get_json(silent=True) or {})
+        data = RequestInviteCodeRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as e:
         return _validation_err(e)
 
@@ -329,7 +331,7 @@ def request_invite_code():
 def accept_invitation():
     """Accept an invitation: create the account and membership, then sign the invitee in."""
     try:
-        data = AcceptInviteRequest(**request.get_json(silent=True) or {})
+        data = AcceptInviteRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as e:
         return _validation_err(e)
 

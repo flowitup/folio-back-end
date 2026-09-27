@@ -204,7 +204,7 @@ def search_persons():
 def create_person():
     """Create a new Person scoped to the authenticated caller as creator."""
     try:
-        body = CreatePersonRequestSchema(**(request.get_json() or {}))
+        body = CreatePersonRequestSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
@@ -258,7 +258,7 @@ def merge_persons(source_person_id: str):
         return _error("Forbidden", "Platform ops required.", 403)
 
     try:
-        body = MergePersonsRequestSchema(**(request.get_json() or {}))
+        body = MergePersonsRequestSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 
