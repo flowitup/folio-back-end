@@ -326,6 +326,35 @@ class TestRefundableFilter:
         assert inv_null_id in ids
         assert inv_set_id not in ids
 
+    def test_refundable_false_leaves_out_company_paid_expenses(self, mat_client, admin_tok, mat_exp_app):
+        """An expense paid with a company payment method can never be tracked, so it is not offered."""
+        from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+        with mat_exp_app.app_context():
+            methods = {}
+            for label, company_paid in (("Company card", True), ("Own card", False)):
+                pm = PaymentMethodModel(
+                    id=uuid4(),
+                    company_id=mat_exp_app._company_a_id,
+                    label=f"{label} {uuid4().hex[:4]}",
+                    is_company_payment=company_paid,
+                )
+                db.session.add(pm)
+                methods[company_paid] = pm.id
+            db.session.commit()
+            ids = {}
+            for company_paid, pm_id in methods.items():
+                inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id)
+                inv.payment_method_id = pm_id
+                ids[company_paid] = str(inv.id)
+            db.session.commit()
+
+        resp = mat_client.get("/api/v1/billing/materials-expenses?refundable=false", headers=_auth(admin_tok))
+        assert resp.status_code == 200
+        listed = {i["id"] for i in resp.get_json()["items"]}
+        assert ids[True] not in listed
+        assert ids[False] in listed
+
     def test_refundable_true_returns_only_non_null_status(self, mat_client, admin_tok, mat_exp_app):
         with mat_exp_app.app_context():
             inv_null = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status=None)

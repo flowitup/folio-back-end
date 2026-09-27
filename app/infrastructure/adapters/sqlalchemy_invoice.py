@@ -725,7 +725,22 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         if refundable is True:
             query = query.filter(InvoiceModel.refundable_status.isnot(None))
         elif refundable is False:
-            query = query.filter(InvoiceModel.refundable_status.is_(None))
+            # Candidates for "Add refundable expense": not tracked yet, and not
+            # paid with a company payment method of the project's company — the
+            # company paid those itself, so SetInvoiceRefundableStatusUseCase
+            # refuses to track them and offering them is a dead end.
+            from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+            query = query.outerjoin(
+                PaymentMethodModel,
+                and_(
+                    InvoiceModel.payment_method_id == PaymentMethodModel.id,
+                    PaymentMethodModel.company_id == ProjectModel.company_id,
+                ),
+            ).filter(
+                InvoiceModel.refundable_status.is_(None),
+                or_(PaymentMethodModel.id.is_(None), PaymentMethodModel.is_company_payment.isnot(True)),
+            )
 
         total: int = query.count()
 
