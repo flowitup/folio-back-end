@@ -26,10 +26,10 @@ from app.api.openapi import openapi_doc
 from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_templates_bp
 from app.api.v1.billing.decorators import require_billing_template_owner
+from app.api.v1.billing.item_inputs import items_from_schema
 from app.api.v1.billing.schemas import CreateTemplateRequest, UpdateTemplateRequest
 from app.application.billing import (
     CreateTemplateInput,
-    ItemInput,
     UpdateTemplateInput,
     BillingTemplateNotFoundError,
     BillingTemplateNameConflictError,
@@ -84,18 +84,6 @@ def _resolve_template_company_scope(caller_id: UUID, requested_raw: "str | None"
 
 def _err(error: str, message: str, status: int) -> Tuple[Response, int]:
     return jsonify({"error": error, "message": message}), status
-
-
-def _items_from_schema(raw_items) -> list[ItemInput]:
-    return [
-        ItemInput(
-            description=it.description,
-            quantity=it.quantity,
-            unit_price=it.unit_price,
-            vat_rate=it.vat_rate,
-        )
-        for it in raw_items
-    ]
 
 
 def _tpl_to_json(dto) -> dict:
@@ -168,7 +156,7 @@ def create_billing_template():
         user_id=user_id,
         kind=BillingDocumentKind(body.kind),
         name=body.name,
-        items=_items_from_schema(body.items),
+        items=items_from_schema(body.items),
         notes=body.notes,
         terms=body.terms,
         default_vat_rate=body.default_vat_rate,
@@ -229,7 +217,7 @@ def update_billing_template(template_id: str, billing_template):
         id=billing_template.id,
         user_id=user_id,
         name=body.name,
-        items=_items_from_schema(body.items) if body.items is not None else None,
+        items=items_from_schema(body.items) if body.items is not None else None,
         notes=body.notes,
         terms=body.terms,
         default_vat_rate=body.default_vat_rate,

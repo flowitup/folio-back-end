@@ -34,6 +34,7 @@ from app.api.openapi import openapi_doc
 from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.billing import billing_documents_bp
 from app.api.v1.billing.decorators import require_billing_document_owner
+from app.api.v1.billing.item_inputs import items_from_schema
 from app.api.v1.billing.schemas import (
     ActivitySuggestionsQuery,
     ApplyTemplateRequest,
@@ -50,7 +51,6 @@ from app.application.billing import (
     CompanyNotAttachedError,
     ConvertDevisToFactureInput,
     CreateBillingDocumentInput,
-    ItemInput,
     UpdateBillingDocumentInput,
     UpdateStatusInput,
     BillingDocumentNotFoundError,
@@ -74,19 +74,6 @@ from wiring import get_container
 
 def _err(error: str, message: str, status: int) -> Tuple[Response, int]:
     return jsonify({"error": error, "message": message}), status
-
-
-def _items_from_schema(raw_items) -> list[ItemInput]:
-    return [
-        ItemInput(
-            description=it.description,
-            quantity=it.quantity,
-            unit_price=it.unit_price,
-            vat_rate=it.vat_rate,
-            category=getattr(it, "category", None),
-        )
-        for it in raw_items
-    ]
 
 
 def _doc_to_json(dto) -> dict:
@@ -201,7 +188,7 @@ def create_billing_document():
         user_id=user_id,
         kind=BillingDocumentKind(body.kind),
         recipient_name=body.recipient_name,
-        items=_items_from_schema(body.items),
+        items=items_from_schema(body.items),
         company_id=body.company_id,
         project_id=body.project_id,
         recipient_address=body.recipient_address,
@@ -281,7 +268,7 @@ def update_billing_document(doc_id: str, billing_doc):
         recipient_address=body.recipient_address,
         recipient_email=str(body.recipient_email) if body.recipient_email else None,
         recipient_siret=body.recipient_siret,
-        items=_items_from_schema(body.items) if body.items is not None else None,
+        items=items_from_schema(body.items) if body.items is not None else None,
         notes=body.notes,
         terms=body.terms,
         signature_block_text=body.signature_block_text,
@@ -667,7 +654,7 @@ def import_billing_document():
         user_id=user_id,
         kind=BillingDocumentKind(body.kind),
         recipient_name=body.recipient_name,
-        items=_items_from_schema(body.items),
+        items=items_from_schema(body.items),
         company_id=body.company_id,
         document_number=body.document_number,
         status=BillingDocumentStatus(body.status),
