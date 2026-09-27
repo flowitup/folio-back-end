@@ -43,7 +43,7 @@ def _columns(conn) -> set[str]:
 
 def test_upgrade_backfills_sign_in_and_downgrade_drops_phone_change_codes():
     migration = _load_migration()
-    assert migration.down_revision == "9a1c7e5f3b2d"
+    assert migration.down_revision == "b6d2f4a8c1e3"
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
         conn.execute(
