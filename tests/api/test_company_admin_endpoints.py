@@ -168,6 +168,23 @@ class TestUpdateCompany:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         assert resp.get_json()["legal_name"] == "Company A Renamed"
 
+    def test_saving_the_masked_form_keeps_real_bank_details(
+        self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token
+    ):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}"
+        real = {"siret": "12345678900011", "iban": "FR7630006000011234567890189", "bic": "BNPAFRPP"}
+        assert cadm_client.put(url, json=real, headers=_auth(company_a_admin_token)).status_code == 200
+
+        # The company admin's read is masked; the edit form sends it straight back.
+        shown = cadm_client.get(url, headers=_auth(company_a_admin_token)).get_json()
+        assert shown["iban"].startswith("····")
+        form = {k: shown[k] for k in ("legal_name", "siret", "iban", "bic")}
+        resp = cadm_client.put(url, json=form, headers=_auth(company_a_admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        stored = cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()
+        assert {k: stored[k] for k in real} == real
+
     def test_company_admin_403_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
         resp = cadm_client.put(
             f"/api/v1/companies/{cadm_app._test_company_b_id}",

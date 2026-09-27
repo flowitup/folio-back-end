@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
+from app.domain.companies.masking import is_masked
+
 
 class _StrictBase(BaseModel):
     model_config = {"extra": "forbid"}
@@ -100,6 +102,13 @@ class UpdateCompanyRequest(_StrictBase):
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+
+    @field_validator("siret", "tva_number", "iban", "bic", mode="before")
+    @classmethod
+    def masked_means_unchanged(cls, v):
+        # A form seeded from the masked read sends "····0189" back; treat it as
+        # "leave unchanged" instead of failing the SIRET/TVA pattern or storing it.
+        return None if isinstance(v, str) and is_masked(v) else v
 
     @field_validator("logo_url", mode="after")
     @classmethod
