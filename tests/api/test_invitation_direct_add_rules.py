@@ -100,3 +100,37 @@ def test_directly_added_outsider_is_listed_in_the_company_directory(inv_client, 
     resp = _invite(inv_client, admin_token, people["project_id"], people["stranger"][1])
     assert resp.status_code == 201, resp.get_data(as_text=True)
     assert people["stranger"][0].replace("-", "") in _profiles(invitation_app, people["company_id"])
+
+
+def test_directory_backfill_lists_an_attached_account_once(invitation_app):
+    """The data step behind the direct-add fix is idempotent: one profile, however often it runs."""
+    from app import db
+    from app.infrastructure.database.backfills.authz_backfill_report import BackfillReport
+    from app.infrastructure.database.backfills.directory_profiles import backfill_directory_profiles
+    from app.infrastructure.database.models import UserModel
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+    from tests.api.test_company_attachment_directory_invariant import _profiles
+
+    company_id = invitation_app._test_company_id
+    with invitation_app.app_context():
+        user = UserModel(email=f"legacy_direct_{uuid4().hex[:6]}@invite-rules.com", is_active=True)
+        db.session.add(user)
+        db.session.flush()
+        db.session.add(
+            UserCompanyAccessModel(
+                user_id=user.id,
+                company_id=UUID(company_id),
+                role="member",
+                is_primary=True,
+                attached_at=datetime.now(timezone.utc),
+            )
+        )
+        db.session.commit()
+        user_key = str(user.id).replace("-", "")
+        assert user_key not in _profiles(invitation_app, company_id)
+
+        for _ in range(2):
+            backfill_directory_profiles(db.session.connection(), BackfillReport())
+            db.session.commit()
+
+    assert _profiles(invitation_app, company_id).count(user_key) == 1
