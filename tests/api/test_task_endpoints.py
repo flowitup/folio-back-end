@@ -92,3 +92,19 @@ def test_only_a_column_change_sends_the_moved_push(inv_client, admin_token, invi
     change = inv_client.patch(url, json={"status": other}, headers=_auth(admin_token))
     assert change.status_code == 200, change.get_data(as_text=True)
     assert moved == [other]
+
+
+def test_labels_and_description_are_bounded(inv_client, admin_token, invitation_app):
+    pid = invitation_app._test_project_id
+    assert _create(inv_client, admin_token, pid, labels=["x" * 51]).status_code in (400, 422)
+    assert _create(inv_client, admin_token, pid, labels=[f"l{i}" for i in range(21)]).status_code in (400, 422)
+    assert _create(inv_client, admin_token, pid, description="d" * 5001).status_code in (400, 422)
+
+    created = _create(inv_client, admin_token, pid, labels=["  urgent  ", "x" * 50], description="d" * 5000)
+    assert created.status_code == 201, created.get_data(as_text=True)
+    assert created.get_json()["labels"] == ["urgent", "x" * 50]
+
+    too_long = inv_client.put(
+        f"/api/v1/tasks/{created.get_json()['id']}", json={"labels": ["y" * 51]}, headers=_auth(admin_token)
+    )
+    assert too_long.status_code in (400, 422)
