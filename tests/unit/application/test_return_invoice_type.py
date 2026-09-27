@@ -158,11 +158,21 @@ class TestCreateMixedSignItems:
         assert result.total_amount == 450.0
 
     def test_create_refund_positive_item_allowed(self):
-        """A refund invoice may have positive lines (charge adjustment)."""
+        """A return may carry positive lines (charge adjustment) as long as it nets to <= 0."""
         repo = _make_mock_repo()
         uc = CreateInvoiceUseCase(repo)
-        result = uc.execute(_create_request(items=[_make_item(100.0)]))
-        assert result.total_amount == 100.0
+        result = uc.execute(_create_request(items=[_make_item(-150.0), _make_item(100.0)]))
+        assert result.total_amount == -50.0
+
+    def test_create_return_with_a_positive_total_raises(self):
+        """A return nets spend down; a positive total would raise spend instead."""
+        uc = CreateInvoiceUseCase(_make_mock_repo())
+        with pytest.raises(InvalidInvoiceDataError, match="zero or negative"):
+            uc.execute(_create_request(items=[_make_item(50.0)]))
+
+    def test_create_return_with_a_zero_total_is_allowed(self):
+        uc = CreateInvoiceUseCase(_make_mock_repo())
+        assert uc.execute(_create_request(items=[_make_item(50.0), _make_item(-50.0)])).total_amount == 0.0
 
     def test_stored_value_equals_entered_value_no_negation(self):
         """No auto-negation: unit_price is stored exactly as entered."""
@@ -418,6 +428,24 @@ class TestUpdateEffectiveTypeSignGuard:
         )
         with pytest.raises(InvalidInvoiceDataError, match="[Nn]egative|unit_price"):
             uc.execute(req)
+
+    def test_patch_items_of_a_return_to_a_positive_total_raises(self):
+        existing = _make_invoice(invoice_type=InvoiceType.RETURN, unit_price=-100.0)
+        uc = UpdateInvoiceUseCase(_make_mock_repo(find_by_id_result=existing))
+        with pytest.raises(InvalidInvoiceDataError, match="zero or negative"):
+            uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, items=[_make_item(80.0)]))
+
+    def test_patch_type_to_return_with_positive_lines_raises(self):
+        existing = _make_invoice(invoice_type=InvoiceType.MATERIALS_SERVICES, unit_price=500.0)
+        uc = UpdateInvoiceUseCase(_make_mock_repo(find_by_id_result=existing))
+        with pytest.raises(InvalidInvoiceDataError, match="zero or negative"):
+            uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, type=InvoiceType.RETURN))
+
+    def test_an_older_positive_return_can_still_be_edited_without_touching_its_lines(self):
+        existing = _make_invoice(invoice_type=InvoiceType.RETURN, unit_price=50.0)
+        uc = UpdateInvoiceUseCase(_make_mock_repo(find_by_id_result=existing))
+        result = uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, recipient_name="Renamed"))
+        assert result.recipient_name == "Renamed"
 
     def test_patch_negative_items_on_others_without_type_raises(self):
         """PATCH negative item on existing others invoice without resending type → 400."""

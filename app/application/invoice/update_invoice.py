@@ -180,6 +180,13 @@ class UpdateInvoiceUseCase:
                 invoice_items.append(InvoiceItem(description=desc, quantity=qty, unit_price=price, vat_rate=vat))
             updates["items"] = invoice_items
 
+        # A return nets spend down, whether its lines or its type changed (checked only
+        # then, so an older positive return can still be renamed or re-dated).
+        if effective_type == InvoiceType.RETURN and (request.items is not None or invoice.type != InvoiceType.RETURN):
+            items = updates.get("items", invoice.items)
+            if sum((i.total for i in items), Decimal("0")) > 0:
+                raise InvalidInvoiceDataError("A return's total must be zero or negative")
+
         # Payment method: only process if the key was explicitly provided.
         if request.payment_method_id is not _UNSET:
             pm_id = request.payment_method_id  # None or UUID
