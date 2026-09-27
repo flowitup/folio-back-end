@@ -73,6 +73,13 @@ def _validate_bic(v: Optional[str]) -> Optional[str]:
     return normalize_bic(v) if v else v
 
 
+def _reject_blank(v: Optional[str]) -> Optional[str]:
+    """A name or address of spaces only is as empty as ''."""
+    if v is not None and not v.strip():
+        raise ValueError("must not be blank")
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Company request schemas
 # ---------------------------------------------------------------------------
@@ -90,6 +97,11 @@ class CreateCompanyRequest(_StrictBase):
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+
+    @field_validator("legal_name", "address", mode="after")
+    @classmethod
+    def reject_blank(cls, v: Optional[str]) -> Optional[str]:
+        return _reject_blank(v)
 
     @field_validator("logo_url", mode="after")
     @classmethod
@@ -129,6 +141,11 @@ class UpdateCompanyRequest(_StrictBase):
         # A form seeded from the masked read sends "····0189" back; treat it as
         # "leave unchanged" instead of failing the SIRET/TVA pattern or storing it.
         return None if isinstance(v, str) and is_masked(v) else v
+
+    @field_validator("legal_name", "address", mode="after")
+    @classmethod
+    def reject_blank(cls, v: Optional[str]) -> Optional[str]:
+        return _reject_blank(v)
 
     @field_validator("logo_url", mode="after")
     @classmethod

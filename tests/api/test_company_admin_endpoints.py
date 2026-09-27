@@ -201,6 +201,18 @@ class TestUpdateCompany:
         )
         assert resp.status_code in (400, 422), resp.get_data(as_text=True)
 
+    @pytest.mark.parametrize("body", [{"legal_name": "   "}, {"address": "  "}])
+    def test_blank_name_or_address_is_a_validation_error(self, cadm_client, cadm_app, company_a_admin_token, body):
+        resp = cadm_client.put(
+            f"/api/v1/companies/{cadm_app._test_company_a_id}", json=body, headers=_auth(company_a_admin_token)
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
+    @pytest.mark.parametrize("body", [{"legal_name": "   ", "address": "x"}, {"legal_name": "QA x", "address": "   "}])
+    def test_blank_name_or_address_is_refused_on_create(self, cadm_client, company_a_admin_token, body):
+        resp = cadm_client.post("/api/v1/companies", json=body, headers=_auth(company_a_admin_token))
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
     def test_update_answers_with_the_same_masking_as_a_read(
         self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token
     ):
