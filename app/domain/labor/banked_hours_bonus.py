@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Iterable
 
 #: Banked hours that make up one full paid day.
 HOURS_PER_BONUS_DAY = 8
@@ -38,4 +39,19 @@ def bonus_for_banked_hours(banked_hours: int, daily_rate: Decimal) -> BankedHour
     full_days = banked // HOURS_PER_BONUS_DAY
     half_days = 1 if (banked % HOURS_PER_BONUS_DAY) >= HOURS_PER_BONUS_DAY // 2 else 0
     cost = Decimal(full_days) * daily_rate + Decimal(half_days) * daily_rate * Decimal("0.5")
+    return BankedHoursBonus(full_days=full_days, half_days=half_days, cost=cost)
+
+
+def bonus_for_monthly_banked_hours(months: "Iterable[tuple[int, Decimal]]") -> BankedHoursBonus:
+    """Sum the bonus of each calendar month, given as (banked hours, daily rate).
+
+    Hours do not carry over between months: 6 h in one month and 2 h in the next
+    earn a half day, whichever period the two months are read in.
+    """
+    full_days, half_days, cost = 0, 0, Decimal("0")
+    for hours, rate in months:
+        bonus = bonus_for_banked_hours(hours, rate)
+        full_days += bonus.full_days
+        half_days += bonus.half_days
+        cost += bonus.cost
     return BankedHoursBonus(full_days=full_days, half_days=half_days, cost=cost)

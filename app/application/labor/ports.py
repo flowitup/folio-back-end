@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from uuid import UUID
 
 from app.domain.entities.worker import Worker
@@ -29,6 +29,10 @@ class LaborSummaryRow:
     daily_rate: Decimal = Decimal(
         "0"
     )  # resolved bonus rate — worker's latest effective rate as of date_to (base-rate fallback); used for bonus-day cost
+    # (banked hours, bonus rate) per calendar month of the period. The bonus rule rounds
+    # banked hours per month, so a period spanning months is priced month by month, as
+    # the monthly rollup and the export do. None: the whole period is one month.
+    banked_months: Optional[List[Tuple[int, Decimal]]] = None
 
 
 @dataclass

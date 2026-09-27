@@ -7,7 +7,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.application.labor.ports import ILaborEntryRepository
-from app.domain.labor.banked_hours_bonus import bonus_for_banked_hours
+from app.domain.labor.banked_hours_bonus import bonus_for_banked_hours, bonus_for_monthly_banked_hours
 
 
 @dataclass
@@ -64,7 +64,10 @@ class GetLaborSummaryUseCase:
 
         for row in summary_rows:
             banked = row.banked_hours or 0
-            bonus = bonus_for_banked_hours(banked, row.daily_rate)
+            if row.banked_months is not None:
+                bonus = bonus_for_monthly_banked_hours(row.banked_months)
+            else:
+                bonus = bonus_for_banked_hours(banked, row.daily_rate)
             priced_cost = row.total_cost  # already Decimal from repo
 
             rows.append(
