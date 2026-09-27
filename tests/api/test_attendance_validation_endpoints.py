@@ -298,6 +298,13 @@ class TestValidateReject:
         assert client.post(f"{base}/{uuid4()}/reject", headers=owner_h).status_code == 404
         assert client.post(f"{base}/{uuid4()}/validate", headers=owner_h).status_code == 404
 
+    def test_malformed_entry_id_is_a_json_400(self, client, owner_h, ids):
+        base = f"/api/v1/projects/{ids['project']}/labor-entries/not-a-uuid"
+        for action in ("reject", "validate"):
+            resp = client.post(f"{base}/{action}", headers=owner_h)
+            assert resp.status_code == 400, action
+            assert resp.is_json
+
     def test_entry_from_other_project_is_404(self, client, linked_h, owner_h, ids):
         entry_id = self._pending_id(client, linked_h, ids)
         other = f"/api/v1/projects/{ids['other_project']}/labor-entries/{entry_id}"

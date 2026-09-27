@@ -168,14 +168,18 @@ def reject_attendance(project_id: str, entry_id: str):
     usecase = get_container().reject_attendance_usecase
     if usecase is None:
         raise RuntimeError("reject_attendance_usecase not wired in container")
+    try:
+        entry_uuid = UUID(entry_id)
+    except ValueError as e:
+        return _error_response("ValidationError", str(e), 400)
     # The row is deleted by the use case: capture who/when first for the worker's push.
     entry_repo = get_container().labor_entry_repository
-    doomed = entry_repo.find_by_id(UUID(entry_id)) if entry_repo is not None else None
+    doomed = entry_repo.find_by_id(entry_uuid) if entry_repo is not None else None
 
     try:
         usecase.execute(
             RejectAttendanceDTO(
-                entry_id=UUID(entry_id),
+                entry_id=entry_uuid,
                 project_id=UUID(project_id),
                 actor_user_id=UUID(str(get_jwt_identity())),
             )

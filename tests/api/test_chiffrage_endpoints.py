@@ -1317,3 +1317,33 @@ class TestPricesByShop:
         assert baskets[full["id"]]["basket_ht"] == 100.0
         # The cheaper but incomplete shop must not head the list.
         assert section_tree["store_baskets"][0]["store_id"] == full["id"]
+
+
+class TestMalformedIds:
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("post", "quotes/not-a-uuid/select"),
+            ("patch", "quotes/not-a-uuid"),
+            ("delete", "quotes/not-a-uuid"),
+            ("patch", "articles/xyz"),
+            ("delete", "articles/xyz"),
+            ("patch", "postes/xyz"),
+            ("delete", "postes/xyz"),
+            ("patch", "rooms/xyz"),
+            ("delete", "units/xyz"),
+        ],
+    )
+    def test_malformed_id_is_a_json_404(self, inv_client, writer_token, project_id, method, path):
+        resp = getattr(inv_client, method)(f"{_base(project_id)}/{path}", json={}, headers=_auth(writer_token))
+        assert resp.status_code == 404
+        assert resp.is_json
+
+    def test_quote_without_supplier_says_why(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/quotes",
+            json={"unit_price_ht": "10"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 422
+        assert "supplier" in resp.get_json()["message"]

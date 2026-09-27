@@ -1042,3 +1042,12 @@ class TestLaborEntryRoutes:
         assert row["banked_hours"] == 8  # 3+3+2
         assert row["bonus_full_days"] == 1  # 8//8 = 1
         assert row["bonus_half_days"] == 0  # (8%8)=0 < 4
+
+    def test_malformed_activity_id_is_a_json_400(self, labor_client, admin_token, labor_app):
+        url = f"/api/v1/projects/{labor_app._test_project_id}/labor-activities/not-a-uuid"
+        for resp in (
+            labor_client.delete(url, headers=_auth(admin_token)),
+            labor_client.put(url, json={"title": "x"}, headers=_auth(admin_token)),
+        ):
+            assert resp.status_code == 400
+            assert resp.is_json

@@ -101,7 +101,9 @@ def _handle(fn: Callable[[], Any]) -> Any:
     try:
         return fn()
     except ValidationError as e:
-        return jsonify({"error": "ValidationError", "fields": safe_validation_fields(e)}), 422
+        # A body-level rule (e.g. a quote needs a supplier) has no field; its message says what is wrong.
+        message = "; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors())
+        return jsonify({"error": "ValidationError", "fields": safe_validation_fields(e), "message": message}), 422
     except UnsupportedImageTypeError as e:
         return _err(415, "UnsupportedMediaType", str(e))
     except ImageTooLargeError as e:
@@ -243,16 +245,16 @@ def create_unit(project_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/units/<unit_id>")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/units/<uuid:unit_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_unit(project_id: str, unit_id: str) -> Any:
+def delete_unit(project_id: str, unit_id: UUID) -> Any:
     """Remove a custom unit. Articles keep their snapshot symbol."""
 
     def run() -> Any:
-        get_container().delete_chiffrage_unit_usecase.execute(project_id=UUID(project_id), unit_id=UUID(unit_id))
+        get_container().delete_chiffrage_unit_usecase.execute(project_id=UUID(project_id), unit_id=unit_id)
         return "", 204
 
     return _handle(run)
@@ -281,12 +283,12 @@ def create_poste(project_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.patch("/projects/<project_id>/chiffrage/postes/<poste_id>")
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def update_poste(project_id: str, poste_id: str) -> Any:
+def update_poste(project_id: str, poste_id: UUID) -> Any:
     """Rename a poste or edit its note."""
 
     def run() -> Any:
@@ -296,7 +298,7 @@ def update_poste(project_id: str, poste_id: str) -> Any:
         unset = ChiffragePoste._UNSET
         poste = get_container().update_chiffrage_poste_usecase.execute(
             project_id=UUID(project_id),
-            poste_id=UUID(poste_id),
+            poste_id=poste_id,
             name=_sentinel(body, "name", unset),
             note=_sentinel(body, "note", unset),
         )
@@ -305,34 +307,34 @@ def update_poste(project_id: str, poste_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/postes/<poste_id>")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_poste(project_id: str, poste_id: str) -> Any:
+def delete_poste(project_id: str, poste_id: UUID) -> Any:
     """Delete a poste with its articles and quotes."""
 
     def run() -> Any:
-        get_container().delete_chiffrage_poste_usecase.execute(project_id=UUID(project_id), poste_id=UUID(poste_id))
+        get_container().delete_chiffrage_poste_usecase.execute(project_id=UUID(project_id), poste_id=poste_id)
         return "", 204
 
     return _handle(run)
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/reorder")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>/reorder")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def reorder_poste(project_id: str, poste_id: str) -> Any:
+def reorder_poste(project_id: str, poste_id: UUID) -> Any:
     """Move a poste between two neighbours."""
 
     def run() -> Any:
         body = _parse(ReorderBody)
         poste = get_container().reorder_chiffrage_poste_usecase.execute(
             project_id=UUID(project_id),
-            poste_id=UUID(poste_id),
+            poste_id=poste_id,
             before_id=body.before_id,
             after_id=body.after_id,
         )
@@ -372,12 +374,12 @@ def create_store(project_id: str) -> Any:
     return _create_store(project_id)
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/stores")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>/stores")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def create_store_for_poste(project_id: str, poste_id: str) -> Any:
+def create_store_for_poste(project_id: str, poste_id: UUID) -> Any:
     """Deprecated alias of the project-scoped create.
 
     Shops moved from poste scope to project scope. Backend and frontend release
@@ -389,12 +391,12 @@ def create_store_for_poste(project_id: str, poste_id: str) -> Any:
     return _create_store(project_id)
 
 
-@chiffrage_bp.patch("/projects/<project_id>/chiffrage/stores/<store_id>")
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/stores/<uuid:store_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def update_store(project_id: str, store_id: str) -> Any:
+def update_store(project_id: str, store_id: UUID) -> Any:
     """Rename a shop, correct its address or its website."""
 
     def run() -> Any:
@@ -404,7 +406,7 @@ def update_store(project_id: str, store_id: str) -> Any:
         unset = ChiffrageStore._UNSET
         store = get_container().update_chiffrage_store_usecase.execute(
             project_id=UUID(project_id),
-            store_id=UUID(store_id),
+            store_id=store_id,
             name=_sentinel(body, "name", unset),
             address=_sentinel(body, "address", unset),
             website_url=_sentinel(body, "website_url", unset),
@@ -414,16 +416,16 @@ def update_store(project_id: str, store_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/stores/<store_id>")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/stores/<uuid:store_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_store(project_id: str, store_id: str) -> Any:
+def delete_store(project_id: str, store_id: UUID) -> Any:
     """Remove a shop from the project. Prices recorded there keep their value."""
 
     def run() -> Any:
-        get_container().delete_chiffrage_store_usecase.execute(project_id=UUID(project_id), store_id=UUID(store_id))
+        get_container().delete_chiffrage_store_usecase.execute(project_id=UUID(project_id), store_id=store_id)
         return "", 204
 
     return _handle(run)
@@ -434,19 +436,19 @@ def delete_store(project_id: str, store_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<poste_id>/articles")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>/articles")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def create_article(project_id: str, poste_id: str) -> Any:
+def create_article(project_id: str, poste_id: UUID) -> Any:
     """Add an article to a poste."""
 
     def run() -> Any:
         body = _parse(ArticleCreateBody)
         article = get_container().create_chiffrage_article_usecase.execute(
             project_id=UUID(project_id),
-            poste_id=UUID(poste_id),
+            poste_id=poste_id,
             name=body.name,
             quantity=body.quantity,
             unit=body.unit,
@@ -458,12 +460,12 @@ def create_article(project_id: str, poste_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.patch("/projects/<project_id>/chiffrage/articles/<article_id>")
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/articles/<uuid:article_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def update_article(project_id: str, article_id: str) -> Any:
+def update_article(project_id: str, article_id: UUID) -> Any:
     """Edit an article's name, quantity, unit or note."""
 
     def run() -> Any:
@@ -473,7 +475,7 @@ def update_article(project_id: str, article_id: str) -> Any:
         unset = ChiffrageArticle._UNSET
         article = get_container().update_chiffrage_article_usecase.execute(
             project_id=UUID(project_id),
-            article_id=UUID(article_id),
+            article_id=article_id,
             name=_sentinel(body, "name", unset),
             quantity=_sentinel(body, "quantity", unset),
             unit=_sentinel(body, "unit", unset),
@@ -485,36 +487,34 @@ def update_article(project_id: str, article_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<article_id>")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<uuid:article_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_article(project_id: str, article_id: str) -> Any:
+def delete_article(project_id: str, article_id: UUID) -> Any:
     """Delete an article with its quotes."""
 
     def run() -> Any:
-        get_container().delete_chiffrage_article_usecase.execute(
-            project_id=UUID(project_id), article_id=UUID(article_id)
-        )
+        get_container().delete_chiffrage_article_usecase.execute(project_id=UUID(project_id), article_id=article_id)
         return "", 204
 
     return _handle(run)
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/reorder")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<uuid:article_id>/reorder")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def reorder_article(project_id: str, article_id: str) -> Any:
+def reorder_article(project_id: str, article_id: UUID) -> Any:
     """Move an article within its poste."""
 
     def run() -> Any:
         body = _parse(ReorderBody)
         article = get_container().reorder_chiffrage_article_usecase.execute(
             project_id=UUID(project_id),
-            article_id=UUID(article_id),
+            article_id=article_id,
             before_id=body.before_id,
             after_id=body.after_id,
         )
@@ -528,19 +528,19 @@ def reorder_article(project_id: str, article_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/quotes")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<uuid:article_id>/quotes")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def create_quote(project_id: str, article_id: str) -> Any:
+def create_quote(project_id: str, article_id: UUID) -> Any:
     """Record a fournisseur price for an article."""
 
     def run() -> Any:
         body = _parse(QuoteCreateBody)
         quote = get_container().create_chiffrage_quote_usecase.execute(
             project_id=UUID(project_id),
-            article_id=UUID(article_id),
+            article_id=article_id,
             unit_price_ht=body.unit_price_ht,
             tva_rate=body.tva_rate,
             store_id=body.store_id,
@@ -555,12 +555,12 @@ def create_quote(project_id: str, article_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.patch("/projects/<project_id>/chiffrage/quotes/<quote_id>")
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/quotes/<uuid:quote_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def update_quote(project_id: str, quote_id: str) -> Any:
+def update_quote(project_id: str, quote_id: UUID) -> Any:
     """Edit a quote's fournisseur, price, VAT rate, link or note."""
 
     def run() -> Any:
@@ -570,7 +570,7 @@ def update_quote(project_id: str, quote_id: str) -> Any:
         unset = ChiffrageQuote._UNSET
         quote = get_container().update_chiffrage_quote_usecase.execute(
             project_id=UUID(project_id),
-            quote_id=UUID(quote_id),
+            quote_id=quote_id,
             store_id=_sentinel(body, "store_id", unset),
             supplier_id=_sentinel(body, "supplier_id", unset),
             supplier_name=_sentinel(body, "supplier_name", unset),
@@ -585,33 +585,31 @@ def update_quote(project_id: str, quote_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/quotes/<quote_id>")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/quotes/<uuid:quote_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_quote(project_id: str, quote_id: str) -> Any:
+def delete_quote(project_id: str, quote_id: UUID) -> Any:
     """Delete a quote; the article falls back to the cheapest remaining one."""
 
     def run() -> Any:
-        get_container().delete_chiffrage_quote_usecase.execute(project_id=UUID(project_id), quote_id=UUID(quote_id))
+        get_container().delete_chiffrage_quote_usecase.execute(project_id=UUID(project_id), quote_id=quote_id)
         return "", 204
 
     return _handle(run)
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/quotes/<quote_id>/select")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/quotes/<uuid:quote_id>/select")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def select_quote(project_id: str, quote_id: str) -> Any:
+def select_quote(project_id: str, quote_id: UUID) -> Any:
     """Mark a quote as the retained offer for its article."""
 
     def run() -> Any:
-        quote = get_container().select_chiffrage_quote_usecase.execute(
-            project_id=UUID(project_id), quote_id=UUID(quote_id)
-        )
+        quote = get_container().select_chiffrage_quote_usecase.execute(project_id=UUID(project_id), quote_id=quote_id)
         return jsonify(_quote_json(quote)), 200
 
     return _handle(run)
@@ -622,12 +620,12 @@ def select_quote(project_id: str, quote_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@chiffrage_bp.get("/projects/<project_id>/chiffrage/articles/<article_id>/image")
+@chiffrage_bp.get("/projects/<project_id>/chiffrage/articles/<uuid:article_id>/image")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:read")
 @require_project_access()
 @limiter.limit(READ_LIMIT, key_func=jwt_user_key)
-def get_article_image(project_id: str, article_id: str) -> Any:
+def get_article_image(project_id: str, article_id: UUID) -> Any:
     """Stream an article photo inline.
 
     Bytes are proxied through the API rather than served from the object store:
@@ -637,7 +635,7 @@ def get_article_image(project_id: str, article_id: str) -> Any:
     """
     try:
         stream, length, content_type = get_container().get_chiffrage_article_image_usecase.execute(
-            project_id=UUID(project_id), article_id=UUID(article_id)
+            project_id=UUID(project_id), article_id=article_id
         )
     except (ArticleNotFoundError, ArticleImageNotFoundError):
         return _err(404, "NotFound", "Article or image not found.")
@@ -654,12 +652,12 @@ def get_article_image(project_id: str, article_id: str) -> Any:
     return response
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/image")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<uuid:article_id>/image")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def upload_article_image(project_id: str, article_id: str) -> Any:
+def upload_article_image(project_id: str, article_id: UUID) -> Any:
     """Upload a photo for an article (multipart field 'image')."""
 
     def run() -> Any:
@@ -669,7 +667,7 @@ def upload_article_image(project_id: str, article_id: str) -> Any:
         raw = file.stream.read()
         get_container().upload_chiffrage_article_image_usecase.execute(
             project_id=UUID(project_id),
-            article_id=UUID(article_id),
+            article_id=article_id,
             fileobj=BytesIO(raw),
             content_type=file.content_type or "application/octet-stream",
             size=len(raw),
@@ -679,35 +677,35 @@ def upload_article_image(project_id: str, article_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<article_id>/image-from-url")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/articles/<uuid:article_id>/image-from-url")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit("10 per minute", key_func=jwt_user_key)
-def set_article_image_from_url(project_id: str, article_id: str) -> Any:
+def set_article_image_from_url(project_id: str, article_id: UUID) -> Any:
     """Fetch a supplier image server-side and store it for the article."""
 
     def run() -> Any:
         body = _parse(ImageFromUrlBody)
         get_container().set_chiffrage_article_image_from_url_usecase.execute(
-            project_id=UUID(project_id), article_id=UUID(article_id), url=body.url
+            project_id=UUID(project_id), article_id=article_id, url=body.url
         )
         return jsonify({"ok": True}), 201
 
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<article_id>/image")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/articles/<uuid:article_id>/image")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_article_image(project_id: str, article_id: str) -> Any:
+def delete_article_image(project_id: str, article_id: UUID) -> Any:
     """Detach an article's photo."""
 
     def run() -> Any:
         get_container().delete_chiffrage_article_image_usecase.execute(
-            project_id=UUID(project_id), article_id=UUID(article_id)
+            project_id=UUID(project_id), article_id=article_id
         )
         return "", 204
 
@@ -750,52 +748,52 @@ def create_room(project_id: str) -> Any:
     return _handle(run)
 
 
-@chiffrage_bp.patch("/projects/<project_id>/chiffrage/rooms/<room_id>")
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/rooms/<uuid:room_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def update_room(project_id: str, room_id: str) -> Any:
+def update_room(project_id: str, room_id: UUID) -> Any:
     """Rename a room. Articles hold its id, so they follow the rename."""
 
     def run() -> Any:
         body = _parse(RoomUpdateBody)
         room = get_container().update_chiffrage_room_usecase.execute(
-            project_id=UUID(project_id), room_id=UUID(room_id), name=body.name
+            project_id=UUID(project_id), room_id=room_id, name=body.name
         )
         return jsonify(_room_json(room)), 200
 
     return _handle(run)
 
 
-@chiffrage_bp.delete("/projects/<project_id>/chiffrage/rooms/<room_id>")
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/rooms/<uuid:room_id>")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def delete_room(project_id: str, room_id: str) -> Any:
+def delete_room(project_id: str, room_id: UUID) -> Any:
     """Delete a room; its articles resurface as unassigned rather than vanish."""
 
     def run() -> Any:
-        get_container().delete_chiffrage_room_usecase.execute(project_id=UUID(project_id), room_id=UUID(room_id))
+        get_container().delete_chiffrage_room_usecase.execute(project_id=UUID(project_id), room_id=room_id)
         return "", 204
 
     return _handle(run)
 
 
-@chiffrage_bp.post("/projects/<project_id>/chiffrage/rooms/<room_id>/reorder")
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/rooms/<uuid:room_id>/reorder")
 @jwt_required()  # type: ignore[untyped-decorator]
 @require_permission("project:manage_invoices")
 @require_project_access(write=True, permission="project:manage_invoices")
 @limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
-def reorder_room(project_id: str, room_id: str) -> Any:
+def reorder_room(project_id: str, room_id: UUID) -> Any:
     """Move a room between two neighbours."""
 
     def run() -> Any:
         body = _parse(ReorderBody)
         room = get_container().reorder_chiffrage_room_usecase.execute(
             project_id=UUID(project_id),
-            room_id=UUID(room_id),
+            room_id=room_id,
             before_id=body.before_id,
             after_id=body.after_id,
         )

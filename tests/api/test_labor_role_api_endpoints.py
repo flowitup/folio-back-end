@@ -346,6 +346,13 @@ class TestDeleteLaborRole:
         resp = role_client.delete(_role_url(str(uuid4())), headers=_auth(admin_token))
         assert resp.status_code == 404
 
+    def test_malformed_role_id_is_a_json_404(self, role_client, admin_token):
+        patch = role_client.patch(_role_url("not-a-uuid"), json={"name": "x"}, headers=_auth(admin_token))
+        delete = role_client.delete(_role_url("not-a-uuid"), headers=_auth(admin_token))
+        for resp in (patch, delete):
+            assert resp.status_code == 404
+            assert resp.is_json
+
     def test_delete_requires_auth(self, role_client, admin_token):
         role_id = self._create_role(role_client, admin_token, "UnauthDelete")
         resp = role_client.delete(_role_url(role_id))
