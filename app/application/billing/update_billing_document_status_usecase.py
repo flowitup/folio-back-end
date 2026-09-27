@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 from app.application.billing._helpers import (
     _assert_billing_doc_access,
+    _assert_devis_not_locked,
     _converted_facture_id,
     _funds_release_items,
 )
@@ -63,6 +64,7 @@ class UpdateBillingDocumentStatusUseCase:
         old_status = doc.status
 
         validate_status_transition(doc.kind, doc.status, inp.new_status)
+        _assert_devis_not_locked(self._doc_repo, doc)
 
         updated = doc.with_updates(
             status=inp.new_status,

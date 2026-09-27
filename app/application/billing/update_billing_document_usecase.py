@@ -7,6 +7,7 @@ from typing import Optional
 
 from app.application.billing._helpers import (
     _assert_billing_doc_access,
+    _assert_devis_not_locked,
     _converted_facture_id,
     _funds_release_items,
     _items_from_inputs,
@@ -78,6 +79,7 @@ class UpdateBillingDocumentUseCase:
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
         _assert_billing_doc_access(doc, inp.user_id, self._access_repo)
+        _assert_devis_not_locked(self._doc_repo, doc)
 
         # M3: Reject kind-incompatible field updates before touching the DB.
         if doc.kind == BillingDocumentKind.DEVIS:

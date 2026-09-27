@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
-from app.domain.billing.exceptions import ForbiddenBillingDocumentError
+from app.domain.billing.exceptions import DevisLockedByFactureError, ForbiddenBillingDocumentError
 from app.domain.billing.value_objects import BillingDocumentItem
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
@@ -69,6 +69,20 @@ def _converted_facture_id(doc_repo, doc: BillingDocument) -> Optional[UUID]:
         return None
     facture = doc_repo.find_by_source_devis_id(doc.id)
     return facture.id if facture is not None else None
+
+
+def _assert_devis_not_locked(doc_repo, doc: BillingDocument) -> None:
+    """A devis with a facture made from it stays as it is while that facture is live.
+
+    Reverting it to sent, rejected or draft, or editing it, would leave a facture
+    pointing at a devis that no longer says what was invoiced. Cancelling the
+    facture releases the devis.
+    """
+    if doc.kind != BillingDocumentKind.DEVIS:
+        return
+    facture = doc_repo.find_by_source_devis_id(doc.id)
+    if facture is not None and facture.status != BillingDocumentStatus.CANCELLED:
+        raise DevisLockedByFactureError(doc.id)
 
 
 def _snapshot_issuer_from_company(company: Company) -> dict:

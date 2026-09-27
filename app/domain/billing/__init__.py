@@ -13,6 +13,7 @@ from app.domain.billing.exceptions import (
     BillingNumberCollisionError,
     BillingTemplateNotFoundError,
     DevisAlreadyConvertedError,
+    DevisLockedByFactureError,
     ForbiddenBillingDocumentError,
     InvalidStatusTransitionError,
     MissingCompanyProfileError,
@@ -48,5 +49,6 @@ __all__ = [
     "BillingTemplateNotFoundError",
     "BillingNumberCollisionError",
     "DevisAlreadyConvertedError",
+    "DevisLockedByFactureError",
     "ForbiddenBillingDocumentError",
 ]

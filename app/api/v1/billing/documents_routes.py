@@ -56,6 +56,7 @@ from app.application.billing import (
     BillingDocumentNotFoundError,
     BillingTemplateNotFoundError,
     DevisAlreadyConvertedError,
+    DevisLockedByFactureError,
     ForbiddenBillingDocumentError,
     ForbiddenProjectAccessError,
     InvalidStatusTransitionError,
@@ -294,6 +295,8 @@ def update_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
+    except DevisLockedByFactureError as exc:
+        return _err("Conflict", str(exc), 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -473,7 +476,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
-    except InvalidStatusTransitionError as exc:
+    except (InvalidStatusTransitionError, DevisLockedByFactureError) as exc:
         return _err("Conflict", str(exc), 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
