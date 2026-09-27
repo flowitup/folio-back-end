@@ -16,7 +16,7 @@ from uuid import uuid4
 import pytest
 
 from app.application.usecases.otp_login import _consume_code, _issue_code, _reviewer_code_for
-from app.domain.entities.login_otp import LoginOtp
+from app.domain.entities.login_otp import LoginOtp, OtpPurpose
 from app.domain.exceptions.auth_exceptions import OtpInvalidError, OtpThrottledError
 
 REVIEWER = "+33600000000"
@@ -32,8 +32,8 @@ class FakeOtps:
     def save(self, otp: LoginOtp) -> None:
         self.rows = [r for r in self.rows if r.id != otp.id] + [otp]
 
-    def latest_for_phone(self, phone: str):
-        rows = [r for r in self.rows if r.phone == phone]
+    def latest_for_phone(self, phone: str, purpose=None):
+        rows = [r for r in self.rows if r.phone == phone and (purpose is None or r.purpose == purpose)]
         return max(rows, key=lambda r: r.created_at) if rows else None
 
     def count_created_since(self, phone: str, since: datetime) -> int:
@@ -43,9 +43,9 @@ class FakeOtps:
         created = [r.created_at for r in self.rows if r.phone == phone and r.created_at >= since]
         return min(created) if created else None
 
-    def void_active(self, phone: str, now: datetime) -> None:
+    def void_active(self, phone: str, now: datetime, purpose=OtpPurpose.SIGN_IN) -> None:
         for r in self.rows:
-            if r.phone == phone and r.is_active(now):
+            if r.phone == phone and r.purpose == purpose and r.is_active(now):
                 r.consumed_at = now
 
 

@@ -343,6 +343,9 @@ class Container:
     verify_otp_usecase: Optional[Any] = None
     request_signup_otp_usecase: Optional[Any] = None
     verify_signup_otp_usecase: Optional[Any] = None
+    # Verified sign-in phone change: code texted to the new number (see app/application/usecases/change_phone.py).
+    request_phone_change_code_usecase: Optional[Any] = None
+    confirm_phone_change_usecase: Optional[Any] = None
     # Texts a sign-up code to the phone an invitation acceptor is claiming — gated by the
     # invitation token instead of being open to anyone (see AcceptInvitationUseCase).
     request_invite_otp_usecase: Optional[Any] = None

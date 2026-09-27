@@ -29,7 +29,7 @@ from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
 from app.application.ports.sms_sender import SmsSenderPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
-from app.domain.entities.login_otp import LoginOtp
+from app.domain.entities.login_otp import LoginOtp, OtpPurpose
 from app.domain.entities.user import User
 from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
@@ -134,8 +134,13 @@ def _issue_code(
     resend_after: int,
     hourly_max: int,
     message: str,
+    purpose: OtpPurpose = OtpPurpose.SIGN_IN,
 ) -> None:
-    """Throttle per phone, void older codes, store the hash and send the SMS."""
+    """Throttle per phone, void older codes of the same purpose, store the hash and send the SMS.
+
+    The throttle counts every code sent to the number whatever its purpose, so switching flows
+    never buys an extra SMS.
+    """
     is_reviewer = _reviewer_code_for(phone) is not None
     latest = otps.latest_for_phone(phone)
     if not is_reviewer:
@@ -156,7 +161,7 @@ def _issue_code(
                 hourly_limit=True,
             )
     code = f"{secrets.randbelow(10**6):06d}"
-    otps.void_active(phone, now)
+    otps.void_active(phone, now, purpose)
     otps.save(
         LoginOtp(
             id=uuid4(),
@@ -165,6 +170,7 @@ def _issue_code(
             code_hash=_hash_code(phone, code),
             expires_at=now + timedelta(seconds=ttl),
             created_at=now,
+            purpose=purpose,
         )
     )
     if is_reviewer:
@@ -174,15 +180,26 @@ def _issue_code(
     sms.send(phone, message.format(code=code, minutes=max(1, ttl // 60)))
 
 
-def _consume_code(otps: LoginOtpRepositoryPort, *, phone: str, code: str, now: datetime, max_attempts: int) -> LoginOtp:
+def _consume_code(
+    otps: LoginOtpRepositoryPort,
+    *,
+    phone: str,
+    code: str,
+    now: datetime,
+    max_attempts: int,
+    purpose: OtpPurpose = OtpPurpose.SIGN_IN,
+) -> LoginOtp:
     """Return the matching active code (marked consumed) or raise ``OtpInvalidError``; wrong guesses count.
+
+    Only codes issued for ``purpose`` are considered: a phone-change code never signs anyone in,
+    and a sign-in code never changes a number.
 
     Login, signup and (from phase 02) invite acceptance all funnel through this one
     comparison — the single point where the non-production ``OTP_TEST_CODE`` bypass
     (``_test_code_accepted``) and the store-review account's fixed code
     (``_reviewer_code_for``) are honoured.
     """
-    otp = otps.latest_for_phone(phone)
+    otp = otps.latest_for_phone(phone, purpose)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
         raise OtpInvalidError("Invalid or expired code")
     submitted = code.strip()

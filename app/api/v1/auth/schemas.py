@@ -49,6 +49,19 @@ class SignupVerifyBody(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=80)
 
 
+class PhoneChangeRequestBody(BaseModel):
+    """POST /auth/me/phone/request-code — text a code to the new number the caller wants to use."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+
+
+class PhoneChangeConfirmBody(BaseModel):
+    """POST /auth/me/phone/confirm — the new number and the code texted to it."""
+
+    phone: str = Field(..., min_length=6, max_length=32)
+    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+
+
 class LogoutBody(BaseModel):
     """Optional body of POST /auth/logout: Bearer clients pass their refresh token so it is revoked too."""
 
@@ -87,7 +100,8 @@ class UpdateMeRequest(BaseModel):
 
     The e-mail is deliberately not editable here (platform ops only). ``phone`` is the sign-in
     identity: it may only be sent unchanged (any formatting of the current number); clearing or
-    replacing it answers 400 ``PhoneChangeNotAllowed``. At least one field must be provided.
+    replacing it answers 400 ``PhoneChangeNotAllowed`` — a new number goes through the verified
+    ``/auth/me/phone/request-code`` + ``/auth/me/phone/confirm`` flow. At least one field must be provided.
     """
 
     display_name: Optional[str] = Field(default=None, max_length=255)

@@ -8,8 +8,8 @@ answer.
 
 Self-service callers pass ``allow_phone_change=False``: nothing proves the caller holds a new
 number, and clearing or mistyping it locks the account out for good, so the profile may only
-re-send the number it already has. Changing it stays a platform-ops action until a verified
-(SMS code to the new number) flow exists.
+re-send the number it already has. A user moves to a new number through the verified flow
+(``POST /auth/me/phone/request-code`` then ``/auth/me/phone/confirm``, SMS code to the new number).
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ ProfileError = Tuple[int, str, str]
 PHONE_CHANGE_REFUSED: ProfileError = (
     400,
     "PhoneChangeNotAllowed",
-    "Your phone number is how you sign in, so it cannot be removed or changed from your profile. "
-    "Contact Folio support to move your account to a new number.",
+    "Your phone number is how you sign in, so it cannot be removed or edited here. "
+    'Use "Change number" to move your account to a new number with a code sent to it.',
 )
 
 

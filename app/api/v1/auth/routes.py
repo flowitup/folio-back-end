@@ -29,6 +29,8 @@ from app.api.v1.auth.schemas import (
     OtpRequestBody,
     OtpRequestResponse,
     OtpVerifyBody,
+    PhoneChangeConfirmBody,
+    PhoneChangeRequestBody,
     RefreshResponse,
     SignupRequestBody,
     SignupVerifyBody,
@@ -49,6 +51,7 @@ from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
     OtpThrottledError,
     PhoneAlreadyRegisteredError,
+    PhoneUnchangedError,
     UserInactiveError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
@@ -337,7 +340,8 @@ def update_current_user():
     """Self-service profile edit (Settings › Profile).
 
     The phone is the sign-in identity: it may be re-sent unchanged, but clearing or replacing it
-    is refused (400 ``PhoneChangeNotAllowed``) because no code proves the caller holds a new number.
+    is refused (400 ``PhoneChangeNotAllowed``) because no code proves the caller holds a new number;
+    ``/auth/me/phone/request-code`` + ``/auth/me/phone/confirm`` do that.
     """
     try:
         data = UpdateMeRequest.model_validate(request.get_json(silent=True) or {})
@@ -359,6 +363,98 @@ def update_current_user():
     container.user_repository.save(user)
     from app import db
 
+    db.session.commit()
+    return jsonify(_me_payload(container, user).model_dump())
+
+
+_PHONE_TAKEN = "This phone number is already used by another account."
+
+
+@auth_bp.route("/me/phone/request-code", methods=["POST"])
+@openapi_doc(
+    summary="Text a code to the new phone number the current user wants to sign in with",
+    request=PhoneChangeRequestBody,
+    responses={202: OtpRequestResponse},
+    tags=["auth"],
+)
+@jwt_required()
+@limiter.limit("5 per minute", key_func=jwt_user_key)
+def request_phone_change_code():
+    """Step 1 of a verified number change: the code goes to the NEW number, never the current one.
+
+    Same rules as sign-in codes (French numbers only, TTL, resend throttle, hourly cap). 409 when
+    another account already signs in with that number (whose is never revealed), 400
+    ``PhoneUnchanged`` when it is already the caller's number.
+    """
+    try:
+        data = PhoneChangeRequestBody(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: phone")
+    container = get_container()
+    usecase = container.request_phone_change_code_usecase
+    if usecase is None:
+        return _error(500, "ServerError", "Phone change not configured")
+    try:
+        result = usecase.execute(UUID(get_jwt_identity()), data.phone)
+    except InvalidPhoneNumberError:
+        return _error(400, "ValidationError", "Invalid phone number")
+    except PhoneUnchangedError:
+        return _error(400, "PhoneUnchanged", "This is already your phone number.")
+    except PhoneAlreadyRegisteredError:
+        return _error(409, "Conflict", _PHONE_TAKEN)
+    except UserInactiveError:
+        return _error(401, "Unauthorized", "User account is deactivated")
+    except OtpThrottledError:
+        return _error(429, "TooManyRequests", "A code was sent recently. Wait a minute and try again.")
+    except SmsSendError:
+        return _error(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
+    from app import db
+
+    db.session.commit()
+    return jsonify(OtpRequestResponse(expires_in=result.expires_in).model_dump()), 202
+
+
+@auth_bp.route("/me/phone/confirm", methods=["POST"])
+@openapi_doc(
+    summary="Switch the current user's sign-in phone to the new number once its SMS code checks out",
+    request=PhoneChangeConfirmBody,
+    responses={200: UserResponse},
+    tags=["auth"],
+)
+@jwt_required()
+@limiter.limit("5 per minute", key_func=jwt_user_key)
+def confirm_phone_change():
+    """Step 2: swap the number. The caller stays signed in (tokens carry the user, not the phone).
+
+    400 ``InvalidCode`` for a wrong, expired, used-up or sign-in code (attempts are persisted so
+    guesses stay limited). Not 401: the caller IS authenticated, and clients treat a 401 on an
+    authenticated route as an expired session (refresh and replay, which would spend a second
+    attempt). 409 if another account took the number in the meantime.
+    """
+    try:
+        data = PhoneChangeConfirmBody(**(request.get_json(silent=True) or {}))
+    except ValidationError:
+        return _error(400, "ValidationError", "Invalid input: phone, code")
+    container = get_container()
+    usecase = container.confirm_phone_change_usecase
+    if usecase is None:
+        return _error(500, "ServerError", "Phone change not configured")
+    from app import db
+
+    try:
+        user = usecase.execute(UUID(get_jwt_identity()), data.phone, data.code)
+    except InvalidPhoneNumberError:
+        return _error(400, "ValidationError", "Invalid phone number")
+    except PhoneUnchangedError:
+        return _error(400, "PhoneUnchanged", "This is already your phone number.")
+    except PhoneAlreadyRegisteredError:
+        return _error(409, "Conflict", _PHONE_TAKEN)
+    except UserInactiveError:
+        return _error(401, "Unauthorized", "User account is deactivated")
+    except OtpInvalidError:
+        # The attempt counter moved; persist it so guesses really are limited.
+        db.session.commit()
+        return _error(400, "InvalidCode", "Invalid or expired code")
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())
 

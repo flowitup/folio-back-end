@@ -618,6 +618,22 @@ def _configure_di_container() -> None:
             _c.token_issuer,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
         )
+        # Verified change of the sign-in phone: same code store and limits, PHONE_CHANGE purpose.
+        from app.application.usecases.change_phone import ConfirmPhoneChangeUseCase, RequestPhoneChangeCodeUseCase
+
+        _c.request_phone_change_code_usecase = RequestPhoneChangeCodeUseCase(
+            _c.user_repository,
+            _otp_repo,
+            _sms,
+            ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
+            resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
+            hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
+        )
+        _c.confirm_phone_change_usecase = ConfirmPhoneChangeUseCase(
+            _c.user_repository,
+            _otp_repo,
+            max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+        )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
         # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
         # use case instance, gated by the invitation token instead of being open to

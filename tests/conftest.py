@@ -1387,6 +1387,11 @@ def invitation_app():
 
         _c.request_signup_otp_usecase = _RequestSignupUC(user_repo, _otp_repo, _sms)
         _c.verify_signup_otp_usecase = _VerifySignupUC(user_repo, _otp_repo, _c.authorization_service, token_issuer)
+        from app.application.usecases.change_phone import ConfirmPhoneChangeUseCase as _ConfirmPhoneChangeUC
+        from app.application.usecases.change_phone import RequestPhoneChangeCodeUseCase as _RequestPhoneChangeUC
+
+        _c.request_phone_change_code_usecase = _RequestPhoneChangeUC(user_repo, _otp_repo, _sms)
+        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(user_repo, _otp_repo)
 
         # Invitation acceptance proves a phone by the same sign-up code flow (phase 02) —
         # mirrors app/__init__.py's wiring, which this fixture had drifted from (the

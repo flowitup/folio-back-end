@@ -50,6 +50,12 @@ class PhoneAlreadyRegisteredError(AuthenticationError):
     pass
 
 
+class PhoneUnchangedError(AuthenticationError):
+    """Phone-number change to the number the account already signs in with."""
+
+    pass
+
+
 class AuthorizationError(Exception):
     """Base authorization exception."""
 
