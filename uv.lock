@@ -410,7 +410,7 @@ requires-dist = [
     { name = "reportlab", specifier = ">=4.4" },
     { name = "rq", specifier = ">=1.16.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "sqlalchemy", specifier = ">=2.0.45" },
+    { name = "sqlalchemy", specifier = ">=2.0.45,<2.1" },
     { name = "typesafe-sdk", specifier = ">=0.7" },
 ]
 provides-extras = ["dev"]
