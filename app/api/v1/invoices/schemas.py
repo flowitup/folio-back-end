@@ -5,8 +5,9 @@ from datetime import date
 from typing import Literal, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.api.v1.numeric_bounds import MAX_LINE_QUANTITY, MAX_LINE_UNIT_PRICE
 from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error schema
 
 InvoiceTypeLiteral = Literal["released_funds", "labor", "materials_services", "others", "return"]
@@ -33,12 +34,16 @@ class InvoiceItemSchema(BaseModel):
 
     unit_price carries no ge=0 bound — sign validation is type-dependent and
     enforced in the use-case (mixed-sign allowed for materials_services + return).
-    quantity must be > 0; vat_rate is 0–100.
+    quantity must be > 0; vat_rate is 0–100. Both are capped like billing lines,
+    and inf/NaN are refused.
     """
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     description: str = Field(..., min_length=1, max_length=500)
-    quantity: float = Field(..., gt=0)
-    unit_price: float  # sign enforcement is in the use-case, not here
+    quantity: float = Field(..., gt=0, le=float(MAX_LINE_QUANTITY))
+    # sign enforcement is in the use-case, not here
+    unit_price: float = Field(..., ge=-float(MAX_LINE_UNIT_PRICE), le=float(MAX_LINE_UNIT_PRICE))
     vat_rate: float = Field(default=0.0, ge=0, le=100)
 
 

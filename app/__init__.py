@@ -37,6 +37,10 @@ def create_app(config_class: type = Config) -> Flask:
     """
     app = Flask(__name__)
     app.config.from_object(config_class)
+    # Responses must stay valid JSON even if a stored amount overflows a float.
+    from app.api._helpers.json_provider import FiniteJSONProvider
+
+    app.json = FiniteJSONProvider(app)
 
     # Production security check — fail fast rather than run with insecure defaults
     _flask_env = os.environ.get("FLASK_ENV", "development")
