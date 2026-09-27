@@ -62,11 +62,13 @@ def configure_jwt_handlers(jwt: JWTManager) -> None:
             return True
         if request.endpoint in _SIGN_IN_CHECK_EXEMPT_ENDPOINTS:
             return False
-        return not _token_subject_may_sign_in(container, jwt_payload.get("sub"))
+        return not _token_subject_may_sign_in(container, jwt_payload.get("sub"), jwt_payload.get("iat"))
 
 
-def _token_subject_may_sign_in(container, subject) -> bool:
-    """True when the token's subject is a user that still exists and is active.
+def _token_subject_may_sign_in(container, subject, issued_at=None) -> bool:
+    """True when the token's subject is a user that still exists and is active, and the token
+    was not issued before the user's sessions cut-off (a verified phone change signs the user
+    out of every other device; refresh tokens held there are never presented to be revoked).
 
     Fails open only when there is no repository to ask (unit-test containers that
     wire nothing) — never when the repository answers "no such user". That
@@ -91,4 +93,6 @@ def _token_subject_may_sign_in(container, subject) -> bool:
         # to the parse alone — a ValueError from inside the query must not read
         # as "may sign in".
         return True
-    return bool(check(user_id))
+    if issued_at is None:
+        return bool(check(user_id))
+    return bool(check(user_id, issued_at=issued_at))

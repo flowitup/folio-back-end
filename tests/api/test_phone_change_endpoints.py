@@ -52,6 +52,15 @@ def member_id(inv_client, superadmin_token, invitation_app):
     outsider = _user_id(inv_client, superadmin_token, invitation_app._test_outsider_email)
     _set_phone(inv_client, superadmin_token, outsider, None)
     _set_phone(inv_client, superadmin_token, uid, CURRENT)
+    # An earlier test's confirmed change signed the member out of older sessions; start clean.
+    from uuid import UUID
+
+    from app import db
+    from app.infrastructure.database.models import UserModel
+
+    with invitation_app.app_context():
+        db.session.query(UserModel).filter(UserModel.id == UUID(uid)).update({UserModel.tokens_valid_after: None})
+        db.session.commit()
     return uid
 
 
@@ -79,9 +88,13 @@ def test_code_goes_to_the_new_number_and_confirm_switches_the_phone(
     assert ok.status_code == 200, ok.get_json()
     assert ok.get_json()["id"] == member_id and ok.get_json()["phone"] == NEW
 
-    # The session survives the change.
-    me = inv_client.get("/api/v1/auth/me", headers=_auth(member_token))
+    # The session carries on with the fresh tokens of the response; the ones it used are dead.
+    fresh = ok.get_json()
+    me = inv_client.get("/api/v1/auth/me", headers=_auth(fresh["access_token"]))
     assert me.status_code == 200 and me.get_json()["phone"] == NEW
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(member_token)).status_code == 401
+    refreshed = inv_client.post("/api/v1/auth/refresh", headers=_auth(fresh["refresh_token"]))
+    assert refreshed.status_code == 200, refreshed.get_json()
 
     # The new number signs in; the old one no longer reaches the account (no SMS is sent to it).
     sent_before = len(invitation_app._sms.sent)
@@ -200,3 +213,52 @@ def test_another_users_code_does_not_work(
     resp = inv_client.post(CONFIRM, json={"phone": NEW, "code": member_code}, headers=_auth(outsider_token))
     assert resp.status_code == 400 and resp.get_json()["error"] == "InvalidCode"
     assert inv_client.get("/api/v1/auth/me", headers=_auth(outsider_token)).get_json()["phone"] != NEW
+
+
+def _token_issued_before_now(invitation_app, user_id: str, *, refresh: bool = False) -> str:
+    """A token another device got at sign-in, a minute ago."""
+    import time
+    from uuid import UUID
+
+    from flask_jwt_extended import create_access_token, create_refresh_token
+
+    with invitation_app.app_context():
+        claims = {"iat": int(time.time()) - 60}
+        if refresh:
+            return create_refresh_token(identity=str(UUID(user_id)), expires_delta=False, additional_claims=claims)
+        return create_access_token(identity=str(UUID(user_id)), additional_claims=claims)
+
+
+def test_confirmed_change_signs_every_other_device_out(inv_client, invitation_app, member_token, member_id):
+    other_access = _token_issued_before_now(invitation_app, member_id)
+    other_refresh = _token_issued_before_now(invitation_app, member_id, refresh=True)
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(other_access)).status_code == 200
+
+    assert inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token)).status_code == 202
+    ok = inv_client.post(
+        CONFIRM, json={"phone": NEW, "code": _code_from_sms(invitation_app)}, headers=_auth(member_token)
+    )
+    assert ok.status_code == 200, ok.get_json()
+
+    # Other devices: access refused and no new access token from their (never-expiring) refresh token.
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(other_access)).status_code == 401
+    assert inv_client.post("/api/v1/auth/refresh", headers=_auth(other_refresh)).status_code == 401
+    # This device: signed in with the pair it was handed, also set as cookies for browsers.
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(ok.get_json()["access_token"])).status_code == 200
+    cookies = " ".join(ok.headers.getlist("Set-Cookie"))
+    assert "access_token_cookie=" in cookies or "access_token=" in cookies
+    # A later sign-in is a new session and works as usual.
+    from tests.auth_login_helper import mint_access_token
+
+    later = mint_access_token(inv_client, invitation_app._test_member_email)
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(later)).status_code == 200
+
+
+def test_refused_change_signs_nobody_out(inv_client, invitation_app, member_token, member_id):
+    other_access = _token_issued_before_now(invitation_app, member_id)
+    assert inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token)).status_code == 202
+    code = _code_from_sms(invitation_app)
+    wrong = "000000" if code != "000000" else "111111"
+    assert inv_client.post(CONFIRM, json={"phone": NEW, "code": wrong}, headers=_auth(member_token)).status_code == 400
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(other_access)).status_code == 200
+    assert inv_client.get("/api/v1/auth/me", headers=_auth(member_token)).status_code == 200

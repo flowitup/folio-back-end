@@ -30,6 +30,7 @@ from app.api.v1.auth.schemas import (
     OtpRequestResponse,
     OtpVerifyBody,
     PhoneChangeConfirmBody,
+    PhoneChangeConfirmResponse,
     PhoneChangeRequestBody,
     RefreshResponse,
     SignupRequestBody,
@@ -418,13 +419,17 @@ def request_phone_change_code():
 @openapi_doc(
     summary="Switch the current user's sign-in phone to the new number once its SMS code checks out",
     request=PhoneChangeConfirmBody,
-    responses={200: UserResponse},
+    responses={200: PhoneChangeConfirmResponse},
     tags=["auth"],
 )
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
 def confirm_phone_change():
-    """Step 2: swap the number. The caller stays signed in (tokens carry the user, not the phone).
+    """Step 2: swap the number and sign the account out of every other device.
+
+    Every token issued before the change is refused from then on, the caller's included; the
+    caller stays signed in with the fresh pair this response carries (body, plus cookies for
+    browsers). The refresh token is persistent under the same policy as sign-in.
 
     400 ``InvalidCode`` for a wrong, expired, used-up or sign-in code (attempts are persisted so
     guesses stay limited). Not 401: the caller IS authenticated, and clients treat a 401 on an
@@ -456,7 +461,23 @@ def confirm_phone_change():
         db.session.commit()
         return _error(400, "InvalidCode", "Invalid or expired code")
     db.session.commit()
-    return jsonify(_me_payload(container, user).model_dump())
+
+    token_issuer = container.token_issuer
+    # The cut-off has whole-second precision; revoke the caller's own old tokens by JTI too, so
+    # they die even when issued within the same second as the change.
+    old_jti = get_jwt().get("jti")
+    if old_jti:
+        token_issuer.revoke_token(old_jti, token_type="access")
+    _revoke_presented_refresh_tokens(token_issuer)
+    access_token = token_issuer.create_access_token(user.id)
+    refresh_token = token_issuer.create_refresh_token(user.id, persistent=_persistent_sessions())
+    body = PhoneChangeConfirmResponse(
+        **_me_payload(container, user).model_dump(), access_token=access_token, refresh_token=refresh_token
+    )
+    response = make_response(jsonify(body.model_dump(mode="json")))
+    set_access_cookies(response, access_token)
+    set_refresh_cookies(response, refresh_token)
+    return response
 
 
 @auth_bp.route("/me", methods=["DELETE"])

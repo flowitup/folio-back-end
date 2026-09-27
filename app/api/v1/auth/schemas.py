@@ -108,6 +108,18 @@ class UpdateMeRequest(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=32)
 
 
+class PhoneChangeConfirmResponse(UserResponse):
+    """POST /auth/me/phone/confirm — the updated user plus fresh tokens for this session.
+
+    The change signs the account out of every other device and every token issued before it,
+    including the ones the caller used: browsers get the new pair as cookies, Bearer clients
+    must store these two in place of their old ones.
+    """
+
+    access_token: str
+    refresh_token: str
+
+
 class LoginResponse(BaseModel):
     """Login response with tokens and user info."""
 

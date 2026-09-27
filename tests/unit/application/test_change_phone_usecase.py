@@ -38,6 +38,7 @@ class FakeUsers:
     def __init__(self, *users) -> None:
         self.users = {u.id: u for u in users}
         self.saved: list = []
+        self.sessions_ended: list = []
 
     def find_by_id(self, user_id):
         return self.users.get(user_id)
@@ -48,6 +49,9 @@ class FakeUsers:
     def save(self, user):
         self.saved.append(user)
         return user
+
+    def end_sessions_issued_before(self, user_id, cutoff):
+        self.sessions_ended.append((user_id, cutoff))
 
 
 def _user(phone=OLD, active=True):
@@ -91,6 +95,21 @@ def test_code_is_texted_to_the_new_number_and_confirm_switches(env):
 
     user = env.confirm.execute(env.me.id, NEW, _last_code(env.sms))
     assert user.phone == NEW and env.users.saved == [env.me]
+
+
+def test_confirmed_change_ends_every_session_issued_before_it(env):
+    env.request.execute(env.me.id, NEW)
+    assert env.users.sessions_ended == []
+    env.clock.now = NOW + timedelta(seconds=42)
+    env.confirm.execute(env.me.id, NEW, _last_code(env.sms))
+    assert env.users.sessions_ended == [(env.me.id, NOW + timedelta(seconds=42))]
+
+
+def test_refused_change_ends_no_session(env):
+    env.request.execute(env.me.id, NEW)
+    with pytest.raises(OtpInvalidError):
+        env.confirm.execute(env.me.id, NEW, "000000" if _last_code(env.sms) != "000000" else "111111")
+    assert env.users.sessions_ended == []
 
 
 def test_code_is_single_use(env):

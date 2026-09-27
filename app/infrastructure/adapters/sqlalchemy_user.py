@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of UserRepositoryPort."""
 
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from uuid import UUID
 
@@ -111,8 +112,11 @@ class SQLAlchemyUserRepository:
         )
         return [self._to_entity(u) for u in users]
 
-    def is_sign_in_allowed(self, user_id: UUID) -> bool:
+    def is_sign_in_allowed(self, user_id: UUID, issued_at: Optional[int] = None) -> bool:
         """True when the user exists, is active, and has not erased their account.
+
+        With ``issued_at`` (a token's ``iat``), also requires the token not to predate the
+        user's ``tokens_valid_after`` cut-off — read in the same single-row query.
 
         Selects the two columns rather than the entity on purpose: this runs on
         every authenticated request, so it must not return an instance the
@@ -125,8 +129,30 @@ class SQLAlchemyUserRepository:
         # point — surfacing unrelated integrity errors inside auth — and makes
         # every authenticated request pay for a flush it did not ask for.
         with self._session.no_autoflush:
-            row = self._session.query(UserModel.is_active, UserModel.deleted_at).filter(UserModel.id == user_id).first()
-        return bool(row is not None and row.is_active and row.deleted_at is None)
+            row = (
+                self._session.query(UserModel.is_active, UserModel.deleted_at, UserModel.tokens_valid_after)
+                .filter(UserModel.id == user_id)
+                .first()
+            )
+        if row is None or not row.is_active or row.deleted_at is not None:
+            return False
+        cutoff = row.tokens_valid_after
+        if issued_at is None or cutoff is None:
+            return True
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        return int(issued_at) >= int(cutoff.timestamp())
+
+    def end_sessions_issued_before(self, user_id: UUID, cutoff: datetime) -> None:
+        """Targeted UPDATE, like the erasure: ``save()`` round-trips only profile fields.
+
+        Truncated to whole seconds because a token's ``iat`` is: a token issued later in the same
+        second as the cut-off (the fresh tokens handed to the session that made the change) has the
+        same ``iat`` and must stay valid.
+        """
+        self._session.query(UserModel).filter(UserModel.id == user_id).update(
+            {UserModel.tokens_valid_after: cutoff.replace(microsecond=0)}, synchronize_session=False
+        )
 
     def save(self, user: User) -> User:
         """Save a user (create or update)."""

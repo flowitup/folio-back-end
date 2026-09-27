@@ -6,8 +6,9 @@ proven: ``RequestPhoneChangeCodeUseCase`` texts a code to the NEW number and
 ``OtpPurpose.PHONE_CHANGE`` and bound to the requesting user, so they never sign anyone in, and a
 sign-in code never changes a number. Same rules as sign-in: French numbers only, same TTL, resend
 throttle, hourly cap and attempt limit (``_issue_code`` / ``_consume_code``). A number already used
-by another account is refused without saying whose it is. The caller's tokens identify the user,
-not the phone, so the session stays valid after the change.
+by another account is refused without saying whose it is. A confirmed change signs the account out
+of every other device: tokens issued before it are refused from then on
+(``end_sessions_issued_before``), and the route hands the session that made the change fresh ones.
 """
 
 from __future__ import annotations
@@ -135,5 +136,8 @@ class ConfirmPhoneChangeUseCase:
             raise OtpInvalidError("Invalid or expired code")
         user.phone = phone
         self._users.save(user)
+        # Whoever else holds a session on this account (a lost or shared phone, the old number's
+        # new owner) is signed out; the caller gets fresh tokens from the route.
+        self._users.end_sessions_issued_before(user.id, self._clock())
         logger.info("auth.phone_change.confirmed user=%s", user.id)
         return user
