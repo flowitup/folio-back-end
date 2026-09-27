@@ -967,3 +967,35 @@ class TestBankedHoursBonusPerMonth:
         assert bonus(date(2026, 9, 1), date(2026, 9, 30)) == (2, 0, 0, 0.0)
         assert bonus(date(2026, 8, 1), date(2026, 9, 30)) == (8, 0, 1, 40.0)
         assert bonus(None, None) == (8, 0, 1, 40.0)
+
+
+class TestLabourCostRoundedToTheCent:
+    """A priced entry is worth a whole number of cents, rounded half-up once, so the
+    API, the web and the PDF/XLSX exports all show the same amount."""
+
+    # 62.625 is exact in binary, so SQLite (float maths) and Postgres (numeric) agree.
+    @pytest.mark.parametrize("rate, expected", [("125.25", "62.63")])
+    def test_a_half_day_is_rounded_half_up(self, entry_repo, worker_repo, sample_project, session, rate, expected):
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Half Rate Worker",
+            daily_rate=Decimal(rate),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        worker_repo.create(worker)
+        entry = LaborEntry(
+            id=uuid4(),
+            worker_id=worker.id,
+            date=date(2026, 9, 3),
+            shift_type="half",
+            created_at=datetime.now(timezone.utc),
+        )
+        entry_repo.create(entry)
+
+        assert entry.effective_cost(Decimal(rate)) == Decimal(expected)
+        (row,) = entry_repo.get_summary(sample_project.id)
+        assert row.total_cost == Decimal(expected)
+        (month,) = entry_repo.get_monthly_summary(sample_project.id)
+        assert month.total_cost == Decimal(expected)

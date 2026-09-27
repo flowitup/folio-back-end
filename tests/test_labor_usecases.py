@@ -898,3 +898,9 @@ def test_mixed_priced_plus_supplement_cost(mock_entry_repo):
     assert Decimal(str(row.bonus_cost)).quantize(Decimal("0.01")) == Decimal("100.00")
     # total_cost = priced(200) + bonus(100) = 300
     assert Decimal(str(row.total_cost)).quantize(Decimal("0.01")) == Decimal("300.00")
+
+
+def test_a_half_bonus_day_is_rounded_to_the_cent():
+    from app.domain.labor.banked_hours_bonus import bonus_for_banked_hours
+
+    assert bonus_for_banked_hours(4, Decimal("125.25")).cost == Decimal("62.63")

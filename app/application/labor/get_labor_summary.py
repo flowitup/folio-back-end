@@ -61,6 +61,7 @@ class GetLaborSummaryUseCase:
         total_banked_hours = 0
         total_bonus_days = Decimal("0")
         total_bonus_cost = Decimal("0")
+        total_cost = Decimal("0")
 
         for row in summary_rows:
             banked = row.banked_hours or 0
@@ -86,14 +87,14 @@ class GetLaborSummaryUseCase:
             total_banked_hours += banked
             total_bonus_days += bonus.days
             total_bonus_cost += bonus.cost
+            total_cost += priced_cost + bonus.cost
 
         total_days = float(sum(r.days_worked for r in rows))
-        total_cost = sum(r.total_cost for r in rows)
 
         return LaborSummaryResponse(
             rows=rows,
             total_days=total_days,
-            total_cost=total_cost,
+            total_cost=float(total_cost),
             total_banked_hours=total_banked_hours,
             total_bonus_days=float(total_bonus_days),
             total_bonus_cost=float(total_bonus_cost),

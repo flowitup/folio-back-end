@@ -12,7 +12,7 @@ earned totals for the same month.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable
 
 #: Banked hours that make up one full paid day.
@@ -39,6 +39,7 @@ def bonus_for_banked_hours(banked_hours: int, daily_rate: Decimal) -> BankedHour
     full_days = banked // HOURS_PER_BONUS_DAY
     half_days = 1 if (banked % HOURS_PER_BONUS_DAY) >= HOURS_PER_BONUS_DAY // 2 else 0
     cost = Decimal(full_days) * daily_rate + Decimal(half_days) * daily_rate * Decimal("0.5")
+    cost = cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return BankedHoursBonus(full_days=full_days, half_days=half_days, cost=cost)
 
 

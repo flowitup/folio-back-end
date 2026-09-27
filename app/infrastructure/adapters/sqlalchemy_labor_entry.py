@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import case as sa_case, func, select
+from sqlalchemy import Numeric, cast, case as sa_case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -149,7 +149,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            eff_rate * shift_multiplier,
+            # Each entry rounded to the cent, as LaborEntry.effective_cost does.
+            func.round(cast(eff_rate * shift_multiplier, Numeric(14, 4)), 2),
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),
@@ -290,7 +291,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         )
         shift_cost = func.coalesce(
             LaborEntryModel.amount_override,
-            eff_rate * shift_multiplier,
+            # Each entry rounded to the cent, as LaborEntry.effective_cost does.
+            func.round(cast(eff_rate * shift_multiplier, Numeric(14, 4)), 2),
         )
         effective_cost = sa_case(
             (LaborEntryModel.shift_type.is_(None), 0),

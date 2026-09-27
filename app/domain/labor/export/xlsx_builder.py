@@ -27,6 +27,7 @@ separate columns so readers can distinguish the two cost components.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from io import BytesIO
 from typing import List
 
@@ -253,7 +254,7 @@ def _write_summary_table(
             cell.border = thin
             if col_idx in _SUMMARY_CURRENCY_COLS:
                 cell.number_format = EUR_FR_FORMAT
-                cell.value = float(val)  # ensure float, not Decimal
+                cell.value = _money(val)  # a float for openpyxl, not a Decimal
             elif col_idx == 0:
                 cell.alignment = Alignment(horizontal="left")
             else:
@@ -277,9 +278,14 @@ def _write_summary_table(
         cell.border = thick
         if col_idx in _SUMMARY_CURRENCY_COLS:
             cell.number_format = EUR_FR_FORMAT
-            cell.value = float(val)
+            cell.value = _money(val)
 
     return footer_row + 1  # next available row
+
+
+def _money(value) -> float:
+    """A money cell's value: rounded half-up to the cent (float sums drift, e.g. 830.3049999)."""
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _write_daily_detail(
@@ -328,10 +334,10 @@ def _write_daily_detail(
             cell.border = thin
             if col_idx in _DETAIL_CURRENCY_COLS:
                 cell.number_format = EUR_FR_FORMAT
-                cell.value = float(val) if val != "" else 0.0
+                cell.value = _money(val) if val != "" else 0.0
             elif col_idx == 4 and val != "":  # Override column (currency if present)
                 cell.number_format = EUR_FR_FORMAT
-                cell.value = float(val)
+                cell.value = _money(val)
         data_row += 1
 
     return data_row
