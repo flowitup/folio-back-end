@@ -43,6 +43,7 @@ def export_labor(project_id: str):
         from   (str, YYYY-MM) — start month, inclusive
         to     (str, YYYY-MM) — end month, inclusive
         format (str)          — "xlsx" or "pdf"
+        locale (str, optional) — label language: "en" (default), "fr" or "vi"
 
     Returns:
         200: binary file stream with Content-Disposition: attachment
@@ -70,6 +71,7 @@ def export_labor(project_id: str):
                 to_month=query.to_month,
                 format=query.format,
                 acting_user_email=requester_email,
+                locale=query.locale,
             )
         )
     except ProjectNotFoundError:
@@ -107,6 +109,7 @@ def export_worker_labor(project_id: str, worker_id: str):
         from   (str, YYYY-MM) — start month, inclusive
         to     (str, YYYY-MM) — end month, inclusive
         format (str)          — "xlsx" or "pdf"
+        locale (str, optional) — label language: "en" (default), "fr" or "vi"
 
     Returns:
         200: binary file stream with Content-Disposition: attachment
@@ -142,6 +145,7 @@ def export_worker_labor(project_id: str, worker_id: str):
                 to_month=query.to_month,
                 format=query.format,
                 acting_user_email=requester_email,
+                locale=query.locale,
             )
         )
     except ProjectNotFoundError:

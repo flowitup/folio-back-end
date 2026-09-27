@@ -33,6 +33,8 @@ class ExportLaborRequest:
     acting_user_email: str
     # Optional: when set, scopes entire export to a single worker
     worker_id: Optional[UUID] = field(default=None)
+    # Label language of the file: "en" (default), "fr" or "vi".
+    locale: str = "en"
 
 
 @dataclass
@@ -233,6 +235,7 @@ class ExportLaborUseCase:
             generated_by_email=req.acting_user_email,
             worker_name=worker.name if worker is not None else None,
             worker_daily_rate=self._header_rate(worker, to_d),
+            locale=req.locale,
         )
 
         # 6. Dispatch to builder

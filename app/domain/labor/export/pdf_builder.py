@@ -52,6 +52,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .format import format_eur_fr
+from .labels import month_label, range_label, t
 from .models import ExportContext, MonthBucket
 
 
@@ -84,16 +85,16 @@ def _format_days(v: float) -> str:
 
 _FONTS_DIR = Path(__file__).parent / "fonts"
 
-# Table column headers (8 columns)
+# Table column headers (8 columns) — label keys, see labels.py
 _BREAKDOWN_HEADERS = [
-    "Worker",
-    "Days",
-    "Banked hrs",
-    "Bonus full",
-    "Bonus half",
-    "Priced cost",
-    "Bonus cost",
-    "Total (priced + bonus)",
+    "worker",
+    "days",
+    "banked_hrs",
+    "bonus_full",
+    "bonus_half",
+    "priced_cost",
+    "bonus_cost",
+    "total_priced_bonus",
 ]
 
 # Relative column widths for breakdown table (sum normalised to page width in builder).
@@ -103,11 +104,11 @@ _BREAKDOWN_COL_WEIGHTS = [3, 1.4, 1.5, 1.5, 1.5, 2.2, 2.2, 2.7]
 
 # KPI labels and attribute names for aggregation
 _KPI_LABELS = [
-    "Total cost",
-    "Worker-days",
-    "Bonus cost",
-    "Bonus days",
-    "Banked hours",
+    "total_cost",
+    "worker_days",
+    "bonus_cost",
+    "bonus_days",
+    "banked_hours",
 ]
 
 # Indices of right-aligned (numeric/currency) columns in breakdown table (0-based)
@@ -292,9 +293,9 @@ def _aggregate_across_buckets(buckets: List[MonthBucket]) -> List[_AggRow]:
 # ---------------------------------------------------------------------------
 
 
-def _header_cells(labels: List[str], styles: dict) -> list:
+def _header_cells(keys: List[str], styles: dict, locale: str = "en") -> list:
     """Header labels as Paragraphs, so ReportLab wraps them within their column."""
-    return [Paragraph(_xml_escape(label), styles["th"]) for label in labels]
+    return [Paragraph(_xml_escape(t(locale, key)), styles["th"]) for key in keys]
 
 
 def _render_header(context: ExportContext, styles: dict) -> list:
@@ -303,23 +304,23 @@ def _render_header(context: ExportContext, styles: dict) -> list:
     Project-wide: 4 paragraphs (title, project, range, generated).
     Single-worker: same 4 + extra worker line with name and daily rate.
     """
-    from_label = context.range.from_month.strftime("%b %Y")
-    to_label = context.range.to_month.strftime("%b %Y")
-    # Count months: inclusive range
-    from_dt = context.range.from_month
-    to_dt = context.range.to_month
-    n_months = (to_dt.year - from_dt.year) * 12 + (to_dt.month - from_dt.month) + 1
-
+    locale = context.locale
     elements = [
-        Paragraph("Folio · Labor Export", styles["h1"]),
-        Paragraph(f"Project: {_xml_escape(context.project_name)}", styles["h2"]),
+        Paragraph(_xml_escape(t(locale, "title")), styles["h1"]),
+        Paragraph(_xml_escape(t(locale, "project", name=context.project_name)), styles["h2"]),
         Paragraph(
-            f"Range: {from_label} → {to_label} ({n_months} month{'s' if n_months != 1 else ''})",
+            _xml_escape(range_label(context.range.from_month, context.range.to_month, locale)),
             styles["h2"],
         ),
         Paragraph(
-            f"Generated: {context.generated_at.strftime('%d/%m/%Y %H:%M UTC')} "
-            f"by {_xml_escape(context.generated_by_email)}",
+            _xml_escape(
+                t(
+                    locale,
+                    "generated",
+                    at=context.generated_at.strftime("%d/%m/%Y %H:%M UTC"),
+                    email=context.generated_by_email,
+                )
+            ),
             styles["h2"],
         ),
     ]
@@ -327,12 +328,14 @@ def _render_header(context: ExportContext, styles: dict) -> list:
     if context.worker_name is not None:
         rate = context.worker_daily_rate
         rate_str = format_eur_fr(rate) if rate is not None else "—"
-        elements.append(Paragraph(f"Worker: {_xml_escape(context.worker_name)}    Rate: {rate_str}/day", styles["h2"]))
+        elements.append(
+            Paragraph(_xml_escape(t(locale, "worker_rate", name=context.worker_name, rate=rate_str)), styles["h2"])
+        )
 
     return elements
 
 
-def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
+def _render_kpi_table(buckets: List[MonthBucket], styles: dict, locale: str = "en") -> list:
     """Build a 1-row × 5-column KPI mini-table summarising all buckets."""
     total_cost = Decimal("0")
     total_days: float = 0.0
@@ -350,13 +353,7 @@ def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
 
     kpi_data = [
         # Labels row
-        [
-            Paragraph("Total cost", styles["kpi_label"]),
-            Paragraph("Worker-days", styles["kpi_label"]),
-            Paragraph("Bonus cost", styles["kpi_label"]),
-            Paragraph("Bonus days", styles["kpi_label"]),
-            Paragraph("Banked hours", styles["kpi_label"]),
-        ],
+        [Paragraph(_xml_escape(t(locale, key)), styles["kpi_label"]) for key in _KPI_LABELS],
         # Values row
         [
             Paragraph(format_eur_fr(total_cost), styles["kpi_value"]),
@@ -384,7 +381,7 @@ def _render_kpi_table(buckets: List[MonthBucket], styles: dict) -> list:
     return [kpi_table]
 
 
-def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_width: float) -> list:
+def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_width: float, locale: str = "en") -> list:
     """Build per-worker breakdown table aggregated across all months."""
     agg_rows = _aggregate_across_buckets(buckets)
 
@@ -393,7 +390,7 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
     col_widths = [usable_width * (w / total_weight) for w in _BREAKDOWN_COL_WEIGHTS]
 
     # Build table data: header row + one row per worker
-    table_data = [_header_cells(_BREAKDOWN_HEADERS, styles)]
+    table_data = [_header_cells(_BREAKDOWN_HEADERS, styles, locale)]
 
     for agg in agg_rows:
         table_data.append(
@@ -454,7 +451,11 @@ _DAY_LOG_SECTION_HEADER_STYLE_NAME = "h2"
 
 
 def _render_day_log_section(
-    buckets: List[MonthBucket], styles: dict, usable_width: float, worker_scoped: bool = False
+    buckets: List[MonthBucket],
+    styles: dict,
+    usable_width: float,
+    worker_scoped: bool = False,
+    locale: str = "en",
 ) -> list:
     """Build the combined day-log section — one block per month with activities or descriptions.
 
@@ -509,12 +510,16 @@ def _render_day_log_section(
             continue
 
         # Per-month sub-heading
-        month_label = bucket.month.strftime("%b %Y")
         elements.append(Spacer(1, 4 * mm))
-        elements.append(Paragraph(f"Day log — {_xml_escape(month_label)}", styles[_DAY_LOG_SECTION_HEADER_STYLE_NAME]))
+        elements.append(
+            Paragraph(
+                _xml_escape(t(locale, "day_log", month=month_label(bucket.month, locale))),
+                styles[_DAY_LOG_SECTION_HEADER_STYLE_NAME],
+            )
+        )
 
         # Table header + data rows
-        table_data = [_header_cells(["Date", "Activity", "Description"], styles)]
+        table_data = [_header_cells(["date", "activity", "description"], styles, locale)]
 
         for iso_date in all_dates:
             # Reformat ISO 'YYYY-MM-DD' → 'dd/mm/YYYY' for visual consistency
@@ -584,7 +589,7 @@ def _make_footer_callback(context: ExportContext):
     def _footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]
         canvas.saveState()
         canvas.setFont("DejaVu", 8)
-        page_text = f"Page {doc.page}"
+        page_text = t(context.locale, "page", n=doc.page)
         right_text = f"{project_label} · {date_label}"
 
         y = 8 * mm
@@ -653,16 +658,22 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
         # project-wide modes because the buckets are already pre-filtered by
         # worker_id in the use-case. The breakdown table will therefore contain
         # exactly one worker row in single-worker mode.
-        story.extend(_render_kpi_table(buckets, styles))
+        story.extend(_render_kpi_table(buckets, styles, context.locale))
         story.append(Spacer(1, 6 * mm))
-        story.extend(_render_breakdown_table(buckets, styles, usable_width))
+        story.extend(_render_breakdown_table(buckets, styles, usable_width, context.locale))
 
     # Render the day-log first so we can tell whether it actually produced rows.
     # In single-worker mode it is filtered to the worker's worked days, which can
     # legitimately leave it empty even when the project has activities — in that
     # case we must NOT emit a leading spacer (stray gap).
     day_log_elements = (
-        _render_day_log_section(buckets, styles, usable_width, worker_scoped=context.worker_name is not None)
+        _render_day_log_section(
+            buckets,
+            styles,
+            usable_width,
+            worker_scoped=context.worker_name is not None,
+            locale=context.locale,
+        )
         if has_day_log
         else []
     )
@@ -675,11 +686,16 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     if all_empty and not day_log_elements:
         # Nothing meaningful to show — emit a human-readable placeholder instead of
         # leaving the PDF completely blank after the header.
-        from_label = context.range.from_month.strftime("%b %Y")
-        to_label = context.range.to_month.strftime("%b %Y")
         story.append(
             Paragraph(
-                f"No labor entries in range {from_label} → {to_label}",
+                _xml_escape(
+                    t(
+                        context.locale,
+                        "no_entries_range",
+                        start=month_label(context.range.from_month, context.locale),
+                        end=month_label(context.range.to_month, context.locale),
+                    )
+                ),
                 styles["body_italic"],
             )
         )

@@ -35,6 +35,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from app.domain.labor.export.labels import month_label as month_name
+from app.domain.labor.export.labels import t
 from app.domain.labor.export.models import ExportContext, MonthBucket
 
 # ---------------------------------------------------------------------------
@@ -43,25 +45,26 @@ from app.domain.labor.export.models import ExportContext, MonthBucket
 
 EUR_FR_FORMAT = "_-* #,##0.00\\ [$€-fr-FR]_-;" "-* #,##0.00\\ [$€-fr-FR]_-;" '_-* "-"?? [$€-fr-FR]_-;' "_-@_-"
 
+# Column headers — label keys, see labels.py
 _SUMMARY_HEADERS = [
-    "Worker",
-    "Days",
-    "Banked hrs",
-    "Bonus full",
-    "Bonus half",
-    "Priced cost",
-    "Bonus cost",
-    "Total (priced + bonus)",
+    "worker",
+    "days",
+    "banked_hrs",
+    "bonus_full",
+    "bonus_half",
+    "priced_cost",
+    "bonus_cost",
+    "total_priced_bonus",
 ]
 
 _DETAIL_HEADERS = [
-    "Date",
-    "Worker",
-    "Shift",
-    "Supplement hrs",
-    "Override",
-    "Effective cost",
-    "Note",
+    "date",
+    "worker",
+    "shift",
+    "supplement_hrs",
+    "override",
+    "effective_cost",
+    "note",
 ]
 
 # Column widths per section header label
@@ -188,20 +191,21 @@ def _month_agg_rows(bucket: MonthBucket) -> List[_AggRow]:
 
 def _write_header_block(ws: Worksheet, context: ExportContext, month_label: str | None = None) -> int:
     """Write rows 1-4 (project header). Returns next_row (5)."""
-    from_label = context.range.from_month.strftime("%b %Y")
-    to_label = context.range.to_month.strftime("%b %Y")
+    locale = context.locale
+    from_label = month_name(context.range.from_month, locale)
+    to_label = month_name(context.range.to_month, locale)
 
-    ws["A1"] = "Folio · Labor Export"
+    ws["A1"] = t(locale, "title")
     ws["A1"].font = Font(bold=True, size=14)
 
-    ws["A2"] = f"Project: {context.project_name}"
+    ws["A2"] = t(locale, "project", name=context.project_name)
 
     if month_label:
-        ws["A3"] = f"Month: {month_label}"
+        ws["A3"] = t(locale, "month", month=month_label)
     else:
-        ws["A3"] = f"Range: {from_label} → {to_label}"
+        ws["A3"] = t(locale, "range", start=from_label, end=to_label)
 
-    ws["A4"] = f"Generated: {context.generated_at.isoformat()} " f"by {context.generated_by_email}"
+    ws["A4"] = t(locale, "generated", at=context.generated_at.isoformat(), email=context.generated_by_email)
 
     # Row 5 blank
     return 5
@@ -211,6 +215,7 @@ def _write_summary_table(
     ws: Worksheet,
     start_row: int,
     agg_rows: List[_AggRow],
+    locale: str = "en",
 ) -> int:
     """Write summary header + per-worker rows + footer totals.
 
@@ -222,8 +227,8 @@ def _write_summary_table(
 
     # Header row
     hdr_row = start_row
-    for i, label in enumerate(_SUMMARY_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=label)
+    for i, key in enumerate(_SUMMARY_HEADERS):
+        cell = ws.cell(row=hdr_row, column=i + 1, value=t(locale, key))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -257,7 +262,7 @@ def _write_summary_table(
     # Footer totals row
     footer_row = data_start + len(agg_rows)
     totals = [
-        "TOTAL",
+        t(locale, "total_row"),
         sum(r.days_worked for r in agg_rows),
         sum(r.banked_hours for r in agg_rows),
         sum(r.bonus_full_days for r in agg_rows),
@@ -281,19 +286,20 @@ def _write_daily_detail(
     ws: Worksheet,
     start_row: int,
     entries: list,
+    locale: str = "en",
 ) -> int:
     """Write 'Daily detail' section header + table. Returns next row after last data row."""
     thin = _thin_border()
     fill = _header_fill()
 
     # Section label
-    section_cell = ws.cell(row=start_row, column=1, value="Daily detail")
+    section_cell = ws.cell(row=start_row, column=1, value=t(locale, "daily_detail"))
     section_cell.font = _bold_font()
 
     # Table header row
     hdr_row = start_row + 1
-    for i, label in enumerate(_DETAIL_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=label)
+    for i, key in enumerate(_DETAIL_HEADERS):
+        cell = ws.cell(row=hdr_row, column=i + 1, value=t(locale, key))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -386,23 +392,26 @@ def _build_xlsx_single_worker(
     # Add worker-specific sub-header (row 5 used by blank; write into row 5)
     rate = context.worker_daily_rate
     rate_str = str(rate) if rate is not None else "—"
-    ws.cell(row=next_row, column=1, value=f"Worker: {worker_name}    Rate: {rate_str}/day").font = Font(italic=True)
+    locale = context.locale
+    ws.cell(row=next_row, column=1, value=t(locale, "worker_rate", name=worker_name, rate=rate_str)).font = Font(
+        italic=True
+    )
     next_row += 1  # advance past worker sub-header (row 6 is now available for data)
 
     all_empty = all(not bucket.summary.rows and not bucket.daily_entries for bucket in buckets) if buckets else True
 
     if all_empty:
-        from_label = context.range.from_month.strftime("%b %Y")
-        to_label = context.range.to_month.strftime("%b %Y")
-        ws.cell(row=next_row, column=1, value=f"No labor entries in range {from_label} → {to_label}").font = Font(
-            italic=True
+        from_label = month_name(context.range.from_month, locale)
+        to_label = month_name(context.range.to_month, locale)
+        ws.cell(row=next_row, column=1, value=t(locale, "no_entries_range", start=from_label, end=to_label)).font = (
+            Font(italic=True)
         )
         _set_summary_col_widths(ws)
         _set_detail_col_widths(ws)
         return
 
     for bucket in sorted(buckets, key=lambda b: b.month):
-        month_label = bucket.month.strftime("%b %Y")
+        month_label = month_name(bucket.month, locale)
 
         # Month section label
         label_cell = ws.cell(row=next_row, column=1, value=month_label)
@@ -412,9 +421,9 @@ def _build_xlsx_single_worker(
         # Per-worker monthly summary table (may be empty if worker had no entries this month)
         month_rows = _month_agg_rows(bucket)
         if month_rows:
-            next_row = _write_summary_table(ws, start_row=next_row, agg_rows=month_rows)
+            next_row = _write_summary_table(ws, start_row=next_row, agg_rows=month_rows, locale=locale)
         else:
-            ws.cell(row=next_row, column=1, value="No entries this month").font = Font(italic=True)
+            ws.cell(row=next_row, column=1, value=t(locale, "no_entries_month")).font = Font(italic=True)
             next_row += 1
 
         _set_summary_col_widths(ws)
@@ -423,7 +432,7 @@ def _build_xlsx_single_worker(
         next_row += 1
 
         # Daily detail for this month
-        next_row = _write_daily_detail(ws, start_row=next_row, entries=bucket.daily_entries)
+        next_row = _write_daily_detail(ws, start_row=next_row, entries=bucket.daily_entries, locale=locale)
         _set_detail_col_widths(ws)
 
         # Extra blank row between months
@@ -462,14 +471,15 @@ def build_xlsx(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
 
     # --- Sheet 1: Summary ---
     ws_summary = wb.active
-    ws_summary.title = "Summary"
+    locale = context.locale
+    ws_summary.title = t(locale, "summary_sheet")
 
     _write_header_block(ws_summary, context, month_label=None)
 
     if all_empty:
-        from_label = context.range.from_month.strftime("%b %Y")
-        to_label = context.range.to_month.strftime("%b %Y")
-        ws_summary["A6"] = f"No labor entries in range {from_label} → {to_label}"
+        from_label = month_name(context.range.from_month, locale)
+        to_label = month_name(context.range.to_month, locale)
+        ws_summary["A6"] = t(locale, "no_entries_range", start=from_label, end=to_label)
         ws_summary["A6"].font = Font(italic=True)
         _set_summary_col_widths(ws_summary)
         buf = BytesIO()
@@ -477,19 +487,19 @@ def build_xlsx(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
         return buf.getvalue()
 
     agg_rows = _aggregate_across_buckets(buckets)
-    _write_summary_table(ws_summary, start_row=6, agg_rows=agg_rows)
+    _write_summary_table(ws_summary, start_row=6, agg_rows=agg_rows, locale=locale)
     _set_summary_col_widths(ws_summary)
 
     # --- Sheets 2..N+1: per month ---
     for bucket in sorted(buckets, key=lambda b: b.month):
-        month_label = bucket.month.strftime("%b %Y")
-        ws = wb.create_sheet(title=month_label)
+        month_label = month_name(bucket.month, locale)
+        ws = wb.create_sheet(title=_sanitize_sheet_name(month_label, month_label))
 
         _write_header_block(ws, context, month_label=month_label)
 
         # Per-worker monthly summary (top section)
         month_rows = _month_agg_rows(bucket)
-        next_month_row = _write_summary_table(ws, start_row=6, agg_rows=month_rows)
+        next_month_row = _write_summary_table(ws, start_row=6, agg_rows=month_rows, locale=locale)
         _set_summary_col_widths(ws)
 
         # Blank row separator
@@ -497,7 +507,7 @@ def build_xlsx(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
         next_month_row = blank_row + 1
 
         # Daily detail section
-        _write_daily_detail(ws, start_row=next_month_row, entries=bucket.daily_entries)
+        _write_daily_detail(ws, start_row=next_month_row, entries=bucket.daily_entries, locale=locale)
         _set_detail_col_widths(ws)
 
     buf = BytesIO()

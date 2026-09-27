@@ -429,6 +429,7 @@ class ExportLaborQuery(BaseModel):
         description="End month, inclusive. Format: YYYY-MM",
     )
     format: Literal["xlsx", "pdf"] = Field(..., description="Export format")
+    locale: Literal["en", "fr", "vi"] = Field("en", description="Label language of the file; English when omitted")
 
     model_config = {"populate_by_name": True}
 

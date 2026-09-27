@@ -167,6 +167,16 @@ def test_export_xlsx_200_returns_pk_magic(export_client, export_app, admin_token
     assert resp.data[:4] == b"PK\x03\x04", "Expected xlsx (ZIP) magic bytes"
 
 
+def test_export_locale_param_is_validated(export_client, export_app, admin_token):
+    """?locale=vi is accepted; anything outside en/fr/vi is a 422."""
+    url = f"/api/v1/projects/{export_app._test_project_id}/labor-export"
+    base = {"from": "2026-01", "to": "2026-01", "format": "pdf"}
+    ok = export_client.get(url, query_string={**base, "locale": "vi"}, headers=_auth(admin_token))
+    assert ok.status_code == 200, ok.get_data(as_text=True)
+    bad = export_client.get(url, query_string={**base, "locale": "de"}, headers=_auth(admin_token))
+    assert bad.status_code == 422
+
+
 def test_export_pdf_200_returns_pdf_magic(export_client, export_app, admin_token):
     """pdf bytes start with %PDF-."""
     url = _export_url(export_app._test_project_id)
