@@ -62,7 +62,7 @@ class CreateBillingDocumentUseCase:
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
         # 1. Verify project:read access if project_id supplied (H1 — auth boundary)
-        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         # 2. company_id is required — validate attachment and snapshot from Company entity
         if inp.company_id is None:

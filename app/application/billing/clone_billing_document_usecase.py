@@ -96,7 +96,7 @@ class CloneBillingDocumentUseCase:
         target_kind = inp.override_kind if inp.override_kind is not None else source.kind
 
         # H1: Verify project:read access if source doc has a project_id
-        assert_project_read_access(self._project_repo, source.project_id, inp.user_id)
+        assert_project_read_access(self._project_repo, source.project_id, inp.user_id, self._access_repo)
 
         # 6. Atomically generate new document number
         today = datetime.now(timezone.utc).date()

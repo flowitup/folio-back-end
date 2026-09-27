@@ -227,10 +227,13 @@ def assert_project_read_access(
     project_repo: Optional[ProjectReadPort],
     project_id: Optional[UUID],
     user_id: UUID,
+    access_repo: Optional["UserCompanyAccessRepositoryPort"] = None,
 ) -> None:
     """Verify the user has project:read access on *project_id*.
 
-    A user has project:read if they are the project owner or a project member.
+    A user has project:read if they are the project owner, a project member, or an admin of
+    the company the project belongs to (company admins hold project:read on every project of
+    their company, see app.domain.authz.matrix). The admin rule needs *access_repo*.
     Raises ForbiddenProjectAccessError if access is denied.
     Raises ValueError if the project does not exist.
     No-op when project_id is None or project_repo is None (test / no-project context).
@@ -246,6 +249,11 @@ def assert_project_read_access(
         return
     if user_id in (project.user_ids or []):
         return
+    company_id = getattr(project, "company_id", None)
+    if access_repo is not None and company_id is not None:
+        access = access_repo.find(user_id, company_id)
+        if access is not None and access.role == CompanyRole.ADMIN.value:
+            return
     raise ForbiddenProjectAccessError(project_id)
 
 

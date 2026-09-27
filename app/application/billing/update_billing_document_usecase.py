@@ -62,7 +62,7 @@ class UpdateBillingDocumentUseCase:
         # update_project_id=True means the caller included the field; project_id may be
         # None to unlink, or a UUID to link. Only check access when linking (not None).
         if inp.update_project_id and inp.project_id is not None:
-            assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+            assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
 

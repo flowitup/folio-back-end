@@ -262,16 +262,25 @@ class TestUpdateLaborActivity:
         pid = uuid4()
 
         created = create_uc.execute(_req(pid, date(2026, 8, 1), "Original"))
-        updated = update_uc.execute(UpdateLaborActivityRequest(activity_id=created.id, title="Revised"))
+        updated = update_uc.execute(UpdateLaborActivityRequest(activity_id=created.id, project_id=pid, title="Revised"))
 
         assert updated.id == created.id
         assert updated.title == "Revised"
+
+    def test_update_activity_of_other_project_raises(self):
+        repo = _make_repo()
+        created = CreateLaborActivityUseCase(repo).execute(_req(uuid4(), date(2026, 8, 1), "Original"))
+        with pytest.raises(LaborActivityNotFoundError):
+            UpdateLaborActivityUseCase(repo).execute(
+                UpdateLaborActivityRequest(activity_id=created.id, project_id=uuid4(), title="Hijacked")
+            )
+        assert repo.find_by_id(created.id).title == "Original"
 
     def test_update_nonexistent_raises(self):
         repo = _make_repo()
         uc = UpdateLaborActivityUseCase(repo)
         with pytest.raises(LaborActivityNotFoundError):
-            uc.execute(UpdateLaborActivityRequest(activity_id=uuid4(), title="Ghost"))
+            uc.execute(UpdateLaborActivityRequest(activity_id=uuid4(), project_id=uuid4(), title="Ghost"))
 
 
 # ---------------------------------------------------------------------------
@@ -287,16 +296,25 @@ class TestDeleteLaborActivity:
         pid = uuid4()
 
         created = create_uc.execute(_req(pid, date(2026, 9, 1), "To delete"))
-        delete_uc.execute(DeleteLaborActivityRequest(activity_id=created.id))
+        delete_uc.execute(DeleteLaborActivityRequest(activity_id=created.id, project_id=pid))
 
         # No longer in store
         assert repo.find_by_id(created.id) is None
+
+    def test_delete_activity_of_other_project_raises(self):
+        repo = _make_repo()
+        created = CreateLaborActivityUseCase(repo).execute(_req(uuid4(), date(2026, 9, 1), "Keep me"))
+        with pytest.raises(LaborActivityNotFoundError):
+            DeleteLaborActivityUseCase(repo).execute(
+                DeleteLaborActivityRequest(activity_id=created.id, project_id=uuid4())
+            )
+        assert repo.find_by_id(created.id) is not None
 
     def test_delete_nonexistent_raises(self):
         repo = _make_repo()
         uc = DeleteLaborActivityUseCase(repo)
         with pytest.raises(LaborActivityNotFoundError):
-            uc.execute(DeleteLaborActivityRequest(activity_id=uuid4()))
+            uc.execute(DeleteLaborActivityRequest(activity_id=uuid4(), project_id=uuid4()))
 
     def test_delete_removes_from_list(self):
         repo = _make_repo()
@@ -306,7 +324,7 @@ class TestDeleteLaborActivity:
         pid = uuid4()
 
         created = create_uc.execute(_req(pid, date(2026, 9, 2), "Will be deleted"))
-        delete_uc.execute(DeleteLaborActivityRequest(activity_id=created.id))
+        delete_uc.execute(DeleteLaborActivityRequest(activity_id=created.id, project_id=pid))
 
         results = list_uc.execute(ListLaborActivitiesRequest(project_id=pid))
         assert results == []

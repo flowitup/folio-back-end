@@ -47,19 +47,41 @@ class SQLAlchemyUserRepository:
             return None
         return self._to_entity(user_model)
 
-    def search_by_email(self, query: str, limit: int = 10) -> List[Tuple[UUID, str]]:
+    def search_by_email(
+        self,
+        query: str,
+        limit: int = 10,
+        sharing_company_with: Optional[UUID] = None,
+    ) -> List[Tuple[UUID, str]]:
         """Search users by email substring. Returns list of (id, email) tuples.
 
         Wildcard chars in ``query`` are escaped so a literal ``%`` matches a literal ``%``.
+
+        ``sharing_company_with`` limits the result to users attached to at least one
+        company that user is attached to, so a tenant cannot enumerate another
+        tenant's accounts. ``None`` searches every user (platform ops only).
         """
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
         pattern = f"%{_escape_like(query)}%"
-        users = (
+        q = (
             self._session.query(UserModel)
             .filter(UserModel.email.ilike(pattern, escape="\\"))
             .filter(UserModel.is_active.is_(True))
-            .limit(limit)
-            .all()
         )
+        if sharing_company_with is not None:
+            caller_companies = (
+                self._session.query(UserCompanyAccessModel.company_id)
+                .filter(UserCompanyAccessModel.user_id == sharing_company_with)
+                .scalar_subquery()
+            )
+            same_tenant_users = (
+                self._session.query(UserCompanyAccessModel.user_id)
+                .filter(UserCompanyAccessModel.company_id.in_(caller_companies))
+                .scalar_subquery()
+            )
+            q = q.filter(UserModel.id.in_(same_tenant_users))
+        users = q.order_by(UserModel.email).limit(limit).all()
         return [(u.id, u.email) for u in users]
 
     def search_by_email_or_name(self, query: str, limit: int = 20) -> List[User]:

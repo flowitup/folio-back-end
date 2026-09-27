@@ -37,6 +37,39 @@ class TestUpdateCompanyHappyPath:
         assert result.siret == "99999999901234"
         assert result.iban == "FR76000"
 
+    def test_masked_sensitive_values_leave_stored_ones_unchanged(
+        self, usecase, company_repo, seeded_company, admin_id, fake_session
+    ):
+        usecase.execute(
+            UpdateCompanyInput(
+                id=seeded_company.id,
+                caller_id=admin_id,
+                siret="12345678900011",
+                tva_number="FR12345678901",
+                iban="FR7630006000011234567890189",
+                bic="BNPAFRPP",
+            ),
+            fake_session,
+        )
+        result = usecase.execute(
+            UpdateCompanyInput(
+                id=seeded_company.id,
+                caller_id=admin_id,
+                legal_name="Renamed SAS",
+                siret="····0011",
+                tva_number="····8901",
+                iban="····0189",
+                bic="····FRPP",
+            ),
+            fake_session,
+        )
+        assert result.legal_name == "Renamed SAS"
+        stored = company_repo.find_by_id(seeded_company.id)
+        assert stored.siret == "12345678900011"
+        assert stored.tva_number == "FR12345678901"
+        assert stored.iban == "FR7630006000011234567890189"
+        assert stored.bic == "BNPAFRPP"
+
     def test_update_persisted(self, usecase, company_repo, seeded_company, admin_id, fake_session):
         inp = UpdateCompanyInput(id=seeded_company.id, caller_id=admin_id, legal_name="Stored Name SAS")
         usecase.execute(inp, fake_session)

@@ -18,6 +18,8 @@ _ROLE_SENTINEL = object()
 @dataclass
 class UpdateWorkerRequest:
     worker_id: UUID
+    # The project the caller was authorised for; a worker of another project is "not found".
+    project_id: UUID
     name: Optional[str] = None
     phone: Optional[str] = None
     # daily_rate is intentionally absent: base rate is immutable after creation.
@@ -58,7 +60,7 @@ class UpdateWorkerUseCase:
 
     def execute(self, request: UpdateWorkerRequest) -> UpdateWorkerResponse:
         worker = self._repo.find_by_id(request.worker_id)
-        if not worker:
+        if worker is None or worker.project_id != request.project_id:
             raise WorkerNotFoundError(str(request.worker_id))
 
         if request.name is not None:

@@ -58,7 +58,7 @@ class ListBillingDocumentsUseCase:
         is_superadmin: bool = False,
     ) -> ListBillingDocumentsResult:
         # H1: Verify project:read access before filtering by project_id
-        assert_project_read_access(self._project_repo, project_id, user_id)
+        assert_project_read_access(self._project_repo, project_id, user_id, self._access_repo)
 
         docs, total = self._doc_repo.list_visible(
             kind,
