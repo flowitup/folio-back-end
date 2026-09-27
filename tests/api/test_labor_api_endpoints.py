@@ -390,6 +390,37 @@ class TestWorkerRoutes:
         assert resp.get_json()["is_active"] is True
         assert listed()[worker_id] is True
 
+    def test_new_days_cannot_be_logged_for_a_deactivated_worker(self, labor_client, admin_token, labor_app):
+        pid = labor_app._test_project_id
+        worker_id = labor_client.post(
+            _workers_url(pid), json={"name": "Archived Worker", "daily_rate": 70.0}, headers=_auth(admin_token)
+        ).get_json()["id"]
+        assert labor_client.delete(_worker_url(pid, worker_id), headers=_auth(admin_token)).status_code == 204
+
+        entries = f"/api/v1/projects/{pid}/labor-entries"
+        single = labor_client.post(
+            entries,
+            json={"worker_id": worker_id, "date": "2026-09-20", "shift_type": "full"},
+            headers=_auth(admin_token),
+        )
+        bulk = labor_client.post(
+            f"{entries}/bulk",
+            json={"date": "2026-09-21", "entries": [{"worker_id": worker_id, "shift_type": "full"}]},
+            headers=_auth(admin_token),
+        )
+        for resp in (single, bulk):
+            assert resp.status_code == 409, resp.get_data(as_text=True)
+            assert resp.get_json()["error"] == "WorkerInactive"
+
+        # Reactivated, the worker can be logged again.
+        labor_client.put(_worker_url(pid, worker_id), json={"is_active": True}, headers=_auth(admin_token))
+        again = labor_client.post(
+            entries,
+            json={"worker_id": worker_id, "date": "2026-09-20", "shift_type": "full"},
+            headers=_auth(admin_token),
+        )
+        assert again.status_code == 201, again.get_data(as_text=True)
+
     def test_is_active_false_on_put_is_rejected(self, labor_client, admin_token, labor_app):
         """Deactivation stays DELETE (it also frees the account link); PUT only reactivates."""
         pid = labor_app._test_project_id

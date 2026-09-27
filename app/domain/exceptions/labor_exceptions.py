@@ -15,6 +15,14 @@ class WorkerNotFoundError(LaborError):
         super().__init__(f"Worker not found: {worker_id}")
 
 
+class WorkerInactiveError(LaborError):
+    """Raised when new attendance is logged for a deactivated worker."""
+
+    def __init__(self, worker_id: str):
+        self.worker_id = worker_id
+        super().__init__(f"Worker is deactivated: {worker_id}. Reactivate them to log new days.")
+
+
 class LaborEntryNotFoundError(LaborError):
     """Raised when labor entry does not exist."""
 

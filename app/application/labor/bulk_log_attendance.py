@@ -27,7 +27,7 @@ from app.application.labor.ports import (
     IWorkerRepository,
 )
 from app.domain.entities.labor_entry import LaborEntry
-from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,8 @@ class BulkLogAttendanceUseCase:
             worker = self._worker_repo.find_by_id(entry.worker_id)
             if worker is None or worker.project_id != request.project_id:
                 raise WorkerNotFoundError(str(entry.worker_id))
+            if not worker.is_active:
+                raise WorkerInactiveError(str(entry.worker_id))
 
         # 2. Build skip set from existing entries on this date.
         existing = self._entry_repo.list_by_project(

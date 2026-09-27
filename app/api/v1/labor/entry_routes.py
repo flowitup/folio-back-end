@@ -46,6 +46,7 @@ from app.application.labor import (
     GetMonthlyLaborSummaryRequest,
 )
 from app.domain.exceptions.labor_exceptions import (
+    WorkerInactiveError,
     WorkerNotFoundError,
     LaborEntryNotFoundError,
     DuplicateEntryError,
@@ -178,6 +179,8 @@ def log_attendance(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    except WorkerInactiveError as e:
+        return _error_response("WorkerInactive", str(e), 409)
     except WorkerNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
     except DuplicateEntryError as e:
@@ -305,6 +308,8 @@ def bulk_log_attendance(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    except WorkerInactiveError as e:
+        return _error_response("WorkerInactive", str(e), 409)
     except WorkerNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
     except DuplicateEntryError as e:
