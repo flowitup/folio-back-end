@@ -156,6 +156,7 @@ from app.application.chiffrage.quote_usecases import (
     CreateQuoteUseCase,
     DeleteQuoteUseCase,
     SelectQuoteUseCase,
+    UnselectQuoteUseCase,
     UpdateQuoteUseCase,
 )
 from app.application.chiffrage.article_image_usecases import (
@@ -386,6 +387,7 @@ class Container:
     update_chiffrage_quote_usecase: Optional[UpdateQuoteUseCase] = None
     delete_chiffrage_quote_usecase: Optional[DeleteQuoteUseCase] = None
     select_chiffrage_quote_usecase: Optional[SelectQuoteUseCase] = None
+    unselect_chiffrage_quote_usecase: Optional[UnselectQuoteUseCase] = None
     list_chiffrage_rooms_usecase: Optional[Any] = None
     create_chiffrage_room_usecase: Optional[CreateRoomUseCase] = None
     update_chiffrage_room_usecase: Optional[UpdateRoomUseCase] = None
@@ -1084,6 +1086,7 @@ def configure_container(
     container.update_chiffrage_quote_usecase = UpdateQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_quote_usecase = DeleteQuoteUseCase(_chiffrage_repo, _chiffrage_session)
     container.select_chiffrage_quote_usecase = SelectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
+    container.unselect_chiffrage_quote_usecase = UnselectQuoteUseCase(_chiffrage_repo, _chiffrage_session)
 
     class _ListRooms:
         """Thin read use-case: the room list needs no rules beyond project access."""

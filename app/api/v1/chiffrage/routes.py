@@ -615,6 +615,21 @@ def select_quote(project_id: str, quote_id: UUID) -> Any:
     return _handle(run)
 
 
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/quotes/<uuid:quote_id>/select")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True, permission="project:manage_invoices")
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def unselect_quote(project_id: str, quote_id: UUID) -> Any:
+    """Stop retaining a quote; its article falls back to the cheapest quote."""
+
+    def run() -> Any:
+        quote = get_container().unselect_chiffrage_quote_usecase.execute(project_id=UUID(project_id), quote_id=quote_id)
+        return jsonify(_quote_json(quote)), 200
+
+    return _handle(run)
+
+
 # ---------------------------------------------------------------------------
 # Article photos
 # ---------------------------------------------------------------------------

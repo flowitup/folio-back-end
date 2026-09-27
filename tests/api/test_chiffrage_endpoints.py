@@ -186,6 +186,48 @@ class TestTreeAndTotals:
         selected = [q["id"] for q in found["quotes"] if q["is_selected"]]
         assert selected == [second["id"]]
 
+    def test_unretaining_a_quote_falls_back_to_the_cheapest(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        _add_quote(inv_client, writer_token, project_id, article["id"], "Cheap", "10.00")
+        dear = _add_quote(inv_client, writer_token, project_id, article["id"], "Dear", "11.00")
+        url = f"{_base(project_id)}/quotes/{dear['id']}/select"
+        inv_client.post(url, headers=_auth(writer_token))
+
+        assert inv_client.delete(url, headers=_auth(reader_token)).status_code == 403
+        resp = inv_client.delete(url, headers=_auth(writer_token))
+        assert resp.status_code == 200
+        assert resp.get_json()["is_selected"] is False
+        assert inv_client.delete(url, headers=_auth(writer_token)).status_code == 200  # idempotent
+
+        found = _article_in_tree(
+            inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), article["id"]
+        )
+        assert found["effective_source"] == "cheapest"
+        assert not any(q["is_selected"] for q in found["quotes"])
+
+        # A cheaper price recorded later now drives the total.
+        _add_quote(inv_client, writer_token, project_id, article["id"], "Cheaper", "9.00")
+        found = _article_in_tree(
+            inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), article["id"]
+        )
+        assert found["total_ht"] == 108.00  # 12 x 9.00
+
+    def test_unretaining_another_quote_keeps_the_retained_one(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        first = _add_quote(inv_client, writer_token, project_id, article["id"], "A", "10.00")
+        second = _add_quote(inv_client, writer_token, project_id, article["id"], "B", "11.00")
+        inv_client.post(f"{_base(project_id)}/quotes/{second['id']}/select", headers=_auth(writer_token))
+
+        resp = inv_client.delete(f"{_base(project_id)}/quotes/{first['id']}/select", headers=_auth(writer_token))
+        assert resp.status_code == 200
+
+        found = _article_in_tree(
+            inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), article["id"]
+        )
+        assert [q["id"] for q in found["quotes"] if q["is_selected"]] == [second["id"]]
+
     def test_deleting_the_retained_quote_falls_back_to_cheapest(
         self, inv_client, writer_token, reader_token, project_id, article
     ):
