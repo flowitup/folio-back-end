@@ -107,6 +107,11 @@ class ApplyTemplateToCreateDocumentUseCase:
         if not recipient_name:
             raise ValueError("Recipient name is required")
 
+        # Same rule as a create: a document needs a line. Checked before the counter so a
+        # template with no lines does not use up a document number.
+        if not template.items:
+            raise ValueError("At least one line item is required")
+
         # 5. Resolve issue_date and atomically generate document number
         today = datetime.now(timezone.utc).date()
         issue_date = inp.issue_date if inp.issue_date is not None else today

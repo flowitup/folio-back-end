@@ -137,3 +137,18 @@ class TestApplyTemplateErrors:
     ):
         with pytest.raises(ValueError, match="Recipient name"):
             usecase.execute(_inp(user_id, devis_template.id, company_id=company_id, recipient="  "), fake_session)
+
+
+class TestApplyTemplateWithoutLines:
+    def test_a_template_with_no_lines_creates_nothing_and_keeps_the_number(
+        self, usecase, fake_session, user_id, company_id, seeded_company, template_repo, counter_repo
+    ):
+        from dataclasses import replace
+
+        tpl = replace(make_template(user_id=user_id, kind=BillingDocumentKind.FACTURE), items=())
+        template_repo.save(tpl)
+
+        with pytest.raises(ValueError, match="At least one line item"):
+            usecase.execute(_inp(user_id, tpl.id, company_id=company_id), fake_session)
+
+        assert counter_repo.next_value(company_id, BillingDocumentKind.FACTURE, 2026) == 1
