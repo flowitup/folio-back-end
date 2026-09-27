@@ -8,6 +8,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.application.task.ports import ITaskRepository
+from app.domain.authz.resolver import effective_permissions
 from app.domain.entities.task import Task, TaskPriority, TaskStatus
 
 # Step size used when appending a new task to the end of a column. Gaps between
@@ -17,6 +18,25 @@ POSITION_STEP = 1000
 
 class TaskNotFoundError(LookupError):
     """Raised when a task id has no matching record."""
+
+
+class InvalidAssigneeError(ValueError):
+    """Raised when a task is assigned to someone who cannot read its project."""
+
+
+def _assert_assignee_can_read(authz_reader, assignee_id: Optional[UUID], project_id: UUID) -> None:
+    """A task may only be assigned to a user holding `project:read` on its project.
+
+    That covers an unknown user id, a user of another company and a company
+    member who is not on the project: none of them could open the task, and
+    the assignment push would show them its title and the project name.
+    Without a reader (unit tests that wire only the repository) there is no
+    check.
+    """
+    if assignee_id is None or authz_reader is None:
+        return
+    if "project:read" not in effective_permissions(authz_reader, assignee_id, project_id=project_id):
+        raise InvalidAssigneeError("Assignee must be a member of this project")
 
 
 @dataclass
@@ -33,12 +53,17 @@ class CreateTaskRequest:
 
 
 class CreateTaskUseCase:
-    def __init__(self, repo: ITaskRepository) -> None:
+    def __init__(self, repo: ITaskRepository, authz_reader=None) -> None:
         self._repo = repo
+        self._authz_reader = authz_reader
+
+    def set_authz_reader(self, authz_reader) -> None:
+        self._authz_reader = authz_reader
 
     def execute(self, req: CreateTaskRequest) -> Task:
         if not req.title.strip():
             raise ValueError("Task title is required")
+        _assert_assignee_can_read(self._authz_reader, req.assignee_id, req.project_id)
         # Append: position = (current max in this lane) + STEP, leaving room above.
         next_position = self._repo.max_position(req.project_id, req.status) + POSITION_STEP
         now = datetime.now(timezone.utc)
@@ -92,8 +117,12 @@ class UpdateTaskRequest:
 
 
 class UpdateTaskUseCase:
-    def __init__(self, repo: ITaskRepository) -> None:
+    def __init__(self, repo: ITaskRepository, authz_reader=None) -> None:
         self._repo = repo
+        self._authz_reader = authz_reader
+
+    def set_authz_reader(self, authz_reader) -> None:
+        self._authz_reader = authz_reader
 
     def execute(self, task_id: UUID, req: UpdateTaskRequest) -> Task:
         task = self._repo.find_by_id(task_id)
@@ -108,6 +137,8 @@ class UpdateTaskUseCase:
         if req.priority is not None:
             task.priority = req.priority
         if req.assignee_id is not None:
+            if req.assignee_id != task.assignee_id:
+                _assert_assignee_can_read(self._authz_reader, req.assignee_id, task.project_id)
             task.assignee_id = req.assignee_id
         if req.due_date is not None:
             task.due_date = req.due_date

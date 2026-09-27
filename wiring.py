@@ -1139,13 +1139,16 @@ def configure_container(
         container.authorization_service.set_authz_reader(container.authz_reader)
     # Every invitation use-case resolves `project:invite` itself (create, list
     # and revoke), and they are all built above, before the reader exists.
-    for _invitation_usecase in (
+    for _reader_usecase in (
         container.create_invitation_usecase,
         container.list_invitations_usecase,
         container.revoke_invitation_usecase,
+        # Task create/update check the assignee can read the task's project.
+        container.create_task_usecase,
+        container.update_task_usecase,
     ):
-        if _invitation_usecase is not None and hasattr(_invitation_usecase, "set_authz_reader"):
-            _invitation_usecase.set_authz_reader(container.authz_reader)
+        if _reader_usecase is not None and hasattr(_reader_usecase, "set_authz_reader"):
+            _reader_usecase.set_authz_reader(container.authz_reader)
 
     container.list_chiffrage_units_usecase = ListUnitsUseCase(_chiffrage_repo)
     container.create_chiffrage_unit_usecase = CreateUnitUseCase(_chiffrage_repo, _chiffrage_session)
