@@ -893,6 +893,9 @@ def invitation_app():
         _c.update_labor_role_usecase = _UpdateLRUseCase(repo=_labor_role_repo, db_session=db.session)
         _c.delete_labor_role_usecase = _DeleteLRUseCase(repo=_labor_role_repo, db_session=db.session)
         _c.list_labor_roles_usecase = _ListLRUseCase(repo=_labor_role_repo)
+        for _worker_usecase in (_c.create_worker_usecase, _c.update_worker_usecase):
+            if _worker_usecase is not None and hasattr(_worker_usecase, "set_role_scope"):
+                _worker_usecase.set_role_scope(_labor_role_repo, _c.authz_reader)
 
         # ------------------------------------------------------------------
         # Wire project documents use-cases (phase 03)

@@ -1045,6 +1045,10 @@ def _configure_di_container() -> None:
     _c.update_labor_role_usecase = _UpdateLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.delete_labor_role_usecase = _DeleteLaborRoleUseCase(repo=_labor_role_repo, db_session=db.session)
     _c.list_labor_roles_usecase = _ListLaborRolesUseCase(repo=_labor_role_repo)
+    # A worker's role must belong to the project's company.
+    for _worker_usecase in (_c.create_worker_usecase, _c.update_worker_usecase):
+        if _worker_usecase is not None and hasattr(_worker_usecase, "set_role_scope"):
+            _worker_usecase.set_role_scope(_labor_role_repo, _c.authz_reader)
 
     # Default role roster for a newly created company (Phase 2 onboarding
     # slice wires this into company creation; exposed here so seeds/tests

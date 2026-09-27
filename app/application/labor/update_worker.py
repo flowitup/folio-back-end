@@ -6,6 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository
+from app.application.labor.role_scope import assert_role_in_project_company
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
@@ -57,8 +58,15 @@ class UpdateWorkerResponse:
 class UpdateWorkerUseCase:
     """Update an existing worker."""
 
-    def __init__(self, worker_repo: IWorkerRepository):
+    def __init__(self, worker_repo: IWorkerRepository, labor_role_repo=None, authz_reader=None):
         self._repo = worker_repo
+        self._labor_role_repo = labor_role_repo
+        self._authz_reader = authz_reader
+
+    def set_role_scope(self, labor_role_repo, authz_reader) -> None:
+        """Inject what the role check needs; wired after the labor-role repository exists."""
+        self._labor_role_repo = labor_role_repo
+        self._authz_reader = authz_reader
 
     def execute(self, request: UpdateWorkerRequest) -> UpdateWorkerResponse:
         worker = self._repo.find_by_id(request.worker_id)
@@ -76,6 +84,10 @@ class UpdateWorkerUseCase:
             worker.phone = request.phone.strip() if request.phone else None
 
         if request.role_id is not _ROLE_SENTINEL:
+            if request.role_id != worker.role_id:
+                assert_role_in_project_company(
+                    self._labor_role_repo, self._authz_reader, request.role_id, worker.project_id  # type: ignore[arg-type]
+                )
             worker.role_id = request.role_id  # type: ignore[assignment]
 
         if request.user_id is not _ROLE_SENTINEL:
