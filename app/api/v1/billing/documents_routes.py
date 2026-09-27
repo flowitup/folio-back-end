@@ -786,9 +786,8 @@ def _summary_to_json(s) -> dict:
 def list_project_billing_documents(project_id: str):
     """List all billing documents linked to a project.
 
-    Access gated by project:read (owner or project member).
-    Returns docs of any kind, any status, and any owner as long as
-    they are linked to the specified project.
+    Access gated by project:read (owner or project member). A company admin
+    sees every document linked to the project, anyone else only their own.
     """
     try:
         project_uuid = UUID(project_id)
@@ -801,6 +800,7 @@ def list_project_billing_documents(project_id: str):
         summaries = get_container().list_project_billing_documents_usecase.execute(
             project_id=project_uuid,
             user_id=user_id,
+            is_platform_ops=is_platform_ops(),
         )
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have read access to this project", 403)

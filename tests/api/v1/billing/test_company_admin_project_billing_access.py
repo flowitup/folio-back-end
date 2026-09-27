@@ -94,3 +94,40 @@ def test_company_admin_is_refused_on_another_company_project(inv_client, admin_t
         headers=_auth(admin_token),
     )
     assert listed.status_code == 403
+
+
+def test_assigned_member_does_not_see_the_company_billing_of_the_project(
+    inv_client, admin_token, member_token, invitation_app
+):
+    """Billing amounts stay with the company admin: an assigned member lists only their own documents."""
+    from app import db
+    from app.infrastructure.database.models.associations import user_projects
+
+    project_id = invitation_app._test_project_3_id
+    with invitation_app.app_context():
+        db.session.execute(
+            user_projects.insert().values(
+                user_id=UUID(invitation_app._test_member_user_id), project_id=UUID(project_id)
+            )
+        )
+        db.session.commit()
+    created = inv_client.post(
+        "/api/v1/billing-documents",
+        json={
+            "kind": "facture",
+            "recipient_name": "Client of the company",
+            "company_id": invitation_app._test_company_id,
+            "project_id": project_id,
+            "items": [{"description": "Works", "quantity": "1", "unit_price": "3000", "vat_rate": "20"}],
+        },
+        headers=_auth(admin_token),
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+    doc_id = created.get_json()["id"]
+
+    as_member = inv_client.get(f"/api/v1/projects/{project_id}/billing-documents", headers=_auth(member_token))
+    assert as_member.status_code == 200, as_member.get_data(as_text=True)
+    assert doc_id not in {d["id"] for d in as_member.get_json()["billing_documents"]}
+
+    as_admin = inv_client.get(f"/api/v1/projects/{project_id}/billing-documents", headers=_auth(admin_token))
+    assert doc_id in {d["id"] for d in as_admin.get_json()["billing_documents"]}
