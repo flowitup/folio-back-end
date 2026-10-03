@@ -493,7 +493,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 company_total += _items_total(m.items)
 
             # Personal bucket: same predicate as sum_personal_spent (personal-flagged
-            # method, excluding company-reimbursed rows; bank and company+bank refunds still count).
+            # method, excluding company-reimbursed rows; bank-only refunds still count).
             if m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
                 if not is_company_reimbursed(refundable_status=m.refundable_status, refunded_by=m.refunded_by):
                     personal_total += _items_total(m.items)
@@ -506,8 +506,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         Counts any non-released_funds invoice where either:
           - refundable_status == 'refunded' AND refunded_by is 'company' or NULL
-            (the company itself reimbursed the expense — 'bank' and 'both' rows
-            are refunded by the bank to the payer's purse, not company spend;
+            (the company itself reimbursed the expense, alone or with the bank —
+            'bank' rows are refunded by the bank to the payer, not company spend;
             NULL refunded_by is legacy and counts as company), OR
           - payment_method_id belongs to a method flagged is_company_payment
             (invoice was paid directly with company funds, any non-released_funds type).
@@ -537,10 +537,10 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         Counts non-released_funds invoices paid via a method flagged
         is_personal_payment, EXCLUDING rows where the company already reimbursed
-        the expense (refundable_status == 'refunded' AND refunded_by is 'company'
-        or NULL; NULL is legacy, same convention as sum_company_spent). Rows
-        refunded by 'bank' or 'both' still count — their bank refund is a release
-        into this same purse, so the spend must stay here to balance it.
+        the expense (refundable_status == 'refunded' AND refunded_by is 'company',
+        'both', or NULL; NULL is legacy, same convention as sum_company_spent). Rows
+        refunded by the bank alone still count — their bank refund is a release into
+        this same purse, so the spend must stay here to balance it.
 
         Refund-type invoices follow the same personal-payment gate: a refund paid
         out via a personal-flagged method carries negative line amounts, so it

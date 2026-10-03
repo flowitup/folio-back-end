@@ -186,8 +186,8 @@ class IInvoiceRepository(ABC):
 
         Counts non-released_funds invoices paid via a method flagged
         is_personal_payment, EXCLUDING rows where the company already reimbursed
-        the expense (refundable_status == 'refunded' AND refunded_by is 'company'
-        or NULL). Rows refunded by 'bank' or 'both' still count. Refund-type
+        the expense (refundable_status == 'refunded' AND refunded_by is 'company',
+        'both' or NULL). Rows refunded by the bank alone still count. Refund-type
         invoices net the total down (mirrors sum_company_spent). Result is floored at 0.
         """
         ...

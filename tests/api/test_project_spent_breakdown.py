@@ -160,12 +160,12 @@ def test_null_payment_method_is_personal(invitation_app, credit_project):
     [
         ("company", Decimal("400")),  # company reimbursed it → company money
         (None, Decimal("400")),  # legacy row, no refunded_by → counts as company
-        ("both", Decimal("0")),  # full bank refund released to the payer's purse
+        ("both", Decimal("400")),  # company reimbursed it (with the bank)
         ("bank", Decimal("0")),  # bank's money, never the company's
     ],
 )
 def test_refunded_rows_follow_refunded_by(invitation_app, credit_project, refunded_by, expected_credits):
-    """A refunded expense counts as credit spend only when the company alone refunded it."""
+    """A refunded expense counts as credit spend unless the bank alone refunded it."""
     from app import db
 
     with invitation_app.app_context():
