@@ -236,6 +236,28 @@ class TestSumPersonalSpent:
 
         assert total == pytest.approx(Decimal("200.00"), abs=Decimal("0.01"))
 
+    def test_company_and_bank_refunded_expense_still_counts(self, session):
+        """refunded_by='both' — its bank refund is a full-amount release into the
+        personal purse, so the expense must stay in personal spend to balance it."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        pm_id = _make_payment_method(session, company_id, is_personal_payment=True)
+        _make_invoice(
+            session,
+            project_id,
+            "materials_services",
+            200.0,
+            refundable_status="refunded",
+            refunded_by="both",
+            payment_method_id=pm_id,
+        )
+
+        repo = SQLAlchemyInvoiceRepository(session)
+
+        assert repo.sum_personal_spent(project_id) == pytest.approx(Decimal("200.00"), abs=Decimal("0.01"))
+        assert repo.sum_company_spent(project_id) == Decimal("0")
+
     def test_refund_type_invoice_nets_total_down(self, session):
         """A refund paid via a personal-flagged method (negative lines) nets the total down."""
         user_id = _make_user(session)

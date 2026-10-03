@@ -294,6 +294,28 @@ class TestPersonalSpentTotal:
         data = resp.get_json()
         assert data["personal_spent_total"] == pytest.approx(before_total + 77.0, abs=0.01)
 
+    def test_company_and_bank_refunded_personal_expense_still_counts(self, ps_client, ps_app, admin_token):
+        """A 'both' refund keeps the expense in personal spend, where its bank refund
+        release is counted, and out of company spend."""
+        project_id = ps_app._test_project_id
+        personal_pm_id = ps_app._test_personal_pm_id
+
+        before = ps_client.get(_list_url(project_id), headers=_auth(admin_token)).get_json()
+
+        _seed_invoice(
+            ps_app,
+            project_id,
+            "materials_services",
+            refundable_status="refunded",
+            refunded_by="both",
+            payment_method_id=personal_pm_id,
+            items=[{"description": "BothRefunded", "quantity": 1, "unit_price": 88.0, "vat_rate": 0}],
+        )
+
+        data = ps_client.get(_list_url(project_id), headers=_auth(admin_token)).get_json()
+        assert data["personal_spent_total"] == pytest.approx(before["personal_spent_total"] + 88.0, abs=0.01)
+        assert data["company_spent_total"] == pytest.approx(before["company_spent_total"], abs=0.01)
+
     def test_released_funds_never_counted(self, ps_client, ps_app, admin_token):
         project_id = ps_app._test_project_id
         personal_pm_id = ps_app._test_personal_pm_id
