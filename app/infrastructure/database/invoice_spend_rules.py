@@ -95,14 +95,14 @@ def load_personal_method_ids(session: Session, company_ids: Iterable[UUID]) -> d
 def is_company_reimbursed(*, refundable_status: Optional[str], refunded_by: Optional[str]) -> bool:
     """Return True when the company itself paid a personally-funded expense back.
 
-    Only ``refunded_by`` 'company' (or legacy NULL) qualifies. 'bank' and 'both' do not:
-    for both, the bank refund is recorded as a full-amount release to the payer's purse
-    (see ``FundsReleaseAdapter.create_bank_refund_release``), so the expense must stay in
-    that purse. Counting it as company money as well would move the spend out of the
-    purse while its bank refund stays in, and the purse would show the refund as money
-    left over.
+    ``refunded_by`` 'company', 'both' or legacy NULL qualifies: whenever the company
+    reimbursed the expense, it is company spend. Only 'bank' does not — the bank paid the
+    person back directly, so the expense stays in the payer's purse next to its bank
+    refund. For 'both', the bank refund is company money too (see
+    ``SQLAlchemyInvoiceRepository.sum_funds_released_split``), so both sides of the
+    refund land in the company purse.
     """
-    return refundable_status == "refunded" and refunded_by in (None, "company")
+    return refundable_status == "refunded" and refunded_by in (None, "company", "both")
 
 
 def is_company_paid(
@@ -116,8 +116,8 @@ def is_company_paid(
 
     True when either:
       - the company reimbursed the expense (``is_company_reimbursed``: refunded with
-        ``refunded_by`` 'company' or legacy NULL). Bank and company+bank refunds are the
-        bank's money, released to the payer's purse, not the company's, OR
+        ``refunded_by`` 'company', 'both' or legacy NULL). A bank-only refund is the
+        bank's money paid to the person, not the company's, OR
       - it was paid with a payment method flagged ``is_company_payment``.
 
     Callers pass raw column values, so this stays a pure predicate with no DB access and

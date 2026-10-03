@@ -94,6 +94,10 @@ def _make_invoice(
     amount: float,
     payment_method_id: "UUID | None" = None,
     is_cash_advance: bool = False,
+    refundable_status: "str | None" = None,
+    refunded_by: "str | None" = None,
+    refunds_invoice_id: "UUID | None" = None,
+    is_auto_generated: bool = False,
 ) -> UUID:
     inv = InvoiceModel(
         id=uuid4(),
@@ -105,6 +109,10 @@ def _make_invoice(
         items=[{"description": "Line", "quantity": 1, "unit_price": amount, "vat_rate": 0}],
         payment_method_id=payment_method_id,
         is_cash_advance=is_cash_advance,
+        refundable_status=refundable_status,
+        refunded_by=refunded_by,
+        refunds_invoice_id=refunds_invoice_id,
+        is_auto_generated=is_auto_generated,
     )
     session.add(inv)
     session.flush()
@@ -288,3 +296,43 @@ class TestSumFundsReleasedSplitCashAdvance:
         company_total, personal_total, cash_advanced = repo.sum_funds_released_split(project_id)
 
         assert (company_total, personal_total, cash_advanced) == (Decimal("0"), Decimal("0"), Decimal("0"))
+
+    @pytest.mark.parametrize(
+        "refunded_by,expected_company,expected_personal",
+        [
+            ("both", Decimal("250.00"), Decimal("0")),  # company reimbursed: its bank refund is company money
+            ("bank", Decimal("0"), Decimal("250.00")),  # bank paid the person: stays in the personal purse
+        ],
+    )
+    def test_bank_refund_release_follows_who_reimbursed(
+        self, session, refunded_by, expected_company, expected_personal
+    ):
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        pm_id = _make_payment_method(session, company_id, is_personal_payment=True)
+        source_id = _make_invoice(
+            session,
+            project_id,
+            "materials_services",
+            250.0,
+            payment_method_id=pm_id,
+            refundable_status="refunded",
+            refunded_by=refunded_by,
+        )
+        _make_invoice(
+            session,
+            project_id,
+            "released_funds",
+            250.0,
+            payment_method_id=pm_id,
+            refunds_invoice_id=source_id,
+            is_auto_generated=True,
+        )
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, _cash = repo.sum_funds_released_split(project_id)
+
+        assert company_total == pytest.approx(expected_company, abs=Decimal("0.01"))
+        assert personal_total == pytest.approx(expected_personal, abs=Decimal("0.01"))
+        assert company_total + personal_total == pytest.approx(repo.sum_funds_released(project_id), abs=Decimal("0.01"))
