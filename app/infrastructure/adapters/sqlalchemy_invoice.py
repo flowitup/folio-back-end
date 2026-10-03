@@ -421,12 +421,6 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         (is_active=false) personal-payment methods still count, mirroring
         sum_company_spent. items is JSONB — computed in Python to stay DB-agnostic.
 
-        Exception: the auto-generated bank refund of an expense refunded by company AND
-        bank always counts as company_total, whatever method it inherited. That expense
-        is company spend (is_company_reimbursed), so its bank refund is money that came
-        back to the company; counting it as personal would show it as money left over
-        in the personal purse.
-
         cash_advanced_total: rows flagged is_cash_advance — company money handed to a
         person, an internal transfer rather than a release. They are EXCLUDED from
         both company_total and personal_total (whatever their payment method) so no
@@ -448,16 +442,6 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             )
             .all()
         )
-        source_ids = {m.refunds_invoice_id for m in rows if m.is_auto_generated and m.refunds_invoice_id}
-        both_refunded_ids: set[UUID] = set()
-        if source_ids:
-            both_refunded_ids = {
-                r[0]
-                for r in self._session.query(InvoiceModel.id)
-                .filter(InvoiceModel.id.in_(source_ids), InvoiceModel.refunded_by == "both")
-                .all()
-            }
-
         company_total = Decimal("0")
         personal_total = Decimal("0")
         cash_advanced_total = Decimal("0")
@@ -465,8 +449,6 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             amount = _items_total(m.items)
             if m.is_cash_advance:
                 cash_advanced_total += amount
-            elif m.is_auto_generated and m.refunds_invoice_id in both_refunded_ids:
-                company_total += amount
             elif m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
                 personal_total += amount
             else:

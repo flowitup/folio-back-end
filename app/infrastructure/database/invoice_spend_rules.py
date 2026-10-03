@@ -98,9 +98,9 @@ def is_company_reimbursed(*, refundable_status: Optional[str], refunded_by: Opti
     ``refunded_by`` 'company', 'both' or legacy NULL qualifies: whenever the company
     reimbursed the expense, it is company spend. Only 'bank' does not — the bank paid the
     person back directly, so the expense stays in the payer's purse next to its bank
-    refund. For 'both', the bank refund is company money too (see
-    ``SQLAlchemyInvoiceRepository.sum_funds_released_split``), so both sides of the
-    refund land in the company purse.
+    refund. For 'both', the company's refund makes the expense company spend, while the
+    bank's refund is still money released to the payer's purse (it keeps the expense's
+    payment method), so each refund lands with whoever paid it.
     """
     return refundable_status == "refunded" and refunded_by in (None, "company", "both")
 

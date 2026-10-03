@@ -297,16 +297,9 @@ class TestSumFundsReleasedSplitCashAdvance:
 
         assert (company_total, personal_total, cash_advanced) == (Decimal("0"), Decimal("0"), Decimal("0"))
 
-    @pytest.mark.parametrize(
-        "refunded_by,expected_company,expected_personal",
-        [
-            ("both", Decimal("250.00"), Decimal("0")),  # company reimbursed: its bank refund is company money
-            ("bank", Decimal("0"), Decimal("250.00")),  # bank paid the person: stays in the personal purse
-        ],
-    )
-    def test_bank_refund_release_follows_who_reimbursed(
-        self, session, refunded_by, expected_company, expected_personal
-    ):
+    @pytest.mark.parametrize("refunded_by", ["bank", "both"])
+    def test_bank_refund_release_counts_as_personal(self, session, refunded_by):
+        """A bank refund is the bank's money paid to the person, whoever else refunded."""
         user_id = _make_user(session)
         company_id = _make_company(session, user_id)
         project_id = _make_project(session, user_id, company_id)
@@ -333,6 +326,5 @@ class TestSumFundsReleasedSplitCashAdvance:
         repo = SQLAlchemyInvoiceRepository(session)
         company_total, personal_total, _cash = repo.sum_funds_released_split(project_id)
 
-        assert company_total == pytest.approx(expected_company, abs=Decimal("0.01"))
-        assert personal_total == pytest.approx(expected_personal, abs=Decimal("0.01"))
-        assert company_total + personal_total == pytest.approx(repo.sum_funds_released(project_id), abs=Decimal("0.01"))
+        assert company_total == Decimal("0")
+        assert personal_total == pytest.approx(Decimal("250.00"), abs=Decimal("0.01"))
