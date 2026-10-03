@@ -92,6 +92,19 @@ def load_personal_method_ids(session: Session, company_ids: Iterable[UUID]) -> d
     return result
 
 
+def is_company_reimbursed(*, refundable_status: Optional[str], refunded_by: Optional[str]) -> bool:
+    """Return True when the company itself paid a personally-funded expense back.
+
+    Only ``refunded_by`` 'company' (or legacy NULL) qualifies. 'bank' and 'both' do not:
+    for both, the bank refund is recorded as a full-amount release to the payer's purse
+    (see ``FundsReleaseAdapter.create_bank_refund_release``), so the expense must stay in
+    that purse. Counting it as company money as well would move the spend out of the
+    purse while its bank refund stays in, and the purse would show the refund as money
+    left over.
+    """
+    return refundable_status == "refunded" and refunded_by in (None, "company")
+
+
 def is_company_paid(
     *,
     payment_method_id: Optional[UUID],
@@ -102,15 +115,14 @@ def is_company_paid(
     """Return True when the invoice was funded with company money.
 
     True when either:
-      - the company reimbursed the expense (``refundable_status == 'refunded'`` and
-        ``refunded_by != 'bank'``). A bank refund is the bank's money, not the company's.
-        NULL ``refunded_by`` is legacy data and counts as company; 'both' counts too
-        (the company did reimburse, the split is just unknown), OR
+      - the company reimbursed the expense (``is_company_reimbursed``: refunded with
+        ``refunded_by`` 'company' or legacy NULL). Bank and company+bank refunds are the
+        bank's money, released to the payer's purse, not the company's, OR
       - it was paid with a payment method flagged ``is_company_payment``.
 
     Callers pass raw column values, so this stays a pure predicate with no DB access and
     works identically against ORM instances and row tuples.
     """
-    is_refunded = refundable_status == "refunded" and refunded_by != "bank"
+    is_refunded = is_company_reimbursed(refundable_status=refundable_status, refunded_by=refunded_by)
     is_paid_by_company_method = payment_method_id is not None and payment_method_id in company_paid_ids
     return is_refunded or is_paid_by_company_method
