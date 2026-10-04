@@ -70,6 +70,10 @@ from app.application.labor.labor_day_description_usecases import (
     SetLaborDayDescriptionUseCase,
     ListLaborDayDescriptionsUseCase,
 )
+from app.application.labor.labor_payment_note_usecases import (
+    SetLaborPaymentNoteUseCase,
+    ListLaborPaymentNotesUseCase,
+)
 from app.application.invoice.export_invoices_usecase import ExportInvoicesUseCase
 from app.application.invoice import (
     IInvoiceRepository,
@@ -634,6 +638,10 @@ class Container:
     # Labor day description use cases
     set_labor_day_description_usecase: Optional[SetLaborDayDescriptionUseCase] = None
     list_labor_day_descriptions_usecase: Optional[ListLaborDayDescriptionsUseCase] = None
+
+    # Labor payment note use cases (one note per worker per month, Payments tab)
+    set_labor_payment_note_usecase: Optional[SetLaborPaymentNoteUseCase] = None
+    list_labor_payment_notes_usecase: Optional[ListLaborPaymentNotesUseCase] = None
 
     # Worker rate-change use cases (effective-dated pay-rate timeline)
     set_worker_rate_change_usecase: Optional[SetWorkerRateChangeUseCase] = None
