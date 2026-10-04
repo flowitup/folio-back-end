@@ -371,6 +371,18 @@ def _configure_di_container() -> None:
     if _c.export_labor_usecase is not None:
         _c.export_labor_usecase._list_day_descriptions_usecase = ListLaborDayDescriptionsUseCase(_day_desc_repo)
 
+    # Wire labor payment note use-cases (same late-injection pattern as above).
+    from app.infrastructure.adapters.sqlalchemy_labor_payment_note import SQLAlchemyLaborPaymentNoteRepository
+    from app.infrastructure.adapters.sqlalchemy_worker import SQLAlchemyWorkerRepository as _PayNoteWorkerRepo
+    from app.application.labor.labor_payment_note_usecases import (
+        ListLaborPaymentNotesUseCase,
+        SetLaborPaymentNoteUseCase,
+    )
+
+    _payment_note_repo = SQLAlchemyLaborPaymentNoteRepository(db.session)
+    _c.set_labor_payment_note_usecase = SetLaborPaymentNoteUseCase(_payment_note_repo, _PayNoteWorkerRepo(db.session))
+    _c.list_labor_payment_notes_usecase = ListLaborPaymentNotesUseCase(_payment_note_repo)
+
     # Wire notes use-cases — done post-configure_container so we can pass db.session
     # directly without adding more params to configure_container's signature.
     _note_repo = SqlAlchemyNoteRepository(db.session)

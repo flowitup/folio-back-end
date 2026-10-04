@@ -11,6 +11,7 @@ from app.domain.entities.worker import Worker
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.entities.labor_activity import LaborActivity
 from app.domain.entities.labor_day_description import LaborDayDescription
+from app.domain.entities.labor_payment_note import LaborPaymentNote
 from app.domain.entities.worker_rate_change import WorkerRateChange
 
 
@@ -344,6 +345,34 @@ class ILaborActivityRepository(ABC):
 
     @abstractmethod
     def delete(self, activity_id: UUID) -> bool: ...
+
+
+class ILaborPaymentNoteRepository(ABC):
+    """Port for labor payment note persistence.
+
+    One note per (project_id, worker_id, month). Blank notes are handled at the
+    use-case layer by calling delete instead of upsert.
+    """
+
+    @abstractmethod
+    def find(self, project_id: UUID, worker_id: UUID, month: date) -> Optional[LaborPaymentNote]:
+        """Return the note for (project_id, worker_id, month), or None if absent."""
+        ...
+
+    @abstractmethod
+    def upsert(self, entity: LaborPaymentNote) -> LaborPaymentNote:
+        """Insert the note, or update the text of the existing row for the same key."""
+        ...
+
+    @abstractmethod
+    def list_by_project(self, project_id: UUID, month: Optional[date] = None) -> List[LaborPaymentNote]:
+        """Return the project's notes, only those of ``month`` when given."""
+        ...
+
+    @abstractmethod
+    def delete(self, project_id: UUID, worker_id: UUID, month: date) -> bool:
+        """Delete the note for (project_id, worker_id, month). Returns True if deleted."""
+        ...
 
 
 class ILaborDayDescriptionRepository(ABC):

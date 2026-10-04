@@ -10,6 +10,7 @@ from app.api.v1.labor import (  # noqa: E402, F401
     labor_role_routes,
     activity_routes,
     day_description_routes,
+    payment_note_routes,
     rate_change_routes,
     attendance_validation_routes,
     roster_routes,
