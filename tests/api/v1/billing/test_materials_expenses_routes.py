@@ -34,7 +34,6 @@ from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.invoice_attachment import InvoiceAttachmentModel
 from tests.auth_login_helper import mint_access_token
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1122,7 +1121,8 @@ class TestRefundSummary:
         assert resp.status_code == 200, resp.get_data(as_text=True)
         summary = resp.get_json()["summary"]
         assert summary is not None
-        assert summary["refundable_amount"] == pytest.approx(150.0)
+        # 100 refundable + 50 pending + 75 refunded by the bank alone (company still owes it).
+        assert summary["refundable_amount"] == pytest.approx(225.0)
         assert summary["refunded_total"] == pytest.approx(275.0)
         assert summary["refunded_by_company"] == pytest.approx(200.0)
         assert summary["refunded_by_bank"] == pytest.approx(75.0)
