@@ -803,7 +803,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         are stored as JSONB and cannot be summed in SQL portably.
 
         Returns floats keyed:
-          refundable_amount    — status in ('refundable', 'refund_pending')
+          refundable_amount    — what the company still owes the payer: status in
+                                 ('refundable', 'refund_pending'), plus expenses refunded
+                                 by the bank alone (refunded_by == 'bank'), which settles
+                                 only the bank channel. Same rule as the Expense page's
+                                 "Refundable · company" line.
           refunded_total       — status == 'refunded'
           refunded_by_company  — refunded AND company involved (refunded_by IS NULL,
                                  'company' or 'both'); 'both' rows count in full here
@@ -844,6 +848,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 refundable_amount += row_total
             elif status == RefundableStatus.REFUNDED.value:
                 refunded_total += row_total
+                if refunded_by == "bank":
+                    # Bank-only refund: the payer is repaid, the company still owes it.
+                    refundable_amount += row_total
                 # Involvement buckets: 'both' rows land in company AND bank
                 # (per-source amounts are not tracked), plus the overlap bucket.
                 if refunded_by in ("bank", "both"):
