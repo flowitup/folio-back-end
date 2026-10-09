@@ -4,8 +4,8 @@ Endpoints (5):
   GET    /billing-document-templates                → list (jwt)
   POST   /billing-document-templates                → create (jwt, 10/min)
   GET    /billing-document-templates/<template_id>  → get (jwt + author or company admin)
-  PUT    /billing-document-templates/<template_id>  → update (jwt + author or company admin, 30/min)
-  DELETE /billing-document-templates/<template_id>  → delete (jwt + author or company admin)
+  PUT    /billing-document-templates/<template_id>  → update (jwt + company admin, 30/min)
+  DELETE /billing-document-templates/<template_id>  → delete (jwt + company admin)
 
 Decorator order: @jwt_required() BEFORE @limiter.limit(...).
 """
@@ -221,6 +221,8 @@ def update_billing_template(template_id: str, billing_template):
         notes=body.notes,
         terms=body.terms,
         default_vat_rate=body.default_vat_rate,
+        # An optional field sent as null is cleared; an omitted one is left alone.
+        cleared=frozenset(f for f in body.model_fields_set if getattr(body, f) is None),
     )
 
     from app import db
@@ -231,6 +233,9 @@ def update_billing_template(template_id: str, billing_template):
         return _err("NotFound", f"Billing template {template_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing template {template_id} not found", 404)
+    except BillingTemplateNameConflictError as exc:
+        db.session.rollback()  # the failed flush left the session unusable
+        return _err("Conflict", str(exc), 409)
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 

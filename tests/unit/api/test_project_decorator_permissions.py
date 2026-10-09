@@ -381,8 +381,9 @@ def test_require_invoice_access_paths(monkeypatch, app_ctx):
 
     _body, status = _view(dec.require_invoice_access())()
     assert status == 403  # missing invoice id
-    _body, status = _view(dec.require_invoice_access())(invoice_id="not-a-uuid")
-    assert status == 403
+    body, status = _view(dec.require_invoice_access())(invoice_id="not-a-uuid")
+    assert status == 400  # malformed, not a permission problem
+    assert body.get_json()["message"] == "Invalid invoice id"
 
     _wire_project(monkeypatch, reader, user_id, project, invoice=None)
     _body, status = _view(dec.require_invoice_access())(invoice_id=str(uuid4()))
@@ -405,7 +406,7 @@ def test_require_task_access_paths(monkeypatch, app_ctx):
     _body, status = _view(dec.require_task_access())()
     assert status == 403
     _body, status = _view(dec.require_task_access())(task_id="not-a-uuid")
-    assert status == 403
+    assert status == 400
 
     _wire_project(monkeypatch, reader, user_id, project, task=None)
     _body, status = _view(dec.require_task_access())(task_id=str(uuid4()))
@@ -435,7 +436,7 @@ def test_require_attachment_access_paths(monkeypatch, app_ctx):
     _body, status = _view(dec.require_attachment_access())()
     assert status == 403
     _body, status = _view(dec.require_attachment_access())(attachment_id="not-a-uuid")
-    assert status == 403
+    assert status == 400
 
     _wire_project(monkeypatch, reader, user_id, project, invoice=invoice, attachment=None)
     _body, status = _view(dec.require_attachment_access())(attachment_id=str(uuid4()))
@@ -549,10 +550,30 @@ def test_url_id_helpers_degrade_instead_of_raising(monkeypatch, app_ctx):
 
     assert dec._as_uuid(None) is None
     assert dec._missing_ref_message({}) == "Not found"
-    # A malformed child id yields no project context (the permission check
-    # answers), not a 404 pretending the row is gone.
+    # A malformed child id yields no project context, not a 404 pretending the
+    # row is gone (require_permission has already answered 400 for it).
     assert dec._resolve_project_ref({"invoice_id": "not-a-uuid"}) == (None, False)
     assert dec._resolve_project_ref({"task_id": "not-a-uuid"}) == (None, False)
+
+
+@pytest.mark.parametrize(
+    "kwarg,label", [("invoice_id", "invoice"), ("task_id", "task"), ("attachment_id", "attachment")]
+)
+def test_require_permission_answers_400_for_a_malformed_child_id(monkeypatch, app_ctx, kwarg, label):
+    """Not 403 'Missing permission' from the context-free check: the id names no row at all."""
+    reader, user_id, project_id = _ctx(role="admin")
+    _wire(monkeypatch, reader, user_id)
+
+    @dec.require_permission("project:read")
+    def view(**kwargs):  # pragma: no cover - never reached
+        return "ok"
+
+    body, status = view(**{kwarg: "not-a-uuid"})
+    assert status == 400
+    assert body.get_json() == {"error": "INVALID_ID", "message": f"Invalid {label} id", "status_code": 400}
+    # With a valid project in the URL too, the malformed child id still answers 400.
+    _body, status = view(project_id=str(project_id), **{kwarg: "123"})
+    assert status == 400
 
 
 def test_effective_permissions_without_a_usable_identity_is_empty(monkeypatch, app_ctx):

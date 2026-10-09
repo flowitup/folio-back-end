@@ -194,13 +194,19 @@ def test_cash_advance_exports_under_others_not_released_funds(monkeypatch):
 
     others = _export_bundle(monkeypatch, project, invoices, type_filter=InvoiceType.OTHERS)
     assert sorted(i.invoice_number for i in others.invoices) == ["CA1", "O1"]
-    assert [(s.type, s.total_amount) for s in others.subtotals_by_type] == [(InvoiceType.OTHERS, Decimal("540.00"))]
+    # The advance is listed under Others but subtotalled apart: it is in no total.
+    assert [(s.type, s.is_cash_advance, s.total_amount) for s in others.subtotals_by_type] == [
+        (InvoiceType.OTHERS, False, Decimal("40.00")),
+        (InvoiceType.OTHERS, True, Decimal("500.00")),
+    ]
+    assert others.grand_total == Decimal("40.00")
 
     everything = _export_bundle(monkeypatch, project, invoices)
-    assert {s.type: s.total_amount for s in everything.subtotals_by_type} == {
-        InvoiceType.RELEASED_FUNDS: Decimal("9000.00"),
-        InvoiceType.OTHERS: Decimal("540.00"),
-    }
+    assert [(s.type, s.is_cash_advance, s.total_amount) for s in everything.subtotals_by_type] == [
+        (InvoiceType.RELEASED_FUNDS, False, Decimal("9000.00")),
+        (InvoiceType.OTHERS, False, Decimal("40.00")),
+        (InvoiceType.OTHERS, True, Decimal("500.00")),
+    ]
 
 
 def test_cash_advance_stays_hidden_from_callers_without_budget(monkeypatch):
@@ -462,3 +468,33 @@ def test_total_is_expenses_only_with_returns_netted_and_advances_left_out(monkey
     assert bundle.grand_total == Decimal("450.00")
     assert bundle.released_total == Decimal("5000.00")
     assert {s.type: s.total_amount for s in bundle.subtotals_by_type}[InvoiceType.RETURN] == Decimal("-50.00")
+
+
+def test_expense_subtotals_add_up_to_the_total_at_cent_precision(monkeypatch):
+    """Expense rows sum to the total, each counted at the cent amount the app shows (99.999 -> 100.00)."""
+    project = _make_project("Cents Project")
+    pid = project.id
+    others = _make_invoice(project_id=pid, invoice_type=InvoiceType.OTHERS, invoice_number="O1").with_updates(
+        items=[InvoiceItem(description="x", quantity=Decimal("3"), unit_price=Decimal("33.333"))]
+    )
+    vat = _make_invoice(project_id=pid, invoice_type=InvoiceType.MATERIALS_SERVICES, invoice_number="M1").with_updates(
+        items=[
+            InvoiceItem(description="Vis", quantity=Decimal("3"), unit_price=Decimal("1.50"), vat_rate=Decimal("20")),
+            InvoiceItem(
+                description="Colle", quantity=Decimal("1"), unit_price=Decimal("0.123"), vat_rate=Decimal("20")
+            ),
+        ]
+    )
+    invoices = [others, vat, _cash_advance(pid, amount=Decimal("300.00"))]
+
+    bundle = _export_bundle(monkeypatch, project, invoices)
+
+    by_row = {(s.type, s.is_cash_advance): s.total_amount for s in bundle.subtotals_by_type}
+    assert by_row == {
+        (InvoiceType.MATERIALS_SERVICES, False): Decimal("5.55"),
+        (InvoiceType.OTHERS, False): Decimal("100.00"),
+        (InvoiceType.OTHERS, True): Decimal("300.00"),
+    }
+    assert bundle.grand_total == Decimal("105.55")
+    expense_rows = [s.total_amount for s in bundle.subtotals_by_type if not s.is_cash_advance]
+    assert sum(expense_rows) == bundle.grand_total

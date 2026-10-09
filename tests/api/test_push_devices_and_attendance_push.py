@@ -123,6 +123,11 @@ def _register(client, headers, token, platform="ios"):
 
 def test_register_validates_body_and_moves_a_token_between_accounts(client, owner_h, linked_h, push_app):
     assert _register(client, owner_h, "short", "ios").status_code == 400
+    # The message names the field, not just "Field required".
+    for method in (client.post, client.delete):
+        missing = method("/api/v1/push/devices", json={}, headers=owner_h)
+        assert missing.status_code == 400
+        assert missing.get_json()["message"].startswith("token: Field required")
     assert (
         client.post("/api/v1/push/devices", json={"token": OWNER_TOKEN, "platform": "web"}, headers=owner_h).status_code
         == 400
@@ -197,6 +202,16 @@ def test_rejecting_a_pending_day_still_pushes_the_worker(client, ids, recorder, 
         == 204
     )
     assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(WORKER_TOKEN, "rejected")]
+
+
+def test_unregister_never_removes_another_users_device(client, owner_h, push_app):
+    from app import db
+    from app.infrastructure.database.models.push_device import PushDeviceOrm
+
+    # Same 204 as for one's own token, so the answer does not say whose it is.
+    assert client.delete("/api/v1/push/devices", json={"token": WORKER_TOKEN}, headers=owner_h).status_code == 204
+    with push_app.app_context():
+        assert db.session.query(PushDeviceOrm).filter_by(token=WORKER_TOKEN).count() == 1
 
 
 def test_unregister_removes_the_device(client, ids, recorder, owner_h, linked_h):

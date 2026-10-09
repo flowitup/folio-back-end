@@ -3,19 +3,18 @@
 Matches the Alembic migration ``cea9f050672d_add_payment_methods_and_invoice_columns``
 column-for-column (types, nullability, FK on_delete behaviour).
 
-SQLite compatibility note
---------------------------
-The partial unique index ``ux_payment_methods_company_label_active`` is
-expressed as raw SQL DDL in the migration (``op.execute``) because Alembic
-cannot represent functional expressions portably. The ``__table_args__``
-below therefore only declares the covering composite index and omits the
-partial-unique definition — it is enforced by the migration on PostgreSQL only.
+Partial unique index
+--------------------
+``ux_payment_methods_company_label_active`` is raw SQL DDL in the migration
+(``op.execute``, PostgreSQL only). The ``__table_args__`` below declare the same
+functional partial index, so autogenerate keeps it and SQLite-backed tests,
+which build the schema from the ORM, enforce it too.
 """
 
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -78,11 +77,16 @@ class PaymentMethodModel(Base):
     __table_args__ = (
         # Covering composite index for the dominant query pattern:
         # "all (active) methods for a company"
-        # The partial-unique functional index on (company_id, lower(label))
-        # WHERE is_active = true is created directly via SQL in the migration
-        # because SQLAlchemy cannot express functional partial indexes in a
-        # SQLite-compatible way.
         Index("ix_payment_methods_company_active", "company_id", "is_active"),
+        # One label per company (case-insensitive), active rows only.
+        Index(
+            "ux_payment_methods_company_label_active",
+            company_id,
+            func.lower(label),
+            unique=True,
+            postgresql_where=text("is_active = true"),
+            sqlite_where=text("is_active = 1"),
+        ),
         # A method cannot be flagged as both company-funded and personal-funded.
         # Declared here (not just in the migration) so SQLite-backed tests, which
         # build the schema straight from the ORM, enforce it too.

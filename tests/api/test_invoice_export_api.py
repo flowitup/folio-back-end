@@ -213,6 +213,8 @@ def test_from_after_to_returns_422(inv_export_client, inv_export_app, admin_toke
     )
     assert resp.status_code == 422
     assert resp.get_json()["error"] == "validation_error"
+    # A range rule has no field: its reason stands alone, without "value: Value error, ".
+    assert resp.get_json()["message"] == "from must be <= to"
 
 
 def test_unknown_project_returns_404(inv_export_client, inv_export_app, admin_token):

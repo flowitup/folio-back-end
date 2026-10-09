@@ -32,7 +32,9 @@ def note_app():
 
         admin = UserModel(email="paynote_admin@test.com", is_active=True)
         member = UserModel(email="paynote_member@test.com", is_active=True)
-        db.session.add_all([admin, member])
+        linked = UserModel(email="paynote_linked@test.com", is_active=True)
+        manager = UserModel(email="paynote_manager@test.com", is_active=True)
+        db.session.add_all([admin, member, linked, manager])
         db.session.flush()
 
         company_id = company_for_projects(db.session, admin.id)
@@ -43,21 +45,24 @@ def note_app():
 
         worker = WorkerModel(project_id=project.id, name="Ana", daily_rate=100)
         foreign_worker = WorkerModel(project_id=other.id, name="Bao", daily_rate=100)
-        db.session.add_all([worker, foreign_worker])
+        linked_worker = WorkerModel(project_id=project.id, name="Cuong", daily_rate=100, user_id=linked.id)
+        db.session.add_all([worker, foreign_worker, linked_worker])
         db.session.flush()
 
-        db.session.execute(
-            text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:uid, :pid, :at)"),
-            {"uid": str(member.id), "pid": str(project.id), "at": datetime.now(timezone.utc)},
-        )
+        for uid in (member.id, linked.id, manager.id):
+            db.session.execute(
+                text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:uid, :pid, :at)"),
+                {"uid": str(uid), "pid": str(project.id), "at": datetime.now(timezone.utc)},
+            )
         db.session.commit()
 
         test_app._project_id = str(project.id)
         test_app._worker_id = str(worker.id)
         test_app._foreign_worker_id = str(foreign_worker.id)
-        admin_id, member_id = admin.id, member.id
+        test_app._linked_worker_id = str(linked_worker.id)
+        roles = {admin.id: "admin", member.id: "member", linked.id: "member", manager.id: "manager"}
 
-    seed_company_tenancy(test_app, roles={admin_id: "admin", member_id: "member"})
+    seed_company_tenancy(test_app, roles=roles)
 
     yield test_app
 
@@ -153,6 +158,33 @@ def test_note_over_2000_chars_is_rejected(client, note_app, admin_h):
     assert _put(client, note_app, admin_h, "a" * 2001).status_code == 400
 
 
+@pytest.mark.parametrize("body", ["x", 5, [1, 2]])
+def test_a_json_body_that_is_not_an_object_is_400(client, note_app, admin_h, body):
+    resp = client.put(_url(note_app), json=body, headers=admin_h)
+    assert resp.status_code == 400, resp.get_data(as_text=True)
+    assert resp.get_json()["error"] == "ValidationError"
+
+
 def test_member_can_read_but_not_write(client, note_app, member_h):
     assert client.get(_url(note_app), headers=member_h).status_code == 200
     assert _put(client, note_app, member_h, "nope").status_code == 403
+
+
+def test_restricted_members_only_read_their_own_worker_notes(client, note_app, admin_h, member_h):
+    month = "2026-05"
+    _put(client, note_app, admin_h, "Ana: rest paid end of month", month=month)
+    _put(client, note_app, admin_h, "Cuong: paid in full", month=month, worker_id=note_app._linked_worker_id)
+    url = f"{_url(note_app)}?month={month}"
+
+    # A member not linked to any worker sees no notes.
+    unlinked = client.get(url, headers=member_h)
+    assert unlinked.status_code == 200
+    assert unlinked.get_json()["notes"] == []
+
+    # A member linked to a worker only sees that worker's notes.
+    linked = client.get(url, headers=_h(client, "paynote_linked@test.com")).get_json()["notes"]
+    assert [(n["worker_id"], n["note"]) for n in linked] == [(note_app._linked_worker_id, "Cuong: paid in full")]
+
+    # An assigned manager sees every note.
+    managed = client.get(url, headers=_h(client, "paynote_manager@test.com")).get_json()["notes"]
+    assert {n["worker_id"] for n in managed} == {note_app._worker_id, note_app._linked_worker_id}

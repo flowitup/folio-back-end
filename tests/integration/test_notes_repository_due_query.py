@@ -219,7 +219,10 @@ class TestFireAtSqlMath:
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=after_fire, limit=100)
         assert len(results) == 1
-        assert results[0].id == note_id
+        assert results[0].note.id == note_id
+        # The bell shows when the reminder is for.
+        assert results[0].due_date == today
+        assert results[0].lead_time_minutes == 0
 
     def test_fire_at_boundary_inclusive(self, pg_session):
         """fire_at boundary: query exactly at 09:00:00 UTC → 1 result (<=)."""
@@ -235,7 +238,7 @@ class TestFireAtSqlMath:
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=exact_fire_at, limit=100)
         assert len(results) == 1
-        assert results[0].id == note_id
+        assert results[0].note.id == note_id
 
     def test_lead_time_60_fire_at_is_08_00(self, pg_session):
         """lead_time=60 → fire_at=08:00 UTC; query at 07:59 → 0 results."""
@@ -285,7 +288,7 @@ class TestFireAtSqlMath:
         far_future = datetime(2099, 1, 1, 0, 0, 0, tzinfo=UTC)
         repo = SqlAlchemyNoteRepository(pg_session)
         results = repo.list_due_for_user(user_id=user_id, now=far_future, limit=100)
-        ids = [r.id for r in results]
+        ids = [r.note.id for r in results]
         assert journal_note_id not in ids
 
     def test_dismissed_note_not_returned(self, pg_session):
@@ -368,7 +371,7 @@ class TestReminderScope:
         _attach(pg_session, admin, company_id, "admin")
         note_id = _insert_note(pg_session, project_id=project_id, user_id=owner, due_date=date.today())
 
-        assert [n.id for n in self._due(pg_session, admin)] == [note_id]
+        assert [d.note.id for d in self._due(pg_session, admin)] == [note_id]
 
     def test_admin_also_assigned_gets_each_reminder_once(self, pg_session):
         admin = _insert_user(pg_session)
@@ -377,7 +380,7 @@ class TestReminderScope:
         _assign(pg_session, admin, project_id)
         note_id = _insert_note(pg_session, project_id=project_id, user_id=admin, due_date=date.today())
 
-        assert [n.id for n in self._due(pg_session, admin)] == [note_id]
+        assert [d.note.id for d in self._due(pg_session, admin)] == [note_id]
 
     def test_member_gets_no_reminders_of_unassigned_projects(self, pg_session):
         owner = _insert_user(pg_session)

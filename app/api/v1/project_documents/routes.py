@@ -50,6 +50,8 @@ from app.application.project_documents.confirm_project_document_upload import (
     DocumentNotInStorageError,
     StorageKeyMismatchError,
 )
+from app.application.usecases.otp_login import is_placeholder_email
+from app.domain.value_objects.display_filename import strip_control_chars
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -376,7 +378,8 @@ def download_project_document(project_id: str, document_id: str):
     response = send_file(
         stream,
         mimetype=doc.content_type,
-        download_name=doc.filename,
+        # Rows stored before control characters were refused: werkzeug 500s on CR/LF in the header
+        download_name=strip_control_chars(doc.filename) or "document",
         as_attachment=not inline_safe,
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -519,6 +522,14 @@ def update_document_tags(project_id: str, document_id: str):
     return jsonify(_serialize(updated)), 200
 
 
+def _uploader_label(display_name: str | None, email: str, phone: str | None, is_deleted: bool) -> str:
+    """Name, else real e-mail, else phone. A phone-only account's synthetic address and an erased
+    account's placeholder are identifiers, not something to show: an erased account gets ""."""
+    if is_deleted:
+        return ""
+    return display_name or (None if is_placeholder_email(email) else email) or phone or ""
+
+
 @project_documents_bp.route("/projects/<project_id>/documents/uploaders", methods=["GET"])
 @openapi_doc(
     summary="List the distinct uploaders of a project's documents",
@@ -538,8 +549,13 @@ def list_project_document_uploaders(project_id: str):
     container = get_container()
     rows = container.project_document_repository.list_uploaders_for_project(UUID(project_id))
     items = [
-        DocumentUploaderSchema(user_id=user_id, display_name=display_name or email)
-        for user_id, display_name, email in rows
+        DocumentUploaderSchema(
+            user_id=user_id,
+            display_name=_uploader_label(display_name, email, phone, deleted_at is not None),
+            phone=phone,
+            is_deleted=deleted_at is not None,
+        )
+        for user_id, display_name, email, phone, deleted_at in rows
     ]
     return jsonify(DocumentUploadersResponse(items=items).model_dump(mode="json")), 200
 

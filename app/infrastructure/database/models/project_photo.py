@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, desc, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +22,16 @@ class ProjectPhotoRow(Base):
     """
 
     __tablename__ = "project_photos"
+    # Index of migration c78cbcf5a73b: active photos by capture date, then insertion date.
+    __table_args__ = (
+        Index(
+            "ix_project_photos_project_captured",
+            "project_id",
+            desc("captured_at"),
+            desc("created_at"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),

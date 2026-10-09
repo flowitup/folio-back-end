@@ -312,8 +312,10 @@ class TestSingleWorkerDailyDetail:
         data_start = detail_row + 2  # skip table header
         dates = [ws.cell(row=data_start + i, column=1).value for i in range(3)]
         assert dates == sorted(dates), f"Entries not sorted: {dates}"
-        assert dates[0] == "2026-04-05"
-        assert dates[2] == "2026-04-20"
+        # Real Excel dates (read back as datetimes), shown as dd/mm/yyyy
+        assert dates[0] == datetime(2026, 4, 5)
+        assert dates[2] == datetime(2026, 4, 20)
+        assert ws.cell(row=data_start, column=1).number_format == "DD/MM/YYYY"
 
 
 # ---------------------------------------------------------------------------

@@ -50,9 +50,17 @@ class ListDueNotificationsUseCase:
             Up to 100 DueNotificationDto items, ordered by due_date ASC.
         """
         effective_now = now if now is not None else datetime.now(timezone.utc)
-        notes = self._note_query.list_due_for_user(
+        due = self._note_query.list_due_for_user(
             user_id=user_id,
             now=effective_now,
             limit=_DUE_NOTIFICATIONS_HARD_CAP,
         )
-        return [DueNotificationDto(note=NoteDto.from_entity(n), dismissed=False) for n in notes]
+        return [
+            DueNotificationDto(
+                note=NoteDto.from_entity(d.note),
+                dismissed=False,
+                due_date=d.due_date,
+                lead_time_minutes=d.lead_time_minutes,
+            )
+            for d in due
+        ]

@@ -730,3 +730,75 @@ def test_invoiced_is_zero_for_a_project_with_only_accruals(invitation_app, credi
         r = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert r.invoiced == Decimal("0")
         assert r.total == pytest.approx(Decimal("400"))
+
+
+def test_banked_hours_bonus_is_accrued_like_the_labor_summary(invitation_app, credit_project):
+    """Supplement hours are paid as bonus days; project labor must count them.
+
+    Priced per calendar month at the rate in force on the month's last day, exactly as
+    the labor summary does, so `labor_accrued` equals its total cost and a worker paid
+    priced days + bonus owes nothing.
+    """
+    from app import db
+    from app.application.labor.get_labor_summary import GetLaborSummaryRequest, GetLaborSummaryUseCase
+    from app.infrastructure.adapters.sqlalchemy_labor_entry import SQLAlchemyLaborEntryRepository
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        worker = WorkerModel(id=uuid4(), project_id=pid, name="Banked", daily_rate=Decimal("100.00"), is_active=True)
+        db.session.add(worker)
+        db.session.flush()
+        for day, shift, hours in [
+            (date(2025, 9, 3), "full", 5),
+            (date(2025, 9, 4), None, 7),  # Sept: 12 h banked → 1.5 bonus days at 100
+            (date(2025, 10, 2), "full", 4),  # Oct: 4 h → half a day at the Oct-end rate (120)
+        ]:
+            db.session.add(
+                LaborEntryModel(id=uuid4(), worker_id=worker.id, date=day, shift_type=shift, supplement_hours=hours)
+            )
+        db.session.add(
+            WorkerRateChangeModel(
+                id=uuid4(), worker_id=worker.id, effective_date=date(2025, 10, 15), daily_rate=Decimal("120.00")
+            )
+        )
+        db.session.commit()
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        # 2 priced days at 100 + 150 (Sept bonus) + 60 (Oct bonus).
+        assert r.labor_accrued == pytest.approx(Decimal("410"))
+        summary = GetLaborSummaryUseCase(SQLAlchemyLaborEntryRepository(db.session)).execute(
+            GetLaborSummaryRequest(project_id=pid)
+        )
+        assert r.labor_accrued == pytest.approx(Decimal(str(summary.total_cost)))
+
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-BONUS-1",
+            amount=410,
+            type="labor",
+            worker_id=worker.id,
+            payment_method_id=credit_project["regular_pm_id"],
+        )
+        paid = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert paid.labor_unpaid == Decimal("0")
+        assert paid.total == pytest.approx(Decimal("410"))
+
+
+def test_spent_sums_the_invoices_as_the_ledger_shows_them(invitation_app, credit_project):
+    """Each line counts at the cent it is shown at: 2 x (2.5 x 19.99) is 49.98 + 49.98 = 99.96, and
+    two 0.125 lines are 0.13 + 0.13 — never the unrounded 99.95 / 0.25."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        line = {"description": "Paint", "quantity": "2.5", "unit_price": "19.99", "vat_rate": 0}
+        _add_invoice(db.session, pid, number="CS-ROUND-1", amount=0, items=[line, line])
+        tiny = {"description": "Nail", "quantity": "1", "unit_price": "0.125", "vat_rate": 0}
+        _add_invoice(db.session, pid, number="CS-ROUND-2", amount=0, items=[tiny, tiny])
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.total == Decimal("100.22")
+        assert r.invoiced == Decimal("100.22")
+        assert r.personal == Decimal("100.22")
+        assert r.personal_by_type["materials_services"] == Decimal("100.22")

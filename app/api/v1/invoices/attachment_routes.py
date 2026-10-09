@@ -15,6 +15,7 @@ from app.api.v1.projects.decorators import (
     require_invoice_access,
     require_attachment_access,
 )
+from app.api.v1.projects.budget_scope import budget_forbidden, caller_sees_budget
 from app.api.v1.projects.schemas import ErrorResponse
 from app.api.v1.projects.labor_scope import labor_scope_for
 from app.application.invoice import (
@@ -22,7 +23,9 @@ from app.application.invoice import (
     FileTooLargeError,
     UnsupportedFileTypeError,
 )
+from app.domain.entities.invoice import InvoiceType
 from app.domain.exceptions.invoice_exceptions import InvoiceNotFoundError
+from app.domain.value_objects.display_filename import strip_control_chars
 from wiring import get_container
 
 
@@ -56,7 +59,11 @@ def list_attachments(project_id: str, invoice_id: str):
         return _error_response("INVALID_ID", "Invalid invoice id", 400)
 
     container = get_container()
-    if not _own_labor_invoice_or_manager(project_id, inv_uuid):
+    invoice = container.invoice_repository.find_by_id(inv_uuid)
+    # Labor scope on the invoice's own project, as download_attachment does.
+    if invoice is None or not _own_labor_invoice_or_manager(str(invoice.project_id), inv_uuid):
+        return _error_response("NOT_FOUND", "Invoice not found", 404)
+    if _release_hidden_from_caller(invoice):
         return _error_response("NOT_FOUND", "Invoice not found", 404)
     items = container.list_attachments_usecase.execute(inv_uuid)
     return jsonify([_serialize(a) for a in items]), 200
@@ -77,6 +84,28 @@ def _own_labor_invoice_or_manager(project_id: str, invoice_id: UUID) -> bool:
     return invoice is not None and invoice.worker_id is not None and scope.allows_worker(invoice.worker_id)
 
 
+def _release_hidden_from_caller(invoice) -> bool:
+    """A released_funds row is the financing side: out of reach without ``project:view_budget``.
+
+    Mirrors the invoice routes (see :mod:`app.api.v1.projects.budget_scope`) so a
+    release's receipts are no easier to read or change than the release itself.
+    """
+    return (
+        invoice is not None
+        and invoice.type == InvoiceType.RELEASED_FUNDS
+        and not caller_sees_budget(invoice.project_id)
+    )
+
+
+def _attachment_invoice(attachment_id: UUID):
+    """The invoice an attachment hangs off, or None when either is gone."""
+    container = get_container()
+    att = container.invoice_attachment_repository.find_by_id(attachment_id)
+    if att is None:
+        return None
+    return container.invoice_repository.find_by_id(att.invoice_id)
+
+
 @invoice_bp.route("/projects/<project_id>/invoices/<invoice_id>/attachments", methods=["POST"])
 @openapi_doc(summary="Upload an attachment to an invoice", tags=["invoices"])
 @jwt_required()
@@ -87,6 +116,9 @@ def upload_attachment(project_id: str, invoice_id: str):
         inv_uuid = UUID(invoice_id)
     except ValueError:
         return _error_response("INVALID_ID", "Invalid invoice id", 400)
+
+    if _release_hidden_from_caller(get_container().invoice_repository.find_by_id(inv_uuid)):
+        return budget_forbidden()
 
     if "file" not in request.files:
         return _error_response("MISSING_FILE", "No file part in request (expected field 'file')", 400)
@@ -142,6 +174,8 @@ def download_attachment(attachment_id: str):
     invoice = container.invoice_repository.find_by_id(att.invoice_id)
     if invoice is not None and not _own_labor_invoice_or_manager(str(invoice.project_id), att.invoice_id):
         return _error_response("NOT_FOUND", "Attachment not found", 404)
+    if _release_hidden_from_caller(invoice):
+        return _error_response("NOT_FOUND", "Attachment not found", 404)
 
     # Inline preview only for PDF + images; everything else forced to download.
     # nosniff prevents browsers from MIME-sniffing user-controlled bytes into
@@ -150,7 +184,8 @@ def download_attachment(attachment_id: str):
     response = send_file(
         stream,
         mimetype=att.mime_type,
-        download_name=att.filename,
+        # Rows stored before control characters were refused: werkzeug 500s on CR/LF in the header
+        download_name=strip_control_chars(att.filename) or "attachment",
         as_attachment=not inline_safe,
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -171,6 +206,9 @@ def delete_attachment(attachment_id: str):
     except ValueError:
         return _error_response("INVALID_ID", "Invalid attachment id", 400)
 
+    if _release_hidden_from_caller(_attachment_invoice(att_uuid)):
+        return budget_forbidden()
+
     container = get_container()
     try:
         container.delete_attachment_usecase.execute(att_uuid)
@@ -190,6 +228,9 @@ def rename_attachment(attachment_id: str):
         att_uuid = UUID(attachment_id)
     except ValueError:
         return _error_response("INVALID_ID", "Invalid attachment id", 400)
+
+    if _release_hidden_from_caller(_attachment_invoice(att_uuid)):
+        return budget_forbidden()
 
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or "filename" not in body:

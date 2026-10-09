@@ -193,6 +193,8 @@ class TestAddMemberByPhoneExistingAccount:
         assert again.status_code == 409
         assert "Secret" not in again.get_data(as_text=True)
         assert "-" not in again.get_json()["message"]  # no account id in the message
+        # The client tells "already a member" apart from other conflicts by this reason.
+        assert again.get_json()["reason"] == "already_member"
 
     def test_admin_role_rejected(self, members_client, members_app):
         admin_id = _make_user(members_app, "mab_admin2@test.com")
@@ -313,6 +315,18 @@ class TestAddMemberByPhoneMatchOrder:
         )
         assert resp.status_code == 400, resp.get_data(as_text=True)
         assert "French numbers only" in resp.get_json()["message"]
+        assert resp.get_json()["reason"] == "invalid_phone"
+
+    def test_a_number_that_is_not_a_phone_is_refused_with_its_reason(self, members_client, members_app):
+        admin_id = _make_user(members_app, "mab_admin_badphone@test.com")
+        company_id = _make_company(members_app, admin_id, name="MAB Co bad phone")
+        token = _login(members_client, "mab_admin_badphone@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members", json={"phone": "12345"}, headers=_auth(token)
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["reason"] == "invalid_phone"
 
     def test_a_foreign_number_with_an_account_is_refused_too(self, members_client, members_app):
         """Members sign in with French numbers only: an account holding a foreign one is not attached."""
@@ -404,6 +418,47 @@ class TestImportMembers:
         body = resp.get_json()
         assert body["items"] == []
         assert body["already_member_person_ids"] == [str(person_id)]
+
+    def test_a_booted_member_is_reimported_with_an_active_profile(self, members_client, members_app):
+        admin_id = _make_user(members_app, "imp_admin_boot@test.com")
+        linked_user_id = _make_user(members_app, "imp_booted@test.com", phone="+33611110042")
+        source_company = _make_company(members_app, admin_id, name="Import Source Boot")
+        target_company = _make_company(members_app, admin_id, name="Import Target Boot")
+        person_id = _make_person(
+            members_app, name="Booted Person", phone_normalized="+33611110042", user_id=linked_user_id
+        )
+        _link_person_to_company(members_app, source_company, person_id, pending=False)
+        _link_person_to_company(members_app, target_company, person_id, pending=False)
+        token = _login(members_client, "imp_admin_boot@test.com")
+
+        from app import db
+
+        with members_app.app_context():
+            # State left by booting the member from the target company.
+            row = db.session.query(CompanyPersonModel).filter_by(company_id=target_company, person_id=person_id).one()
+            row.is_active = False
+            db.session.commit()
+
+        resp = members_client.post(
+            f"/api/v1/companies/{target_company}/members/import",
+            json={"from_company_id": source_company, "person_ids": [person_id]},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        body = resp.get_json()
+        assert [item["person_id"] for item in body["items"]] == [str(person_id)]
+        assert body["already_member_person_ids"] == []
+        assert _read_profile(members_app, target_company, person_id).is_active is True
+        with members_app.app_context():
+            access = db.session.get(UserCompanyAccessModel, (linked_user_id, target_company))
+            assert access is not None and access.role == "member"
+
+        pay = members_client.patch(
+            f"/api/v1/companies/{target_company}/members/{person_id}",
+            json={"default_daily_rate": 150},
+            headers=_auth(token),
+        )
+        assert pay.status_code == 200, pay.get_data(as_text=True)
 
     def test_import_requires_admin_of_source_company(self, members_client, members_app):
         admin_id = _make_user(members_app, "imp_admin2@test.com")
@@ -657,7 +712,8 @@ class TestUpdateMemberPayDefaults:
         token = _login(members_client, "pay_admin6@test.com")
         url = f"/api/v1/companies/{company_id}/members/{person_id}"
 
-        for bad in (0, -5, 100000000):
+        # A sub-cent rate rounds to 0.00 in the 2-decimal column: refused like 0.
+        for bad in (0, -5, 100000000, "0.004", 1e-9):
             resp = members_client.patch(url, json={"default_daily_rate": bad}, headers=_auth(token))
             assert resp.status_code == 422, f"rate {bad} should be refused: {resp.get_data(as_text=True)}"
 
@@ -666,3 +722,17 @@ class TestUpdateMemberPayDefaults:
         assert typo.status_code == 422
 
         assert _read_profile(members_app, company_id, person_id).default_daily_rate is None
+
+    def test_rounds_the_rate_to_the_cent(self, members_client, members_app):
+        admin_id = _make_user(members_app, "pay_admin7@test.com")
+        company_id = _make_company(members_app, admin_id, name="Pay Co 7")
+        person_id = _make_person(members_app, name="Pay Seven", phone_normalized="+33622220008")
+        _link_person_to_company(members_app, company_id, person_id, pending=False)
+        token = _login(members_client, "pay_admin7@test.com")
+        url = f"/api/v1/companies/{company_id}/members/{person_id}"
+
+        for sent, stored in (("0.005", 0.01), ("120.125", 120.13)):
+            resp = members_client.patch(url, json={"default_daily_rate": sent}, headers=_auth(token))
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            assert resp.get_json()["default_daily_rate"] == stored
+            assert float(_read_profile(members_app, company_id, person_id).default_daily_rate) == stored

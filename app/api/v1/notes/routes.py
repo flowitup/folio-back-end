@@ -6,7 +6,7 @@ Authorization note (D9):
 
     * the route gate — ``project:read`` to list, ``project:update`` to create,
       update or delete. A company ``member`` reads the site journal but never
-      writes it, exactly like analyses and photos. The write gate also answers
+      writes it, exactly like analyses and photos. Both gates also answer
       404 for a project id that does not exist, before any permission is
       evaluated.
     * the use-case — the note must belong to the project in the URL (404
@@ -26,7 +26,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.api._helpers.validation_error import safe_validation_fields
+from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.notes import notes_bp
 from app.api.v1.notes.schemas import NoteCreateBody, NoteUpdateBody
@@ -83,8 +83,7 @@ def create_note(project_id: UUID) -> Any:
     try:
         body = NoteCreateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        fields = safe_validation_fields(exc)
-        return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+        return _err(422, "ValidationError", validation_message(exc))
 
     actor_id = UUID(get_jwt_identity())
     container = get_container()
@@ -118,6 +117,8 @@ def create_note(project_id: UUID) -> Any:
 @notes_bp.get("/projects/<uuid:project_id>/notes")
 @openapi_doc(summary="List all journal notes for a project", tags=["notes"])
 @jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access(write=False)
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def list_notes(project_id: UUID) -> Any:
     """List journal notes for a project ordered by created_at DESC."""
@@ -161,8 +162,7 @@ def update_note(project_id: UUID, note_id: UUID) -> Any:
     try:
         body = NoteUpdateBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        fields = safe_validation_fields(exc)
-        return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+        return _err(422, "ValidationError", validation_message(exc))
 
     actor_id = UUID(get_jwt_identity())
     container = get_container()

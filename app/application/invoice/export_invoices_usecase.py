@@ -13,6 +13,7 @@ from app.application.invoice.ports import IInvoiceRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.invoice import Invoice, InvoiceType
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
+from app.domain.invoice.export.format import round_cents
 from app.domain.invoice.export.models import (
     ExportFormat,
     InvoiceBundle,
@@ -21,12 +22,16 @@ from app.domain.invoice.export.models import (
     TypeSubtotal,
 )
 
-_TYPE_ORDER = (
-    InvoiceType.RELEASED_FUNDS,
-    InvoiceType.LABOR,
-    InvoiceType.MATERIALS_SERVICES,
-    InvoiceType.OTHERS,
-    InvoiceType.RETURN,
+# Subtotal rows in order, as (ledger type, cash advance). A cash advance is listed
+# under Others but counts in no total (see grand_total below), so it gets a row of
+# its own: the expense rows then add up to the total, as the app's Others does.
+_SUBTOTAL_ROWS = (
+    (InvoiceType.RELEASED_FUNDS, False),
+    (InvoiceType.LABOR, False),
+    (InvoiceType.MATERIALS_SERVICES, False),
+    (InvoiceType.OTHERS, False),
+    (InvoiceType.OTHERS, True),
+    (InvoiceType.RETURN, False),
 )
 
 
@@ -134,17 +139,20 @@ class ExportInvoicesUseCase:
             key=lambda inv: (_effective_month(inv), inv.issue_date, inv.ledger_type.value, inv.invoice_number)
         )
 
-        # 5. Aggregate per-type subtotals + totals (Decimal-safe)
+        # 5. Aggregate per-type subtotals + totals (Decimal-safe). Each row counts at its
+        # total rounded to the cent, the amount the app shows and sums, so the file's
+        # totals match the app's to the cent.
         subtotals: list[TypeSubtotal] = []
-        for t in _TYPE_ORDER:
-            scoped = [i for i in invoices if i.ledger_type == t]
+        for t, cash_advance in _SUBTOTAL_ROWS:
+            scoped = [i for i in invoices if i.ledger_type == t and i.is_cash_advance == cash_advance]
             if not scoped:
                 continue
             subtotals.append(
                 TypeSubtotal(
                     type=t,
                     invoice_count=len(scoped),
-                    total_amount=sum((i.total_amount for i in scoped), Decimal("0")),
+                    total_amount=sum((round_cents(i.total_amount) for i in scoped), Decimal("0")),
+                    is_cash_advance=cash_advance,
                 )
             )
         # Money in and money out are never added together. The total is what the
@@ -152,11 +160,15 @@ class ExportInvoicesUseCase:
         # (negative) netted in. A cash advance is stored as a release and, as in
         # the app, counts in neither total.
         grand_total = sum(
-            (i.total_amount for i in invoices if i.type != InvoiceType.RELEASED_FUNDS),
+            (round_cents(i.total_amount) for i in invoices if i.type != InvoiceType.RELEASED_FUNDS),
             Decimal("0"),
         )
         released_total = sum(
-            (i.total_amount for i in invoices if i.type == InvoiceType.RELEASED_FUNDS and not i.is_cash_advance),
+            (
+                round_cents(i.total_amount)
+                for i in invoices
+                if i.type == InvoiceType.RELEASED_FUNDS and not i.is_cash_advance
+            ),
             Decimal("0"),
         )
 

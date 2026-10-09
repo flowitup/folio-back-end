@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of the worker rate-change repository."""
 
+import logging
 from decimal import Decimal
 from typing import Dict, List, Optional
 from uuid import UUID
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.application.labor.ports import IWorkerRateChangeRepository
 from app.domain.entities.worker_rate_change import WorkerRateChange
 from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
+
+_log = logging.getLogger(__name__)
 
 
 class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
@@ -79,7 +82,7 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
             .order_by(WorkerRateChangeModel.effective_date.desc())
             .all()
         )
-        return [self._to_entity(m) for m in models]
+        return [self._to_entity(m) for m in models if self._is_readable(m)]
 
     def list_by_workers(self, worker_ids: List[UUID]) -> Dict[UUID, List[WorkerRateChange]]:
         """Return rate changes for multiple workers in a single query.
@@ -102,6 +105,8 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
 
         result: Dict[UUID, List[WorkerRateChange]] = {}
         for model in models:
+            if not self._is_readable(model):
+                continue
             wid = model.worker_id
             if wid not in result:
                 result[wid] = []
@@ -111,7 +116,7 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
     def find_by_id(self, rc_id: UUID) -> Optional[WorkerRateChange]:
         """Return the rate change by primary key, or None."""
         model = self._session.query(WorkerRateChangeModel).filter_by(id=rc_id).first()
-        return self._to_entity(model) if model is not None else None
+        return self._to_entity(model) if model is not None and self._is_readable(model) else None
 
     def delete(self, rc_id: UUID) -> bool:
         """Delete the rate change. Returns True if deleted, False if not found.
@@ -131,6 +136,20 @@ class SQLAlchemyWorkerRateChangeRepository(IWorkerRateChangeRepository):
     # ------------------------------------------------------------------
     # Mapping helper
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_readable(model: WorkerRateChangeModel) -> bool:
+        """Whether the stored rate passes the entity's "> 0" invariant.
+
+        The 2-decimal column once rounded a sub-cent rate (0.004) to 0.00 after the
+        API had refused it with a 400, so the caller was told nothing was saved. Such
+        a row is skipped (and logged) instead of failing every labor read and the
+        delete of the project's workers.
+        """
+        if model.daily_rate is not None and model.daily_rate > 0:
+            return True
+        _log.warning("Skipping worker rate change %s: stored daily_rate %s is not > 0", model.id, model.daily_rate)
+        return False
 
     @staticmethod
     def _to_entity(model: WorkerRateChangeModel) -> WorkerRateChange:

@@ -7,12 +7,14 @@ to the renderer port. Filename: ``{document_number}.xlsx``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 from uuid import UUID
 
-from app.application.billing._helpers import _assert_billing_doc_access
+from app.application.billing._helpers import _assert_billing_doc_access, _linked_project
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     BillingDocumentXlsxRendererPort,
+    ProjectReadPort,
     UserCompanyAccessRepositoryPort,
 )
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
@@ -38,10 +40,12 @@ class RenderBillingDocumentXlsxUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         xlsx_renderer: BillingDocumentXlsxRendererPort,
         access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
+        project_repo: Optional[ProjectReadPort] = None,
     ) -> None:
         self._doc_repo = doc_repo
         self._xlsx_renderer = xlsx_renderer
         self._access_repo = access_repo
+        self._project_repo = project_repo
 
     def execute(self, doc_id: UUID, user_id: UUID) -> RenderXlsxResult:
         doc = self._doc_repo.find_by_id(doc_id)
@@ -49,7 +53,7 @@ class RenderBillingDocumentXlsxUseCase:
             raise BillingDocumentNotFoundError(doc_id)
         _assert_billing_doc_access(doc, user_id, self._access_repo)
 
-        xlsx_bytes = self._xlsx_renderer.render(doc)
+        xlsx_bytes = self._xlsx_renderer.render(doc, project=_linked_project(self._project_repo, doc))
         # Replace any path-unsafe chars in the doc number when forming filename.
         safe_number = doc.document_number.replace("/", "-").replace("\\", "-")
         filename = f"{safe_number}.xlsx"

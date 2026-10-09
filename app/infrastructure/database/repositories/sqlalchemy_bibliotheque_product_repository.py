@@ -103,11 +103,13 @@ class SqlAlchemyBibliothequeProductRepository:
         if category is not None:
             base = base.where(BibliothequeProductModel.category == category)
         if q:
-            pattern = f"%{q}%"
+            # Escape LIKE wildcards so "%" or "_" match only themselves, not any text.
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
             base = base.where(
-                BibliothequeProductModel.name.ilike(pattern)
-                | BibliothequeProductModel.description.ilike(pattern)
-                | BibliothequeProductModel.supplier_reference.ilike(pattern)
+                BibliothequeProductModel.name.ilike(pattern, escape="\\")
+                | BibliothequeProductModel.description.ilike(pattern, escape="\\")
+                | BibliothequeProductModel.supplier_reference.ilike(pattern, escape="\\")
             )
 
         total = self._session.execute(select(func.count()).select_from(base.subquery())).scalar_one()

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.domain.labor.export.format import format_eur_fr, slugify_project_name
+import pytest
+
+from app.domain.labor.export.format import format_eur_fr, format_unit_price_eur_fr, slugify_project_name
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,28 @@ class TestFormatEurFr:
         result = format_eur_fr(Decimal("1234.56"))
         assert result.endswith("\xa0€"), f"Missing non-breaking space + € in: {result!r}"
         assert "234,56" in result, f"Expected '234,56' in: {result!r}"
+
+
+class TestFormatUnitPriceEurFr:
+    """A unit price keeps its own decimals, so quantity x price gives the printed line amount."""
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (Decimal("15.015"), "15,015\xa0€"),
+            (Decimal("1234.565"), "1\xa0234,565\xa0€"),
+            (Decimal("0.125"), "0,125\xa0€"),
+            (15.015, "15,015\xa0€"),
+            # Two decimals or fewer read exactly like format_eur_fr.
+            (Decimal("200"), "200,00\xa0€"),
+            (Decimal("1250.50"), "1\xa0250,50\xa0€"),
+            (Decimal("19.990"), "19,99\xa0€"),
+            (Decimal("1E+3"), "1\xa0000,00\xa0€"),
+            (None, "—"),
+        ],
+    )
+    def test_keeps_the_price_own_decimals_with_at_least_two(self, value, expected):
+        assert format_unit_price_eur_fr(value) == expected
 
 
 # ---------------------------------------------------------------------------

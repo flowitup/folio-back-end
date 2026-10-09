@@ -52,10 +52,17 @@ class SQLAlchemyLoginOtpRepository:
         row.consumed_at = otp.consumed_at
         self._session.flush()
 
-    def latest_for_phone(self, phone: str, purpose: Optional[OtpPurpose] = None) -> Optional[LoginOtp]:
+    def latest_for_phone(
+        self, phone: str, purpose: Optional[OtpPurpose] = None, *, for_update: bool = False
+    ) -> Optional[LoginOtp]:
         query = select(LoginOtpOrm).where(LoginOtpOrm.phone == phone)
         if purpose is not None:
             query = query.where(LoginOtpOrm.purpose == purpose.value)
+        if for_update:
+            # SELECT ... FOR UPDATE (a no-op on SQLite): parallel guesses wait for each other instead of
+            # all reading the same counter and writing back the same value. populate_existing makes the
+            # waiting request see the row as the previous one committed it, not a cached copy.
+            query = query.with_for_update().execution_options(populate_existing=True)
         row = self._session.execute(query.order_by(LoginOtpOrm.created_at.desc()).limit(1)).scalar_one_or_none()
         return _to_entity(row) if row is not None else None
 

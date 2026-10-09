@@ -46,6 +46,7 @@ from app.application.labor import (
     GetMonthlyLaborSummaryRequest,
 )
 from app.domain.exceptions.labor_exceptions import (
+    AttendanceDateOutOfRangeError,
     WorkerInactiveError,
     WorkerNotFoundError,
     LaborEntryNotFoundError,
@@ -171,7 +172,7 @@ def log_attendance(project_id: str):
                 project_id=UUID(project_id),
                 worker_id=UUID(data.worker_id),
                 date=_parse_date(data.date),
-                amount_override=Decimal(str(data.amount_override)) if data.amount_override else None,
+                amount_override=Decimal(str(data.amount_override)) if data.amount_override is not None else None,
                 note=data.note,
                 shift_type=data.shift_type,
                 supplement_hours=data.supplement_hours,
@@ -179,6 +180,8 @@ def log_attendance(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    except AttendanceDateOutOfRangeError as e:
+        return _error_response("AttendanceDateOutOfRange", str(e), 400)
     except WorkerInactiveError as e:
         return _error_response("WorkerInactive", str(e), 409)
     except WorkerNotFoundError as e:
@@ -308,6 +311,8 @@ def bulk_log_attendance(project_id: str):
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
+    except AttendanceDateOutOfRangeError as e:
+        return _error_response("AttendanceDateOutOfRange", str(e), 400)
     except WorkerInactiveError as e:
         return _error_response("WorkerInactive", str(e), 409)
     except WorkerNotFoundError as e:
@@ -530,6 +535,8 @@ def get_labor_monthly_summary(project_id: str):
                 total_days=sum(w.days_worked for w in workers) if scope.restricted else r.total_days,
                 total_cost=sum(w.total_cost for w in workers) if scope.restricted else r.total_cost,
                 total_bonus_cost=(sum(w.bonus_cost for w in workers) if scope.restricted else r.total_bonus_cost),
+                total_banked_hours=(sum(w.banked_hours for w in workers) if scope.restricted else r.total_banked_hours),
+                total_bonus_days=(sum(w.bonus_days for w in workers) if scope.restricted else r.total_bonus_days),
                 workers=[
                     MonthlyWorkerSubRowResponse(
                         worker_id=w.worker_id,
@@ -537,6 +544,10 @@ def get_labor_monthly_summary(project_id: str):
                         days_worked=w.days_worked,
                         total_cost=w.total_cost,
                         bonus_cost=w.bonus_cost,
+                        banked_hours=w.banked_hours,
+                        bonus_days=w.bonus_days,
+                        daily_rate=w.daily_rate,
+                        month_start_rate=w.month_start_rate,
                     )
                     for w in workers
                 ],

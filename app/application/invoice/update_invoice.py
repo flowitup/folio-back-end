@@ -101,6 +101,30 @@ def _is_release_payment_method_only_edit(invoice: Invoice, request: UpdateInvoic
     )
 
 
+def _is_highlight_only_edit(request: UpdateInvoiceRequest) -> bool:
+    """True when the request ONLY sets or clears highlight_color.
+
+    The highlight is a cosmetic row tint with no financial meaning, so it stays
+    editable on a refunded expense, whose every other field is locked.
+    """
+    return (
+        request.highlight_color is not _UNSET
+        and request.type is None
+        and request.recipient_name is None
+        and request.issue_date is None
+        and request.items is None
+        and request.recipient_address is None
+        and request.notes is None
+        and request.payment_method_id is _UNSET
+        and request.refunds_invoice_id is _UNSET
+        and request.service_month is _UNSET
+        and request.settled_via is _UNSET
+        and request.applied_to_invoice_id is _UNSET
+        and request.worker_id is _UNSET
+        and request.is_cash_advance is _UNSET
+    )
+
+
 class UpdateInvoiceUseCase:
     """Partially update an existing invoice."""
 
@@ -124,8 +148,9 @@ class UpdateInvoiceUseCase:
         # Reject any update on a fully-refunded invoice. The company already
         # reimbursed the worker; silently mutating items or amounts after the
         # fact would cause company_spent_total to diverge from the actual
-        # payment. The refund status must be explicitly cleared first.
-        if invoice.refundable_status == RefundableStatus.REFUNDED.value:
+        # payment. The refund status must be explicitly cleared first. Only the
+        # cosmetic highlight stays editable.
+        if invoice.refundable_status == RefundableStatus.REFUNDED.value and not _is_highlight_only_edit(request):
             raise InvalidInvoiceDataError("Refunded expenses are locked; clear the refund status first")
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
@@ -179,6 +204,13 @@ class UpdateInvoiceUseCase:
                     )
                 invoice_items.append(InvoiceItem(description=desc, quantity=qty, unit_price=price, vat_rate=vat))
             updates["items"] = invoice_items
+        elif effective_type != invoice.type and effective_type not in MIXED_SIGN_TYPES:
+            # A type-only change keeps the stored lines, so they must pass the new
+            # type's sign rule exactly as if they had been resent with it.
+            if any(item.unit_price < 0 for item in invoice.items):
+                raise InvalidInvoiceDataError(
+                    f"Item unit_price cannot be negative for invoice type '{effective_type.value}'"
+                )
 
         # A return nets spend down, whether its lines or its type changed (checked only
         # then, so an older positive return can still be renamed or re-dated).
@@ -210,6 +242,13 @@ class UpdateInvoiceUseCase:
                     from app.domain.companies.exceptions import ForbiddenCompanyError
 
                     raise ForbiddenCompanyError(invoice.created_by, request.company_id)
+                # Refund tracking only applies to an expense someone paid personally
+                # (the guard SetInvoiceRefundableStatusUseCase applies when marking it):
+                # a tracked expense cannot be moved onto a company payment method.
+                if method.is_company_payment and invoice.refundable_status is not None:
+                    raise InvalidInvoiceDataError(
+                        "Expense already paid by the company — refund tracking does not apply"
+                    )
 
                 updates["payment_method_id"] = method.id
                 updates["payment_method_label"] = method.label
@@ -317,6 +356,22 @@ class UpdateInvoiceUseCase:
                 if new_total + linked_returns < 0:
                     raise RefundExceedsSourceError(
                         f"Invoice total cannot drop below its linked returns: {-linked_returns:.2f}"
+                    )
+
+        # This invoice may also be the target of avoirs (returns whose credit is
+        # applied to it): it cannot become a return or a release — targets the
+        # avoir side refuses — nor drop below the credit already applied to it.
+        if invoice.type not in (InvoiceType.RETURN, InvoiceType.RELEASED_FUNDS) and (
+            effective_type != invoice.type or "items" in updates
+        ):
+            applied_avoirs = self._repo.sum_applied_for_target(invoice.id)
+            if applied_avoirs != 0:
+                if effective_type in (InvoiceType.RETURN, InvoiceType.RELEASED_FUNDS):
+                    raise InvalidInvoiceDataError("Unlink the avoirs applied to this invoice before changing its type")
+                new_total = sum((item.total for item in updates.get("items", invoice.items)), Decimal("0"))
+                if abs(applied_avoirs) > new_total:
+                    raise AppliedAmountExceedsTargetError(
+                        f"Invoice total cannot drop below the avoirs applied to it: {abs(applied_avoirs):.2f}"
                     )
 
         # settled_via sentinel: absent = keep existing, None = clear, str = set+validate.

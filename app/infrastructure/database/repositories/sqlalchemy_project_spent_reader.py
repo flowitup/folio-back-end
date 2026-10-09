@@ -34,6 +34,8 @@ Labor cost uses the effective_cost expression shared with the labor summary endp
   - shift_type = 'overtime' → daily_rate * 1.5
   - else               → daily_rate * 1.0
   - amount_override coalesced over the computed value
+plus the bonus days earned by banked supplement hours, priced per calendar month as the
+labor summary prices them, so ``labor_accrued`` equals the labor summary's total cost.
 
 ``daily_rate`` there is the rate in force on the entry's own date — the worker's latest
 rate change effective on or before that date, falling back to the worker's base rate.
@@ -56,6 +58,8 @@ from sqlalchemy import Numeric, cast, case as sa_case, func, select
 from sqlalchemy.orm import Session
 
 from app.application.projects.ports import ProjectSpent, ProjectSpentReaderPort
+from app.domain.labor.banked_hours_bonus import bonus_for_banked_hours
+from app.infrastructure.adapters.sqlalchemy_labor_entry import bonus_rates_by_worker_month
 from app.infrastructure.database.invoice_spend_rules import (
     is_company_paid,
     items_total,
@@ -109,6 +113,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             select(WorkerRateChangeModel.daily_rate)
             .where(WorkerRateChangeModel.worker_id == LaborEntryModel.worker_id)
             .where(WorkerRateChangeModel.effective_date <= LaborEntryModel.date)
+            .where(WorkerRateChangeModel.daily_rate > 0)
             .order_by(WorkerRateChangeModel.effective_date.desc())
             .limit(1)
             .correlate(LaborEntryModel, WorkerModel)
@@ -142,6 +147,36 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             cost = Decimal(str(row.labor_cost)) if row.labor_cost is not None else zero
             by_worker = accrued_by_worker.setdefault(pid, {})
             by_worker[row.worker_id] = by_worker.get(row.worker_id, zero) + cost
+
+        # ------------------------------------------------------------------
+        # Query 1b: banked supplement hours per (worker, calendar month), paid as
+        # bonus days. Priced exactly as the labor summary does (hours do not carry
+        # over between months; rate in force on the month's last day), so a
+        # project's labor_accrued equals the labor summary's total_cost.
+        # ------------------------------------------------------------------
+        year_expr = func.extract("year", LaborEntryModel.date)
+        month_expr = func.extract("month", LaborEntryModel.date)
+        banked_rows = (
+            self._session.query(
+                WorkerModel.project_id.label("project_id"),
+                WorkerModel.id.label("worker_id"),
+                WorkerModel.daily_rate.label("base_rate"),
+                year_expr.label("year"),
+                month_expr.label("month"),
+                func.sum(LaborEntryModel.supplement_hours).label("banked_hours"),
+            )
+            .join(LaborEntryModel, LaborEntryModel.worker_id == WorkerModel.id)
+            .filter(WorkerModel.project_id.in_(project_ids), LaborEntryModel.status == "validated")
+            .group_by(WorkerModel.project_id, WorkerModel.id, WorkerModel.daily_rate, year_expr, month_expr)
+            .having(func.sum(LaborEntryModel.supplement_hours) > 0)
+            .all()
+        )
+        bonus_rates = bonus_rates_by_worker_month(self._session, banked_rows)
+        for row in banked_rows:
+            rate = bonus_rates[(row.worker_id, (int(row.year), int(row.month)))]
+            bonus = bonus_for_banked_hours(int(row.banked_hours), rate).cost
+            by_worker = accrued_by_worker.setdefault(row.project_id, {})
+            by_worker[row.worker_id] = by_worker.get(row.worker_id, zero) + bonus
 
         # ------------------------------------------------------------------
         # Query 2 + 3: resolve each project's company, then that company's

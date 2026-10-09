@@ -1,12 +1,12 @@
 """Invoice API request/response schemas."""
 
 import re
-from datetime import date
 from typing import Literal, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.api.v1.date_bounds import BusinessDate
 from app.api.v1.numeric_bounds import MAX_LINE_QUANTITY, MAX_LINE_UNIT_PRICE
 from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error schema
 
@@ -72,14 +72,14 @@ class CreateInvoiceSchema(BaseModel):
     def _legacy_type_alias(cls, v: object) -> object:
         return normalize_invoice_type_value(v)
 
-    issue_date: date  # Pydantic parses ISO date string (YYYY-MM-DD) automatically
+    issue_date: BusinessDate  # ISO date string (YYYY-MM-DD), 2000–2100
     recipient_name: str = Field(..., min_length=1, max_length=255)
     recipient_address: Optional[str] = None
     notes: Optional[str] = None
     items: List[InvoiceItemSchema] = Field(..., min_length=1)
     payment_method_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
-    service_month: Optional[date] = None
+    service_month: Optional[BusinessDate] = None
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
@@ -100,7 +100,7 @@ class UpdateInvoiceSchema(BaseModel):
     """
 
     type: Optional[InvoiceTypeLiteral] = None
-    issue_date: Optional[date] = None  # Pydantic parses ISO date string automatically
+    issue_date: Optional[BusinessDate] = None  # ISO date string, 2000–2100
 
     @field_validator("type", mode="before")
     @classmethod
@@ -113,7 +113,7 @@ class UpdateInvoiceSchema(BaseModel):
     items: Optional[List[InvoiceItemSchema]] = None
     payment_method_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
-    service_month: Optional[date] = None
+    service_month: Optional[BusinessDate] = None
     settled_via: Optional[SettledViaLiteral] = None
     applied_to_invoice_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
@@ -202,7 +202,7 @@ class ExportInvoicesQuery(BaseModel):
     @field_validator("from_month", "to_month")
     @classmethod
     def _yyyy_mm(cls, v: str) -> str:
-        if not _YYYY_MM.match(v):
+        if not _YYYY_MM.fullmatch(v):  # unlike "$", rejects a trailing "\n"
             raise ValueError("must be YYYY-MM")
         return v
 

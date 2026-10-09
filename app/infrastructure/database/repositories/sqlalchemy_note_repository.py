@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.application.notes.ports import DueNote
 from app.domain.entities.note import Note
 from app.infrastructure.database.models.note_orm import NoteOrm
 
@@ -78,7 +79,7 @@ class SqlAlchemyNoteRepository:
     # NoteQueryPort (dormant notifications path)
     # ------------------------------------------------------------------
 
-    def list_due_for_user(self, user_id: UUID, now: datetime, limit: int = 100) -> list[Note]:
+    def list_due_for_user(self, user_id: UUID, now: datetime, limit: int = 100) -> list[DueNote]:
         """Return open notes with a passed fire_at for user_id.
 
         Legacy reminder rows only (due_date IS NOT NULL guard excludes new
@@ -105,7 +106,9 @@ class SqlAlchemyNoteRepository:
                 n.description,
                 n.category,
                 n.created_at,
-                n.updated_at
+                n.updated_at,
+                n.due_date,
+                n.lead_time_minutes
             FROM notes n
             WHERE n.project_id IN (
                 SELECT p.id
@@ -137,7 +140,7 @@ class SqlAlchemyNoteRepository:
             sql,
             {"user_id": str(user_id), "now": now, "limit": limit},
         ).fetchall()
-        return [_row_to_entity(r) for r in rows]
+        return [DueNote(note=_row_to_entity(r), due_date=r[8], lead_time_minutes=r[9]) for r in rows]
 
 
 def _row_to_entity(row: object) -> Note:

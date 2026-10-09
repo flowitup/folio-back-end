@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from app.domain.entities.note import Note
@@ -54,3 +54,6 @@ class DueNotificationDto:
 
     note: NoteDto
     dismissed: bool = False
+    # When the reminder is for, so the bell can tell an overdue one from today's.
+    due_date: date | None = None
+    lead_time_minutes: int | None = None

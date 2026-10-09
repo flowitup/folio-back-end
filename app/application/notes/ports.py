@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.note import Note
+
+
+@dataclass(frozen=True)
+class DueNote:
+    """A due reminder: the note plus the reminder fields the Note entity does not carry."""
+
+    note: Note
+    due_date: date
+    lead_time_minutes: int
 
 
 class NoteRepositoryPort(Protocol):
@@ -74,7 +84,7 @@ class ProjectMembershipReaderPort(Protocol):
 class NoteQueryPort(Protocol):
     """Read-side query port for cross-table note queries."""
 
-    def list_due_for_user(self, user_id: UUID, now: datetime, limit: int = 100) -> list[Note]:
+    def list_due_for_user(self, user_id: UUID, now: datetime, limit: int = 100) -> list[DueNote]:
         """
         Return open notes whose fire_at timestamp has passed for *user_id*,
         excluding notes the user has already dismissed.

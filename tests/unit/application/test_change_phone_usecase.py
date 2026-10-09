@@ -46,6 +46,9 @@ class FakeUsers:
     def find_by_phone(self, phone):
         return next((u for u in self.users.values() if u.phone == phone), None)
 
+    def find_by_email(self, email):
+        return next((u for u in self.users.values() if u.email == email), None)
+
     def save(self, user):
         self.saved.append(user)
         return user
@@ -54,8 +57,20 @@ class FakeUsers:
         self.sessions_ended.append((user_id, cutoff))
 
 
-def _user(phone=OLD, active=True):
-    return SimpleNamespace(id=uuid4(), phone=phone, is_active=active)
+def _user(phone=OLD, active=True, email="me@example.com"):
+    return SimpleNamespace(id=uuid4(), phone=phone, is_active=active, email=email)
+
+
+class FakePersons:
+    def __init__(self, person=None) -> None:
+        self.person = person
+        self.phone_changes: list = []
+
+    def find_by_user_id(self, user_id):
+        return self.person if self.person is not None and self.person.user_id == user_id else None
+
+    def change_phone(self, person_id, phone, *, commit=True):
+        self.phone_changes.append((person_id, phone, commit))
 
 
 class Clock:
@@ -237,3 +252,51 @@ def test_code_requested_by_another_user_does_not_work(env):
     with pytest.raises(OtpInvalidError):
         env.confirm.execute(env.me.id, NEW, _last_code(env.sms))
     assert env.me.phone == OLD
+
+
+def test_placeholder_email_follows_the_new_number(env):
+    """A phone sign-up's address names its number: left behind, it blocked that number's next sign-up."""
+    env.me.email = "phone-33611111111@no-email.folio.flowitup.com"
+    env.request.execute(env.me.id, NEW)
+    user = env.confirm.execute(env.me.id, NEW, _last_code(env.sms))
+    assert user.email == "phone-33622222222@no-email.folio.flowitup.com"
+
+
+def test_a_real_email_is_left_alone(env):
+    env.request.execute(env.me.id, NEW)
+    assert env.confirm.execute(env.me.id, NEW, _last_code(env.sms)).email == "me@example.com"
+
+
+def test_a_stale_holder_of_the_new_numbers_address_moves_to_its_own(env):
+    """An account that left NEW before addresses followed numbers still holds NEW's address."""
+    env.me.email = "phone-33611111111@no-email.folio.flowitup.com"
+    stale = _user(phone="+33633333333", email="phone-33622222222@no-email.folio.flowitup.com")
+    env.users.users[stale.id] = stale
+    env.request.execute(env.me.id, NEW)
+    env.confirm.execute(env.me.id, NEW, _last_code(env.sms))
+    assert env.me.email == "phone-33622222222@no-email.folio.flowitup.com"
+    assert stale.email == "phone-33633333333@no-email.folio.flowitup.com"
+
+
+def test_the_linked_person_moves_to_the_new_number(env):
+    persons = FakePersons(SimpleNamespace(id=uuid4(), user_id=env.me.id))
+    env.confirm.set_person_repo(persons)
+    env.request.execute(env.me.id, NEW)
+    env.confirm.execute(env.me.id, NEW, _last_code(env.sms))
+    # Same transaction as the number swap: flushed here, committed by the route.
+    assert persons.phone_changes == [(persons.person.id, NEW, False)]
+
+
+def test_a_refused_change_leaves_the_person_alone(env):
+    persons = FakePersons(SimpleNamespace(id=uuid4(), user_id=env.me.id))
+    env.confirm.set_person_repo(persons)
+    env.request.execute(env.me.id, NEW)
+    with pytest.raises(OtpInvalidError):
+        env.confirm.execute(env.me.id, NEW, "000000" if _last_code(env.sms) != "000000" else "111111")
+    assert persons.phone_changes == []
+
+
+def test_an_account_with_no_person_changes_number_all_the_same(env):
+    env.confirm.set_person_repo(FakePersons())
+    env.request.execute(env.me.id, NEW)
+    assert env.confirm.execute(env.me.id, NEW, _last_code(env.sms)).phone == NEW

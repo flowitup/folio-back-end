@@ -28,6 +28,7 @@ from app.api.v1.labor._labor_validation_error_helper import (
     validation_error_response as _validation_error_response,
 )
 from app.api.v1.projects.decorators import require_permission
+from app.api.v1.projects.labor_scope import labor_scope_for
 from app.application.labor.labor_payment_note_usecases import (
     LaborPaymentNoteDetail,
     LaborPaymentNoteWorkerNotFound,
@@ -110,6 +111,10 @@ def list_labor_payment_notes(project_id: str):
     notes = get_container().list_labor_payment_notes_usecase.execute(
         ListLaborPaymentNotesRequest(project_id=project_uuid, month=month)
     )
+    # Restricted members only see the notes on their own linked worker, like the
+    # Payments summary and worker list they can read.
+    scope = labor_scope_for(project_uuid)
+    notes = [n for n in notes if scope.allows_worker(n.worker_id)]
     return jsonify(PaymentNoteListResponse(notes=[_detail_to_response(n) for n in notes]).model_dump())
 
 
@@ -126,7 +131,7 @@ def list_labor_payment_notes(project_id: str):
 @require_permission("project:manage_invoices")
 def set_labor_payment_note(project_id: str):
     try:
-        data = SetPaymentNoteSchema(**(request.get_json() or {}))
+        data = SetPaymentNoteSchema.model_validate(request.get_json() or {})
     except ValidationError as e:
         return _validation_error_response(e)
 

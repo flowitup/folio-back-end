@@ -39,7 +39,9 @@ class CreateLaborRoleRequest(BaseModel):
     @field_validator("color")
     @classmethod
     def color_valid_hex(cls, v: str) -> str:
-        if not re.match(r"^#[0-9a-fA-F]{6}$", v):
+        # fullmatch: with re.match, "$" also matched before a trailing "\n", so
+        # "#FFFFFF\n" passed and overflowed the String(7) column (a 500).
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", v):
             raise ValueError("Color must be a valid hex (#RRGGBB)")
         return v
 
@@ -62,7 +64,7 @@ class UpdateLaborRoleRequest(BaseModel):
     @field_validator("color")
     @classmethod
     def color_valid_hex(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not re.match(r"^#[0-9a-fA-F]{6}$", v):
+        if v is not None and not re.fullmatch(r"#[0-9a-fA-F]{6}", v):
             raise ValueError("Color must be a valid hex (#RRGGBB)")
         return v
 

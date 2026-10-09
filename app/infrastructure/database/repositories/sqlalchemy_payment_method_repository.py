@@ -13,11 +13,17 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.domain.payment_methods.exceptions import PaymentMethodAlreadyExistsError
 from app.domain.payment_methods.payment_method import PaymentMethod
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
+
+
+# One active label per company (case-insensitive): see the model's partial index.
+_LABEL_UNIQUE_INDEX = "ux_payment_methods_company_label_active"
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +139,13 @@ class SqlAlchemyPaymentMethodRepository:
     # ------------------------------------------------------------------
 
     def save(self, method: PaymentMethod) -> PaymentMethod:
-        """Insert or update a payment method. Returns the persisted instance."""
+        """Insert or update a payment method. Returns the persisted instance.
+
+        Raises PaymentMethodAlreadyExistsError when the active label is taken: two
+        concurrent requests with one label both pass the use case's look-up, and the
+        partial unique index then refuses the second write (a 500 before). Callers
+        flush inside a savepoint, which the raised error rolls back.
+        """
         row = self._session.get(PaymentMethodModel, method.id)
         if row is None:
             row = PaymentMethodModel()
@@ -141,7 +153,12 @@ class SqlAlchemyPaymentMethodRepository:
             self._session.add(row)
         else:
             _to_model(method, row)
-        self._session.flush()
+        try:
+            self._session.flush()
+        except IntegrityError as exc:
+            if _LABEL_UNIQUE_INDEX in str(exc.orig):
+                raise PaymentMethodAlreadyExistsError(method.company_id, method.label) from exc
+            raise
         return _to_entity(row)
 
     def insert_many(self, methods: list[PaymentMethod]) -> None:

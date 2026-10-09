@@ -208,6 +208,60 @@ class TestMessages:
         )
 
 
+@pytest.fixture
+def project_of_a_former_member(invitation_app):
+    """A project of the test company created by the outsider, who holds no role in that
+    company (a creator who left or was removed), with a leftover assignment row. The
+    member is assigned too. Yields the channel key."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    from app import db
+    from app.infrastructure.database.models import ProjectModel, UserModel
+
+    with invitation_app.app_context():
+        company_id = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id)).company_id
+        outsider_id = db.session.query(UserModel).filter_by(email=invitation_app._test_outsider_email).one().id
+        project = ProjectModel(name="Former Member Project", owner_id=outsider_id, company_id=company_id)
+        db.session.add(project)
+        db.session.flush()
+        for uid in (str(outsider_id), invitation_app._test_member_user_id):
+            db.session.execute(
+                text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:u, :p, :at)"),
+                {"u": uid, "p": str(project.id), "at": datetime.now(timezone.utc)},
+            )
+        db.session.commit()
+        project_id = project.id
+    yield f"project:{project_id}"
+    with invitation_app.app_context():
+        db.session.execute(text("DELETE FROM user_projects WHERE project_id = :p"), {"p": str(project_id)})
+        db.session.query(ProjectModel).filter_by(id=project_id).delete()
+        db.session.commit()
+
+
+class TestProjectChannelNeedsACompanyRole:
+    """Creator or assignee, a user without a role in the project's company is not in its channel."""
+
+    def test_former_member_loses_list_read_and_send(self, inv_client, outsider_token, project_of_a_former_member):
+        key = project_of_a_former_member
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(outsider_token)).get_json()["items"]
+        assert key not in [c["key"] for c in items]
+        assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(outsider_token)).status_code == 403
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "still here?"}, headers=_auth(outsider_token)
+        )
+        assert resp.status_code == 403
+
+    def test_former_member_is_not_listed_among_the_members(self, inv_client, member_token, project_of_a_former_member):
+        key = project_of_a_former_member
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        assert next(c for c in items if c["key"] == key)["member_count"] == 1
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
+        assert page.status_code == 200
+        assert [m["name"] for m in page.get_json()["members"]] == ["member@invite-test.com"]
+
+
 class TestAttachments:
     def test_image_attachment_roundtrip(self, inv_client, member_token, admin_token, outsider_token, invitation_app):
         key = _project_key(invitation_app)

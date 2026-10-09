@@ -445,3 +445,39 @@ class TestDeleteProjectUseCase:
 
         with pytest.raises(ProjectNotFoundError):
             usecase.execute(uuid4())
+
+    @staticmethod
+    def _existing(project_id):
+        mock_repo = Mock()
+        mock_repo.find_by_id.return_value = Project(
+            id=project_id, name="With files", address=None, owner_id=uuid4(), created_at=datetime.now(timezone.utc)
+        )
+        return mock_repo
+
+    def test_delete_removes_the_project_files_after_the_rows(self):
+        """Keys are read before the cascade drops the rows, files deleted after it."""
+        project_id = uuid4()
+        calls = []
+        mock_repo = self._existing(project_id)
+        mock_repo.delete.side_effect = lambda pid: calls.append(("rows", pid))
+        keys = Mock()
+        keys.storage_keys_for_project.side_effect = lambda pid: calls.append(("keys", pid)) or ["a.pdf", "b.jpg"]
+        storage = Mock()
+        storage.delete.side_effect = lambda key: calls.append(("file", key))
+
+        DeleteProjectUseCase(mock_repo, storage_keys=keys, storage=storage).execute(project_id)
+
+        assert calls == [("keys", project_id), ("rows", project_id), ("file", "a.pdf"), ("file", "b.jpg")]
+
+    def test_a_storage_failure_never_blocks_the_delete(self):
+        project_id = uuid4()
+        mock_repo = self._existing(project_id)
+        keys = Mock()
+        keys.storage_keys_for_project.return_value = ["a.pdf", "b.jpg"]
+        storage = Mock()
+        storage.delete.side_effect = [RuntimeError("s3 down"), None]
+
+        DeleteProjectUseCase(mock_repo, storage_keys=keys, storage=storage).execute(project_id)
+
+        mock_repo.delete.assert_called_once_with(project_id)
+        assert [c.args[0] for c in storage.delete.call_args_list] == ["a.pdf", "b.jpg"]

@@ -723,6 +723,86 @@ class TestDownloadDocumentErrors:
         assert dl_resp.data == content
 
 
+class TestDocumentFilenameControlCharacters:
+    """A CR/LF in the stored name made werkzeug refuse the Content-Disposition header (500)."""
+
+    @pytest.fixture(autouse=True)
+    def _wire_rename(self, doc_app):
+        from app import db
+        from app.application.project_documents import RenameProjectDocumentUseCase
+        from wiring import get_container
+
+        _c = get_container()
+        _c.rename_project_document_usecase = RenameProjectDocumentUseCase(
+            repo=_c.project_document_repository, db_session=db.session
+        )
+
+    @pytest.mark.parametrize("name", ["Plan\nInjected: x.pdf", "a\r\nb.pdf", "Plan\rX.pdf", "a\tb.pdf"])
+    def test_400_rename_with_control_characters(self, doc_client, owner_token, doc_app, name):
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
+        resp = doc_client.patch(
+            f"{_docs_url(doc_app._doc_project_id)}/{doc_id}/rename",
+            json={"filename": name},
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "INVALID_FILENAME"
+
+        dl = doc_client.get(_download_url(doc_app._doc_project_id, doc_id), headers=_auth(owner_token))
+        assert dl.status_code == 200
+
+    def test_201_upload_drops_control_characters_from_the_name(self, doc_client, owner_token, doc_app):
+        # A crafted part can carry a line break through RFC 2231 percent-encoding
+        boundary = "qa-boundary"
+        body = (
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"file\"; filename*=UTF-8''Up%0Aload.pdf\r\n"
+            "Content-Type: application/pdf\r\n\r\n"
+            "%PDF-1.4 test\r\n"
+            f"--{boundary}--\r\n"
+        ).encode()
+        resp = doc_client.post(
+            _docs_url(doc_app._doc_project_id),
+            data=body,
+            content_type=f"multipart/form-data; boundary={boundary}",
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["filename"] == "Upload.pdf"
+
+        dl = doc_client.get(_download_url(doc_app._doc_project_id, resp.get_json()["id"]), headers=_auth(owner_token))
+        assert dl.status_code == 200
+
+    def test_200_download_of_a_name_stored_with_a_line_break(self, doc_client, owner_token, doc_app):
+        from uuid import UUID
+
+        from app import db
+        from wiring import get_container
+
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
+        with doc_app.app_context():
+            get_container().project_document_repository.update_filename(UUID(doc_id), "Plan\r\nInjected: x.pdf")
+            db.session.commit()
+
+        dl = doc_client.get(_download_url(doc_app._doc_project_id, doc_id), headers=_auth(owner_token))
+        assert dl.status_code == 200
+        assert "PlanInjected" in dl.headers["Content-Disposition"]
+
+
+class TestUploadDocumentLongContentType:
+    def test_201_dwg_with_overlong_content_type_stored_as_generic_type(self, doc_client, owner_token, doc_app):
+        """content_type is varchar(255); a free-text DWG MIME longer than that used to 500."""
+        resp = _upload(
+            doc_client,
+            doc_app._doc_project_id,
+            owner_token,
+            filename="plan.dwg",
+            content_type="application/" + "x" * 300,
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["content_type"] == "application/octet-stream"
+
+
 # ===========================================================================
 # DELETE  DELETE /api/v1/projects/<pid>/documents/<did>
 # ===========================================================================
@@ -1049,3 +1129,54 @@ class TestListDocumentUploaders:
     def test_403_member_cannot_list_uploaders(self, doc_client, member_token, doc_app):
         resp = doc_client.get(_uploaders_url(doc_app._doc_project_id), headers=_auth(member_token))
         assert resp.status_code == 403
+
+    def test_never_shows_a_synthetic_or_erased_address(self, doc_client, owner_token, doc_app):
+        """A phone-only account with no name is labelled by its phone; an erased one is flagged, not named."""
+        from datetime import datetime, timezone
+        from uuid import UUID
+
+        from app import db
+        from app.infrastructure.database.models import UserModel
+        from app.infrastructure.database.models.project_document import ProjectDocumentModel
+
+        project_id = doc_app._doc_project_id
+        with doc_app.app_context():
+            phone_only = UserModel(
+                email="phone-33620159009@no-email.folio.flowitup.com", phone="+33620159009", is_active=True
+            )
+            erased = UserModel(
+                email=f"deleted-{uuid4()}@deleted.invalid",
+                is_active=False,
+                deleted_at=datetime.now(timezone.utc),
+            )
+            db.session.add_all([phone_only, erased])
+            db.session.flush()
+            for user in (phone_only, erased):
+                db.session.add(
+                    ProjectDocumentModel(
+                        project_id=UUID(project_id),
+                        uploader_user_id=user.id,
+                        filename="plan.txt",
+                        content_type="text/plain",
+                        size_bytes=4,
+                        storage_key=f"test/{uuid4()}",
+                    )
+                )
+            db.session.commit()
+            phone_only_id, erased_id = str(phone_only.id), str(erased.id)
+
+        resp = doc_client.get(_uploaders_url(project_id), headers=_auth(owner_token))
+
+        assert resp.status_code == 200
+        items = {item["user_id"]: item for item in resp.get_json()["items"]}
+        assert items[phone_only_id] == {
+            "user_id": phone_only_id,
+            "display_name": "+33620159009",
+            "phone": "+33620159009",
+            "is_deleted": False,
+        }
+        assert items[erased_id]["display_name"] == ""
+        assert items[erased_id]["is_deleted"] is True
+        assert all(
+            "no-email" not in i["display_name"] and "deleted.invalid" not in i["display_name"] for i in items.values()
+        )

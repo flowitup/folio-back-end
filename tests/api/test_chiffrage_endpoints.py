@@ -782,6 +782,23 @@ class TestArticleImage:
         resp = self._upload(inv_client, writer_token, project_id, article["id"], b"%PDF-1.4", "application/pdf")
         assert resp.status_code == 415
 
+    def test_non_image_bytes_labelled_as_png_are_rejected(
+        self, inv_client, writer_token, project_id, article, fake_storage
+    ):
+        html = b"<!doctype html><html><body><script>alert(1)</script>"
+        resp = self._upload(inv_client, writer_token, project_id, article["id"], html, "image/png")
+        assert resp.status_code == 415
+        assert fake_storage.objects == {}
+
+    def test_photo_is_stored_under_the_type_its_bytes_are(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"x" * 16
+        assert self._upload(inv_client, writer_token, project_id, article["id"], jpeg, "image/png").status_code == 201
+        resp = inv_client.get(f"{_base(project_id)}/articles/{article['id']}/image", headers=_auth(reader_token))
+        assert resp.data == jpeg
+        assert resp.headers["Content-Type"] == "image/jpeg"
+
     def test_missing_multipart_field_is_422(self, inv_client, writer_token, project_id, article):
         resp = inv_client.post(
             f"{_base(project_id)}/articles/{article['id']}/image",
@@ -862,6 +879,18 @@ class TestRooms:
     def test_duplicate_room_name_is_rejected(self, inv_client, writer_token, project_id):
         self._room(inv_client, writer_token, project_id, "Garage")
         assert self._room(inv_client, writer_token, project_id, "Garage").status_code == 409
+
+    def test_room_names_differing_only_in_case_are_duplicates(self, inv_client, writer_token, project_id):
+        """Same rule as shop names: 'buanderie' is the room 'Buanderie' again."""
+        assert self._room(inv_client, writer_token, project_id, "Buanderie").status_code == 201
+        assert self._room(inv_client, writer_token, project_id, "buanderie").status_code == 409
+
+        dressing = self._room(inv_client, writer_token, project_id, "Dressing").get_json()
+        rename = f"{_base(project_id)}/rooms/{dressing['id']}"
+        resp = inv_client.patch(rename, json={"name": "BUANDERIE"}, headers=_auth(writer_token))
+        assert resp.status_code == 409
+        # Re-casing a room's own name is not a clash with itself.
+        assert inv_client.patch(rename, json={"name": "DRESSING"}, headers=_auth(writer_token)).status_code == 200
 
     def test_blank_room_name_is_rejected(self, inv_client, writer_token, project_id):
         # Rejected by the schema (strip + min_length), so 422 rather than 400.
@@ -1413,3 +1442,399 @@ class TestQuantityPrecision:
         )
         assert created.status_code == 201
         assert float(created.get_json()["quantity"]) == 1.235
+
+
+class TestQuotePrecision:
+    """Price and VAT keep the column's decimals, and the saved quote says so."""
+
+    def _tree_quote(self, client, token, project_id, article_id, quote_id):
+        tree = client.get(_base(project_id), headers=_auth(token)).get_json()
+        return next(q for q in _article_in_tree(tree, article_id)["quotes"] if q["id"] == quote_id)
+
+    def test_create_returns_the_rounded_values_it_stores(self, inv_client, writer_token, project_id, article):
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "S", 1.23456, 5.555)
+        assert (quote["unit_price_ht"], quote["tva_rate"]) == (1.2346, 5.56)
+        stored = self._tree_quote(inv_client, writer_token, project_id, article["id"], quote["id"])
+        assert (stored["unit_price_ht"], stored["tva_rate"]) == (1.2346, 5.56)
+
+    def test_update_returns_the_rounded_values_it_stores(self, inv_client, writer_token, project_id, article):
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "S", "10")
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"unit_price_ht": 2.98765, "tva_rate": 7.777},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert (resp.get_json()["unit_price_ht"], resp.get_json()["tva_rate"]) == (2.9877, 7.78)
+        stored = self._tree_quote(inv_client, writer_token, project_id, article["id"], quote["id"])
+        assert (stored["unit_price_ht"], stored["tva_rate"]) == (2.9877, 7.78)
+
+
+class TestShopOnlyPrices:
+    """A price recorded only at a shop (the mobile app leaves the name blank) keeps the shop's name.
+
+    Without that snapshot the price has neither a shop nor a name once the shop is
+    detached, which breaks ck_chiffrage_quotes_supplier_present: deleting the shop
+    (or, on Postgres, the whole project through ON DELETE SET NULL) failed with 500.
+    """
+
+    def _shop(self, client, token, project_id, name):
+        resp = client.post(f"{_base(project_id)}/stores", json={"name": name}, headers=_auth(token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def _shop_price(self, client, token, project_id, article_id, store_id):
+        resp = client.post(
+            f"{_base(project_id)}/articles/{article_id}/quotes",
+            json={"unit_price_ht": "10", "tva_rate": "20", "store_id": store_id},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def _quote_in_tree(self, client, token, project_id, article_id, quote_id):
+        tree = client.get(_base(project_id), headers=_auth(token)).get_json()
+        return next(q for q in _article_in_tree(tree, article_id)["quotes"] if q["id"] == quote_id)
+
+    def test_a_shop_only_price_takes_the_shop_name(self, inv_client, writer_token, project_id, article):
+        shop = self._shop(inv_client, writer_token, project_id, "Brico Snapshot")
+        quote = self._shop_price(inv_client, writer_token, project_id, article["id"], shop["id"])
+        assert quote["store_id"] == shop["id"]
+        assert quote["supplier_name"] == "Brico Snapshot"
+
+    def test_deleting_the_shop_keeps_its_shop_only_prices(
+        self, inv_client, writer_token, reader_token, project_id, article
+    ):
+        shop = self._shop(inv_client, writer_token, project_id, "Brico Temp")
+        quote = self._shop_price(inv_client, writer_token, project_id, article["id"], shop["id"])
+
+        resp = inv_client.delete(f"{_base(project_id)}/stores/{shop['id']}", headers=_auth(writer_token))
+        assert resp.status_code == 204
+
+        kept = self._quote_in_tree(inv_client, reader_token, project_id, article["id"], quote["id"])
+        assert kept["store_id"] is None
+        assert kept["supplier_name"] == "Brico Temp"
+        assert kept["unit_price_ht"] == 10.0
+
+    def test_deleting_a_shop_names_an_older_nameless_price(
+        self, inv_client, invitation_app, writer_token, reader_token, project_id, article
+    ):
+        """Prices saved before the snapshot carry the shop and no name; the delete names them."""
+        from sqlalchemy import update
+
+        from app import db
+        from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
+
+        shop = self._shop(inv_client, writer_token, project_id, "Brico Legacy")
+        quote = self._shop_price(inv_client, writer_token, project_id, article["id"], shop["id"])
+        with invitation_app.app_context():
+            db.session.execute(
+                update(ChiffrageQuoteModel)
+                .where(ChiffrageQuoteModel.id == uuid.UUID(quote["id"]))
+                .values(supplier_name=None)
+            )
+            db.session.commit()
+
+        resp = inv_client.delete(f"{_base(project_id)}/stores/{shop['id']}", headers=_auth(writer_token))
+        assert resp.status_code == 204
+        kept = self._quote_in_tree(inv_client, reader_token, project_id, article["id"], quote["id"])
+        assert kept["supplier_name"] == "Brico Legacy"
+
+    def test_clearing_the_name_of_a_shop_price_keeps_the_shop_name(self, inv_client, writer_token, project_id, article):
+        shop = self._shop(inv_client, writer_token, project_id, "Brico Clear")
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "typed name", "10")
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"store_id": shop["id"], "supplier_name": None},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["supplier_name"] == "Brico Clear"
+
+    def test_moving_a_price_to_another_shop_moves_the_snapshot(self, inv_client, writer_token, project_id, article):
+        """The mobile edit sheet sends the old shop's snapshot back; it follows the shop, a typed name stays."""
+        first = self._shop(inv_client, writer_token, project_id, "Brico First")
+        second = self._shop(inv_client, writer_token, project_id, "Brico Second")
+        quote = self._shop_price(inv_client, writer_token, project_id, article["id"], first["id"])
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"store_id": second["id"], "supplier_name": "Brico First"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["supplier_name"] == "Brico Second"
+
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"store_id": first["id"], "supplier_name": "Typed by hand"},
+            headers=_auth(writer_token),
+        )
+        assert resp.get_json()["supplier_name"] == "Typed by hand"
+
+    def test_a_long_shop_name_is_cut_to_the_supplier_name_width(self, inv_client, writer_token, project_id, article):
+        name = "Grande Surface " + "x" * 140
+        shop = self._shop(inv_client, writer_token, project_id, name)
+        quote = self._shop_price(inv_client, writer_token, project_id, article["id"], shop["id"])
+        assert quote["supplier_name"] == name[:120]
+
+
+class TestLibraryReferencesStayInTheCompany:
+    """A price may only point at the project's own company library."""
+
+    @pytest.fixture(scope="class")
+    def library(self, invitation_app, chiffrage_world):
+        from datetime import datetime, timezone
+
+        from app import db
+        from app.infrastructure.database.models import ProjectModel
+        from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
+        from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
+        from app.infrastructure.database.models.company import CompanyModel
+
+        with invitation_app.app_context():
+            own_company = db.session.get(ProjectModel, uuid.UUID(chiffrage_world["project_id"])).company_id
+            now = datetime.now(timezone.utc)
+            other_company = CompanyModel(
+                id=uuid.uuid4(),
+                legal_name="Other Library Co",
+                address="2 rue Ailleurs",
+                created_by=db.session.get(ProjectModel, uuid.UUID(chiffrage_world["project_id"])).owner_id,
+                created_at=now,
+                updated_at=now,
+            )
+            db.session.add(other_company)
+            db.session.flush()
+            made = {}
+            for key, company_id in (("own", own_company), ("other", other_company.id)):
+                supplier = BibliothequeSupplierModel(company_id=company_id, name=f"Supplier {key}", slug=f"lib-{key}")
+                db.session.add(supplier)
+                db.session.flush()
+                product = BibliothequeProductModel(
+                    company_id=company_id,
+                    supplier_id=supplier.id,
+                    supplier_reference=f"REF-{key}",
+                    name=f"Product {key}",
+                    image_storage_key=f"bibliotheque/products/{key}.png",
+                )
+                db.session.add(product)
+                db.session.flush()
+                made[key] = {"supplier_id": str(supplier.id), "product_id": str(product.id)}
+            db.session.commit()
+            return made
+
+    def _post_quote(self, client, token, project_id, article_id, **refs):
+        return client.post(
+            f"{_base(project_id)}/articles/{article_id}/quotes",
+            json={"unit_price_ht": "5", "tva_rate": "20", "supplier_name": "x", **refs},
+            headers=_auth(token),
+        )
+
+    def test_another_company_product_or_supplier_is_refused(
+        self, inv_client, writer_token, reader_token, project_id, article, library
+    ):
+        foreign = library["other"]
+        assert (
+            self._post_quote(
+                inv_client, writer_token, project_id, article["id"], library_product_id=foreign["product_id"]
+            ).status_code
+            == 404
+        )
+        assert (
+            self._post_quote(
+                inv_client, writer_token, project_id, article["id"], supplier_id=foreign["supplier_id"]
+            ).status_code
+            == 404
+        )
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, article["id"])["quotes"] == []
+
+    def test_an_unknown_library_id_is_404_not_500(self, inv_client, writer_token, project_id, article):
+        for refs in ({"library_product_id": str(uuid.uuid4())}, {"supplier_id": str(uuid.uuid4())}):
+            resp = self._post_quote(inv_client, writer_token, project_id, article["id"], **refs)
+            assert resp.status_code == 404, refs
+
+    def test_the_own_company_library_is_accepted_and_lends_its_image(
+        self, inv_client, writer_token, reader_token, project_id, article, library
+    ):
+        own = library["own"]
+        resp = self._post_quote(
+            inv_client,
+            writer_token,
+            project_id,
+            article["id"],
+            library_product_id=own["product_id"],
+            supplier_id=own["supplier_id"],
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, article["id"])["image_ref"] == {"kind": "library", "id": own["product_id"]}
+
+    def test_patch_to_another_company_product_is_refused(self, inv_client, writer_token, project_id, article, library):
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "S", "10")
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"library_product_id": library["other"]["product_id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+        resp = inv_client.patch(
+            f"{_base(project_id)}/quotes/{quote['id']}",
+            json={"library_product_id": str(uuid.uuid4())},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+    def test_the_tree_never_reveals_another_company_product(
+        self, inv_client, invitation_app, writer_token, reader_token, project_id, article, library
+    ):
+        """A foreign link already stored (before this check existed) lends no image."""
+        from sqlalchemy import update
+
+        from app import db
+        from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
+
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "S", "10")
+        with invitation_app.app_context():
+            db.session.execute(
+                update(ChiffrageQuoteModel)
+                .where(ChiffrageQuoteModel.id == uuid.UUID(quote["id"]))
+                .values(library_product_id=uuid.UUID(library["other"]["product_id"]))
+            )
+            db.session.commit()
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, article["id"])["image_ref"] is None
+
+
+class TestMoveToTheTop:
+    """Moving one row to the top, then another, puts the second one first.
+
+    The head slot used to be clamped at 0, so the second move tied with the first
+    and the tie (broken by creation date) left it second.
+    """
+
+    def _names(self, client, token, project_id, poste_id):
+        tree = client.get(_base(project_id), headers=_auth(token)).get_json()
+        return [a["name"] for a in next(p for p in tree["postes"] if p["id"] == poste_id)["articles"]]
+
+    def _article(self, client, token, project_id, poste_id, name):
+        return client.post(
+            f"{_base(project_id)}/postes/{poste_id}/articles",
+            json={"name": name, "quantity": "1", "unit": "u"},
+            headers=_auth(token),
+        ).get_json()
+
+    def _reorder(self, client, token, url, before_id, after_id):
+        resp = client.post(url, json={"before_id": before_id, "after_id": after_id}, headers=_auth(token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def test_two_articles_moved_to_the_top_in_turn(self, inv_client, writer_token, reader_token, project_id, poste):
+        a, b, c = (self._article(inv_client, writer_token, project_id, poste["id"], n) for n in ("A", "B", "C"))
+        self._reorder(inv_client, writer_token, f"{_base(project_id)}/articles/{b['id']}/reorder", None, a["id"])
+        self._reorder(inv_client, writer_token, f"{_base(project_id)}/articles/{c['id']}/reorder", None, b["id"])
+        assert self._names(inv_client, reader_token, project_id, poste["id"]) == ["C", "B", "A"]
+
+    def test_repeated_drops_into_one_gap_never_tie(self, inv_client, writer_token, reader_token, project_id, poste):
+        """Halving the same gap runs out of integers; the poste is then renumbered."""
+        top = self._article(inv_client, writer_token, project_id, poste["id"], "Top")
+        bottom = self._article(inv_client, writer_token, project_id, poste["id"], "Bottom")
+        below_top = bottom
+        for i in range(12):
+            moved = self._article(inv_client, writer_token, project_id, poste["id"], f"M{i}")
+            self._reorder(
+                inv_client,
+                writer_token,
+                f"{_base(project_id)}/articles/{moved['id']}/reorder",
+                top["id"],
+                below_top["id"],
+            )
+            below_top = moved
+        names = self._names(inv_client, reader_token, project_id, poste["id"])
+        assert names == ["Top"] + [f"M{i}" for i in reversed(range(12))] + ["Bottom"]
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        positions = [a["position"] for a in next(p for p in tree["postes"] if p["id"] == poste["id"])["articles"]]
+        assert len(set(positions)) == len(positions)
+
+    def test_two_postes_moved_to_the_top_in_turn(self, inv_client, writer_token, reader_token, project_id):
+        def first_postes():
+            tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+            return [p["id"] for p in tree["postes"]]
+
+        x = inv_client.post(f"{_base(project_id)}/postes", json={"name": "X"}, headers=_auth(writer_token)).get_json()
+        y = inv_client.post(f"{_base(project_id)}/postes", json={"name": "Y"}, headers=_auth(writer_token)).get_json()
+        self._reorder(
+            inv_client, writer_token, f"{_base(project_id)}/postes/{x['id']}/reorder", None, first_postes()[0]
+        )
+        self._reorder(
+            inv_client, writer_token, f"{_base(project_id)}/postes/{y['id']}/reorder", None, first_postes()[0]
+        )
+        assert first_postes()[:2] == [y["id"], x["id"]]
+
+    def test_two_rooms_moved_to_the_top_in_turn(self, inv_client, writer_token, reader_token, project_id):
+        def rooms():
+            return [
+                r["id"] for r in inv_client.get(f"{_base(project_id)}/rooms", headers=_auth(reader_token)).get_json()
+            ]
+
+        made = [
+            inv_client.post(f"{_base(project_id)}/rooms", json={"name": n}, headers=_auth(writer_token)).get_json()
+            for n in ("Top Room X", "Top Room Y")
+        ]
+        x, y = made
+        self._reorder(inv_client, writer_token, f"{_base(project_id)}/rooms/{x['id']}/reorder", None, rooms()[0])
+        self._reorder(inv_client, writer_token, f"{_base(project_id)}/rooms/{y['id']}/reorder", None, rooms()[0])
+        assert rooms()[:2] == [y["id"], x["id"]]
+
+    def test_a_drop_between_tied_rooms_lands_between_them(self, inv_client, writer_token, reader_token, project_id):
+        """Rows already tied by the old clamp are separated by the renumbering."""
+        made = [
+            inv_client.post(f"{_base(project_id)}/rooms", json={"name": n}, headers=_auth(writer_token)).get_json()
+            for n in ("Tie R1", "Tie R2", "Tie R3")
+        ]
+        r1, r2, r3 = made
+        # Move r2 to the top, then r3 to the top using r2's position (both land below the head).
+        for room in (r2, r3):
+            head = inv_client.get(f"{_base(project_id)}/rooms", headers=_auth(reader_token)).get_json()[0]["id"]
+            self._reorder(inv_client, writer_token, f"{_base(project_id)}/rooms/{room['id']}/reorder", None, head)
+        self._reorder(inv_client, writer_token, f"{_base(project_id)}/rooms/{r1['id']}/reorder", r3["id"], r2["id"])
+        ids = [r["id"] for r in inv_client.get(f"{_base(project_id)}/rooms", headers=_auth(reader_token)).get_json()]
+        assert ids[:3] == [r3["id"], r1["id"], r2["id"]]
+
+
+class TestExplicitNullIsRefused:
+    """null passes an Optional field; it used to be saved as the text "None" or crash with 500."""
+
+    def test_null_names_are_422(self, inv_client, writer_token, reader_token, project_id, poste, article):
+        store = inv_client.post(
+            f"{_base(project_id)}/stores", json={"name": "Null Name Shop"}, headers=_auth(writer_token)
+        ).get_json()
+        for url in (
+            f"{_base(project_id)}/postes/{poste['id']}",
+            f"{_base(project_id)}/articles/{article['id']}",
+            f"{_base(project_id)}/stores/{store['id']}",
+        ):
+            resp = inv_client.patch(url, json={"name": None}, headers=_auth(writer_token))
+            assert resp.status_code == 422, url
+            assert "name" in resp.get_json()["message"]
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, article["id"])["name"] == "Spot encastré"
+        assert "None" not in [p["name"] for p in tree["postes"]] + [s["name"] for s in tree["stores"]]
+
+    def test_null_numbers_are_422(self, inv_client, writer_token, project_id, article):
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "S", "10")
+        cases = [
+            (f"{_base(project_id)}/articles/{article['id']}", {"quantity": None}),
+            (f"{_base(project_id)}/quotes/{quote['id']}", {"unit_price_ht": None}),
+            (f"{_base(project_id)}/quotes/{quote['id']}", {"tva_rate": None}),
+        ]
+        for url, body in cases:
+            resp = inv_client.patch(url, json=body, headers=_auth(writer_token))
+            assert resp.status_code == 422, body
+
+    def test_clearable_fields_still_accept_null(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.patch(
+            f"{_base(project_id)}/articles/{article['id']}",
+            json={"note": None, "unit": None},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200

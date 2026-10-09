@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.application.chiffrage.exceptions import InvalidChiffrageInputError
 from app.application.chiffrage.ports import ChiffrageRepositoryPort, TransactionalSessionPort
+from app.application.chiffrage.ordering import free_slot, renumber_around
 from app.application.chiffrage.units import POSITION_STEP
 from app.application.chiffrage.validation import (
     MAX_ARTICLE_NAME,
@@ -85,7 +86,11 @@ class UpdateArticleUseCase:
         if room_id is not U and room_id is not None:
             owned_room(self._repo, UUID(str(room_id)), project_id)
         updated = article.with_updates(
-            name=(U if name is U else clean_name(str(name), field="Article name", max_length=MAX_ARTICLE_NAME)),
+            name=(
+                U
+                if name is U
+                else clean_name(None if name is None else str(name), field="Article name", max_length=MAX_ARTICLE_NAME)
+            ),
             quantity=(U if quantity is U else validate_quantity(Decimal(str(quantity)))),
             unit=(U if unit is U else validate_unit(self._repo, project_id, None if unit is None else str(unit))),
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
@@ -137,16 +142,15 @@ class ReorderArticleUseCase:
             if neighbour is not None and neighbour.poste_id != article.poste_id:
                 raise InvalidChiffrageInputError("An article can only be reordered within its own poste.")
 
-        if before and after:
-            new_pos = (before.position + after.position) // 2
-            if new_pos == before.position:
-                new_pos = before.position + 1
-        elif before:
-            new_pos = before.position + POSITION_STEP
-        elif after:
-            new_pos = max(0, after.position - POSITION_STEP)
-        else:
-            new_pos = self._repo.max_article_position(article.poste_id) + POSITION_STEP
+        new_pos = free_slot(before, after, lambda: self._repo.max_article_position(article.poste_id))
+        if new_pos is None:
+            new_pos = renumber_around(
+                self._repo.articles_in_poste(article.poste_id),
+                article,
+                before_id,
+                after_id,
+                lambda sibling, position: self._repo.save_article(sibling.with_position(position)),
+            )
 
         moved = article.with_position(new_pos)
         self._repo.save_article(moved)

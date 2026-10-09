@@ -415,6 +415,16 @@ def test_create_project_without_address_is_rejected(inv_client, admin_token):
         assert resp.status_code in (400, 422), resp.get_json()
 
 
+def test_project_validation_message_names_field_and_reason(inv_client, admin_token):
+    """Not "Invalid input: unknown": the reason is kept, and a non-object body says so."""
+    resp = inv_client.post("/api/v1/projects", json={"name": "No Address"}, headers=_auth(admin_token))
+    assert resp.status_code == 400
+    assert resp.get_json()["message"] == "address: Field required"
+    resp = inv_client.post("/api/v1/projects", json=[1, 2], headers=_auth(admin_token))
+    assert resp.status_code == 400
+    assert resp.get_json()["message"] == "Input should be an object"
+
+
 def test_create_project_without_name_is_labelled_by_address(inv_client, admin_token):
     for payload in ({"address": "12 Rue des Martyrs"}, {"name": "  ", "address": "12 Rue des Martyrs"}):
         resp = inv_client.post("/api/v1/projects", json=payload, headers=_auth(admin_token))

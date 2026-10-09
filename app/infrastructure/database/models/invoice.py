@@ -193,6 +193,12 @@ class InvoiceModel(Base):
             ),
             sqlite_where=sa.text("0"),
         ),
+        # Sparse index of migration cea9f050672d, declared so autogenerate keeps it.
+        Index(
+            "ix_invoices_payment_method_id",
+            "payment_method_id",
+            postgresql_where=sa.text("payment_method_id IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:

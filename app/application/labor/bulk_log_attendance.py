@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.application.labor.attendance_dates import check_manager_attendance_date
 from app.application.labor.ports import (
     CrossProjectConflict,
     ILaborEntryRepository,
@@ -68,6 +69,8 @@ class BulkLogAttendanceRequest:
     # same-day entry in another project of the same company. When True,
     # the caller has seen the conflict modal and explicitly opted in.
     acknowledge_conflicts: bool = False
+    # Injected clock for tests; any instant, read on the business calendar.
+    now: Optional[datetime] = None
 
 
 @dataclass
@@ -107,6 +110,7 @@ class BulkLogAttendanceUseCase:
     def execute(self, request: BulkLogAttendanceRequest) -> BulkLogAttendanceResponse:
         if not request.entries:
             return BulkLogAttendanceResponse(created=[], skipped_worker_ids=[])
+        check_manager_attendance_date(request.date, request.now)
         # A worker has one entry per day: a repeated worker would hit the unique
         # (worker, date) index halfway through, after earlier rows were saved.
         worker_ids = [e.worker_id for e in request.entries]

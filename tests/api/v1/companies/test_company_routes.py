@@ -167,6 +167,31 @@ class TestListMyCompanies:
         resp = inv_client.get("/api/v1/companies")
         assert resp.status_code == 401
 
+    def test_each_company_carries_the_callers_permissions_in_it(self, inv_client, admin_token, member_token_co):
+        """Library/inventory writes are checked per company, so the list says what the caller
+        may do in each one: admin of the company they created, plain member of the one joined."""
+        own = _make_company(inv_client, member_token_co)
+        other = _make_company(inv_client, admin_token)
+        code = inv_client.post(f"/api/v1/companies/{other['id']}/join-code", headers=_auth(admin_token))
+        assert code.status_code == 200
+        joined = inv_client.post(
+            "/api/v1/companies/join", json={"code": code.get_json()["join_code"]}, headers=_auth(member_token_co)
+        )
+        assert joined.status_code == 200, joined.get_data(as_text=True)
+
+        resp = inv_client.get("/api/v1/companies", headers=_auth(member_token_co))
+        assert resp.status_code == 200
+        by_id = {item["company"]["id"]: item for item in resp.get_json()["items"]}
+        assert by_id[own["id"]]["access"]["role"] == "admin"
+        assert {"bibliotheque:manage", "inventory:manage"} <= set(by_id[own["id"]]["permissions"])
+        assert by_id[other["id"]]["access"]["role"] == "member"
+        assert "bibliotheque:manage" not in by_id[other["id"]]["permissions"]
+        assert "inventory:manage" not in by_id[other["id"]]["permissions"]
+
+        # Platform ops may write anywhere, as `has_permission_in_company` answers for them.
+        ops = inv_client.get("/api/v1/companies", headers=_auth(admin_token)).get_json()["items"]
+        assert ops and all(item["permissions"] == ["*:*"] for item in ops)
+
 
 # ---------------------------------------------------------------------------
 # Sensitive field masking

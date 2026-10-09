@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING, Optional
+from uuid import UUID
 
 from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
@@ -14,14 +15,24 @@ from app.application.invitations.ports import (
 from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
 from app.application.ports.token_issuer import TokenIssuerPort
 from app.application.ports.user_repository import UserRepositoryPort
-from app.application.usecases.otp_login import RequestOtpResult, RequestSignupOtpUseCase, _consume_code
+from app.application.usecases.otp_login import (
+    RequestOtpResult,
+    RequestOtpUseCase,
+    RequestSignupOtpUseCase,
+    _consume_code,
+)
 from app.application.company_persons.ensure_company_person import ensure_company_person
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
+from app.domain.entities.invitation import Invitation
 from app.domain.entities.project_membership import ProjectMembership
 from app.domain.entities.user import User
 from app.domain.exceptions.auth_exceptions import OtpInvalidError, PhoneAlreadyRegisteredError
-from app.domain.exceptions.invitation_exceptions import InvalidInvitationTokenError
+from app.domain.exceptions.invitation_exceptions import (
+    InvalidInvitationTokenError,
+    InvitationAccountExistsError,
+    InvitationWrongAccountError,
+)
 from app.domain.value_objects.invite_token import hash_token
 from app.domain.value_objects.phone_number import normalize_french_phone
 
@@ -34,40 +45,57 @@ _MAX_NAME_LEN = 100
 
 
 class RequestInviteOtpUseCase:
-    """Text a sign-up code to the phone number an invitation acceptor is claiming.
+    """Text a code to the phone number an invitation acceptor is claiming.
 
     Public endpoint — the invitation token is the authorisation, so a code is only sent for a
     currently-usable (pending, unexpired, unrevoked) invitation. Once the token checks out, this
     delegates straight to ``RequestSignupOtpUseCase``: same phone normalisation,
     already-registered check, per-phone throttling and code storage as phone sign-up
     (``_issue_code`` in otp_login.py). No OTP logic is reimplemented here.
+
+    When the invited address already has an account (a second invitation sent before the
+    first was accepted, say), the invitation belongs to that account: its own phone gets a
+    sign-in code (``RequestOtpUseCase``), and any other phone is refused.
     """
 
     def __init__(
         self,
         invitation_repo: InvitationRepositoryPort,
         request_signup_otp: RequestSignupOtpUseCase,
+        user_repo: Optional[UserRepositoryPort] = None,
+        request_signin_otp: Optional[RequestOtpUseCase] = None,
     ) -> None:
         self._inv_repo = invitation_repo
         self._request_signup_otp = request_signup_otp
+        self._users = user_repo
+        self._request_signin_otp = request_signin_otp
 
     def execute(self, raw_token: str, raw_phone: str) -> RequestOtpResult:
-        """Send a sign-up code to ``raw_phone`` once ``raw_token`` proves a live invitation.
+        """Send a code to ``raw_phone`` once ``raw_token`` proves a live invitation.
 
         Raises:
             InvalidInvitationTokenError: token does not match any invitation.
             InvitationExpiredError / InvitationRevokedError / InvitationAlreadyAcceptedError:
                 the invitation exists but cannot be used right now (via ``Invitation.accept()``;
                 the returned copy is discarded here — nothing is persisted by this check).
+            InvitationAccountExistsError: the invited address has an account and ``raw_phone``
+                is not its phone.
             InvalidPhoneNumberError / PhoneAlreadyRegisteredError / OtpThrottledError / SmsSendError:
-                propagated from ``RequestSignupOtpUseCase.execute()``.
+                propagated from the sign-up / sign-in code use cases.
         """
         inv = self._inv_repo.find_by_token_hash(hash_token(raw_token))
         if inv is None:
             raise InvalidInvitationTokenError("No invitation found for the supplied token.")
         inv.accept()  # validate-only: raises on expired/revoked/accepted; result discarded
 
-        return self._request_signup_otp.execute(raw_phone)
+        account = self._users.find_by_email(inv.email) if self._users is not None else None
+        if account is None:
+            return self._request_signup_otp.execute(raw_phone)
+
+        phone = normalize_french_phone(raw_phone)
+        if self._request_signin_otp is None or not account.phone or account.phone != phone:
+            raise InvitationAccountExistsError("This invitation is for an existing account; use its phone number.")
+        return self._request_signin_otp.execute(phone)
 
 
 class AcceptInvitationUseCase:
@@ -140,7 +168,9 @@ class AcceptInvitationUseCase:
                 via inv.accept().
             InvalidPhoneNumberError: phone is not a valid French E.164 number.
             OtpInvalidError: code is wrong, expired, attempts exhausted, or was issued to sign an
-                existing account in rather than to prove a new one.
+                existing account in while the invited address has no account yet.
+            InvitationAccountExistsError: the invited address already has an account and the code
+                was not issued to sign that account in (it proves some other phone).
             PhoneAlreadyRegisteredError: phone already belongs to another account.
             ValueError: name validation failure.
         """
@@ -171,9 +201,6 @@ class AcceptInvitationUseCase:
             now=datetime.now(timezone.utc),
             max_attempts=self._otp_max_attempts,
         )
-        if otp.user_id is not None:
-            # A sign-in code proves an existing account, not a new one.
-            raise OtpInvalidError("Invalid or expired code")
 
         # --- Transactional block (SAVEPOINT — works inside Flask-SQLAlchemy's request transaction).
         #
@@ -194,6 +221,9 @@ class AcceptInvitationUseCase:
             user = self._user_repo.find_by_email(inv.email)
             is_new_user = user is None
             if is_new_user:
+                if otp.user_id is not None:
+                    # A sign-in code proves an existing account, not a new one.
+                    raise OtpInvalidError("Invalid or expired code")
                 if self._user_repo.find_by_phone(normalized_phone) is not None:
                     raise PhoneAlreadyRegisteredError("This phone number already has an account.")
                 user = User.create(
@@ -202,41 +232,13 @@ class AcceptInvitationUseCase:
                     phone=normalized_phone,
                 )
                 user = self._user_repo.save(user)
+            elif otp.user_id != user.id or not user.is_active:
+                # The invited address already has an account: only a code that signs THAT
+                # account in may accept for it. A code proving any other phone would hand
+                # out a session for someone else's account.
+                raise InvitationAccountExistsError("This invitation is for an existing account; use its phone number.")
 
-            if not self._membership_repo.exists(user.id, inv.project_id):
-                membership = ProjectMembership.create(
-                    user_id=user.id,
-                    project_id=inv.project_id,
-                    invited_by=inv.invited_by,
-                )
-                self._membership_repo.add(membership)
-
-            # Invitations are the outsider path (Phase 2): no company-membership
-            # precondition, but the acceptor becomes a `member` of the invited
-            # project's company (derived from the project — invitations carry
-            # no company_id of their own).
-            if self._authz_reader is not None and self._access_repo is not None:
-                company_id = self._authz_reader.project_company_id(inv.project_id)
-                if company_id is not None and self._access_repo.find(user.id, company_id) is None:
-                    self._access_repo.save(
-                        UserCompanyAccess(
-                            user_id=user.id,
-                            company_id=company_id,
-                            is_primary=len(self._access_repo.list_for_user(user.id)) == 0,
-                            attached_at=datetime.now(timezone.utc),
-                            role=CompanyRole.MEMBER.value,
-                        )
-                    )
-                if company_id is not None:
-                    ensure_company_person(
-                        persons=self._persons,
-                        company_persons=self._company_persons,
-                        users=self._user_repo,
-                        user_id=user.id,
-                        company_id=company_id,
-                        now=datetime.now(timezone.utc),
-                    )
-
+            self._join_project(inv, user)
             self._inv_repo.save(accepted_inv)
         self._db.commit()
 
@@ -255,6 +257,69 @@ class AcceptInvitationUseCase:
             invited_by=accepted_inv.invited_by,
             project_id=accepted_inv.project_id,
         )
+
+    def accept_as(self, raw_token: str, user_id: UUID) -> Invitation:
+        """Accept an invitation for an account that is already signed in; return the accepted invitation.
+
+        The session proves the account, so no phone code is needed — but only the
+        account the invitation was sent to may take it up.
+
+        Raises:
+            InvalidInvitationTokenError: token unknown.
+            InvitationExpiredError / InvitationRevokedError / InvitationAlreadyAcceptedError:
+                via inv.accept().
+            InvitationWrongAccountError: the signed-in account's email is not the invited one.
+        """
+        with self._db.begin_nested():
+            inv = self._inv_repo.find_by_token_hash_for_update(hash_token(raw_token))
+            if inv is None:
+                raise InvalidInvitationTokenError("No invitation found for the supplied token.")
+            accepted_inv = inv.accept()  # raises if expired/revoked/accepted
+
+            user = self._user_repo.find_by_id(user_id)
+            if user is None or (user.email or "").strip().lower() != inv.email.strip().lower():
+                raise InvitationWrongAccountError("This invitation was sent to another email address.")
+
+            self._join_project(inv, user)
+            self._inv_repo.save(accepted_inv)
+        self._db.commit()
+        return accepted_inv
+
+    def _join_project(self, inv: Invitation, user: User) -> None:
+        """Write what accepting grants: the project assignment, company access and directory profile."""
+        if not self._membership_repo.exists(user.id, inv.project_id):
+            membership = ProjectMembership.create(
+                user_id=user.id,
+                project_id=inv.project_id,
+                invited_by=inv.invited_by,
+            )
+            self._membership_repo.add(membership)
+
+        # Invitations are the outsider path (Phase 2): no company-membership
+        # precondition, but the acceptor becomes a `member` of the invited
+        # project's company (derived from the project — invitations carry
+        # no company_id of their own).
+        if self._authz_reader is not None and self._access_repo is not None:
+            company_id = self._authz_reader.project_company_id(inv.project_id)
+            if company_id is not None and self._access_repo.find(user.id, company_id) is None:
+                self._access_repo.save(
+                    UserCompanyAccess(
+                        user_id=user.id,
+                        company_id=company_id,
+                        is_primary=len(self._access_repo.list_for_user(user.id)) == 0,
+                        attached_at=datetime.now(timezone.utc),
+                        role=CompanyRole.MEMBER.value,
+                    )
+                )
+            if company_id is not None:
+                ensure_company_person(
+                    persons=self._persons,
+                    company_persons=self._company_persons,
+                    users=self._user_repo,
+                    user_id=user.id,
+                    company_id=company_id,
+                    now=datetime.now(timezone.utc),
+                )
 
     # ------------------------------------------------------------------
     # Private validators

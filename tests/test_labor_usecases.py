@@ -12,6 +12,7 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     LaborEntryNotFoundError,
     InvalidWorkerDataError,
+    InvalidWorkerPhoneError,
 )
 from app.application.labor import (
     CreateWorkerUseCase,
@@ -114,6 +115,49 @@ class TestCreateWorkerUseCase:
                 )
             )
 
+    def test_create_worker_sub_cent_rate_raises_error(self, mock_worker_repo):
+        # The column keeps 2 decimals: 0.004 would be stored as a rate of 0.00.
+        with pytest.raises(InvalidWorkerDataError):
+            CreateWorkerUseCase(mock_worker_repo).execute(
+                CreateWorkerRequest(project_id=uuid4(), name="Worker", daily_rate=Decimal("0.004"))
+            )
+        mock_worker_repo.create.assert_not_called()
+
+    def test_create_worker_rounds_the_rate_to_the_cent(self, mock_worker_repo):
+        mock_worker_repo.create.side_effect = lambda worker: worker
+        CreateWorkerUseCase(mock_worker_repo).execute(
+            CreateWorkerRequest(project_id=uuid4(), name="Worker", daily_rate=Decimal("0.005"))
+        )
+        assert mock_worker_repo.create.call_args.args[0].daily_rate == Decimal("0.01")
+
+    @pytest.mark.parametrize("phone", ["hello world", "call me maybe!", "<b>abc</b>", "12345"])
+    def test_create_worker_refuses_a_phone_that_is_not_a_number(self, mock_worker_repo, phone):
+        with pytest.raises(InvalidWorkerPhoneError):
+            CreateWorkerUseCase(mock_worker_repo).execute(
+                CreateWorkerRequest(project_id=uuid4(), name="Worker", daily_rate=Decimal("100"), phone=phone)
+            )
+        mock_worker_repo.create.assert_not_called()
+
+    def test_create_worker_keeps_the_picked_persons_legacy_phone(self, mock_worker_repo, sample_worker):
+        # A person saved before phones were checked: picking them still works.
+        person = Mock(phone="ask the foreman")
+        person_repo = Mock()
+        person_repo.find_by_id.return_value = person
+        mock_worker_repo.list_by_project.return_value = []
+        mock_worker_repo.create.side_effect = lambda w: w
+
+        result = CreateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+            CreateWorkerRequest(
+                project_id=uuid4(),
+                name="Worker",
+                daily_rate=Decimal("100"),
+                phone="ask the foreman",
+                person_id=uuid4(),
+            )
+        )
+
+        assert result.phone == "ask the foreman"
+
 
 class TestUpdateWorkerUseCase:
     """Tests for UpdateWorkerUseCase."""
@@ -196,6 +240,36 @@ class TestUpdateWorkerUseCase:
 
         person_repo.change_phone.assert_called_once_with(sample_worker.person_id, "0611223344", commit=False)
         assert result.phone == "0611223344" and result.person_phone == "0611223344"
+
+    def test_phone_change_refuses_text_that_is_not_a_number(self, mock_worker_repo, sample_worker):
+        sample_worker.person_id = uuid4()
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        person_repo = Mock()
+
+        with pytest.raises(InvalidWorkerPhoneError):
+            UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+                UpdateWorkerRequest(
+                    worker_id=sample_worker.id, project_id=sample_worker.project_id, phone="hello world"
+                )
+            )
+
+        person_repo.change_phone.assert_not_called()
+        mock_worker_repo.update.assert_not_called()
+
+    def test_unchanged_legacy_phone_does_not_block_other_edits(self, mock_worker_repo, sample_worker):
+        # The edit form always sends the phone back; a number stored before phones were checked passes.
+        sample_worker.person_id = uuid4()
+        sample_worker.phone = sample_worker.person_phone = "ask the foreman"
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+
+        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=Mock()).execute(
+            UpdateWorkerRequest(
+                worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed", phone="ask the foreman"
+            )
+        )
+
+        assert result.name == "Renamed" and result.phone == "ask the foreman"
 
     def test_update_without_phone_leaves_the_persons_phone_alone(self, mock_worker_repo, sample_worker):
         sample_worker.person_id = uuid4()

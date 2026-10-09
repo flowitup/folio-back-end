@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 from app.application.notes.list_due_notifications_usecase import ListDueNotificationsUseCase
+from app.application.notes.ports import DueNote
 from app.domain.entities.note import Note
 
 
@@ -33,6 +34,10 @@ def _make_note(*, project_id=None) -> Note:
     )
 
 
+def _due(note: Note, due_date: date = date(2026, 4, 27), lead_time_minutes: int = 0) -> DueNote:
+    return DueNote(note=note, due_date=due_date, lead_time_minutes=lead_time_minutes)
+
+
 def _make_usecase(note_query=None) -> ListDueNotificationsUseCase:
     return ListDueNotificationsUseCase(note_query=note_query or MagicMock())
 
@@ -56,7 +61,7 @@ class TestListDueNotificationsHappyPath:
         user_id = uuid4()
         note = _make_note()
         note_query = MagicMock()
-        note_query.list_due_for_user.return_value = [note]
+        note_query.list_due_for_user.return_value = [_due(note)]
 
         uc = _make_usecase(note_query=note_query)
         result = uc.execute(user_id=user_id, now=_CLOCK)
@@ -65,10 +70,20 @@ class TestListDueNotificationsHappyPath:
         assert result[0].note.id == note.id
         assert result[0].dismissed is False
 
+    def test_each_notification_carries_its_due_date_and_lead_time(self):
+        """The bell tells an overdue reminder from today's by its due date."""
+        note_query = MagicMock()
+        note_query.list_due_for_user.return_value = [_due(_make_note(), date(2026, 4, 20), 1440)]
+
+        result = _make_usecase(note_query=note_query).execute(user_id=uuid4(), now=_CLOCK)
+
+        assert result[0].due_date == date(2026, 4, 20)
+        assert result[0].lead_time_minutes == 1440
+
     def test_dismissed_field_always_false_in_v1(self):
         """Query already excludes dismissed notes; DTO field is always False."""
         note_query = MagicMock()
-        note_query.list_due_for_user.return_value = [_make_note(), _make_note()]
+        note_query.list_due_for_user.return_value = [_due(_make_note()), _due(_make_note())]
 
         uc = _make_usecase(note_query=note_query)
         result = uc.execute(user_id=uuid4(), now=_CLOCK)
@@ -100,7 +115,7 @@ class TestListDueNotificationsHappyPath:
 
     def test_returns_at_most_100_items(self):
         """Even if query returns 100 items, use-case forwards all (cap in query)."""
-        notes = [_make_note() for _ in range(100)]
+        notes = [_due(_make_note()) for _ in range(100)]
         note_query = MagicMock()
         note_query.list_due_for_user.return_value = notes
 
@@ -124,7 +139,7 @@ class TestListDueNotificationsHappyPath:
         """Query already joins across all user's projects; use-case forwards all."""
         p1 = uuid4()
         p2 = uuid4()
-        notes = [_make_note(project_id=p1), _make_note(project_id=p2)]
+        notes = [_due(_make_note(project_id=p1)), _due(_make_note(project_id=p2))]
         note_query = MagicMock()
         note_query.list_due_for_user.return_value = notes
 

@@ -10,6 +10,7 @@ import pytest
 
 from app.application.invitations.create_invitation_usecase import CreateInvitationUseCase
 from app.application.invitations.exceptions import (
+    InviteeDeactivatedError,
     PermissionDeniedError,
     RateLimitedError,
     ProjectNotFoundError,
@@ -331,7 +332,7 @@ class TestExistingUserPath:
         assert renderer.render.call_args[0][0] == "added_to_project"
 
     def test_existing_assignment_is_an_idempotent_noop(self):
-        """Already assigned → direct_added, no second email (H2)."""
+        """Already assigned → already_member (nothing was added), no second email (H2)."""
         inviter = _make_user(has_invite_perm=True)
         project = _make_project()
         existing_user = User(
@@ -365,11 +366,112 @@ class TestExistingUserPath:
             email="member@example.com",
         )
 
-        assert result.kind == "direct_added"
+        assert result.kind == "already_member"
+        assert result.user_id == existing_user.id
         # No new membership added, no email enqueued
         membership_repo.add.assert_not_called()
         queue.enqueue.assert_not_called()
         renderer.render.assert_not_called()
+
+    def test_a_deactivated_account_is_refused_before_any_write(self):
+        """projects-members-06: same rule as PUT /assignments; no membership, no company attachment."""
+        inviter = _make_user(has_invite_perm=True)
+        project = _make_project()
+        inactive = User(id=uuid4(), email="gone@example.com", is_active=False, created_at=datetime.now(timezone.utc))
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = inviter
+        user_repo.find_by_email.return_value = inactive
+        user_repo.is_sign_in_allowed.return_value = False
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        access_repo = MagicMock()
+        queue = MagicMock()
+        session = _FakeSession()
+        uc = _make_usecase(
+            membership_repo=membership_repo,
+            user_repo=user_repo,
+            project_repo=project_repo,
+            access_repo=access_repo,
+            queue_port=queue,
+            db_session=session,
+            company_id=uuid4(),
+        )
+
+        with pytest.raises(InviteeDeactivatedError):
+            uc.execute(inviter_id=inviter.id, project_id=project.id, email="gone@example.com")
+
+        user_repo.is_sign_in_allowed.assert_called_once_with(inactive.id)
+        membership_repo.add.assert_not_called()
+        access_repo.save.assert_not_called()
+        queue.enqueue.assert_not_called()
+        assert session.commit_calls == 0
+
+
+class TestEmailLanguageAndProjectLabel:
+    """projects-members-05 / backend-code-12 / projects-members-17: the email speaks the
+    inviter's language, links to that locale and names the project by its address."""
+
+    def _render(self, locale: str, *, existing: bool) -> dict:
+        from pathlib import Path
+
+        from app.infrastructure.email import renderer as renderer_module
+        from app.infrastructure.email.renderer import EmailRenderer
+
+        inviter = _make_user(has_invite_perm=True)
+        project = _make_project()
+        project.name = "Internal name"
+        project.address = "  12 rue des Lilas, Lyon "
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = inviter
+        user_repo.find_by_email.return_value = (
+            User(id=uuid4(), email="known@example.com", is_active=True, created_at=datetime.now(timezone.utc))
+            if existing
+            else None
+        )
+        inv_repo = MagicMock()
+        inv_repo.count_created_today_by_project.return_value = 0
+        inv_repo.find_pending_by_email_and_project.return_value = None
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        queue = MagicMock()
+        uc = CreateInvitationUseCase(
+            invitation_repo=inv_repo,
+            project_membership_repo=membership_repo,
+            user_repo=user_repo,
+            project_repo=project_repo,
+            email_port=MagicMock(),
+            email_renderer=EmailRenderer(str(Path(renderer_module.__file__).parent / "templates")),
+            queue_port=queue,
+            app_base_url="http://localhost:3000",
+            db_session=_FakeSession(),
+            authz_reader=_InviteReader(),
+        )
+        uc.execute(inviter_id=inviter.id, project_id=project.id, email="known@example.com", locale=locale)
+        payload = queue.enqueue.call_args[0][1]["payload"]
+        return {"subject": payload.subject, "body": payload.body, "html": payload.html_body}
+
+    def test_french_invite(self):
+        mail = self._render("fr", existing=False)
+        assert mail["subject"] == "Vous êtes invité à rejoindre 12 rue des Lilas, Lyon sur Folio"
+        assert "http://localhost:3000/fr/accept-invite/" in mail["body"]
+        assert "en tant que membre" in mail["body"]
+        assert "Internal name" not in mail["body"]
+
+    def test_vietnamese_added_to_project(self):
+        mail = self._render("vi", existing=True)
+        assert mail["subject"] == "Bạn đã được thêm vào 12 rue des Lilas, Lyon trên Folio"
+        assert "http://localhost:3000/vi/dashboard" in mail["body"]
+        assert "với vai trò thành viên" in mail["body"]
+
+    def test_english_stays_the_default(self):
+        mail = self._render("en", existing=False)
+        assert mail["subject"] == "You're invited to join 12 rue des Lilas, Lyon on Folio"
+        assert "http://localhost:3000/en/accept-invite/" in mail["body"]
+        assert "as member" in mail["body"]
 
 
 # ---------------------------------------------------------------------------

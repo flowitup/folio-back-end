@@ -44,6 +44,8 @@ class TypeSubtotal:
     type: InvoiceType
     invoice_count: int
     total_amount: Decimal
+    # The cash advances listed under OTHERS: a row of their own, outside the expenses total.
+    is_cash_advance: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,8 @@ class InvoiceBundle:
     """The full data set passed to builders."""
 
     invoices: List[Invoice]  # sorted by (issue_date, type, invoice_number)
-    # In the order RELEASED_FUNDS, LABOR, MATERIALS_SERVICES, OTHERS, RETURN (skip empty).
+    # In the order RELEASED_FUNDS, LABOR, MATERIALS_SERVICES, OTHERS, OTHERS (cash advance),
+    # RETURN (skip empty).
     subtotals_by_type: List[TypeSubtotal]
     # Total expenses: every row except released funds (money in); returns net in.
     grand_total: Decimal

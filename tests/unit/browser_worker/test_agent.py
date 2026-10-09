@@ -291,13 +291,10 @@ class TestRunProductSearch:
         assert result.status == "failed"  # no structured result — but no crash either
 
     def test_browser_use_import_failure_is_reported_as_failed(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-        monkeypatch.delitem(sys.modules, "browser_use", raising=False)
-        monkeypatch.setattr(
-            "builtins.__import__",
-            lambda name, *a, **k: (
-                (_ for _ in ()).throw(ImportError("no module")) if name == "browser_use" else __import__(name, *a, **k)
-            ),
-        )
+        # A None entry makes `from browser_use import ...` raise ImportError. Patching
+        # builtins.__import__ instead recursed forever on Python 3.13 (lazy imports in
+        # linecache/pytest resolved `__import__` to the patch itself).
+        monkeypatch.setitem(sys.modules, "browser_use", None)
 
         result = asyncio.run(
             run_product_search(

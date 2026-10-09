@@ -92,8 +92,9 @@ class CreateCompanyUseCase:
             address=address,
             siret=inp.siret,
             tva_number=inp.tva_number,
-            iban=inp.iban,
-            bic=inp.bic,
+            # "" (the schemas' clear value) is stored as NULL, as an update stores it.
+            iban=inp.iban or None,
+            bic=inp.bic or None,
             logo_url=inp.logo_url,
             default_payment_terms=inp.default_payment_terms,
             prefix_override=inp.prefix_override,

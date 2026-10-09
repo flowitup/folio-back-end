@@ -362,6 +362,33 @@ class TestValidation:
         )
         assert resp.status_code == 404
 
+    @pytest.mark.parametrize("permission", ["bibliotheque:manage", "inventory:manage"])
+    @pytest.mark.parametrize("effect", ["grant", "deny"])
+    def test_company_wide_only_permission_refuses_project_scope_400(
+        self, client, mg_app, admin_a_h, permission, effect
+    ):
+        """The library and inventory are checked company-wide only: a project-scoped row would never apply."""
+        resp = _set_grant(client, admin_a_h, mg_app, mg_app._member_a_id, permission, effect, mg_app._project_p_id)
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        listed = client.get(_grants_url(mg_app, mg_app._member_a_id), headers=admin_a_h).get_json()
+        assert not any(g["permission"] == permission and g["project_id"] for g in listed["grants"])
+
+    def test_list_reports_company_wide_only_permissions(self, client, mg_app, admin_a_h):
+        listed = client.get(_grants_url(mg_app, mg_app._member_a_id), headers=admin_a_h)
+        assert listed.status_code == 200
+        assert listed.get_json()["company_wide_only"] == ["bibliotheque:manage", "inventory:manage"]
+
+    def test_company_wide_library_grant_lets_member_create_product(self, client, mg_app, admin_a_h, member_a_h):
+        body = {"company_id": mg_app._company_a_id, "name": "MG Product", "supplier_name": "MG Supplier"}
+        assert client.post("/api/v1/bibliotheque/products", json=body, headers=member_a_h).status_code == 403
+        assert (
+            _set_grant(client, admin_a_h, mg_app, mg_app._member_a_id, "bibliotheque:manage", "grant").status_code
+            == 200
+        )
+        created = client.post("/api/v1/bibliotheque/products", json=body, headers=member_a_h)
+        assert created.status_code == 201, created.get_data(as_text=True)
+        _remove_grant(client, admin_a_h, mg_app, mg_app._member_a_id, "bibliotheque:manage")
+
     def test_nonexistent_project_id_404(self, client, mg_app, admin_a_h):
         resp = _set_grant(
             client, admin_a_h, mg_app, mg_app._member_a_id, "project:manage_invoices", "grant", str(uuid4())

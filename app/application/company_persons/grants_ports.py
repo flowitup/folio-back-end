@@ -68,6 +68,14 @@ class MemberGrantRepositoryPort(Protocol):
         """
         ...
 
+    def delete_for_member(self, company_id: UUID, user_id: UUID) -> int:
+        """Delete every grant/deny row of (company_id, user_id); return how many went.
+
+        Called when the user leaves or is removed from the company, so a
+        returning member starts from their role alone.
+        """
+        ...
+
 
 class _AccessRow(Protocol):
     role: str

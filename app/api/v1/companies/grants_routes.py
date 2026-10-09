@@ -45,6 +45,7 @@ from app.api.v1.companies.grants_schemas import (
 from app.application.company_persons.grants_ports import MemberGrant
 from app.application.company_persons.manage_grants_usecase import (
     CompanyNotFoundForGrantsError,
+    CompanyWideOnlyPermissionError,
     ForbiddenGrantsCallerError,
     InvalidGrantEffectError,
     InvalidGrantPermissionError,
@@ -130,6 +131,7 @@ _ERROR_STATUS: "list[tuple[type[Exception], int]]" = [
     (InvalidGrantPermissionError, 400),
     (InvalidGrantEffectError, 400),
     (NonDeniablePermissionError, 400),
+    (CompanyWideOnlyPermissionError, 400),
     (TargetNotCustomisableError, 400),
 ]
 
@@ -199,6 +201,7 @@ def list_member_grants(company_id: str, user_id: str):
             MemberGrantsListResponse(
                 grants=[_to_row(g) for g in result.grants],
                 customisable=result.customisable,
+                company_wide_only=result.company_wide_only,
             ).model_dump(mode="json")
         ),
         200,

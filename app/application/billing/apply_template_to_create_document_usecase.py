@@ -6,7 +6,6 @@ access_repo. If user has no attached companies, raises MissingCompanyProfileErro
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.application.billing._helpers import (
@@ -33,6 +32,7 @@ from app.domain.billing.exceptions import (
     MissingCompanyProfileError,
 )
 from app.domain.billing.numbering import next_document_number
+from app.domain.time import business_today
 
 
 class ApplyTemplateToCreateDocumentUseCase:
@@ -112,8 +112,9 @@ class ApplyTemplateToCreateDocumentUseCase:
             raise ValueError("At least one line item is required")
 
         # 5. Resolve issue_date and atomically generate document number
-        today = datetime.now(timezone.utc).date()
-        issue_date = inp.issue_date if inp.issue_date is not None else today
+        # Today on the business (Paris) calendar: in the hour or two after midnight the
+        # UTC day is still the day before, and on 1 January the year before.
+        issue_date = inp.issue_date if inp.issue_date is not None else business_today()
         sequence = self._counter_repo.next_value(counter_key, template.kind, issue_date.year)
         document_number = next_document_number(
             prefix_override=effective_prefix,

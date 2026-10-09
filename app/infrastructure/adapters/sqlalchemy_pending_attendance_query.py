@@ -48,6 +48,7 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 LaborEntryModel.id.label("entry_id"),
                 ProjectModel.id.label("project_id"),
                 ProjectModel.name.label("project_name"),
+                ProjectModel.address.label("project_address"),
                 WorkerModel.id.label("worker_id"),
                 worker_name.label("worker_name"),
                 LaborEntryModel.date.label("date"),
@@ -80,7 +81,8 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
             PendingAttendanceItem(
                 entry_id=r.entry_id,
                 project_id=r.project_id,
-                project_name=r.project_name,
+                # The label the apps show a project under: its site address, else its name.
+                project_name=(r.project_address or "").strip() or r.project_name,
                 worker_id=r.worker_id,
                 worker_name=r.worker_name,
                 date=r.date,

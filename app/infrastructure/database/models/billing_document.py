@@ -158,6 +158,25 @@ class BillingDocumentModel(Base):
             "kind",
             "status",
         ),
+        # Mirrors of the migration-only partial indexes (97e7156ea751, 2d9c35848b9b), so
+        # autogenerate stops proposing to drop them. One facture per source devis:
+        Index(
+            "uix_billing_documents_source_devis_id",
+            "source_devis_id",
+            unique=True,
+            postgresql_where=sa.text("source_devis_id IS NOT NULL"),
+            sqlite_where=sa.text("source_devis_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_billing_documents_project_id_partial",
+            "project_id",
+            postgresql_where=sa.text("project_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_billing_documents_company_id",
+            "company_id",
+            postgresql_where=sa.text("company_id IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:

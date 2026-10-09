@@ -13,6 +13,7 @@ from app.domain.billing.exceptions import (
     ForbiddenBillingDocumentError,
     InvalidStatusTransitionError,
 )
+from app.domain.value_objects.invoice_item import InvoiceItem
 from tests.unit.application.billing.conftest import make_doc, make_item
 
 
@@ -172,6 +173,61 @@ class TestFundsReleaseBridge:
         # facture rounds its TVA to the cent, and both show 79544.68.
         assert total == Decimal("79544.676")
         assert total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == doc.total_ttc == Decimal("79544.68")
+
+    @pytest.mark.parametrize(
+        "items, expected_ttc",
+        [
+            # HT 49.975 → 49.98 and 508.2025 → 508.20 on the facture; the expense maths
+            # (TTC rounded once) gave 59.97 for the first line, so the release was 618.99.
+            ((("Peinture m2", "2.5", "19.99", "20"), ("Enduit", "12.35", "41.15", "10")), Decimal("619.00")),
+            # 0.125 → 0.13 HT + 0.03 TVA per line on the facture, but 0.15 per expense line.
+            ((("A", "1", "0.125", "20"), ("B", "1", "0.125", "20")), Decimal("0.32")),
+        ],
+    )
+    def test_release_total_equals_facture_ttc_when_line_ht_needs_rounding(
+        self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id, items, expected_ttc
+    ):
+        doc = self._paid_facture(
+            doc_repo,
+            fake_session,
+            usecase_with_funds,
+            user_id,
+            items=tuple(make_item(desc=d, qty=q, price=p, vat=v) for d, q, p, v in items),
+        )
+        assert doc.total_ttc == expected_ttc
+        released = funds_release.created[0]["amount_items"]
+        expense_lines = [
+            InvoiceItem(
+                description=it["description"],
+                quantity=Decimal(it["quantity"]),
+                unit_price=Decimal(it["unit_price"]),
+                vat_rate=Decimal(it["vat_rate"]),
+            )
+            for it in released
+        ]
+        assert [line.total for line in expense_lines] == [it.total_ttc for it in doc.items]
+        assert sum((line.total for line in expense_lines), Decimal("0")) == expected_ttc
+        # A line that needs rounding is released as one unit at its rounded HT.
+        assert released[0] == {
+            "description": items[0][0],
+            "quantity": "1",
+            "unit_price": str(doc.items[0].total_ht),
+            "vat_rate": items[0][3],
+        }
+
+    def test_release_keeps_quantity_and_unit_price_when_line_ht_is_at_the_cent(
+        self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
+    ):
+        self._paid_facture(
+            doc_repo,
+            fake_session,
+            usecase_with_funds,
+            user_id,
+            items=(make_item(desc="Carrelage", qty="2.5", price="19.98", vat="20"),),
+        )
+        assert funds_release.created[0]["amount_items"] == [
+            {"description": "Carrelage", "quantity": "2.5", "unit_price": "19.98", "vat_rate": "20"},
+        ]
 
     def test_multiple_items_with_different_vat_rates(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -54,9 +54,17 @@ class UserCompanyAccessModel(Base):
             "role IN ('admin','manager','member')",
             name="ck_user_company_access_role",
         ),
-        # Partial unique is defined in the migration; declared here for reflection
-        # completeness only — SQLAlchemy does not emit CREATE INDEX for this when
-        # using create_all() because it lacks a postgresql_where expression on Index.
+        # At most one primary company per user (migration 2d9c35848b9b). A schema no-op
+        # on SQLite (always-false predicate, as uq_invoices_bank_refund_release does):
+        # SQLite tests run no ON DELETE CASCADE and many fixtures seed a primary row per
+        # company, so enforcing it there would fail them for reasons Postgres never sees.
+        Index(
+            "uix_user_company_access_primary_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_primary = TRUE"),
+            sqlite_where=text("0"),
+        ),
     )
 
     def __repr__(self) -> str:

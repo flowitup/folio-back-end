@@ -266,16 +266,30 @@ class SqlAlchemyChatRepository:
         return [UUID(str(row[0])) for row in rows]
 
     def _project_member_ids(self, project_id: UUID) -> list[UUID]:
+        """Users assigned to the project, plus its creator — kept only while they hold
+        a role in the project's company. A user who left or was removed from the
+        company keeps neither the assignment nor the creator shortcut (as everywhere
+        the resolver decides: no company role, no access)."""
+        project = self._session.execute(
+            select(ProjectModel.owner_id, ProjectModel.company_id).where(ProjectModel.id == project_id)
+        ).first()
+        if project is None:
+            return []
+        owner, company_id = project
+        company_member_ids = set(
+            self._session.execute(
+                select(UserCompanyAccessModel.user_id).where(UserCompanyAccessModel.company_id == company_id)
+            ).scalars()
+        )
         rows = self._session.execute(
             text("SELECT user_id FROM user_projects WHERE project_id = :pid"), {"pid": str(project_id)}
         ).fetchall()
-        owner = self._session.execute(select(ProjectModel.owner_id).where(ProjectModel.id == project_id)).scalar()
         ids: list[UUID] = []
         for raw in [*(row[0] for row in rows), owner]:
             if raw is None:
                 continue
             uid = UUID(str(raw))
-            if uid not in ids:
+            if uid in company_member_ids and uid not in ids:
                 ids.append(uid)
         return ids
 
@@ -291,7 +305,11 @@ class SqlAlchemyChatRepository:
         project_stmt = select(ProjectModel.id, ProjectModel.name).order_by(ProjectModel.name)
         if not is_ops:
             visible = self._membership_project_ids(user_id)
-            project_stmt = project_stmt.where((ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id))
+            project_stmt = project_stmt.where(
+                (ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id),
+                # Only projects of a company the user still belongs to (see _project_member_ids).
+                ProjectModel.company_id.in_([cid for cid, _name, _role in companies]),
+            )
         projects = self._session.execute(project_stmt).all()
 
         admin_channel_company_ids: set[UUID] = set()

@@ -11,7 +11,6 @@ duplicate them.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 from uuid import UUID
@@ -43,17 +42,6 @@ MAX_CANDIDATES = 5
 #: (an unbounded scan of a large company's inventory otherwise runs one `list()` call
 #: per company/term and one location lookup per row before ever truncating).
 _SEARCH_ROW_CAP = MAX_CANDIDATES + 1
-
-_LIKE_SPECIAL_RE = re.compile(r"([\\%_])")
-
-
-def _escape_like(term: str) -> str:
-    """Escape `%`/`_` (and a literal backslash) so a free-text search term is matched
-    literally by the repository's ILIKE, not as a wildcard — an unescaped `%`/`_` in a
-    free-text message would otherwise turn `@folio %` into a search that matches the
-    whole inventory. Postgres' default LIKE escape character is the
-    backslash, with no ESCAPE clause required on the SQL side."""
-    return _LIKE_SPECIAL_RE.sub(r"\\\1", term)
 
 
 @dataclass(frozen=True)
@@ -135,7 +123,8 @@ class EquipmentService:
         rows: list[InventoryItem] = []
         for company_id in company_ids:
             for term in terms:
-                for row in self._items.list(company_id, q=_escape_like(term)):
+                # The repository matches q literally ("%"/"_" are escaped there).
+                for row in self._items.list(company_id, q=term):
                     if row.id in seen_item_ids:
                         continue
                     seen_item_ids.add(row.id)

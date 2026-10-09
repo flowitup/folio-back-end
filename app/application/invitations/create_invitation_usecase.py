@@ -9,6 +9,7 @@ from uuid import UUID
 from app.application.invitations.authz import can_manage_project_invites
 from app.application.invitations.dtos import CreateInvitationResultDto
 from app.application.invitations.exceptions import (
+    InviteeDeactivatedError,
     PermissionDeniedError,
     RateLimitedError,
     ProjectNotFoundError,
@@ -23,6 +24,7 @@ from app.application.invitations.ports import (
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.invitation import Invitation
+from app.domain.entities.project import project_display_label
 from app.domain.entities.project_membership import ProjectMembership
 from tasks import EmailPayload
 
@@ -84,6 +86,8 @@ class CreateInvitationUseCase:
     # Accepting an invitation makes the invitee a `member` of the project's
     # company; the invite itself never carries a role.
     _GRANTED_ROLE = CompanyRole.MEMBER.value
+    # How the emails name that role, per email locale ("en tant que membre", ...).
+    _GRANTED_ROLE_LABELS = {"en": "member", "fr": "membre", "vi": "thành viên"}
 
     def execute(
         self,
@@ -114,40 +118,45 @@ class CreateInvitationUseCase:
         # 4. Existing-user fast-path
         #
         # SECURITY/UX NOTE — kind discriminator leak (H3 from code-review):
-        # The DTO returned below carries `kind="direct_added"` for existing emails
-        # and `kind="invitation_sent"` for new ones. This leaks user-existence to
+        # The DTO returned below carries `kind="direct_added"` (or "already_member")
+        # for existing emails and `kind="invitation_sent"` for new ones. This leaks user-existence to
         # the authenticated admin/owner. Accepted within the admin trust boundary
         # because admins can already enumerate users via the /projects/<id>/members
         # endpoint and via project membership lists. Do NOT expose this discriminator
         # on any public-facing endpoint.
         existing_user = self._user_repo.find_by_email(normalized_email)
         if existing_user is not None:
-            if not self._membership_repo.exists(existing_user.id, project_id):
-                self._forbid_manager_adding_a_non_member(inviter_id, existing_user.id, project_id)
-                # Not yet assigned — assign + send notification email.
-                membership = ProjectMembership.create(
-                    user_id=existing_user.id,
-                    project_id=project_id,
-                    invited_by=inviter_id,
-                )
-                self._membership_repo.add(membership)
-                # Permissions resolve through the company: an existing user who
-                # belongs to another company (or to none) would land on the
-                # project with zero permissions. Attach them as `member`, the
-                # same grant accepting an invitation gives.
-                self._attach_to_project_company(existing_user.id, project_id)
-                # H2 — commit BEFORE enqueueing the email so the queue write only
-                # happens after persistence is durable. If commit raises, no email
-                # goes out for a membership that didn't land.
-                self._db.commit()
-                self._enqueue_added_email(
-                    to=existing_user.email,
-                    project_name=project.name,
-                    inviter_name=inviter.display_or_email,
-                    role_name=self._GRANTED_ROLE,
-                    locale=locale,
-                )
-            # else: already assigned → idempotent no-op (don't re-send the email).
+            if self._membership_repo.exists(existing_user.id, project_id):
+                # Already on the project: nothing to do, and no email.
+                return CreateInvitationResultDto(kind="already_member", user_id=existing_user.id)
+            # Same rule as PUT /assignments: a deactivated account is never put on a
+            # project (nor attached to its company on the way).
+            if not self._user_repo.is_sign_in_allowed(existing_user.id):
+                raise InviteeDeactivatedError(f"User {existing_user.id} is deactivated.")
+            self._forbid_manager_adding_a_non_member(inviter_id, existing_user.id, project_id)
+            # Not yet assigned — assign + send notification email.
+            membership = ProjectMembership.create(
+                user_id=existing_user.id,
+                project_id=project_id,
+                invited_by=inviter_id,
+            )
+            self._membership_repo.add(membership)
+            # Permissions resolve through the company: an existing user who
+            # belongs to another company (or to none) would land on the
+            # project with zero permissions. Attach them as `member`, the
+            # same grant accepting an invitation gives.
+            self._attach_to_project_company(existing_user.id, project_id)
+            # H2 — commit BEFORE enqueueing the email so the queue write only
+            # happens after persistence is durable. If commit raises, no email
+            # goes out for a membership that didn't land.
+            self._db.commit()
+            self._enqueue_added_email(
+                to=existing_user.email,
+                project_name=project_display_label(project),
+                inviter_name=inviter.display_or_email,
+                role_name=self._role_label(locale),
+                locale=locale,
+            )
             return CreateInvitationResultDto(kind="direct_added", user_id=existing_user.id)
 
         # 5. Invitation flow — enforce daily cap
@@ -179,8 +188,8 @@ class CreateInvitationUseCase:
         self._enqueue_invite_email(
             to=normalized_email,
             accept_url=accept_url,
-            project_name=project.name,
-            role_name=self._GRANTED_ROLE,
+            project_name=project_display_label(project),
+            role_name=self._role_label(locale),
             inviter_name=inviter.display_or_email,
             locale=locale,
         )
@@ -247,6 +256,10 @@ class CreateInvitationUseCase:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _role_label(self, locale: str) -> str:
+        """The granted role as the email for `locale` words it."""
+        return self._GRANTED_ROLE_LABELS.get(locale, self._GRANTED_ROLE)
 
     def _can_invite(self, user: Any, project_owner_id: UUID, inviter_id: UUID, project_id: UUID) -> bool:
         """Return True when the resolver grants `project:invite` on this project.

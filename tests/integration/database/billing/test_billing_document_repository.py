@@ -284,3 +284,48 @@ class TestCategorySerializerRoundTrip:
         saved = repo.save(doc)
         found = repo.find_by_id(UUID(str(saved.id)))
         assert found.items[0].category is None
+
+
+class TestActivitySuggestionsPrefixIsLiteral:
+    """'%' and '_' typed in the line picker are plain characters, not LIKE wildcards."""
+
+    @staticmethod
+    def _line(description: str) -> BillingDocumentItem:
+        return BillingDocumentItem(
+            description=description, quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("20")
+        )
+
+    def test_wildcards_only_match_literally(self, session):
+        user_id = _seed_user(session)
+        repo = SqlAlchemyBillingDocumentRepository(session)
+        repo.save(_make_doc(user_id, items=tuple(self._line(d) for d in ("Peinture murs", "%remise", "_lot"))))
+
+        def descriptions(q):
+            return sorted(s.description for s in repo.aggregate_item_suggestions(user_id, None, q, 20).suggestions)
+
+        assert descriptions("%") == ["%remise"]
+        assert descriptions("_") == ["_lot"]
+        assert descriptions("%ure") == []
+        assert descriptions("P_inture") == []
+        assert descriptions("pein") == ["Peinture murs"]
+
+    def test_postgres_query_escapes_the_prefix(self):
+        """The Postgres path (JSONB lateral join) passes q to ILIKE escaped, with an ESCAPE clause."""
+        from sqlalchemy.dialects import postgresql
+
+        class _RecordingSession:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, stmt):
+                self.statements.append(stmt)
+                return self
+
+            def all(self):
+                return []
+
+        recorder = _RecordingSession()
+        SqlAlchemyBillingDocumentRepository(recorder)._aggregate_suggestions_postgres(uuid4(), None, "50%_off\\", 20)
+        compiled = recorder.statements[0].compile(dialect=postgresql.dialect())
+        assert "ILIKE" in str(compiled).upper() and "ESCAPE" in str(compiled).upper()
+        assert "50\\%\\_off\\\\%" in compiled.params.values()

@@ -1,8 +1,9 @@
 """API tests for boot/detach cleanup + join code rotation (Phase 2 onboarding, finding 11):
 
 - Booting (or self-detaching) a company member removes their project
-  assignments in that company, deactivates their directory profile, and
-  rotates the join code so the old one can no longer be used.
+  assignments in that company, deactivates their directory profile, deletes
+  their D8 grants in that company, and rotates the join code so the old one
+  can no longer be used.
 - `POST /companies/join` creates an active, linked `company_persons` row
   for the joiner if one is missing.
 """
@@ -15,6 +16,7 @@ from uuid import uuid4
 import pytest
 
 from app.infrastructure.database.models.company import CompanyModel
+from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.project import ProjectModel
@@ -132,18 +134,61 @@ def _attach_with_person_and_project(app, user_id, company_id):
         return person.id, project.id
 
 
+def _grant(app, user_id, company_id, permission: str = "project:manage_labor"):
+    """Give `user_id` a company-wide D8 grant in `company_id`."""
+    from app import db
+
+    with app.app_context():
+        db.session.add(
+            CompanyMemberGrantModel(
+                id=uuid4(),
+                company_id=company_id,
+                user_id=user_id,
+                permission=permission,
+                effect="grant",
+                project_id=None,
+                granted_by_user_id=None,
+                granted_at=datetime.now(timezone.utc),
+            )
+        )
+        db.session.commit()
+
+
+def _grant_count(app, user_id, company_id) -> int:
+    from app import db
+
+    with app.app_context():
+        return db.session.query(CompanyMemberGrantModel).filter_by(user_id=user_id, company_id=company_id).count()
+
+
 class TestBootCleanup:
     def test_boot_removes_assignment_deactivates_profile_and_rotates_code(self, boot_client, boot_app):
         admin_id = _make_user(boot_app, "boot_admin1@test.com")
         target_id = _make_user(boot_app, "boot_target1@test.com")
         company_id = _make_company(boot_app, admin_id, name="Boot Co 1", join_code="OLDCODE1")
         person_id, project_id = _attach_with_person_and_project(boot_app, target_id, company_id)
+        _grant(boot_app, target_id, company_id)
+        # A grant in another company the target still belongs to is not touched.
+        other_company_id = _make_company(boot_app, admin_id, name="Boot Co 1 bis")
+        from app import db
+
+        with boot_app.app_context():
+            db.session.add(
+                UserCompanyAccessModel(
+                    user_id=target_id,
+                    company_id=other_company_id,
+                    role="member",
+                    is_primary=False,
+                    attached_at=datetime.now(timezone.utc),
+                )
+            )
+            db.session.commit()
+        _grant(boot_app, target_id, other_company_id)
         token = _login(boot_client, "boot_admin1@test.com")
 
         resp = boot_client.delete(f"/api/v1/companies/{company_id}/access/{target_id}", headers=_auth(token))
         assert resp.status_code == 204
 
-        from app import db
         from sqlalchemy import text
 
         with boot_app.app_context():
@@ -158,6 +203,10 @@ class TestBootCleanup:
 
             company = db.session.get(CompanyModel, company_id)
             assert company.join_code != "OLDCODE1", "join code must be rotated"
+
+        # A stale grant would outlive the role with no admin route left to revoke it.
+        assert _grant_count(boot_app, target_id, company_id) == 0, "grants in the company must be deleted"
+        assert _grant_count(boot_app, target_id, other_company_id) == 1
 
         # The old join code must no longer work.
         old_code_join = boot_client.post(
@@ -174,6 +223,7 @@ class TestSelfDetachCleanup:
         target_id = _make_user(boot_app, "boot_target2@test.com")
         company_id = _make_company(boot_app, admin_id, name="Boot Co 2", join_code="OLDCODE2")
         person_id, project_id = _attach_with_person_and_project(boot_app, target_id, company_id)
+        _grant(boot_app, target_id, company_id)
         token = _login(boot_client, "boot_target2@test.com")
 
         resp = boot_client.delete(f"/api/v1/companies/{company_id}/access", headers=_auth(token))
@@ -191,6 +241,56 @@ class TestSelfDetachCleanup:
 
             cp_row = db.session.query(CompanyPersonModel).filter_by(company_id=company_id, person_id=person_id).first()
             assert cp_row is not None and cp_row.is_active is False
+
+        assert _grant_count(boot_app, target_id, company_id) == 0
+
+
+def _task_assigned_to(app, user_id, project_id):
+    from app import db
+    from app.infrastructure.database.models.task import TaskModel
+
+    with app.app_context():
+        task = TaskModel(id=uuid4(), project_id=project_id, title="Poser les cloisons", assignee_id=user_id)
+        db.session.add(task)
+        db.session.commit()
+        return task.id
+
+
+def _assignee_of(app, task_id):
+    from app import db
+    from app.infrastructure.database.models.task import TaskModel
+
+    with app.app_context():
+        db.session.expire_all()
+        return db.session.get(TaskModel, task_id).assignee_id
+
+
+class TestTasksUnassignedOnLeave:
+    """Whoever leaves a company is no longer named (nor pushed to) on its tasks."""
+
+    def test_boot_clears_the_targets_tasks(self, boot_client, boot_app):
+        admin_id = _make_user(boot_app, "boot_admin_tasks@test.com")
+        target_id = _make_user(boot_app, "boot_target_tasks@test.com")
+        company_id = _make_company(boot_app, admin_id, name="Boot Tasks Co")
+        _person_id, project_id = _attach_with_person_and_project(boot_app, target_id, company_id)
+        task_id = _task_assigned_to(boot_app, target_id, project_id)
+        token = _login(boot_client, "boot_admin_tasks@test.com")
+
+        resp = boot_client.delete(f"/api/v1/companies/{company_id}/access/{target_id}", headers=_auth(token))
+        assert resp.status_code == 204
+        assert _assignee_of(boot_app, task_id) is None
+
+    def test_self_detach_clears_their_tasks(self, boot_client, boot_app):
+        admin_id = _make_user(boot_app, "boot_admin_tasks2@test.com")
+        target_id = _make_user(boot_app, "boot_target_tasks2@test.com")
+        company_id = _make_company(boot_app, admin_id, name="Boot Tasks Co 2")
+        _person_id, project_id = _attach_with_person_and_project(boot_app, target_id, company_id)
+        task_id = _task_assigned_to(boot_app, target_id, project_id)
+        token = _login(boot_client, "boot_target_tasks2@test.com")
+
+        resp = boot_client.delete(f"/api/v1/companies/{company_id}/access", headers=_auth(token))
+        assert resp.status_code == 204
+        assert _assignee_of(boot_app, task_id) is None
 
 
 class TestJoinCodeCreatesCompanyPerson:

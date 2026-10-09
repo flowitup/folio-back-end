@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import BinaryIO, Optional
 from uuid import UUID, uuid4
 
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository, IInvoiceRepository
-from app.domain.entities.invoice_attachment import InvoiceAttachment
+from app.domain.entities.invoice_attachment import MAX_ATTACHMENT_FILENAME_LENGTH, InvoiceAttachment
 from app.domain.exceptions.invoice_exceptions import InvoiceNotFoundError
+from app.domain.value_objects.display_filename import strip_control_chars
 
 # Validation constants
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -47,6 +49,20 @@ def _matches_magic(mime_type: str, head: bytes) -> bool:
     if mime_type in ("image/heic", "image/heif"):
         return True
     return False
+
+
+def _fit_filename(filename: str) -> str:
+    """Shorten ``filename`` to the column's length, keeping its extension.
+
+    Only a file sent straight to the API can be longer (disk file names stop at
+    255); it used to fail the insert with a 500.
+    """
+    if len(filename) <= MAX_ATTACHMENT_FILENAME_LENGTH:
+        return filename
+    stem, ext = os.path.splitext(filename)
+    if len(ext) >= MAX_ATTACHMENT_FILENAME_LENGTH:
+        return filename[:MAX_ATTACHMENT_FILENAME_LENGTH]
+    return stem[: MAX_ATTACHMENT_FILENAME_LENGTH - len(ext)] + ext
 
 
 class FileTooLargeError(ValueError):
@@ -108,6 +124,9 @@ class UploadAttachmentUseCase:
             raise UnsupportedFileTypeError(f"File contents do not match declared type '{mime_type}'")
 
         attachment_id = uuid4()
+        # A line break in the stored name would 500 every download (Content-Disposition)
+        filename = strip_control_chars(filename) or "attachment"
+        filename = _fit_filename(filename)
         # Sanitize filename for the storage key — keep only the basename, no path separators
         safe_name = filename.replace("/", "_").replace("\\", "_")
         storage_key = f"invoice-attachments/{invoice_id}/{attachment_id}/{safe_name}"

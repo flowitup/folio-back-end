@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
@@ -15,7 +15,13 @@ from app.application.persons.create_person import (
     CreatePersonUseCase,
 )
 from app.domain.entities.worker import Worker
-from app.domain.exceptions.labor_exceptions import InvalidWorkerDataError, WorkerAlreadyLinkedError
+from app.domain.exceptions.labor_exceptions import (
+    InvalidWorkerDataError,
+    InvalidWorkerPhoneError,
+    WorkerAlreadyLinkedError,
+    WorkerAlreadyOnProjectError,
+)
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 
 if TYPE_CHECKING:
     from app.application.authz.ports import AuthzReaderPort
@@ -85,12 +91,14 @@ class CreateWorkerUseCase:
          create. Caller (the FE PersonTypeahead) has already picked
          an existing identity.
 
-      2. ``person_id`` None → create a fresh Person inline using
+      2. ``person_id`` None → reuse the project company's person with the
+         same phone number, if any; else create a fresh Person inline using
          ``name``/``phone``, then link. ``created_by_user_id`` is
          required in this branch (taken from the JWT subject by the
          route).
 
-    Either way the saved Worker comes back with person_id populated.
+    Either way the saved Worker comes back with person_id populated. A person
+    who already has a worker on the project is refused (409).
     """
 
     def __init__(
@@ -135,6 +143,56 @@ class CreateWorkerUseCase:
             now=datetime.now(timezone.utc),
         )
 
+    def _company_person_with_phone(self, phone: Optional[str], project_id: UUID) -> Optional[UUID]:
+        """The person already listed in the project company under this phone number, if any.
+
+        A number identifies one human within a company (one active profile per number),
+        so an inline "Add worker" with a known number reuses that person instead of
+        creating a second identity the double-booking check cannot match.
+        """
+        if not phone or self._company_person_repo is None or self._authz_reader is None or self._person_repo is None:
+            return None
+        company_id = self._authz_reader.project_company_id(project_id)
+        if company_id is None:
+            return None
+        try:
+            normalized = normalize_phone(phone)
+        except InvalidPhoneNumberError:
+            return None
+
+        def same_number(stored: Optional[str]) -> bool:
+            try:
+                return bool(stored) and normalize_phone(stored) == normalized
+            except InvalidPhoneNumberError:
+                return False
+
+        # Already on this project's roster under this number (older persons may not be
+        # in the directory): reused, so the one-row-per-person check refuses the add.
+        for existing in self._repo.list_by_project(project_id, active_only=False):
+            if existing.person_id is not None and same_number(existing.person_phone or existing.phone):
+                return existing.person_id
+        profile = self._company_person_repo.find_by_phone(company_id, normalized)
+        if profile is not None and profile.is_active:
+            return profile.person_id
+        # Persons added inline carry their number on the person row only, as typed
+        # ("06 20 …", "0620…", "+33 6 …"): compare each directory person's number normalized.
+        person_ids = [profile.person_id for profile in self._company_person_repo.list_for_company(company_id)]
+        matches = [person for person in self._person_repo.find_by_ids(person_ids) if same_number(person.phone)]
+        if matches:
+            return min(matches, key=lambda person: person.created_at).id
+        return None
+
+    def _is_persons_phone(self, phone: str, request: CreateWorkerRequest) -> bool:
+        """Whether `phone` is the picked person's stored number, sent back as is.
+
+        Numbers saved before phones were checked may be free text; picking that
+        person must still work, so only a number the caller typed is refused.
+        """
+        if request.person_id is None or self._person_repo is None:
+            return False
+        person = self._person_repo.find_by_id(request.person_id)
+        return person is not None and (person.phone or "").strip() == phone.strip()
+
     def set_role_scope(self, labor_role_repo, authz_reader) -> None:
         """Inject what the role check needs; wired after the labor-role repository exists."""
         self._labor_role_repo = labor_role_repo
@@ -146,10 +204,14 @@ class CreateWorkerUseCase:
         assert_role_in_project_company(self._labor_role_repo, self._authz_reader, request.role_id, request.project_id)
         name = request.name.strip() if request.name else ""
         phone = request.phone
+        if phone and phone.strip() and not is_phone_number(phone) and not self._is_persons_phone(phone, request):
+            raise InvalidWorkerPhoneError()
         daily_rate = request.daily_rate
         role_id = request.role_id
         user_id = request.user_id
         person_id: Optional[UUID] = request.person_id
+        if person_id is None:
+            person_id = self._company_person_with_phone(phone, request.project_id)
 
         # Phase 2 onboarding: fill in whatever the request omitted from the
         # person's company profile — never overrides an explicit value.
@@ -179,8 +241,17 @@ class CreateWorkerUseCase:
             raise InvalidWorkerDataError("Worker name is required")
         if len(name) > 255:
             raise InvalidWorkerDataError("Worker name exceeds 255 characters")
+        if daily_rate is not None:
+            # Checked as the 2-decimal column will store it (0.004 would be saved as 0.00).
+            daily_rate = Decimal(str(daily_rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if daily_rate is None or daily_rate <= 0:
             raise InvalidWorkerDataError("Daily rate must be greater than 0")
+
+        # One person, one row on a project's roster: a second worker would pay their days twice.
+        if person_id is not None:
+            for existing in self._repo.list_by_project(request.project_id, active_only=False):
+                if existing.person_id == person_id:
+                    raise WorkerAlreadyOnProjectError(str(existing.id), existing.is_active)
 
         if user_id is not None:
             linked = self._repo.find_by_project_and_user(request.project_id, user_id)
@@ -211,6 +282,13 @@ class CreateWorkerUseCase:
                     )
                 )
                 person_id = UUID(created_person.id)
+                self._list_in_project_company(person_id, request)
+        elif request.person_id is not None and self._person_repo is not None:
+            # The web picker creates a new person first (POST /persons) and sends its id:
+            # list that person in the project company like the inline branch does. A
+            # person someone else created is left in the directories it is already in.
+            picked = self._person_repo.find_by_id(person_id)
+            if picked is not None and picked.created_by_user_id == request.created_by_user_id:
                 self._list_in_project_company(person_id, request)
 
         worker = Worker(

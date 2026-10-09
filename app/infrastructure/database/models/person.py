@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -81,13 +81,10 @@ class PersonModel(Base):
         Index("ix_persons_normalized_name", "normalized_name"),
         Index("ix_persons_created_by", "created_by_user_id"),
         # Plain (non-unique) index — phone_normalized is a matching hint
-        # only, so unlike ix_persons_phone this one is not partial and is
-        # safe to declare here too (SQLite create_all() compatible).
+        # only, so unlike ix_persons_phone this one is not partial.
         Index("ix_persons_phone_normalized", "phone_normalized"),
-        # NOTE: partial index on phone (WHERE phone IS NOT NULL) is
-        # declared only in the Alembic migration (ix_persons_phone)
-        # because the postgresql_where syntax is not SQLite-compatible.
-        # Omitting it here keeps create_all() working in SQLite tests.
+        # Partial index of migration b1c2d3e4f5a6 (a plain index on SQLite).
+        Index("ix_persons_phone", "phone", postgresql_where=text("phone IS NOT NULL")),
     )
 
     def __repr__(self) -> str:

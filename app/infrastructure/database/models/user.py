@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, Index, String, Text, func
+from sqlalchemy import Boolean, Column, DateTime, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -50,8 +50,10 @@ class UserModel(Base):
         foreign_keys=[user_projects.c.user_id, user_projects.c.project_id],
     )
 
-    # Case-insensitive email index using func.lower()
-    __table_args__ = (Index("ix_users_email_lower", func.lower(email)),)
+    # Migration 7f6bfdbaee86 created this index on plain `email`, despite its name; the
+    # model mirrors the real index. Emails are stored lowercased, and exact lookups use
+    # the users_email_key unique index.
+    __table_args__ = (Index("ix_users_email_lower", email),)
 
     def __repr__(self) -> str:
         return f"<User {self.email}>"

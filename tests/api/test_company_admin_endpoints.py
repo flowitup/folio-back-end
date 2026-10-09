@@ -227,6 +227,87 @@ class TestUpdateCompany:
         stored = cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()
         assert (stored["iban"], stored["bic"]) == ("FR7630006000011234567890189", "BNPAFRPP")
 
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            ({"siret": "552 100 554 00025"}, ("siret", "55210055400025")),
+            ({"tva_number": "fr40552100554"}, ("tva_number", "FR40552100554")),
+            ({"tva_number": "FR 40 552100554"}, ("tva_number", "FR40552100554")),
+        ],
+    )
+    def test_siret_and_tva_as_printed_are_stored_compact(
+        self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token, body, expected
+    ):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}"
+        resp = cadm_client.put(url, json=body, headers=_auth(company_a_admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        field, value = expected
+        assert cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()[field] == value
+
+    def test_siret_and_tva_as_printed_are_accepted_on_create(self, cadm_client, company_a_admin_token):
+        resp = cadm_client.post(
+            "/api/v1/companies",
+            json={
+                "legal_name": "QA compact ids",
+                "address": "1 rue de Test",
+                "siret": "552 100 554 00025",
+                "tva_number": "fr 40 552100554",
+            },
+            headers=_auth(company_a_admin_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    @pytest.mark.parametrize("body", [{"siret": "552 100 554"}, {"tva_number": "FR-40"}])
+    def test_malformed_siret_or_tva_is_still_refused(self, cadm_client, cadm_app, company_a_admin_token, body):
+        resp = cadm_client.put(
+            f"/api/v1/companies/{cadm_app._test_company_a_id}", json=body, headers=_auth(company_a_admin_token)
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
+    def test_clearing_bank_details_stores_null_not_a_mask(
+        self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token
+    ):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}"
+        filled = {"iban": "FR7630006000011234567890189", "bic": "BNPAFRPP"}
+        assert cadm_client.put(url, json=filled, headers=_auth(company_a_admin_token)).status_code == 200
+
+        resp = cadm_client.put(url, json={"iban": "", "bic": ""}, headers=_auth(company_a_admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert (resp.get_json()["iban"], resp.get_json()["bic"]) == (None, None)
+        shown = cadm_client.get(url, headers=_auth(company_a_admin_token)).get_json()
+        assert (shown["iban"], shown["bic"]) == (None, None)
+        stored = cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()
+        assert (stored["iban"], stored["bic"]) == (None, None)
+
+    def test_explicit_null_clears_optional_fields_while_absent_or_masked_keeps_them(
+        self, cadm_client, cadm_app, company_a_admin_token, platform_admin_token
+    ):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}"
+        filled = {
+            "logo_url": "https://example.com/logo.png",
+            "default_payment_terms": "30 jours",
+            "prefix_override": "QAA",
+            "siret": "55210055400025",
+            "tva_number": "FR40552100554",
+            "iban": "FR7630006000011234567890189",
+        }
+        assert cadm_client.put(url, json=filled, headers=_auth(company_a_admin_token)).status_code == 200
+
+        # The web form: emptied plain fields as null, the untouched masked IBAN sent back as its mask.
+        shown = cadm_client.get(url, headers=_auth(company_a_admin_token)).get_json()
+        cleared = {"logo_url": None, "default_payment_terms": None, "prefix_override": None, "siret": None}
+        resp = cadm_client.put(
+            url, json={**cleared, "legal_name": None, "iban": shown["iban"]}, headers=_auth(company_a_admin_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        stored = cadm_client.get(url, headers=_auth(platform_admin_token)).get_json()
+        assert {k: stored[k] for k in cleared} == cleared
+        # Absent (tva_number), masked (iban) and a null required field (legal_name) are left as they were.
+        assert stored["tva_number"] == "FR40552100554"
+        assert stored["iban"] == "FR7630006000011234567890189"
+        assert stored["legal_name"]
+
     def test_company_admin_403_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
         resp = cadm_client.put(
             f"/api/v1/companies/{cadm_app._test_company_b_id}",
@@ -274,6 +355,37 @@ class TestListAttachedUsers:
         schema = spec["components"]["schemas"]["AttachedUserRow"]["properties"]
         assert {"email", "display_name", "phone"} <= set(schema)
 
+    def test_nameless_phone_account_gets_no_name_from_its_synthetic_address(
+        self, cadm_client, cadm_app, platform_admin_token
+    ):
+        from app import db
+        from app.application.usecases.otp_login import placeholder_email
+
+        company_b = UUID(cadm_app._test_company_b_id)
+        with cadm_app.app_context():
+            phone_only = UserModel(email=placeholder_email("+33611119901"), phone="+33611119901", is_active=True)
+            real_email = UserModel(email="cadm.nameless@test.com", is_active=True)
+            db.session.add_all([phone_only, real_email])
+            db.session.flush()
+            for user in (phone_only, real_email):
+                db.session.add(
+                    UserCompanyAccessModel(
+                        user_id=user.id,
+                        company_id=company_b,
+                        role="member",
+                        is_primary=True,
+                        attached_at=datetime.now(timezone.utc),
+                    )
+                )
+            db.session.commit()
+            ids = (str(phone_only.id), str(real_email.id))
+
+        resp = cadm_client.get(f"/api/v1/companies/{company_b}/attached-users", headers=_auth(platform_admin_token))
+        rows = {r["user_id"]: r for r in resp.get_json()["items"]}
+        # Null, so clients show the phone, never "phone-33611119901".
+        assert (rows[ids[0]]["display_name"], rows[ids[0]]["phone"]) == (None, "+33611119901")
+        assert rows[ids[1]]["display_name"] == "cadm.nameless"
+
     def test_company_admin_403_on_other_company(self, cadm_client, cadm_app, company_a_admin_token):
         resp = cadm_client.get(
             f"/api/v1/companies/{cadm_app._test_company_b_id}/attached-users",
@@ -287,6 +399,36 @@ class TestListAttachedUsers:
             headers=_auth(member_token),
         )
         assert resp.status_code == 403
+
+    @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "offset=-1", "offset=99999999999999999999", "limit=x"])
+    def test_bad_limit_or_offset_is_400(self, cadm_client, cadm_app, company_a_admin_token, query):
+        resp = cadm_client.get(
+            f"/api/v1/companies/{cadm_app._test_company_a_id}/attached-users?{query}",
+            headers=_auth(company_a_admin_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "ValidationError"
+
+    def test_offset_pages_from_the_start(self, cadm_client, cadm_app, company_a_admin_token):
+        url = f"/api/v1/companies/{cadm_app._test_company_a_id}/attached-users"
+        every = cadm_client.get(url, headers=_auth(company_a_admin_token)).get_json()["items"]
+        second = cadm_client.get(f"{url}?limit=1&offset=1", headers=_auth(company_a_admin_token)).get_json()
+        assert [r["user_id"] for r in second["items"]] == [every[1]["user_id"]]
+        assert second["total"] == len(every)
+
+
+class TestListAllCompanies:
+    @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "offset=-1", "offset=99999999999999999999", "limit=x"])
+    def test_bad_limit_or_offset_is_400(self, cadm_client, platform_admin_token, query):
+        resp = cadm_client.get(f"/api/v1/companies?scope=all&{query}", headers=_auth(platform_admin_token))
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "ValidationError"
+
+    def test_valid_paging_is_echoed(self, cadm_client, platform_admin_token):
+        resp = cadm_client.get("/api/v1/companies?scope=all&limit=1&offset=1", headers=_auth(platform_admin_token))
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert (body["limit"], body["offset"], len(body["items"])) == (1, 1, 1)
 
 
 # ---------------------------------------------------------------------------

@@ -21,11 +21,11 @@ def _mask(value: str | None) -> str | None:
     """Mask a single sensitive string value.
 
     Rules:
-      - None  → None  (field absent, nothing to mask)
+      - None or "" → None  (field absent or cleared, nothing to mask)
       - len ≤ 4 → "····"  (too short to show tail)
       - len > 4 → "····" + value[-4:]
     """
-    if value is None:
+    if not value:
         return None
     if len(value) <= 4:
         return _BULLET

@@ -10,10 +10,12 @@ from app.application.chiffrage.exceptions import ArticleNotFoundError
 from app.application.chiffrage.ports import ChiffrageRepositoryPort, TransactionalSessionPort
 from app.application.chiffrage.validation import (
     clean_optional_text,
+    company_library_refs,
     owned_article,
     owned_quote,
     owned_store,
     require_supplier,
+    store_name_snapshot,
     validate_price,
     validate_tva_rate,
 )
@@ -44,15 +46,20 @@ class CreateQuoteUseCase:
         owned_article(self._repo, article_id, project_id)
         # A shop from another project would silently pollute this project's
         # basket comparison, so it is rejected exactly like any other foreign id.
-        if store_id is not None:
-            owned_store(self._repo, store_id, project_id)
+        store = owned_store(self._repo, store_id, project_id) if store_id is not None else None
+        company_library_refs(self._repo, project_id, supplier_id=supplier_id, library_product_id=library_product_id)
+        validated_name = require_supplier(store_id, supplier_id, supplier_name)
+        if validated_name is None and store is not None:
+            # Keep the shop's name as the snapshot, so the price stays attributed
+            # once the shop is deleted.
+            validated_name = store_name_snapshot(store)
         quote = ChiffrageQuote.create(
             article_id=article_id,
             unit_price_ht=validate_price(unit_price_ht),
             tva_rate=validate_tva_rate(tva_rate),
             store_id=store_id,
             supplier_id=supplier_id,
-            supplier_name=require_supplier(store_id, supplier_id, supplier_name),
+            supplier_name=validated_name,
             library_product_id=library_product_id,
             product_url=clean_optional_text(product_url),
             note=clean_optional_text(note),
@@ -92,6 +99,18 @@ class UpdateQuoteUseCase:
         next_store_id = quote.store_id if store_id is U else store_id
         if next_store_id is not None and isinstance(next_store_id, UUID) and next_store_id != quote.store_id:
             owned_store(self._repo, next_store_id, project_id)
+        # Only a newly set library reference is checked, so a quote can still be
+        # edited whatever it already points at.
+        company_library_refs(
+            self._repo,
+            project_id,
+            supplier_id=(supplier_id if isinstance(supplier_id, UUID) and supplier_id != quote.supplier_id else None),
+            library_product_id=(
+                library_product_id
+                if isinstance(library_product_id, UUID) and library_product_id != quote.library_product_id
+                else None
+            ),
+        )
         next_supplier_id = quote.supplier_id if supplier_id is U else supplier_id
         next_supplier_name = quote.supplier_name if supplier_name is U else supplier_name
         validated_name = require_supplier(
@@ -99,11 +118,27 @@ class UpdateQuoteUseCase:
             next_supplier_id if isinstance(next_supplier_id, UUID) or next_supplier_id is None else None,
             None if next_supplier_name is None else str(next_supplier_name),
         )
+        if (
+            validated_name is not None
+            and isinstance(next_store_id, UUID)
+            and quote.store_id is not None
+            and next_store_id != quote.store_id
+        ):
+            # Moving a price to another shop: a name that is just the old shop's
+            # snapshot (the mobile edit sheet sends it back as typed) follows the
+            # shop, or the price would keep the old shop's name once detached.
+            old_store = self._repo.find_store(quote.store_id)
+            if old_store is not None and validated_name == store_name_snapshot(old_store):
+                validated_name = None
+        if validated_name is None and isinstance(next_store_id, UUID):
+            # Same snapshot as on create; this also repairs an older price saved
+            # with a shop and no name.
+            validated_name = store_name_snapshot(owned_store(self._repo, next_store_id, project_id))
 
         updated = quote.with_updates(
             store_id=(U if store_id is U else store_id),
             supplier_id=(U if supplier_id is U else supplier_id),
-            supplier_name=(U if supplier_name is U else validated_name),
+            supplier_name=(U if supplier_name is U and validated_name == quote.supplier_name else validated_name),
             library_product_id=(U if library_product_id is U else library_product_id),
             unit_price_ht=(U if unit_price_ht is U else validate_price(Decimal(str(unit_price_ht)))),
             tva_rate=(U if tva_rate is U else validate_tva_rate(Decimal(str(tva_rate)))),

@@ -67,6 +67,26 @@ class TestSupplierRepository:
         assert result1.id == result2.id
         assert result1.name == result2.name == "Acme Widgets"  # First name preserved
 
+    def test_get_or_create_returns_the_row_a_concurrent_request_inserted(self, session, monkeypatch):
+        """The slug was free at the look-up but taken at the insert: no IntegrityError (a 500)."""
+        repo = SqlAlchemyBibliothequeSupplierRepository(session)
+        company_id = uuid4()
+        first = repo.get_or_create(Supplier.create(company_id=company_id, name="Acme Widgets", slug="acme-widgets"))
+
+        real_find = repo.find_by_slug
+        lookups = []
+
+        def stale_then_real(cid, slug):
+            # The first look-up ran before the other request committed its row.
+            lookups.append(slug)
+            return None if len(lookups) == 1 else real_find(cid, slug)
+
+        monkeypatch.setattr(repo, "find_by_slug", stale_then_real)
+        result = repo.get_or_create(Supplier.create(company_id=company_id, name="ACME WIDGETS", slug="acme-widgets"))
+
+        assert result.id == first.id
+        assert [s.id for s in repo.list_by_company(company_id)] == [first.id]
+
     def test_get_or_create_different_companies_same_slug(self, session):
         repo = SqlAlchemyBibliothequeSupplierRepository(session)
         company1_id = uuid4()

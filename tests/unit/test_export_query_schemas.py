@@ -47,6 +47,11 @@ class TestExportInvoicesQueryYearRange:
         q = ExportInvoicesQuery.model_validate({"from": "2026-01", "to": "2026-01", "format": "pdf"})
         assert q.from_month == "2026-01"
 
+    def test_trailing_newline_rejected(self):
+        """re.match's "$" also matched before a trailing newline; fullmatch does not."""
+        with pytest.raises(ValidationError):
+            ExportInvoicesQuery.model_validate({"from": "2026-01\n", "to": "2026-02", "format": "xlsx"})
+
 
 # ---------------------------------------------------------------------------
 # ExportLaborQuery — YYYY-MM regex

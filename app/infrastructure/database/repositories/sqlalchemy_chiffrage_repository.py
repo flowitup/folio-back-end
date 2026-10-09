@@ -6,8 +6,14 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.application.chiffrage.exceptions import (
+    RoomAlreadyExistsError,
+    StoreAlreadyExistsError,
+    UnitAlreadyExistsError,
+)
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
@@ -20,6 +26,8 @@ from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteMod
 from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
 from app.infrastructure.database.models.chiffrage_room import ChiffrageRoomModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
+from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
+from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.chiffrage_unit import ChiffrageUnitModel
 
 
@@ -31,6 +39,23 @@ class SqlAlchemyChiffrageRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def _flush_unique(self, orm, constraint: tuple[str, ...], error: Exception) -> None:
+        """Write ``orm`` in a savepoint; a clash on ``constraint`` raises ``error`` (a 409).
+
+        The use cases check that a name is free first, but two concurrent requests
+        both pass that check and the unique index refuses the second write, which
+        surfaced as a 500. The savepoint keeps the session usable after it.
+        ``constraint`` holds what identifies the clash in the driver's message:
+        Postgres names the constraint, SQLite (tests) lists its columns.
+        """
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+        except IntegrityError as exc:
+            if any(marker in str(exc.orig) for marker in constraint):
+                raise error from exc
+            raise
 
     # ------------------------------------------------------------------
     # Tree read
@@ -128,6 +153,18 @@ class SqlAlchemyChiffrageRepository:
         ).scalar()
         return int(value) if value is not None else 0
 
+    def postes_for_project(self, project_id: UUID) -> list[ChiffragePoste]:
+        rows = (
+            self._session.execute(
+                select(ChiffragePosteModel)
+                .where(ChiffragePosteModel.project_id == project_id)
+                .order_by(ChiffragePosteModel.position, ChiffragePosteModel.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        return [r.to_entity() for r in rows]
+
     # ------------------------------------------------------------------
     # Article
     # ------------------------------------------------------------------
@@ -171,6 +208,18 @@ class SqlAlchemyChiffrageRepository:
             select(func.max(ChiffrageArticleModel.position)).where(ChiffrageArticleModel.poste_id == poste_id)
         ).scalar()
         return int(value) if value is not None else 0
+
+    def articles_in_poste(self, poste_id: UUID) -> list[ChiffrageArticle]:
+        rows = (
+            self._session.execute(
+                select(ChiffrageArticleModel)
+                .where(ChiffrageArticleModel.poste_id == poste_id)
+                .order_by(ChiffrageArticleModel.position, ChiffrageArticleModel.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        return [r.to_entity() for r in rows]
 
     # ------------------------------------------------------------------
     # Quote
@@ -241,17 +290,21 @@ class SqlAlchemyChiffrageRepository:
         return orm.to_entity() if orm is not None else None
 
     def room_name_exists(self, project_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        """Whether the project already has a room under this name, case-insensitively (same rule as shops)."""
         stmt = select(ChiffrageRoomModel.id).where(
             ChiffrageRoomModel.project_id == project_id,
-            ChiffrageRoomModel.name == name,
+            func.lower(ChiffrageRoomModel.name) == name.strip().lower(),
         )
         if exclude_id is not None:
             stmt = stmt.where(ChiffrageRoomModel.id != exclude_id)
         return self._session.execute(stmt).first() is not None
 
     def add_room(self, room: ChiffrageRoom) -> None:
-        self._session.add(ChiffrageRoomModel.from_entity(room))
-        self._session.flush()
+        self._flush_unique(
+            ChiffrageRoomModel.from_entity(room),
+            ("uq_chiffrage_rooms_project_name", "chiffrage_rooms.project_id, chiffrage_rooms.name"),
+            RoomAlreadyExistsError(f"Room '{room.name}' already exists in this project."),
+        )
 
     def save_room(self, room: ChiffrageRoom) -> None:
         orm = self._session.get(ChiffrageRoomModel, room.id)
@@ -325,8 +378,11 @@ class SqlAlchemyChiffrageRepository:
         return orm.to_entity() if orm is not None else None
 
     def add_store(self, store: ChiffrageStore) -> None:
-        self._session.add(ChiffrageStoreModel.from_entity(store))
-        self._session.flush()
+        self._flush_unique(
+            ChiffrageStoreModel.from_entity(store),
+            ("uq_chiffrage_stores_project_name",),
+            StoreAlreadyExistsError(f"This project already has a shop named '{store.name}'."),
+        )
 
     def save_store(self, store: ChiffrageStore) -> None:
         orm = self._session.get(ChiffrageStoreModel, store.id)
@@ -339,16 +395,25 @@ class SqlAlchemyChiffrageRepository:
         orm.updated_at = store.updated_at
         self._session.flush()
 
-    def clear_store_from_quotes(self, store_id: UUID) -> None:
+    def clear_store_from_quotes(self, store_id: UUID, snapshot_name: str) -> None:
         """Detach every price recorded at this shop, keeping the price itself.
 
         The FK is ON DELETE SET NULL, but relying on that alone would make the
         behaviour depend on the engine enforcing foreign keys — SQLite does not
         by default. Doing it explicitly means a deleted shop leaves the same
-        state everywhere.
+        state everywhere. A price with no supplier name of its own takes the
+        shop's name: with neither a shop nor a name it would break the
+        supplier check constraint and the delete would fail.
         """
         self._session.execute(
-            update(ChiffrageQuoteModel).where(ChiffrageQuoteModel.store_id == store_id).values(store_id=None)
+            update(ChiffrageQuoteModel)
+            .where(ChiffrageQuoteModel.store_id == store_id)
+            .values(
+                store_id=None,
+                supplier_name=func.coalesce(
+                    func.nullif(func.trim(ChiffrageQuoteModel.supplier_name), ""), snapshot_name
+                ),
+            )
         )
         self._session.flush()
 
@@ -399,8 +464,11 @@ class SqlAlchemyChiffrageRepository:
         return found is not None
 
     def add_unit(self, unit: ChiffrageUnit) -> None:
-        self._session.add(ChiffrageUnitModel.from_entity(unit))
-        self._session.flush()
+        self._flush_unique(
+            ChiffrageUnitModel.from_entity(unit),
+            ("uq_chiffrage_units_project_symbol", "chiffrage_units.project_id, chiffrage_units.symbol"),
+            UnitAlreadyExistsError(f"'{unit.symbol}' is already a unit of this project."),
+        )
 
     def delete_unit(self, unit_id: UUID) -> None:
         orm = self._session.get(ChiffrageUnitModel, unit_id)
@@ -424,14 +492,15 @@ class SqlAlchemyChiffrageRepository:
             .where(ChiffrageArticleModel.id == article_id)
         ).scalar_one_or_none()
 
-    def library_products_with_image(self, product_ids: list[UUID]) -> set[UUID]:
+    def library_products_with_image(self, product_ids: list[UUID], company_id: Optional[UUID]) -> set[UUID]:
         """One keyed query — never one lookup per article."""
-        if not product_ids:
+        if not product_ids or company_id is None:
             return set()
         rows = (
             self._session.execute(
                 select(BibliothequeProductModel.id).where(
                     BibliothequeProductModel.id.in_(product_ids),
+                    BibliothequeProductModel.company_id == company_id,
                     BibliothequeProductModel.image_storage_key.is_not(None),
                 )
             )
@@ -439,6 +508,21 @@ class SqlAlchemyChiffrageRepository:
             .all()
         )
         return set(rows)
+
+    def company_id_for_project(self, project_id: UUID) -> Optional[UUID]:
+        return self._session.execute(
+            select(ProjectModel.company_id).where(ProjectModel.id == project_id)
+        ).scalar_one_or_none()
+
+    def company_id_for_supplier(self, supplier_id: UUID) -> Optional[UUID]:
+        return self._session.execute(
+            select(BibliothequeSupplierModel.company_id).where(BibliothequeSupplierModel.id == supplier_id)
+        ).scalar_one_or_none()
+
+    def company_id_for_library_product(self, product_id: UUID) -> Optional[UUID]:
+        return self._session.execute(
+            select(BibliothequeProductModel.company_id).where(BibliothequeProductModel.id == product_id)
+        ).scalar_one_or_none()
 
     def project_id_for_quote(self, quote_id: UUID) -> Optional[UUID]:
         return self._session.execute(

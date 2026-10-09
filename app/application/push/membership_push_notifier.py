@@ -13,6 +13,7 @@ from typing import Dict, Optional, Protocol
 from uuid import UUID
 
 from app.application.push.dispatcher import PushDispatcher
+from app.application.push.project_label import project_label
 from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,13 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
         "fr": ("Vous avez été retiré d'une entreprise", "{name}"),
         "en": ("You were removed from a company", "{name}"),
     },
+}
+
+# Company roles as the mobile app names them (`companies.x.<role>`); the push lands there.
+_ROLE_LABELS: Dict[str, Dict[str, str]] = {
+    "vi": {"admin": "Quản trị viên", "manager": "Quản lý", "member": "Thành viên"},
+    "fr": {"admin": "Admin", "manager": "Responsable", "member": "Membre"},
+    "en": {"admin": "Admin", "manager": "Manager", "member": "Member"},
 }
 
 _PROJECT_EVENTS = (
@@ -88,14 +96,19 @@ class MembershipPushNotifier:
             is_project = event in _PROJECT_EVENTS
             repo = self._projects if is_project else self._companies
             entity = repo.find_by_id(entity_id)
-            name = getattr(entity, "name", None) or getattr(entity, "legal_name", "") or ""
-            title, body = _TEXT[event][self._dispatcher.locale]
+            if is_project:
+                name = project_label(entity)
+            else:
+                name = getattr(entity, "name", None) or getattr(entity, "legal_name", "") or ""
+            locale = self._dispatcher.locale
+            title, body = _TEXT[event][locale]
+            role_label = _ROLE_LABELS.get(locale, {}).get(role or "", role or "")
             key = "project_id" if is_project else "company_id"
             self._dispatcher.dispatch(
                 category=NotificationCategory.MEMBERSHIP.value,
                 recipients=[user_id],
                 title=title,
-                body=body.format(name=name, role=role or ""),
+                body=body.format(name=name, role=role_label),
                 data={"kind": event, key: str(entity_id)},
                 exclude=actor_id,
             )

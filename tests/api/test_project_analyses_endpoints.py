@@ -488,6 +488,21 @@ class TestListAnalysesEndpoint:
         assert len(items) == 1
         assert items[0]["title"] == "Quarterly Report"
 
+    def test_200_search_treats_percent_and_underscore_literally(self, inv_client, member_token, analyses_app):
+        """'%' and '_' in `q` match only themselves, not any text."""
+        project_id = analyses_app._analyses_project_id
+        _upload_analysis(inv_client, project_id, member_token, title="Budget 100% spent")
+        _upload_analysis(inv_client, project_id, member_token, title="Plain report")
+
+        def titles(q: str) -> list[str]:
+            resp = inv_client.get(_analyses_url(project_id), query_string={"q": q}, headers=_auth(member_token))
+            assert resp.status_code == 200
+            return [i["title"] for i in resp.get_json()["items"]]
+
+        assert titles("%") == ["Budget 100% spent"]
+        assert titles("_") == []
+        assert titles("plain_report") == []
+
     def test_200_tag_and_filter(self, inv_client, member_token, analyses_app):
         """Multiple tags AND together (all must match)."""
         _upload_analysis(
@@ -659,6 +674,62 @@ class TestListAnalysisTagsEndpoint:
         assert resp.status_code == 401
 
 
+class TestAnalysisUploaderName:
+    """Every analysis names its uploader, even one who is not a project member."""
+
+    def test_unassigned_uploader_is_named_in_create_list_and_get(
+        self, inv_client, superadmin_token, other_member_token, analyses_app
+    ):
+        """Platform ops was never assigned: the member list cannot name them, the API does."""
+        pid = analyses_app._analyses_project_id
+        resp = _upload(inv_client, pid, superadmin_token, title="By ops")
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["uploader_name"] == "superadmin@invite-test.com"
+        analysis_id = resp.get_json()["id"]
+
+        listed = inv_client.get(_analyses_url(pid), headers=_auth(other_member_token)).get_json()["items"]
+        assert [a["uploader_name"] for a in listed] == ["superadmin@invite-test.com"]
+
+        detail = inv_client.get(_analysis_url(pid, analysis_id), headers=_auth(other_member_token)).get_json()
+        assert detail["uploader_name"] == "superadmin@invite-test.com"
+
+    def test_name_then_phone_for_phone_only_account_and_none_once_erased(self, inv_client, member_token, analyses_app):
+        """A phone-only account's synthetic address is never shown; an erased account has no name."""
+        from datetime import datetime, timezone
+
+        from app import db
+        from app.infrastructure.database.models.project_analysis import ProjectAnalysisModel
+        from app.infrastructure.database.models.user import UserModel
+
+        pid = analyses_app._analyses_project_id
+        named_id = _upload_analysis(inv_client, pid, member_token, title="Named")
+        phone_id = _upload_analysis(inv_client, pid, member_token, title="Phone only")
+        erased_id = _upload_analysis(inv_client, pid, member_token, title="Erased")
+
+        suffix = uuid4().hex[:8]
+        phone = f"+336{int(suffix, 16) % 10**8:08d}"
+        with analyses_app.app_context():
+            named = UserModel(email=f"named-{suffix}@example.com", display_name="Chef de chantier", is_active=True)
+            phone_only = UserModel(
+                email=f"phone-{phone.lstrip('+')}@no-email.folio.flowitup.com", phone=phone, is_active=True
+            )
+            erased = UserModel(
+                email=f"erased-{suffix}@example.com",
+                display_name="Gone",
+                is_active=False,
+                deleted_at=datetime.now(timezone.utc),
+            )
+            db.session.add_all([named, phone_only, erased])
+            db.session.flush()
+            for analysis_id, user in ((named_id, named), (phone_id, phone_only), (erased_id, erased)):
+                db.session.get(ProjectAnalysisModel, UUID(analysis_id)).uploader_user_id = user.id
+            db.session.commit()
+
+        listed = inv_client.get(_analyses_url(pid), headers=_auth(member_token)).get_json()["items"]
+        names = {a["title"]: a["uploader_name"] for a in listed}
+        assert names == {"Named": "Chef de chantier", "Phone only": phone, "Erased": None}
+
+
 # ===========================================================================
 # GET /api/v1/projects/<project_id>/analyses/<analysis_id> — metadata
 # ===========================================================================
@@ -825,6 +896,19 @@ class TestGetAnalysisContentEndpoint:
         assert "style-src 'unsafe-inline'" in csp
         assert "script-src 'unsafe-inline'" in csp
         assert "frame-ancestors 'self'" in csp
+
+    def test_200_csp_sandboxes_the_report_on_direct_navigation(self, inv_client, member_token, analyses_app):
+        """Opened top-level, the report gets an opaque origin, never the API's (matches the FE proxy)."""
+        analysis_id = _upload_analysis(inv_client, analyses_app._analyses_project_id, member_token)
+
+        resp = inv_client.get(
+            _content_url(analyses_app._analyses_project_id, analysis_id),
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        directives = [d.strip() for d in resp.headers.get("Content-Security-Policy", "").split(";")]
+        assert "sandbox allow-scripts" in directives
+        assert "allow-same-origin" not in resp.headers["Content-Security-Policy"]
 
     def test_404_missing_analysis(self, inv_client, member_token, analyses_app):
         """Non-existent analysis → 404."""

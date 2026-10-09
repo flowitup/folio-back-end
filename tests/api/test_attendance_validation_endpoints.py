@@ -388,6 +388,71 @@ class TestNotificationsBell:
             assert body["attendance_pending"] == []
             assert body["count"] == 0
 
+    def test_pending_day_names_the_project_by_its_address(self, av_app, client, linked_h, owner_h, ids):
+        """Same label as the reminders and the rest of the app: the site address, else the name."""
+        from app import db
+        from app.infrastructure.database.models.project import ProjectModel
+
+        with av_app.app_context():
+            db.session.get(ProjectModel, UUID(ids["project"])).address = " 12 rue de la Paix, Lyon "
+            db.session.commit()
+        try:
+            assert _submit(client, linked_h, ids).status_code == 201
+            item = client.get("/api/v1/notifications", headers=owner_h).get_json()["attendance_pending"][0]
+            assert item["project_name"] == "12 rue de la Paix, Lyon"
+        finally:
+            with av_app.app_context():
+                db.session.get(ProjectModel, UUID(ids["project"])).address = None
+                db.session.commit()
+
+    def test_a_manage_labor_grant_counts_only_while_its_holder_is_in_the_company(self, av_app, client, linked_h, ids):
+        """A D8 grant left behind by a removed member must not keep the bell open on that company."""
+        from datetime import datetime, timezone
+
+        from app import db
+        from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+        from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+        with av_app.app_context():
+            project = db.session.get(ProjectModel, UUID(ids["project"]))
+            company_id = project.company_id
+            leaver = UserModel(email="leaver@av-test.com", is_active=True)
+            db.session.add(leaver)
+            db.session.flush()
+            leaver_id = leaver.id
+            now = datetime.now(timezone.utc)
+            db.session.add_all(
+                [
+                    UserCompanyAccessModel(
+                        user_id=leaver_id, company_id=company_id, role="member", is_primary=True, attached_at=now
+                    ),
+                    CompanyMemberGrantModel(
+                        id=uuid4(),
+                        company_id=company_id,
+                        user_id=leaver_id,
+                        permission="project:manage_labor",
+                        effect="grant",
+                        project_id=None,
+                        granted_by_user_id=None,
+                        granted_at=now,
+                    ),
+                ]
+            )
+            db.session.commit()
+
+        entry_id = _submit(client, linked_h, ids).get_json()["id"]
+        leaver_h = _login(client, "leaver@av-test.com")
+        body = client.get("/api/v1/notifications", headers=leaver_h).get_json()
+        assert [p["entry_id"] for p in body["attendance_pending"]] == [entry_id]
+
+        # The access row goes (e.g. a stale row from before boot cleanup existed); the grant row stays.
+        with av_app.app_context():
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=leaver_id, company_id=company_id).delete()
+            db.session.commit()
+        body = client.get("/api/v1/notifications", headers=leaver_h).get_json()
+        assert body["attendance_pending"] == []
+        assert body["count"] == 0
+
     def test_validation_clears_the_bell(self, client, linked_h, owner_h, ids):
         entry_id = _submit(client, linked_h, ids).get_json()["id"]
         client.post(f"/api/v1/projects/{ids['project']}/labor-entries/{entry_id}/validate", headers=owner_h)

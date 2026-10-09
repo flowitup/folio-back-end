@@ -8,11 +8,10 @@ Phase 05 tightening:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.application.billing._helpers import (
-    _assert_billing_doc_access,
+    _assert_billing_doc_write_access,
     _build_doc_from_inputs,
     _effective_prefix_from_company,
     _snapshot_issuer_from_company,
@@ -29,6 +28,7 @@ from app.application.billing.ports import (
     assert_project_read_access,
     assert_user_company_access,
 )
+from app.domain.billing.dates import validate_document_dates
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import (
     BillingDocumentNotFoundError,
@@ -36,6 +36,7 @@ from app.domain.billing.exceptions import (
     MissingCompanyProfileError,
 )
 from app.domain.billing.numbering import next_document_number
+from app.domain.time import business_today
 
 
 class ConvertDevisToFactureUseCase:
@@ -75,7 +76,8 @@ class ConvertDevisToFactureUseCase:
         source = self._doc_repo.find_by_id_for_update(inp.source_devis_id)
         if source is None:
             raise BillingDocumentNotFoundError(inp.source_devis_id)
-        _assert_billing_doc_access(source, inp.user_id, self._access_repo)
+        # Converting locks the devis, so it is a change to the source company's document.
+        _assert_billing_doc_write_access(source, inp.user_id, self._access_repo)
 
         # 2. Assert kind and status preconditions
         if source.kind != BillingDocumentKind.DEVIS:
@@ -114,7 +116,9 @@ class ConvertDevisToFactureUseCase:
         default_payment_terms = company.default_payment_terms
 
         # 7. Atomically generate facture number
-        today = datetime.now(timezone.utc).date()
+        today = business_today()  # the Paris day, not UTC's: it dates and numbers the facture
+        # The facture is issued today: its due date cannot come before (same rule as create).
+        validate_document_dates(today, None, inp.payment_due_date)
         sequence = self._counter_repo.next_value(counter_key, BillingDocumentKind.FACTURE, today.year)
         document_number = next_document_number(
             prefix_override=effective_prefix,

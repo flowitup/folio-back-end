@@ -388,6 +388,27 @@ class TestListProductsEndpoint:
         assert resp.get_json()["items"] == []
         assert resp.get_json()["page"] == 1_000_000
 
+    @pytest.mark.parametrize(
+        ("q", "expected"),
+        [("Qwild%end", ["QWILD%END"]), ("Qwild_end", ["QWILD_END"]), ("%", ["QWILD%END"])],
+    )
+    def test_search_matches_percent_and_underscore_literally(
+        self, bib_client, manager_token, member_token, bibliotheque_app, q, expected
+    ):
+        """'%' and '_' in the search are plain characters, not LIKE wildcards."""
+        company_id = bibliotheque_app._test_company_id
+        for sku in ("QWILD%END", "QWILD_END", "QWILDxEND", "QWILDxxEND"):
+            _create_product_via_import(bib_client, manager_token, company_id, sku=sku)
+
+        resp = bib_client.get(
+            "/api/v1/bibliotheque/products",
+            query_string={"company_id": company_id, "q": q},
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 200
+        refs = [p["supplier_reference"] for p in resp.get_json()["items"]]
+        assert refs == expected
+
     def test_401_unauthenticated(self, bib_client, bibliotheque_app):
         resp = bib_client.get(f"/api/v1/bibliotheque/products?company_id={bibliotheque_app._test_company_id}")
         assert resp.status_code == 401
@@ -706,17 +727,23 @@ class TestUploadProductImageEndpoint:
         )
         assert resp.status_code == 404
 
-    def test_422_missing_image_field(self, bib_client, manager_token):
+    def test_422_missing_image_field(self, bib_client, manager_token, bibliotheque_app):
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-NO-PART"
+        )
         resp = bib_client.post(
-            f"/api/v1/bibliotheque/products/{uuid4()}/image",
+            f"/api/v1/bibliotheque/products/{product_id}/image",
             headers=_auth(manager_token),
         )
         assert resp.status_code == 422
 
-    def test_415_unsupported_content_type_is_rejected(self, bib_client, manager_token):
-        """Uploading a non-image content-type must return 415 before touching the DB."""
+    def test_415_unsupported_content_type_is_rejected(self, bib_client, manager_token, bibliotheque_app):
+        """Uploading a non-image content-type must return 415 before touching storage."""
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-BAD-TYPE"
+        )
         resp = bib_client.post(
-            f"/api/v1/bibliotheque/products/{uuid4()}/image",
+            f"/api/v1/bibliotheque/products/{product_id}/image",
             data={"image": (io.BytesIO(b"not an image"), "evil.exe")},
             content_type="multipart/form-data",
             headers=_auth(manager_token),
@@ -724,17 +751,77 @@ class TestUploadProductImageEndpoint:
         # application/octet-stream (or whatever Flask infers) is not in the allowlist
         assert resp.status_code == 415
 
-    def test_413_oversized_image_is_rejected(self, bib_client, manager_token):
+    def test_413_oversized_image_is_rejected(self, bib_client, manager_token, bibliotheque_app):
         """Uploading a file larger than 10 MB must return 413."""
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-TOO-BIG"
+        )
         # 10 MB + 1 byte — just over the limit
         oversized = io.BytesIO(b"x" * (10 * 1024 * 1024 + 1))
         resp = bib_client.post(
-            f"/api/v1/bibliotheque/products/{uuid4()}/image",
+            f"/api/v1/bibliotheque/products/{product_id}/image",
             data={"image": (oversized, "big.png", "image/png")},
             content_type="multipart/form-data",
             headers=_auth(manager_token),
         )
         assert resp.status_code == 413
+
+    def test_access_is_checked_before_the_upload_is_validated(
+        self, bib_client, manager_token, outsider_token, bibliotheque_app
+    ):
+        """A non-member gets 403 whatever they send — never the upload's 422/415/413 answers."""
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-ORDER-UP"
+        )
+        url = f"/api/v1/bibliotheque/products/{product_id}/image"
+        no_part = bib_client.post(url, headers=_auth(outsider_token))
+        bad_type = bib_client.post(
+            url,
+            data={"image": (io.BytesIO(b"<html></html>"), "x.html", "text/html")},
+            content_type="multipart/form-data",
+            headers=_auth(outsider_token),
+        )
+        assert [no_part.status_code, bad_type.status_code] == [403, 403]
+        # An unknown product is 404 before the missing part is noticed.
+        resp = bib_client.post(f"/api/v1/bibliotheque/products/{uuid4()}/image", headers=_auth(manager_token))
+        assert resp.status_code == 404
+
+    def test_415_html_bytes_labelled_png_are_rejected(self, bib_client, manager_token, bibliotheque_app):
+        """The content-type is the client's label: bytes that are not an image are refused."""
+        from wiring import get_container
+
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-SNIFF-HTML"
+        )
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image",
+            data={"image": (io.BytesIO(b"<!doctype html><html><body><script>alert(1)</script>"), "x.png", "image/png")},
+            content_type="multipart/form-data",
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 415
+        with bibliotheque_app.app_context():
+            assert not get_container().bibliotheque_image_storage.has(f"library-products/{product_id}/image")
+
+    def test_image_is_stored_under_the_type_its_bytes_are(self, bib_client, manager_token, bibliotheque_app):
+        """A JPEG sent as image/png is kept, but stored (and later served) as image/jpeg."""
+        from wiring import get_container
+
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-SNIFF-JPEG"
+        )
+        jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"x" * 16
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image",
+            data={"image": (io.BytesIO(jpeg), "x.png", "image/png")},
+            content_type="multipart/form-data",
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200
+        key = resp.get_json()["image_storage_key"]
+        with bibliotheque_app.app_context():
+            stored = get_container().bibliotheque_image_storage._store[key]
+        assert stored == (jpeg, "image/jpeg")
 
     def test_path_traversal_filename_stored_under_product_prefix(self, bib_client, manager_token, bibliotheque_app):
         """A malicious filename like '../<other-id>/image' must not escape the product prefix.
@@ -966,24 +1053,46 @@ class TestFetchProductImageFromUrlEndpoint:
         assert resp.status_code == 404
 
     def test_422_disallowed_host(self, bib_client, manager_token, bibliotheque_app):
-        """Host not in allowlist must return 422 before any DB access."""
+        """Host not in allowlist must return 422 before any outbound request."""
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-URL-EVIL"
+        )
         resp = bib_client.post(
-            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
             json={"url": "https://evil.example.com/image.jpg"},
             headers=_auth(manager_token),
         )
         assert resp.status_code == 422
         assert "allowlist" in resp.get_data(as_text=True).lower() or "ssrf" in resp.get_data(as_text=True).lower()
 
-    def test_422_non_https_url(self, bib_client, manager_token):
+    def test_422_non_https_url(self, bib_client, manager_token, bibliotheque_app):
         """HTTP (non-HTTPS) URL must return 422."""
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-URL-HTTP"
+        )
         resp = bib_client.post(
-            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url",
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url",
             json={"url": "http://media.adeo.com/media/1234/media.jpg"},
             headers=_auth(manager_token),
         )
         # Pydantic HttpUrl may reject http:// itself as 422 before we even check SSRF
         assert resp.status_code == 422
+
+    def test_access_is_checked_before_the_url(self, bib_client, manager_token, outsider_token, bibliotheque_app):
+        """A non-member gets 403 and an unknown product 404 — the host allowlist is not disclosed."""
+        product_id = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="IMG-ORDER-URL"
+        )
+        body = {"url": "https://example.invalid/a.png"}
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{product_id}/image-from-url", json=body, headers=_auth(outsider_token)
+        )
+        assert resp.status_code == 403
+        assert "allowlist" not in resp.get_data(as_text=True).lower()
+        resp = bib_client.post(
+            f"/api/v1/bibliotheque/products/{uuid4()}/image-from-url", json=body, headers=_auth(manager_token)
+        )
+        assert resp.status_code == 404
 
     def test_415_non_image_content_type(self, bib_client, manager_token, bibliotheque_app, monkeypatch):
         """Remote server returning text/html must yield 415."""
@@ -1356,6 +1465,44 @@ class TestUpdateProductEndpoint:
         )
         assert resp.status_code == 422
 
+    def test_re_import_keeps_a_renamed_product_and_reports_no_update(self, bib_client, manager_token, bibliotheque_app):
+        """A re-import must not revert a manual rename, and an unchanged re-import is not an 'update'."""
+        cid = bibliotheque_app._test_company_id
+
+        def _import(ref: str, doc: str) -> dict:
+            rec = {
+                "supplier_reference": ref,
+                "product_name": "Vis inox 4x40",
+                "quantity": "1.0",
+                "unit_price": "1.00",
+                "purchased_at": "2024-01-01T00:00:00Z",
+                "source_document_ref": doc,
+                "source_document_type": "ticket",
+                "line_index": 0,
+            }
+            payload = {"company_id": cid, "supplier_name": "reimp", "supplier_slug": "reimp", "records": [rec]}
+            resp = bib_client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(manager_token))
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            return resp.get_json()
+
+        _import("RI-1", "DOC-RI-1")
+        p = self._product(bib_client, manager_token, cid, "RI-1")
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{p['id']}",
+            json={"name": "Vis inox A2 4x40 (curated)"},
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 200
+
+        again = _import("RI-1", "DOC-RI-1")
+        assert again["created"] == 0 and again["updated"] == 0 and again["skipped"] == 1
+        assert self._product(bib_client, manager_token, cid, "RI-1")["name"] == "Vis inox A2 4x40 (curated)"
+
+        # A new receipt for the same product updates its aggregates: one product updated, counted once.
+        new_receipt = _import("RI-1", "DOC-RI-2")
+        assert new_receipt["updated"] == 1 and new_receipt["purchases_added"] == 1
+        assert self._product(bib_client, manager_token, cid, "RI-1")["name"] == "Vis inox A2 4x40 (curated)"
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/bibliotheque/products — create product
@@ -1485,6 +1632,56 @@ class TestCreateProductEndpoint:
             {"company_id": cid, "name": "No Supplier"},
         )
         assert resp.status_code == 422
+
+    @pytest.mark.parametrize(
+        "payload",
+        [{"name": "   ", "supplier_name": "Blank Name Supplier"}, {"name": "Blank Supplier", "supplier_name": "   "}],
+    )
+    def test_422_blank_product_or_supplier_name(self, bib_client, manager_token, bibliotheque_app, payload):
+        """A name of spaces only is refused instead of being stored as ''."""
+        cid = bibliotheque_app._test_company_id
+        resp = self._create(bib_client, manager_token, {"company_id": cid, **payload})
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
+    def test_blank_name_rejected_and_names_trimmed_on_patch_and_import(
+        self, bib_client, manager_token, bibliotheque_app
+    ):
+        """PATCH refuses a blank or null name; PATCH and import store names without surrounding spaces."""
+        cid = bibliotheque_app._test_company_id
+        created = self._create(
+            bib_client, manager_token, {"company_id": cid, "name": " Trim Me ", "supplier_name": "Trim Supplier"}
+        )
+        assert created.status_code == 201
+        assert created.get_json()["name"] == "Trim Me"
+        pid = created.get_json()["id"]
+
+        for name in ("   ", None):
+            resp = bib_client.patch(
+                f"/api/v1/bibliotheque/products/{pid}", json={"name": name}, headers=_auth(manager_token)
+            )
+            assert resp.status_code == 422, name
+        resp = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{pid}", json={"name": "Renamed "}, headers=_auth(manager_token)
+        )
+        assert resp.status_code == 200 and resp.get_json()["name"] == "Renamed"
+
+        rec = {
+            "supplier_reference": "TRAIL-1",
+            "product_name": "Cheville 6mm ",
+            "quantity": "1.0",
+            "unit_price": "1.00",
+            "purchased_at": "2024-01-01T00:00:00Z",
+            "source_document_ref": "TRAIL-DOC-1",
+            "source_document_type": "ticket",
+            "line_index": 0,
+        }
+        payload = {"company_id": cid, "supplier_name": "trail-co", "supplier_slug": "trail-co", "records": [rec]}
+        resp = bib_client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(manager_token))
+        assert resp.status_code == 200
+        listed = bib_client.get(
+            f"/api/v1/bibliotheque/products?company_id={cid}&q=TRAIL-1", headers=_auth(manager_token)
+        ).get_json()["items"]
+        assert [p["name"] for p in listed if p["supplier_reference"] == "TRAIL-1"] == ["Cheville 6mm"]
 
     def test_404_cross_company_supplier_id(self, bib_client, manager_token, bibliotheque_app):
         """supplier_id from a different company → 404."""

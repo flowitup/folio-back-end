@@ -232,6 +232,28 @@ class TestUpdateInvoiceHighlightColor:
         match = [i for i in listed.get_json()["invoices"] if i["id"] == invoice_id]
         assert match and match[0]["highlight_color"] == "purple"
 
+    def test_refunded_expense_can_be_highlighted_but_stays_locked(self, inv_hc_client, inv_hc_app, admin_token):
+        """The highlight is cosmetic: a refunded expense takes it, every other edit is still refused."""
+        from uuid import UUID
+
+        from app import db
+        from app.infrastructure.database.models.invoice import InvoiceModel
+
+        created = self._create(inv_hc_client, inv_hc_app, admin_token)
+        with inv_hc_app.app_context():
+            db.session.get(InvoiceModel, UUID(created["id"])).refundable_status = "refunded"
+            db.session.commit()
+        url = _invoice_url(inv_hc_app._test_project_id, created["id"])
+
+        resp = inv_hc_client.put(url, json={"highlight_color": "yellow"}, headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["highlight_color"] == "yellow"
+        assert resp.get_json()["refundable_status"] == "refunded"
+
+        resp = inv_hc_client.put(url, json={"highlight_color": None, "notes": "edit"}, headers=_auth(admin_token))
+        assert resp.status_code == 400
+        assert "Refunded expenses are locked" in resp.get_json()["message"]
+
     def test_highlight_color_on_labor_invoice(self, inv_hc_client, inv_hc_app, admin_token):
         """Highlight applies to every invoice type — not just materials_services."""
         body = {

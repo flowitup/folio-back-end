@@ -168,6 +168,33 @@ class TestSave:
         refetched = repo.find_by_id(row.id)
         assert refetched.label == "New Label"
 
+    def test_save_label_taken_by_a_concurrent_insert_raises_already_exists(self, session):
+        """Two requests both pass the use case's look-up; the unique index refuses the second: a 409, not a 500."""
+        from app.domain.payment_methods.exceptions import PaymentMethodAlreadyExistsError
+        from app.domain.payment_methods.payment_method import PaymentMethod
+
+        company_id = uuid4()
+        _insert_pm(session, company_id, "Race Card")
+        repo = SqlAlchemyPaymentMethodRepository(session)
+        now = _now()
+        method = PaymentMethod(
+            id=uuid4(),
+            company_id=company_id,
+            label="race card",
+            is_builtin=False,
+            is_active=True,
+            created_by=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        with pytest.raises(PaymentMethodAlreadyExistsError):
+            with session.begin_nested():
+                repo.save(method)
+
+        # The savepoint rolled back: the session is usable and holds one "race card".
+        assert repo.find_by_label_ci(company_id, "RACE CARD").label == "Race Card"
+
 
 class TestCompanyPersonalExclusiveCheckConstraint:
     def test_both_flags_true_rejected_by_db_check(self, session):

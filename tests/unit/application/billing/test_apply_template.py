@@ -12,6 +12,7 @@ from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import (
     BillingTemplateNotFoundError,
     ForbiddenBillingDocumentError,
+    ForbiddenCompanyBillingError,
     MissingCompanyProfileError,
 )
 from tests.unit.application.billing.conftest import make_access, make_template
@@ -128,8 +129,8 @@ class TestApplyTemplateErrors:
             usecase.execute(_inp(user_id, devis_template.id, company_id=None), fake_session)
 
     def test_unattached_company_raises(self, usecase, fake_session, user_id, devis_template):
-        """company_id provided but company doesn't exist → ValueError from ports helper."""
-        with pytest.raises((ValueError, MissingCompanyProfileError)):
+        """company_id provided but company doesn't exist → the same 403 as a company the caller has no role in."""
+        with pytest.raises(ForbiddenCompanyBillingError):
             usecase.execute(_inp(user_id, devis_template.id, company_id=uuid4()), fake_session)
 
     def test_empty_recipient_name_raises(

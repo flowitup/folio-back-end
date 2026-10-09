@@ -17,6 +17,9 @@ class BulkAddStatus(Enum):
     ADDED = "added"
     ALREADY_MEMBER = "already_member"
     PROJECT_NOT_FOUND = "project_not_found"
+    # The target has no access to the project's company: a membership would
+    # list them on the project (and its chat) while they cannot open it.
+    NOT_IN_COMPANY = "not_in_company"
 
 
 @dataclass(frozen=True)

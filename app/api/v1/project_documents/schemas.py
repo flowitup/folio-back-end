@@ -24,7 +24,11 @@ class DocumentUploaderSchema(BaseModel):
     """One person who has a document in this project."""
 
     user_id: UUID
-    display_name: str  # the account's display name, or its e-mail when it has none
+    # A label safe to show as is: the account's name, else its real e-mail, else its phone. Never the
+    # synthetic address of a phone-only account nor an erased account's placeholder: "" for an erased one.
+    display_name: str
+    phone: Optional[str] = None
+    is_deleted: bool = False  # the account was erased; clients name it "former member"
 
 
 class DocumentUploadersResponse(BaseModel):

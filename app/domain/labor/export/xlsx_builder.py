@@ -27,6 +27,7 @@ separate columns so readers can distinguish the two cost components.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from io import BytesIO
 from typing import List
@@ -36,8 +37,9 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from app.domain.labor.export.format import format_eur_fr, format_generated_at
 from app.domain.labor.export.labels import month_label as month_name
-from app.domain.labor.export.labels import t
+from app.domain.labor.export.labels import shift_label, t
 from app.domain.labor.export.models import ExportContext, MonthBucket
 
 # ---------------------------------------------------------------------------
@@ -70,7 +72,7 @@ _DETAIL_HEADERS = [
 
 # Column widths per section header label
 _SUMMARY_COL_WIDTHS = [30, 12, 12, 12, 12, 15, 15, 22]
-_DETAIL_COL_WIDTHS = [12, 30, 12, 14, 15, 15, 30]
+_DETAIL_COL_WIDTHS = [12, 30, 18, 26, 15, 15, 30]
 
 # Openpyxl column letters for summary / detail
 _SUMMARY_COLS = [get_column_letter(i + 1) for i in range(len(_SUMMARY_HEADERS))]
@@ -206,7 +208,7 @@ def _write_header_block(ws: Worksheet, context: ExportContext, month_label: str 
     else:
         ws["A3"] = t(locale, "range", start=from_label, end=to_label)
 
-    ws["A4"] = t(locale, "generated", at=context.generated_at.isoformat(), email=context.generated_by_email)
+    ws["A4"] = t(locale, "generated", at=format_generated_at(context.generated_at), email=context.generated_by_email)
 
     # Row 5 blank
     return 5
@@ -321,9 +323,9 @@ def _write_daily_detail(
     for entry in sorted_entries:
         override_val = entry.amount_override if entry.amount_override is not None else ""
         values = [
-            entry.date,
+            date.fromisoformat(entry.date),
             entry.worker_name,
-            entry.shift_type or "",
+            shift_label(locale, entry.shift_type),
             entry.supplement_hours,
             override_val,
             entry.effective_cost,
@@ -332,7 +334,9 @@ def _write_daily_detail(
         for col_idx, val in enumerate(values):
             cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
             cell.border = thin
-            if col_idx in _DETAIL_CURRENCY_COLS:
+            if col_idx == 0:  # a real Excel date, so the column sorts and filters as dates
+                cell.number_format = "DD/MM/YYYY"
+            elif col_idx in _DETAIL_CURRENCY_COLS:
                 cell.number_format = EUR_FR_FORMAT
                 cell.value = _money(val) if val != "" else 0.0
             elif col_idx == 4 and val != "":  # Override column (currency if present)
@@ -397,7 +401,7 @@ def _build_xlsx_single_worker(
 
     # Add worker-specific sub-header (row 5 used by blank; write into row 5)
     rate = context.worker_daily_rate
-    rate_str = str(rate) if rate is not None else "—"
+    rate_str = format_eur_fr(rate)  # "100,56 €" as in the PDF; "—" when unknown
     locale = context.locale
     ws.cell(row=next_row, column=1, value=t(locale, "worker_rate", name=worker_name, rate=rate_str)).font = Font(
         italic=True

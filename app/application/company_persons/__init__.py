@@ -14,6 +14,7 @@ from app.application.company_persons.import_members_usecase import ImportMembers
 from app.application.company_persons.list_directory_usecase import ListDirectoryUseCase
 from app.application.company_persons.update_member_pay_defaults_usecase import UpdateMemberPayDefaultsUseCase
 from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
+from app.application.company_persons.cancel_pending_member_usecase import CancelPendingMemberUseCase
 from app.application.company_persons.dtos import (
     AddMemberByPhoneInput,
     AddMemberByPhoneResult,
@@ -34,6 +35,7 @@ from app.application.company_persons.exceptions import (
     SourceCompanyNotAccessibleError,
     CompanyPersonNotFoundError,
     LaborRoleNotInCompanyError,
+    LinkedMemberNotCancellableError,
 )
 
 __all__ = [
@@ -43,6 +45,7 @@ __all__ = [
     "ListDirectoryUseCase",
     "UpdateMemberPayDefaultsUseCase",
     "LinkPersonOnSignupUseCase",
+    "CancelPendingMemberUseCase",
     "AddMemberByPhoneInput",
     "AddMemberByPhoneResult",
     "ImportMembersInput",
@@ -60,4 +63,5 @@ __all__ = [
     "SourceCompanyNotAccessibleError",
     "CompanyPersonNotFoundError",
     "LaborRoleNotInCompanyError",
+    "LinkedMemberNotCancellableError",
 ]

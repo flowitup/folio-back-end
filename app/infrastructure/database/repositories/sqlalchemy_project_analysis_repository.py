@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -9,7 +11,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.domain.entities.project_analysis import ProjectAnalysis
+from app.infrastructure.database.like_pattern import LIKE_ESCAPE, contains_pattern
 from app.infrastructure.database.models.project_analysis import ProjectAnalysisModel, ProjectAnalysisTagRow
+from app.infrastructure.database.models.user import UserModel
 
 
 class SqlAlchemyProjectAnalysisRepository:
@@ -69,11 +73,12 @@ class SqlAlchemyProjectAnalysisRepository:
         # Free-text filter — case-insensitive substring match on title + summary
         # ------------------------------------------------------------------
         if q:
-            pattern = f"%{q.lower()}%"
+            # Literal substring: "%" and "_" in the search text match only themselves.
+            pattern = contains_pattern(q.lower())
             base_where.append(
                 or_(
-                    func.lower(ProjectAnalysisModel.title).like(pattern),
-                    func.lower(ProjectAnalysisModel.summary).like(pattern),
+                    func.lower(ProjectAnalysisModel.title).like(pattern, escape=LIKE_ESCAPE),
+                    func.lower(ProjectAnalysisModel.summary).like(pattern, escape=LIKE_ESCAPE),
                 )
             )
 
@@ -134,6 +139,23 @@ class SqlAlchemyProjectAnalysisRepository:
             .order_by(ProjectAnalysisTagRow.tag)
         )
         return list(self._session.execute(stmt).scalars().all())
+
+    def find_uploaders(
+        self, user_ids: Iterable[UUID]
+    ) -> list[tuple[UUID, Optional[str], str, Optional[str], Optional[datetime]]]:
+        """Return (user_id, display_name, email, phone, deleted_at) of the given uploaders.
+
+        Read from the accounts, not from the project assignments, so a report's
+        author is named even when they were never assigned (a company admin,
+        platform ops) or have left the project since.
+        """
+        ids = list(user_ids)
+        if not ids:
+            return []
+        stmt = select(
+            UserModel.id, UserModel.display_name, UserModel.email, UserModel.phone, UserModel.deleted_at
+        ).where(UserModel.id.in_(ids))
+        return [(row[0], row[1], row[2], row[3], row[4]) for row in self._session.execute(stmt).all()]
 
     def add(self, analysis: ProjectAnalysis) -> ProjectAnalysis:
         """Insert a new analysis record and return the rehydrated entity.

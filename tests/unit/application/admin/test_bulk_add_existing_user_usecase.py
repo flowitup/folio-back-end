@@ -372,6 +372,67 @@ class TestProjectNotFound:
 
 
 # ---------------------------------------------------------------------------
+# Target outside the project's company
+# ---------------------------------------------------------------------------
+
+
+class _CompanyRoles:
+    """AuthzReaderPort double: company_role_for from a {(user_id, company_id): role} map."""
+
+    def __init__(self, roles: dict) -> None:
+        self._roles = roles
+
+    def company_role_for(self, user_id, company_id):
+        return self._roles.get((user_id, company_id))
+
+
+class TestNotInCompany:
+    def test_target_without_company_access_is_not_added_nor_emailed(self):
+        requester = _make_superadmin()
+        target = _make_user()
+        own, foreign = _make_project("Own company"), _make_project("Other company")
+        own.company_id, foreign.company_id = uuid4(), uuid4()
+
+        user_repo = MagicMock()
+        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
+        project_repo = MagicMock()
+        project_repo.find_by_id.side_effect = lambda pid: own if pid == own.id else foreign
+        membership_repo = MagicMock()
+        membership_repo.add.return_value = True
+        renderer = MagicMock()
+        renderer.render.return_value = ("Subject", "Text body", "<html>body</html>")
+
+        uc = _make_usecase(
+            user_repo=user_repo, project_repo=project_repo, membership_repo=membership_repo, renderer=renderer
+        )
+        uc.set_authz_reader(_CompanyRoles({(target.id, own.company_id): "member"}))
+        result = uc.execute(requester_id=requester.id, target_user_id=target.id, project_ids=[own.id, foreign.id])
+
+        statuses = {r.project_id: r.status for r in result.results}
+        assert statuses == {own.id: BulkAddStatus.ADDED, foreign.id: BulkAddStatus.NOT_IN_COMPANY}
+        assert [c.args[0].project_id for c in membership_repo.add.call_args_list] == [own.id]
+        assert renderer.render.call_args.args[2]["added_projects"] == [{"name": "Own company"}]
+
+    def test_company_less_project_is_not_checked(self):
+        requester = _make_superadmin()
+        target = _make_user()
+        project = _make_project()  # company_id None
+
+        user_repo = MagicMock()
+        user_repo.find_by_id.side_effect = lambda uid: requester if uid == requester.id else target
+        project_repo = MagicMock()
+        project_repo.find_by_id.return_value = project
+        membership_repo = MagicMock()
+        membership_repo.add.return_value = True
+
+        uc = _make_usecase(user_repo=user_repo, project_repo=project_repo, membership_repo=membership_repo)
+        uc.set_authz_reader(_CompanyRoles({}))
+        result = uc.execute(requester_id=requester.id, target_user_id=target.id, project_ids=[project.id])
+
+        assert result.results[0].status == BulkAddStatus.ADDED
+
+
+# ---------------------------------------------------------------------------
 # Guard: missing entities
 # ---------------------------------------------------------------------------
 

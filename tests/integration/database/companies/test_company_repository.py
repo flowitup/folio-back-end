@@ -89,6 +89,13 @@ class TestCompanyRepositoryCRUD:
         ids2 = {c.id for c in page2}
         assert ids1.isdisjoint(ids2)
 
+    def test_list_all_sorts_alphabetically_whatever_the_case(self, repo, creator_id):
+        # Byte order (SQLite BINARY, Postgres C collation) put every uppercase letter first.
+        for name in ("QA2-CS Alpha", "QA2-api-logic SARL", "beta BTP", "Zeta"):
+            repo.save(_make_company(created_by=creator_id, legal_name=name))
+        companies, _ = repo.list_all(limit=50, offset=0)
+        assert [c.legal_name for c in companies] == ["beta BTP", "QA2-api-logic SARL", "QA2-CS Alpha", "Zeta"]
+
     def test_optional_fields_persisted_as_none(self, repo, creator_id):
         company = _make_company(
             created_by=creator_id,

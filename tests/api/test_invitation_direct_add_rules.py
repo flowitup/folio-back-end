@@ -38,6 +38,7 @@ def people(invitation_app):
             name: UserModel(email=f"{name}_{tag}@invite-rules.com", is_active=True)
             for name in ("manager", "other_manager", "plain_member", "stranger")
         }
+        users["deactivated"] = UserModel(email=f"deactivated_{tag}@invite-rules.com", is_active=False)
         db.session.add_all(users.values())
         db.session.flush()
         project = ProjectModel(
@@ -134,3 +135,28 @@ def test_directory_backfill_lists_an_attached_account_once(invitation_app):
             db.session.commit()
 
     assert _profiles(invitation_app, company_id).count(user_key) == 1
+
+
+def test_a_deactivated_account_is_refused_and_left_untouched(inv_client, admin_token, invitation_app, people):
+    """projects-members-06: same answer as PUT /assignments, and no company attachment on the way."""
+    from app import db
+
+    user_id = people["deactivated"][0]
+    resp = _invite(inv_client, admin_token, people["project_id"], people["deactivated"][1])
+    assert resp.status_code == 422, resp.get_data(as_text=True)
+    assert resp.get_json()["reason"] == "account_deactivated"
+    assert user_id.replace("-", "") not in _members(invitation_app, people["project_id"])
+    with invitation_app.app_context():
+        access = db.session.execute(
+            text("SELECT 1 FROM user_company_access WHERE REPLACE(CAST(user_id AS TEXT), '-', '') = :uid"),
+            {"uid": user_id.replace("-", "")},
+        ).fetchone()
+    assert access is None
+
+
+def test_inviting_someone_already_on_the_project_says_so(inv_client, admin_token, people):
+    first = _invite(inv_client, admin_token, people["project_id"], people["plain_member"][1])
+    assert first.status_code == 201
+    again = _invite(inv_client, admin_token, people["project_id"], people["plain_member"][1])
+    assert again.status_code == 201
+    assert again.get_json()["kind"] == "already_member"

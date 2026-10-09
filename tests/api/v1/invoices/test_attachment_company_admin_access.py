@@ -15,6 +15,9 @@ Scenarios:
   - Project member without project:manage_labor → 404 on list and download: a restricted
     member only reaches attachments of their own labor payments (worker scope)
   - Non-member non-company-admin → still 403 on list and download (regression)
+  - Assigned manager without project:view_budget → a released_funds row's attachments
+    answer like the release itself: 404 on list and download, 403 on upload, rename
+    and delete
 """
 
 from __future__ import annotations
@@ -114,7 +117,13 @@ def att_app():
         # Pure outsider: no company admin, no project membership
         outsider_user = UserModel(email="att_outsider@test.com", is_active=True)
 
-        db.session.add_all([setup_user, member_user, company_x_admin_user, company_y_admin_user, outsider_user])
+        # Company-X manager assigned to project_x: runs the spend side, but the
+        # matrix keeps project:view_budget (released funds) for admins only.
+        manager_user = UserModel(email="att_manager@test.com", is_active=True)
+
+        db.session.add_all(
+            [setup_user, member_user, company_x_admin_user, company_y_admin_user, outsider_user, manager_user]
+        )
         db.session.flush()
 
         now = datetime.now(timezone.utc)
@@ -151,6 +160,7 @@ def att_app():
         # relationship is tracked in the identity map from the start, avoiding
         # stale-cache misses when can_read_project checks project.user_ids.
         project_x.users.append(member_user)
+        project_x.users.append(manager_user)
         db.session.commit()
 
         # --- UserCompanyAccess ---
@@ -177,7 +187,14 @@ def att_app():
             is_primary=True,
             attached_at=now,
         )
-        db.session.add_all([access_x, access_y, member_access])
+        manager_access = UserCompanyAccessModel(
+            user_id=manager_user.id,
+            company_id=company_x.id,
+            role="manager",
+            is_primary=True,
+            attached_at=now,
+        )
+        db.session.add_all([access_x, access_y, member_access, manager_access])
         db.session.commit()
 
         # --- Repos ---
@@ -244,6 +261,34 @@ def att_app():
         # Also store the file bytes so download can stream them
         storage.put(att.storage_key, BytesIO(b"%PDF-test"), "application/pdf")
         db.session.add(att)
+
+        # --- A funds release (financing side) with its own receipt ---
+        release = InvoiceModel(
+            id=uuid4(),
+            project_id=project_x.id,
+            invoice_number=f"FR-{uuid4().hex[:8]}",
+            type="released_funds",
+            issue_date=date.today(),
+            recipient_name="Bank",
+            items=[{"description": "Release", "quantity": 1.0, "unit_price": 5000.0}],
+            created_by=setup_user.id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(release)
+        db.session.flush()
+        release_att = InvoiceAttachmentModel(
+            id=uuid4(),
+            invoice_id=release.id,
+            filename="bank-release.pdf",
+            storage_key=f"test/{uuid4().hex}/bank-release.pdf",
+            mime_type="application/pdf",
+            size_bytes=512,
+            uploaded_by=setup_user.id,
+            uploaded_at=now,
+        )
+        storage.put(release_att.storage_key, BytesIO(b"%PDF-release"), "application/pdf")
+        db.session.add(release_att)
         db.session.commit()
 
         test_app._setup_user_id = setup_user.id
@@ -258,6 +303,8 @@ def att_app():
         test_app._invoice_id = inv.id
         test_app._attachment_id = att.id
         test_app._attachment_storage_key = att.storage_key
+        test_app._release_id = release.id
+        test_app._release_attachment_id = release_att.id
 
         # expire_on_commit=True (SQLAlchemy default) already expires all objects after
         # each commit, but expunge_all() makes the identity map fully empty so that
@@ -306,6 +353,11 @@ def company_y_admin_tok(att_client):
 @pytest.fixture(scope="module")
 def outsider_tok(att_client):
     return _login(att_client, "att_outsider@test.com", "Outsider1234!")
+
+
+@pytest.fixture(scope="module")
+def manager_tok(att_client):
+    return _login(att_client, "att_manager@test.com", "Manager1234!")
 
 
 # ---------------------------------------------------------------------------
@@ -462,3 +514,136 @@ class TestOutsiderDeniedRegression:
             headers=_auth_header(outsider_tok),
         )
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Budget scope: a release's receipts follow the release (project:view_budget)
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseAttachmentsFollowBudgetScope:
+    """A manager without project:view_budget cannot see a release, so neither its receipts.
+
+    Reads answer 404 (like GET of the release itself), writes answer 403 like
+    editing or deleting the release does.
+    """
+
+    def _release_urls(self, att_app):
+        proj_id = str(att_app._project_x_id)
+        rel_id = str(att_app._release_id)
+        return f"/api/v1/projects/{proj_id}/invoices/{rel_id}/attachments", str(att_app._release_attachment_id)
+
+    def test_manager_cannot_list_release_attachments(self, att_client, manager_tok, att_app):
+        list_url, _att_id = self._release_urls(att_app)
+        resp = att_client.get(list_url, headers=_auth_header(manager_tok))
+        assert resp.status_code == 404
+
+    def test_manager_cannot_download_release_attachment(self, att_client, manager_tok, att_app):
+        _list_url, att_id = self._release_urls(att_app)
+        resp = att_client.get(f"/api/v1/attachments/{att_id}/download", headers=_auth_header(manager_tok))
+        assert resp.status_code == 404
+
+    def test_manager_cannot_upload_to_a_release(self, att_client, manager_tok, att_app):
+        list_url, _att_id = self._release_urls(att_app)
+        resp = att_client.post(
+            list_url,
+            data={"file": (BytesIO(b"%PDF-sneaky"), "sneaky.pdf", "application/pdf")},
+            content_type="multipart/form-data",
+            headers=_auth_header(manager_tok),
+        )
+        assert resp.status_code == 403
+
+    def test_manager_cannot_rename_release_attachment(self, att_client, manager_tok, att_app):
+        _list_url, att_id = self._release_urls(att_app)
+        resp = att_client.patch(
+            f"/api/v1/attachments/{att_id}/rename",
+            json={"filename": "hijacked.pdf"},
+            headers=_auth_header(manager_tok),
+        )
+        assert resp.status_code == 403
+
+    def test_manager_cannot_delete_release_attachment(self, att_client, manager_tok, company_x_admin_tok, att_app):
+        list_url, att_id = self._release_urls(att_app)
+        resp = att_client.delete(f"/api/v1/attachments/{att_id}", headers=_auth_header(manager_tok))
+        assert resp.status_code == 403
+        # The receipt is untouched, under its original name.
+        listed = att_client.get(list_url, headers=_auth_header(company_x_admin_tok))
+        assert listed.status_code == 200
+        assert [(a["id"], a["filename"]) for a in listed.get_json()] == [(att_id, "bank-release.pdf")]
+
+    def test_manager_still_reaches_expense_attachments(self, att_client, manager_tok, att_app):
+        """The guard is scoped to releases — the spend side stays open to the manager."""
+        inv_id = str(att_app._invoice_id)
+        proj_id = str(att_app._project_x_id)
+        resp = att_client.get(
+            f"/api/v1/projects/{proj_id}/invoices/{inv_id}/attachments",
+            headers=_auth_header(manager_tok),
+        )
+        assert resp.status_code == 200
+        dl = att_client.get(f"/api/v1/attachments/{att_app._attachment_id}/download", headers=_auth_header(manager_tok))
+        assert dl.status_code == 200
+
+    def test_company_admin_reads_release_attachments(self, att_client, company_x_admin_tok, att_app):
+        _list_url, att_id = self._release_urls(att_app)
+        resp = att_client.get(f"/api/v1/attachments/{att_id}/download", headers=_auth_header(company_x_admin_tok))
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Control characters in the file name
+# ---------------------------------------------------------------------------
+
+
+class TestAttachmentFilenameControlCharacters:
+    """A CR/LF in the stored name made werkzeug refuse the download's Content-Disposition (500)."""
+
+    def test_rename_with_a_line_break_is_refused(self, att_client, company_x_admin_tok, att_app):
+        resp = att_client.patch(
+            f"/api/v1/attachments/{att_app._attachment_id}/rename",
+            json={"filename": "a\r\nb.pdf"},
+            headers=_auth_header(company_x_admin_tok),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "INVALID_FILENAME"
+
+    def test_download_of_a_name_stored_with_a_line_break(self, att_client, company_x_admin_tok, att_app):
+        row = db.session.get(InvoiceAttachmentModel, att_app._attachment_id)
+        original = row.filename
+        row.filename = "a\nb.pdf"
+        db.session.commit()
+        try:
+            resp = att_client.get(
+                f"/api/v1/attachments/{att_app._attachment_id}/download",
+                headers=_auth_header(company_x_admin_tok),
+            )
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            assert "ab.pdf" in resp.headers["Content-Disposition"]
+        finally:
+            row = db.session.get(InvoiceAttachmentModel, att_app._attachment_id)
+            row.filename = original
+            db.session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Malformed ids are a bad request, not a permission problem
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedIdsAnswer400:
+    def test_malformed_attachment_id_is_400_on_every_attachment_route(self, att_client, company_x_admin_tok):
+        h = _auth_header(company_x_admin_tok)
+        for resp in (
+            att_client.get("/api/v1/attachments/not-a-uuid/download", headers=h),
+            att_client.patch("/api/v1/attachments/not-a-uuid/rename", json={"filename": "x.pdf"}, headers=h),
+            att_client.delete("/api/v1/attachments/not-a-uuid", headers=h),
+        ):
+            assert resp.status_code == 400, resp.get_data(as_text=True)
+            assert resp.get_json()["message"] == "Invalid attachment id"
+
+    def test_malformed_invoice_id_is_400(self, att_client, company_x_admin_tok, att_app):
+        proj_id = str(att_app._project_x_id)
+        resp = att_client.get(
+            f"/api/v1/projects/{proj_id}/invoices/123/attachments", headers=_auth_header(company_x_admin_tok)
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["message"] == "Invalid invoice id"

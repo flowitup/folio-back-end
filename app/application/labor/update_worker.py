@@ -10,7 +10,9 @@ from app.application.labor.role_scope import assert_role_in_project_company
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
+    InvalidWorkerPhoneError,
 )
+from app.domain.value_objects.phone_number import is_phone_number
 
 
 _ROLE_SENTINEL = object()
@@ -91,7 +93,12 @@ class UpdateWorkerUseCase:
                 worker.person_name = worker.name
 
         if request.phone is not None:
-            worker.phone = request.phone.strip() or None
+            phone = request.phone.strip() or None
+            # A number saved before phones were checked may be free text: sent back unchanged it
+            # passes, so the rest of the worker stays editable; a new value must be a phone number.
+            if phone and phone not in (worker.phone, worker.person_phone) and not is_phone_number(phone):
+                raise InvalidWorkerPhoneError()
+            worker.phone = phone
             # Like the name, the phone belongs to the shared Person: changing it here changes
             # it in every company and project that uses them.
             if worker.person_id is not None and self._person_repo is not None:

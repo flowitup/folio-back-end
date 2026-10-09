@@ -420,3 +420,21 @@ def test_find_percent_query_does_not_match_every_item(world) -> None:
 def test_find_underscore_query_does_not_match_every_item(world) -> None:
     result = world["service"].find(company_ids=[world["company_id"]], query="_")
     assert result.hits == []
+
+
+def test_find_matches_a_literal_percent_in_the_name(world) -> None:
+    # The repository escapes the term once; escaping it again here would find nothing.
+    world["item_repo"].add(
+        InventoryItem.create(
+            company_id=world["company_id"],
+            name="Bâche 100%",
+            quantity=1,
+            condition="working",
+            location_type="warehouse",
+            warehouse_id=world["warehouse"].id,
+        )
+    )
+    world["session"].commit()
+
+    result = world["service"].find(company_ids=[world["company_id"]], query="100%")
+    assert [hit.name for hit in result.hits] == ["Bâche 100%"]

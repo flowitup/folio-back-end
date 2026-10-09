@@ -81,6 +81,25 @@ class TestBulkAddHappyPath:
         assert statuses[invitation_app._test_project_id] == "already_member"
         assert statuses[nonexistent_pid] == "project_not_found"
 
+    def test_200_target_outside_the_project_company_is_not_added(self, inv_client, superadmin_token, invitation_app):
+        """A user with no access to the project's company is refused, not listed as a member they cannot open."""
+        from app import db
+        from app.infrastructure.database.models import UserModel
+
+        with invitation_app.app_context():
+            outsider_id = str(
+                db.session.query(UserModel.id).filter_by(email=invitation_app._test_outsider_email).scalar()
+            )
+        pid = invitation_app._test_project_2_id
+
+        resp = inv_client.post(_bulk_add_url(outsider_id), json={"project_ids": [pid]}, headers=_auth(superadmin_token))
+        assert resp.status_code == 200
+        assert resp.get_json()["results"] == [
+            {"project_id": pid, "project_name": "Bulk Add Test Project 2", "status": "not_in_company"}
+        ]
+        members = inv_client.get(f"/api/v1/projects/{pid}/members", headers=_auth(superadmin_token))
+        assert outsider_id not in {m.get("user_id") or m.get("id") for m in members.get_json()["members"]}
+
 
 # ---------------------------------------------------------------------------
 # Authentication / authorization

@@ -14,8 +14,8 @@ composite UNIQUE constraint — a plain
 `UNIQUE(company_id, user_id, permission, project_id)` would let the SAME
 company-wide row (`project_id IS NULL`) be inserted twice. The migration adds
 a second partial unique index `(company_id, user_id, permission) WHERE
-project_id IS NULL` to close that gap; both are declared here for SQLite
-`create_all()` coverage where the plain (non-partial) constraint applies.
+project_id IS NULL` to close that gap; both are declared here, so SQLite
+`create_all()` enforces them too.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.infrastructure.database.models.base import Base
@@ -74,10 +74,18 @@ class CompanyMemberGrantModel(Base):
             name="uq_company_member_grants_scope",
         ),
         Index("ix_company_member_grants_user_company", "user_id", "company_id"),
-        # NOTE: the partial unique index enforcing at most one company-wide
-        # (project_id IS NULL) grant/deny per (company_id, user_id,
-        # permission) is declared only in the Alembic migration —
-        # postgresql_where is not SQLite-compatible.
+        # At most one company-wide (project_id IS NULL) grant/deny per (company_id,
+        # user_id, permission): the scope constraint above treats NULLs as distinct.
+        # Same partial index as migration 2ca24be9e3a8, on SQLite too.
+        Index(
+            "ix_company_member_grants_company_wide_unique",
+            "company_id",
+            "user_id",
+            "permission",
+            unique=True,
+            postgresql_where=text("project_id IS NULL"),
+            sqlite_where=text("project_id IS NULL"),
+        ),
     )
 
     def __repr__(self) -> str:

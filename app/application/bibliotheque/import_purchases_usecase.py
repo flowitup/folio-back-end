@@ -139,6 +139,7 @@ class ImportPurchasesUseCase:
             # Step 2a: find or create product by supplier reference
             product = self._product_repo.find_by_reference(company_id, supplier_id, rec.supplier_reference)
             is_new = product is None
+            changed = False  # existing product modified by this record (counted once in `updated`)
 
             if is_new:
                 product = LibraryProduct.create(
@@ -164,7 +165,7 @@ class ImportPurchasesUseCase:
                 )
                 if enriched != product:
                     product = self._product_repo.upsert(enriched)
-                    updated += 1
+                    changed = True
 
             # Step 2b: attempt idempotent purchase insert
             # Coerce naive datetimes to UTC so comparisons with the timezone-aware
@@ -200,8 +201,10 @@ class ImportPurchasesUseCase:
                     )
                     self._product_repo.upsert(updated_product)
                     if not is_new:
-                        updated += 1
+                        changed = True
             else:
                 skipped += 1
+            if changed:
+                updated += 1
 
         return created, updated, purchases_added, skipped

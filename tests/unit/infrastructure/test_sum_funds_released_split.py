@@ -328,3 +328,62 @@ class TestSumFundsReleasedSplitCashAdvance:
 
         assert company_total == Decimal("0")
         assert personal_total == pytest.approx(Decimal("250.00"), abs=Decimal("0.01"))
+
+    @pytest.mark.parametrize("method", ["none", "unflagged"])
+    def test_bank_refund_release_without_a_personal_method_still_counts_as_personal(self, session, method):
+        """No (or an unflagged) method on the refunded expense: the bank still repaid a person,
+        so the release is personal released money, never company money."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        pm_id = _make_payment_method(session, company_id) if method == "unflagged" else None
+        source_id = _make_invoice(
+            session,
+            project_id,
+            "materials_services",
+            200.0,
+            payment_method_id=pm_id,
+            refundable_status="refunded",
+            refunded_by="bank",
+        )
+        _make_invoice(
+            session,
+            project_id,
+            "released_funds",
+            200.0,
+            payment_method_id=pm_id,
+            refunds_invoice_id=source_id,
+            is_auto_generated=True,
+        )
+        # A hand-entered release with no method keeps counting as company money.
+        _make_invoice(session, project_id, "released_funds", 5000.0, payment_method_id=None)
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, _cash = repo.sum_funds_released_split(project_id)
+
+        assert company_total == pytest.approx(Decimal("5000.00"), abs=Decimal("0.01"))
+        assert personal_total == pytest.approx(Decimal("200.00"), abs=Decimal("0.01"))
+        assert company_total + personal_total == repo.sum_funds_released(project_id)
+
+    def test_bank_refund_release_with_a_company_method_stays_company(self, session):
+        """A company-flagged method (only reachable when a method is re-flagged later) stays company."""
+        user_id = _make_user(session)
+        company_id = _make_company(session, user_id)
+        project_id = _make_project(session, user_id, company_id)
+        company_pm = _make_payment_method(session, company_id, is_company_payment=True)
+        source_id = _make_invoice(session, project_id, "materials_services", 80.0, payment_method_id=company_pm)
+        _make_invoice(
+            session,
+            project_id,
+            "released_funds",
+            80.0,
+            payment_method_id=company_pm,
+            refunds_invoice_id=source_id,
+            is_auto_generated=True,
+        )
+
+        repo = SQLAlchemyInvoiceRepository(session)
+        company_total, personal_total, _cash = repo.sum_funds_released_split(project_id)
+
+        assert company_total == pytest.approx(Decimal("80.00"), abs=Decimal("0.01"))
+        assert personal_total == Decimal("0")

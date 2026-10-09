@@ -1,10 +1,11 @@
 """Company member onboarding routes — add by phone, import, directory.
 
-Endpoints (3):
-  POST  /companies/<id>/members              → add_member_by_phone (admin)
-  POST  /companies/<id>/members/import       → import_members (admin)
-  GET   /companies/<id>/persons              → list_directory (admin or manager)
-  PATCH /companies/<id>/members/<person_id>  → update_member_pay_defaults (admin or manager)
+Endpoints (5):
+  POST   /companies/<id>/members              → add_member_by_phone (admin)
+  POST   /companies/<id>/members/import       → import_members (admin)
+  GET    /companies/<id>/persons              → list_directory (admin or manager)
+  PATCH  /companies/<id>/members/<person_id>  → update_member_pay_defaults (admin or manager)
+  DELETE /companies/<id>/members/<person_id>  → cancel_pending_member (admin)
 
 D8 grant/deny management routes live in a separate module
 (`app.api.v1.companies.grants_routes`, a parallel slice) — not here.
@@ -37,12 +38,14 @@ from app.application.company_persons import (
     ImportMembersInput,
     InvalidCandidatePersonError,
     LaborRoleNotInCompanyError,
+    LinkedMemberNotCancellableError,
     MemberAlreadyAttachedError,
     MultipleCandidatesError,
     SourceCompanyNotAccessibleError,
     UpdateMemberPayDefaultsInput,
 )
 from app.application.company_persons.exceptions import PhoneAlreadyInCompanyError
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -113,10 +116,13 @@ def add_member_by_phone(company_id: str):
         return _err("Forbidden", "Admin permission required", 403)
     except AdminRoleNotAssignableError as exc:
         return _err("ValidationError", str(exc), 400)
+    except InvalidPhoneNumberError as exc:
+        # Not a phone number, or not a French one: the client shows a dedicated message.
+        return jsonify({"error": "ValidationError", "message": str(exc), "reason": "invalid_phone"}), 400
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
     except MemberAlreadyAttachedError as exc:
-        return _err("Conflict", str(exc), 409)
+        return jsonify({"error": "Conflict", "message": str(exc), "reason": "already_member"}), 409
     except InvalidCandidatePersonError as exc:
         return _err("ValidationError", str(exc), 400)
     except MultipleCandidatesError as exc:
@@ -136,7 +142,8 @@ def add_member_by_phone(company_id: str):
             jsonify(
                 {
                     "error": "Conflict",
-                    "message": str(exc),
+                    # Readable on its own; the ids stay in their own fields, never in the text.
+                    "message": "This phone number already belongs to someone in this company.",
                     "person_id": str(exc.existing_person_id),
                 }
             ),
@@ -336,3 +343,51 @@ def update_member_pay_defaults(company_id: str, person_id: str):
             "labor_role_id": str(result.labor_role_id) if result.labor_role_id else None,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /companies/<company_id>/members/<person_id> — cancel a pending invitation (admin)
+# ---------------------------------------------------------------------------
+
+
+@companies_bp.route("/companies/<company_id>/members/<person_id>", methods=["DELETE"])
+@openapi_doc(
+    summary="Cancel a pending member added by phone who has no account yet (admin only)",
+    tags=["companies"],
+)
+@jwt_required()
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+@require_company_role("admin")
+def cancel_pending_member(company_id: str, person_id: str):
+    """Cancel a pending profile so a sign-up with that phone no longer joins the company.
+
+    409 when the person already has an account: an attached member is removed
+    through `DELETE /companies/<id>/access/<user_id>` instead.
+    """
+    company_uuid, err = _company_uuid_or_404(company_id)
+    if err is not None:
+        return err
+    try:
+        person_uuid = UUID(person_id)
+    except ValueError:
+        return _err("NotFound", f"Person {person_id} not found", 404)
+
+    from app import db
+    from app.application.company_persons import CancelPendingMemberUseCase
+
+    c = get_container()
+    usecase = CancelPendingMemberUseCase(
+        company_person_repo=c.company_person_repo,
+        person_repo=c.person_repo,
+        role_checker=c.authorization_service,
+    )
+    try:
+        usecase.execute(UUID(get_jwt_identity()), company_uuid, person_uuid, db.session)
+    except ForbiddenCompanyError:
+        return _err("Forbidden", "Admin permission required", 403)
+    except CompanyPersonNotFoundError:
+        return _err("NotFound", f"Person {person_id} is not a member of company {company_id}", 404)
+    except LinkedMemberNotCancellableError:
+        return _err("Conflict", "This person has an account; remove the member instead", 409)
+
+    return "", 204

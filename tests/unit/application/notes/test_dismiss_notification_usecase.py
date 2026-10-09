@@ -1,4 +1,4 @@
-"""Unit tests for DismissNotificationUseCase — happy path + 403 + idempotency."""
+"""Unit tests for DismissNotificationUseCase — happy path + 404 for a foreign note + idempotency."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.application.notes.dismiss_notification_usecase import DismissNotificationUseCase
-from app.application.notes.exceptions import NoteNotFoundError, NotProjectMemberError
+from app.application.notes.exceptions import NoteNotFoundError
 from app.domain.entities.note import Note
 
 
@@ -199,8 +199,8 @@ class TestDismissNotificationAuthz:
         with pytest.raises(NoteNotFoundError):
             uc.execute(actor_id=uuid4(), note_id=uuid4())
 
-    def test_non_member_raises_not_project_member_error(self):
-        """User not in the note's project gets 403."""
+    def test_non_member_is_told_the_note_does_not_exist(self):
+        """A note of another project answers like a missing one (404): existence is not leaked."""
         note = _make_note()
         note_repo = MagicMock()
         note_repo.find_by_id.return_value = note
@@ -208,7 +208,7 @@ class TestDismissNotificationAuthz:
         membership.is_member.return_value = False
 
         uc = _make_usecase(note_repo=note_repo, membership_reader=membership)
-        with pytest.raises(NotProjectMemberError):
+        with pytest.raises(NoteNotFoundError):
             uc.execute(actor_id=uuid4(), note_id=note.id)
 
     def test_not_found_before_membership_check(self):
@@ -235,7 +235,7 @@ class TestDismissNotificationAuthz:
             dismissal_repo=dismissal_repo,
             membership_reader=membership,
         )
-        with pytest.raises(NotProjectMemberError):
+        with pytest.raises(NoteNotFoundError):
             uc.execute(actor_id=uuid4(), note_id=note.id)
 
         dismissal_repo.add.assert_not_called()

@@ -16,6 +16,8 @@ from typing import Tuple
 from flask import Response, jsonify
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import validation_message
+
 
 def safe_validation_fields(exc: ValidationError) -> list[str]:
     """Extract human-readable field names from a ``ValidationError``.
@@ -47,10 +49,10 @@ def validation_error_response(
     error_label:
         The ``error`` key in the JSON body.
     """
-    fields = safe_validation_fields(exc)
     body = {
         "error": error_label,
-        "message": f"Invalid input: {', '.join(fields)}",
+        # Field and reason, e.g. "shift_type: Field required", or a body-level rule's own text.
+        "message": validation_message(exc),
         "status_code": status_code,
     }
     return jsonify(body), status_code

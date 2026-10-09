@@ -66,6 +66,83 @@ class TestPdfRoute:
         assert resp.status_code == 404
 
 
+def _create_doc(client, token, company_id, **fields) -> dict:
+    body = {
+        "kind": "devis",
+        "recipient_name": "Acme Corp",
+        "company_id": company_id,
+        "items": [{"description": "Consulting", "quantity": "1", "unit_price": "1000", "vat_rate": "20"}],
+    }
+    body.update(fields)
+    resp = client.post("/api/v1/billing-documents", json=body, headers=_auth(token))
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    return resp.get_json()
+
+
+def _pdf_text(data: bytes) -> str:
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
+    return text.replace(" ", " ")
+
+
+class TestPdfContent:
+    def test_pdf_renders_a_line_description_of_the_maximum_length(self, inv_client, billing_token, billing_profile):
+        """A 5,000-character description (the schema maximum) used to fail with a 500 LayoutError."""
+        item = {"description": "Lorem ipsum dolor sit amet. " * 178 + "fin", "quantity": "1", "unit_price": "10"}
+        doc = _create_doc(inv_client, billing_token, billing_profile["company_id"], items=[{**item, "vat_rate": "20"}])
+        resp = inv_client.get(f"/api/v1/billing-documents/{doc['id']}/pdf", headers=_auth(billing_token))
+        assert resp.status_code == 200
+        assert resp.data.startswith(b"%PDF")
+        assert "Généré par Folio · Page 1 / " in _pdf_text(resp.data)
+
+    def test_pdf_and_xlsx_print_the_linked_project(self, inv_client, billing_token, billing_profile):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+
+        resp = inv_client.post(
+            "/api/v1/projects",
+            json={"name": "Chantier Lilas", "address": "5 rue des Lilas"},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        doc = _create_doc(
+            inv_client,
+            billing_token,
+            billing_profile["company_id"],
+            project_id=resp.get_json()["id"],
+            notes="Accès par la cour\nClé chez le gardien",
+            signature_block_text="Bon pour accord",
+        )
+
+        pdf = inv_client.get(f"/api/v1/billing-documents/{doc['id']}/pdf", headers=_auth(billing_token))
+        text = _pdf_text(pdf.data)
+        assert "Objet : Chantier Lilas — 5 rue des Lilas" in text
+        assert "Clé chez le gardien" in text and "Bon pour accord" in text
+
+        xlsx = inv_client.get(f"/api/v1/billing-documents/{doc['id']}/xlsx", headers=_auth(billing_token))
+        assert xlsx.status_code == 200
+        values = [c.value for row in load_workbook(BytesIO(xlsx.data)).active.iter_rows() for c in row]
+        assert "Objet/Opération" in values and "Chantier Lilas" in values and "5 rue des Lilas" in values
+
+    def test_pdf_that_cannot_be_laid_out_is_a_json_422(self, inv_client, billing_token, seeded_doc):
+        from unittest.mock import patch
+        from uuid import uuid4
+
+        from app.domain.billing.exceptions import BillingDocumentRenderError
+        from app.infrastructure.pdf.billing_document_pdf_renderer import ReportLabBillingDocumentPdfRenderer
+
+        with patch.object(
+            ReportLabBillingDocumentPdfRenderer, "render", side_effect=BillingDocumentRenderError(uuid4())
+        ):
+            resp = inv_client.get(f"/api/v1/billing-documents/{seeded_doc['id']}/pdf", headers=_auth(billing_token))
+        assert resp.status_code == 422
+        assert resp.get_json()["error"] == "ValidationError"
+
+
 # ---------------------------------------------------------------------------
 # Rate limit: 5/min — requires a separate app with limits enabled
 # ---------------------------------------------------------------------------

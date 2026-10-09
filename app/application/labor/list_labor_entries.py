@@ -120,7 +120,7 @@ class ListLaborEntriesUseCase:
                     worker_id=str(entry.worker_id),
                     worker_name=worker.person_name or worker.name,
                     date=entry.date.isoformat(),
-                    amount_override=float(entry.amount_override) if entry.amount_override else None,
+                    amount_override=float(entry.amount_override) if entry.amount_override is not None else None,
                     effective_cost=effective_cost,
                     note=entry.note,
                     shift_type=entry.shift_type,

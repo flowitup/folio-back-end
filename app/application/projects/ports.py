@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import List, Optional, Protocol, Tuple
 from uuid import UUID
 
 from app.domain.entities.project import Project
@@ -125,3 +125,24 @@ class IProjectRepository(ABC):
     def get_project_users(self, project_id: UUID) -> List[Tuple[UUID, str]]:
         """Get users assigned to a project. Returns list of (id, email) tuples."""
         ...
+
+
+class ProjectStorageKeyReaderPort(ABC):
+    """Port listing the object-store keys a project's rows point at.
+
+    Deleting a project removes those rows through FK cascades, which cannot reach the
+    object store; the keys must be read before the delete or the files are orphaned.
+    """
+
+    @abstractmethod
+    def storage_keys_for_project(self, project_id: UUID) -> List[str]:
+        """Every key of the project's documents and photos (soft-deleted ones and photo
+        thumbnails included), its invoices' attachments, its analyses and its chiffrage
+        article images."""
+        ...
+
+
+class ObjectDeleterPort(Protocol):
+    """The one storage operation project deletion needs (S3AttachmentStorage satisfies it)."""
+
+    def delete(self, key: str) -> None: ...

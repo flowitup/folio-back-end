@@ -17,6 +17,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from app.api._helpers.pagination import parse_limit_offset
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
@@ -54,6 +55,8 @@ from app.application.companies import (
     UserCompanyAccessNotFoundError,
 )
 from app.application.companies.join_code_usecases import JoinCodeNotFoundError
+from app.application.companies.update_company_usecase import CLEARABLE_FIELDS
+from app.application.usecases.otp_login import is_placeholder_email
 from app.domain.companies.roles import CompanyRole
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -114,10 +117,9 @@ def list_companies():
         if not _has_superadmin():
             return _err("Forbidden", "Admin permission required for ?scope=all", 403)
         try:
-            limit = min(int(request.args.get("limit", 50)), 200)
-            offset = int(request.args.get("offset", 0))
-        except ValueError:
-            return _err("ValidationError", "limit and offset must be integers", 400)
+            limit, offset = parse_limit_offset(request.args)
+        except ValueError as exc:
+            return _err("ValidationError", str(exc), 400)
 
         inp = ListAllCompaniesInput(caller_id=caller_id, limit=limit, offset=offset)
         result = container.list_all_companies_usecase.execute(inp)
@@ -132,10 +134,15 @@ def list_companies():
 
     # Default: list MY companies
     result = container.list_my_companies_usecase.execute(caller_id)
+    authz = container.authorization_service
     items = [
         {
             "company": _company_to_dict(r.company, caller_id),
             "access": dataclasses.asdict(r.access),
+            # What the caller can do in THIS company (role + D8 grants), so clients gate
+            # company-scoped actions (library, inventory) on the company they show; the
+            # token's `permissions` claim is resolved from the primary company only.
+            "permissions": sorted(authz.get_permissions_in_company(caller_id, r.company.id)),
         }
         for r in result.items
     ]
@@ -241,8 +248,9 @@ def update_company(company_id: str):
     except ValueError:
         return _err("NotFound", f"Company {company_id} not found", 404)
 
+    payload = request.get_json(force=True) or {}
     try:
-        body = UpdateCompanyRequest.model_validate(request.get_json(force=True) or {})
+        body = UpdateCompanyRequest.model_validate(payload)
     except ValidationError as exc:
         return format_validation_error(exc)
 
@@ -259,6 +267,9 @@ def update_company(company_id: str):
         logo_url=str(body.logo_url) if body.logo_url else None,
         default_payment_terms=body.default_payment_terms,
         prefix_override=body.prefix_override,
+        # An explicit null clears the field; an absent key, or a masked value sent
+        # back (the schema turns it into None), leaves it unchanged.
+        clear_fields=frozenset(f for f in CLEARABLE_FIELDS if f in payload and payload[f] is None),
     )
 
     from app import db
@@ -611,7 +622,17 @@ def join_company_by_code():
     except JoinCodeNotFoundError:
         return _err("NotFound", "Unknown or revoked company code", 404)
     except CompanyAlreadyAttachedError:
-        return _err("Conflict", "You already belong to this company", 409)
+        # `reason` lets the clients show their localized "already attached" message.
+        return (
+            jsonify(
+                {
+                    "error": "Conflict",
+                    "message": "You already belong to this company",
+                    "reason": "company_already_attached",
+                }
+            ),
+            409,
+        )
     return jsonify(_company_to_dict(result, caller_id)), 200
 
 
@@ -641,10 +662,9 @@ def list_attached_users(company_id: str):
         return _err("NotFound", f"Company {company_id} not found", 404)
 
     try:
-        limit = min(int(request.args.get("limit", 50)), 200)
-        offset = int(request.args.get("offset", 0))
-    except ValueError:
-        return _err("ValidationError", "limit and offset must be integers", 400)
+        limit, offset = parse_limit_offset(request.args)
+    except ValueError as exc:
+        return _err("ValidationError", str(exc), 400)
 
     caller_id = UUID(get_jwt_identity())
     inp = ListAttachedUsersInput(caller_id=caller_id, company_id=company_uuid, limit=limit, offset=offset)
@@ -679,7 +699,11 @@ def _attach_user_identity(items: list[dict]) -> None:
     for row in items:
         user = users.get(row["user_id"])
         row["email"] = user.email if user else None
-        row["display_name"] = (user.display_name if user else None) or (user.email.split("@", 1)[0] if user else None)
+        # No name: the e-mail's local part, never a phone sign-up's synthetic "phone-336…" one
+        # (null then, and clients show the phone).
+        row["display_name"] = (user.display_name if user else None) or (
+            user.email.split("@", 1)[0] if user and not is_placeholder_email(user.email) else None
+        )
         row["phone"] = user.phone if user else None
         row["is_active"] = bool(user.is_active and user.deleted_at is None) if user else None
 

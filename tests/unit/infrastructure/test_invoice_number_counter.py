@@ -9,14 +9,16 @@ from uuid import UUID, uuid4
 
 import pytest
 
+import app.domain.time as time_module
 from app.domain.entities.invoice import InvoiceType
+from app.domain.time import business_today
 from app.infrastructure.adapters.sqlalchemy_invoice import SQLAlchemyInvoiceRepository
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user import UserModel
 from tests.company_tenancy_helper import company_for_projects
 
-YEAR = datetime.now(timezone.utc).year
+YEAR = business_today().year
 
 
 def _now():
@@ -98,3 +100,18 @@ def test_funds_release_numbers_have_their_own_monotonic_sequence(session, projec
     assert release.invoice_number == "FR-2025-0001"
     assert repo.next_funds_release_number(project_id, year=2025) == "FR-2025-0002"
     assert repo.next_invoice_number(project_id) == f"INV-{YEAR}-0001"
+
+
+def test_default_number_year_is_the_paris_year_on_new_year_night(session, project_and_user, monkeypatch):
+    # 23:30 UTC on 31 December 2026 is already 1 January 2027 in Paris.
+    class _NewYearNight(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            moment = datetime(2026, 12, 31, 23, 30, tzinfo=timezone.utc)
+            return moment if tz is None else moment.astimezone(tz)
+
+    monkeypatch.setattr(time_module, "datetime", _NewYearNight)
+    project_id, _ = project_and_user
+    repo = SQLAlchemyInvoiceRepository(session)
+    assert repo.next_funds_release_number(project_id) == "FR-2027-0001"
+    assert repo.next_invoice_number(project_id) == "INV-2027-0001"

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.api._helpers.requester_identity import get_requester_email
+from app.api._helpers.requester_identity import get_requester_label
 from app.api.openapi import openapi_doc
 from app.api.v1.projects.decorators import require_permission, require_project_access
 from app.api.v1.projects.labor_scope import labor_scope_for, require_full_project_view, restricted_forbidden
@@ -58,9 +58,9 @@ def export_labor(project_id: str):
     except ValidationError as exc:
         return format_validation_error(exc)
 
-    # --- Resolve acting user email (needed for file metadata) ---
+    # --- Resolve how the acting user is named in the file metadata ---
     container = get_container()
-    requester_email = get_requester_email(container.user_repository)
+    requester_label = get_requester_label(container.user_repository)
 
     # --- Execute use-case ---
     try:
@@ -70,7 +70,7 @@ def export_labor(project_id: str):
                 from_month=query.from_month,
                 to_month=query.to_month,
                 format=query.format,
-                acting_user_email=requester_email,
+                acting_user_email=requester_label,
                 locale=query.locale,
             )
         )
@@ -131,9 +131,9 @@ def export_worker_labor(project_id: str, worker_id: str):
     except ValidationError as exc:
         return format_validation_error(exc)
 
-    # --- Resolve acting user email ---
+    # --- Resolve how the acting user is named in the file metadata ---
     container = get_container()
-    requester_email = get_requester_email(container.user_repository)
+    requester_label = get_requester_label(container.user_repository)
 
     # --- Execute use-case ---
     try:
@@ -144,7 +144,7 @@ def export_worker_labor(project_id: str, worker_id: str):
                 from_month=query.from_month,
                 to_month=query.to_month,
                 format=query.format,
-                acting_user_email=requester_email,
+                acting_user_email=requester_label,
                 locale=query.locale,
             )
         )

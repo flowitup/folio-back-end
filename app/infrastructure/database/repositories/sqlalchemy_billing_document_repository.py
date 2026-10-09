@@ -6,7 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import false as sa_false
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.application.billing.dtos import (
@@ -100,19 +100,31 @@ class SqlAlchemyBillingDocumentRepository:
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents visible to a caller, with unfiltered count.
 
         Visibility: owns the doc (user_id == owner_id) OR doc belongs to a company
         the caller administers (company_id IN company_ids). ``all_documents``
-        (superadmin) removes the owner/company restriction entirely.
+        (superadmin) removes the owner/company restriction entirely. With
+        ``owner_company_ids``, an owned company doc counts only while the caller is
+        still attached to its company.
         """
         base = select(BillingDocumentModel).where(BillingDocumentModel.kind == kind.value)
 
         if not all_documents:
             visibility = []
             if owner_id is not None:
-                visibility.append(BillingDocumentModel.user_id == owner_id)
+                owned = BillingDocumentModel.user_id == owner_id
+                if owner_company_ids is not None:
+                    owned = and_(
+                        owned,
+                        or_(
+                            BillingDocumentModel.company_id.is_(None),
+                            BillingDocumentModel.company_id.in_(owner_company_ids),
+                        ),
+                    )
+                visibility.append(owned)
             if company_ids:
                 visibility.append(BillingDocumentModel.company_id.in_(company_ids))
             # No owner and no admin companies → caller sees nothing.
@@ -170,14 +182,14 @@ class SqlAlchemyBillingDocumentRepository:
             return None
         return deserialize_orm_to_doc(row)
 
-    def map_facture_ids_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, UUID]:
-        """Return {devis_id: facture_id} for the already-converted devis, in one query."""
+    def map_factures_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, tuple[UUID, str]]:
+        """Return {devis_id: (facture_id, facture_status)} for the already-converted devis, in one query."""
         if not devis_ids:
             return {}
-        stmt = select(BillingDocumentModel.source_devis_id, BillingDocumentModel.id).where(
+        stmt = select(BillingDocumentModel.source_devis_id, BillingDocumentModel.id, BillingDocumentModel.status).where(
             BillingDocumentModel.source_devis_id.in_(devis_ids)
         )
-        return {row[0]: row[1] for row in self._session.execute(stmt).all()}
+        return {row[0]: (row[1], row[2]) for row in self._session.execute(stmt).all()}
 
     # ------------------------------------------------------------------
     # Writes
@@ -289,7 +301,9 @@ class SqlAlchemyBillingDocumentRepository:
         if category is not None:
             suggestions_q = suggestions_q.where(item_cat == category)
         if q:
-            suggestions_q = suggestions_q.where(item_desc.ilike(f"{q}%"))
+            # q is a literal prefix: escape LIKE wildcards, as the list search does.
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            suggestions_q = suggestions_q.where(item_desc.ilike(f"{escaped}%", escape="\\"))
 
         suggestions_q = suggestions_q.order_by(
             func.count().desc(),

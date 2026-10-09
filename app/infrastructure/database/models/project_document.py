@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, desc, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,7 @@ from app.infrastructure.database.models.base import Base
 
 class ProjectDocumentTagRow(Base):
     __tablename__ = "project_document_tags"
+    __table_args__ = (Index("ix_project_document_tags_tag", "tag"),)
 
     document_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -32,6 +33,20 @@ class ProjectDocumentModel(Base):
     """
 
     __tablename__ = "project_documents"
+    # Partial indexes of migration 818ba2f5ef63 (active rows only).
+    __table_args__ = (
+        Index(
+            "ix_project_documents_project_id_created_at",
+            "project_id",
+            desc("created_at"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_project_documents_uploader_user_id",
+            "uploader_user_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),

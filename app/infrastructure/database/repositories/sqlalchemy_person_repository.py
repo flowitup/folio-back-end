@@ -122,13 +122,13 @@ class SqlAlchemyPersonRepository(IPersonRepository):
                     CompanyPersonModel.company_id == profile.company_id,
                     CompanyPersonModel.phone_normalized == normalized,
                     CompanyPersonModel.person_id != person_id,
-                    CompanyPersonModel.is_active.is_(True),
                 )
                 .first()
                 is not None
             )
-            # One active profile per number and company (partial unique index): when another
-            # person's profile already holds the number there, this one carries none.
+            # One profile per number and company, removed ones included (the unique index covers every
+            # row with a number): when another person's profile already holds the number there, this
+            # one carries none.
             profile.phone_normalized = None if taken else normalized
         if commit:
             self._session.commit()
@@ -152,7 +152,8 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             # ambiguity since phone formats rarely collide with name fragments).
             q = q.filter(
                 or_(
-                    PersonModel.normalized_name.contains(normalized),
+                    # autoescape: "%" and "_" in the search text match only themselves.
+                    PersonModel.normalized_name.contains(normalized, autoescape=True),
                     PersonModel.phone == query.strip(),
                 )
             )

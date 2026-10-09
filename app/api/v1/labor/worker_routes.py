@@ -30,7 +30,9 @@ from app.application.labor import (
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
+    InvalidWorkerPhoneError,
     WorkerAlreadyLinkedError,
+    WorkerAlreadyOnProjectError,
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -158,10 +160,27 @@ def create_worker(project_id: str):
                 user_id=linked_user_id,
             )
         )
+    except InvalidWorkerPhoneError as e:
+        # Its own code so a client can point at the phone field.
+        return _error_response("InvalidPhone", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerAlreadyLinkedError as e:
         return _error_response("Conflict", str(e), 409)
+    except WorkerAlreadyOnProjectError as e:
+        # The existing row is named so a client can open it (or offer Reactivate).
+        return (
+            jsonify(
+                {
+                    "error": "WorkerAlreadyOnProject",
+                    "message": str(e),
+                    "status_code": 409,
+                    "worker_id": e.worker_id,
+                    "is_active": e.is_active,
+                }
+            ),
+            409,
+        )
 
     return jsonify(_worker_response(result).model_dump()), 201
 
@@ -203,6 +222,9 @@ def update_worker(project_id: str, worker_id: str):
                 return err
             update_kwargs["user_id"] = linked_user_id
         result = get_container().update_worker_usecase.execute(UpdateWorkerDTO(**update_kwargs))
+    except InvalidWorkerPhoneError as e:
+        # Its own code so a client can point at the phone field.
+        return _error_response("InvalidPhone", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError:

@@ -51,7 +51,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from .format import format_eur_fr
+from .format import format_eur_fr, format_generated_at
 from .labels import month_label, range_label, t
 from .models import ExportContext, MonthBucket
 
@@ -317,7 +317,7 @@ def _render_header(context: ExportContext, styles: dict) -> list:
                 t(
                     locale,
                     "generated",
-                    at=context.generated_at.strftime("%d/%m/%Y %H:%M UTC"),
+                    at=format_generated_at(context.generated_at),
                     email=context.generated_by_email,
                 )
             ),
@@ -583,7 +583,7 @@ def _make_footer_callback(context: ExportContext):
 
     v1: draws "Page X" only (no X/Y — two-pass total page count is future work).
     """
-    date_label = context.generated_at.strftime("%d/%m/%Y")
+    date_label = format_generated_at(context.generated_at, with_time=False)
     project_label = context.project_name
 
     def _footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]

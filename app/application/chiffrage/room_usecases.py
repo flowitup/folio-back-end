@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.application.chiffrage.exceptions import RoomAlreadyExistsError
 from app.application.chiffrage.ports import ChiffrageRepositoryPort, TransactionalSessionPort
+from app.application.chiffrage.ordering import free_slot, renumber_around
 from app.application.chiffrage.units import POSITION_STEP
 from app.application.chiffrage.validation import MAX_ROOM_NAME, clean_name, owned_room
 from app.domain.entities.chiffrage_room import ChiffrageRoom
@@ -90,14 +91,15 @@ class ReorderRoomUseCase:
         before = owned_room(self._repo, before_id, project_id) if before_id else None
         after = owned_room(self._repo, after_id, project_id) if after_id else None
 
-        if before is not None and after is not None:
-            new_pos = (before.position + after.position) // 2
-        elif before is not None:
-            new_pos = before.position + POSITION_STEP
-        elif after is not None:
-            new_pos = max(0, after.position - POSITION_STEP)
-        else:
-            new_pos = self._repo.max_room_position(project_id) + POSITION_STEP
+        new_pos = free_slot(before, after, lambda: self._repo.max_room_position(project_id))
+        if new_pos is None:
+            new_pos = renumber_around(
+                self._repo.list_rooms(project_id),
+                room,
+                before_id,
+                after_id,
+                lambda sibling, position: self._repo.save_room(sibling.with_position(position)),
+            )
 
         moved = room.with_position(new_pos)
         self._repo.save_room(moved)

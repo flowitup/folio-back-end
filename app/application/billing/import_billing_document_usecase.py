@@ -4,8 +4,9 @@ Differences from CreateBillingDocumentUseCase:
   - Accepts a pre-supplied document_number (no auto-generation).
   - Accepts explicit status (e.g. PAID for historical imports).
   - Accepts optional created_at to preserve original timestamp.
-  - Calls bump_to_at_least on the counter when doc number parses to year+seq,
-    so subsequent auto-creates continue from a sane sequence.
+  - Calls bump_to_at_least on the counter when doc number parses to year+seq
+    (seq up to _MAX_COUNTER_SEQ), so subsequent auto-creates continue from a
+    sane sequence.
   - Wraps IntegrityError on unique-constraint violation into
     BillingDocumentAlreadyExistsError (409).
 """
@@ -37,13 +38,14 @@ from app.application.billing.ports import (
     assert_project_read_access,
     assert_user_company_access,
 )
-from app.domain.billing.dates import validate_kind_fields
+from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import (
     BillingDocumentAlreadyExistsError,
     MissingCompanyProfileError,
 )
+from app.domain.time import business_today
 
 
 # Regex to detect document numbers that encode year + sequence.
@@ -51,6 +53,13 @@ from app.domain.billing.exceptions import (
 # Skips truly irregular numbers like FAC0026-ANN-2025-11/08 (extra trailing tokens).
 # Groups: year (4 digits), seq (trailing digits after optional dash).
 _DOC_NUMBER_PATTERN = re.compile(r"^(?:[A-Za-z]+-?)+(?P<year>\d{4})-?(?P<seq>\d+)$")
+
+# Largest imported sequence that moves the counter. A longer number is not a
+# sequence the counter could continue from (e.g. FAC202403151230459, a timestamp
+# from other software, parses as year 2024 + a 10-digit sequence): bumping the
+# INTEGER counter to it overflowed (a 500), or, just below the limit, made every
+# later facture of that year fail. Such a document is still imported verbatim.
+_MAX_COUNTER_SEQ = 999_999
 
 # Unique constraint name for the (company_id, kind, document_number) partial index.
 _UNIQUE_CONSTRAINT = "uix_billing_document_company_kind_number"
@@ -96,7 +105,8 @@ class ImportBillingDocumentUseCase:
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
         # 1. An imported document may only link a project the caller can read
-        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id)
+        # (company admins read every project of their company, as on create).
+        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         # 2. company_id required — validate attachment and snapshot issuer
         if inp.company_id is None:
@@ -132,14 +142,15 @@ class ImportBillingDocumentUseCase:
 
         # 5. Bump counter if doc number parses to year+seq
         parsed = _parse_year_seq(doc_number)
-        if parsed is not None:
+        if parsed is not None and parsed[1] <= _MAX_COUNTER_SEQ:
             year, seq = parsed
             self._counter_repo.bump_to_at_least(inp.company_id, inp.kind, year, seq)
 
         # 6. Resolve timestamps
         now = datetime.now(timezone.utc)
         created_at = inp.created_at if inp.created_at is not None else now
-        issue_date = inp.issue_date if inp.issue_date is not None else now.date()
+        issue_date = inp.issue_date if inp.issue_date is not None else business_today(now)
+        validate_document_dates(issue_date, inp.validity_until, inp.payment_due_date)
 
         # 7. Build domain entity — resolve kind-specific optional dates
         validity_until = inp.validity_until

@@ -7,36 +7,39 @@ Mirrors the source ANN ECO CONSTRUCTION xlsx layout exactly:
     G=5.14, H=5.29, I=9.29, J=8.42, K=11.29, L=4.57
     (Description spans C..F via merged cells.)
 
-  Row layout:
+  Row layout (the rows given are the minimum: a block that needs more rows —
+  a longer issuer or recipient address, dates and terms under the date —
+  pushes everything below it down):
     row 1     A1: legal_name   — bold sz14 cyan (FF00A0DF), centered
-    row 2-5   issuer header band (Siège / Email on left, SIREN/Tel/TVA/etc.)
+    row 2-5   issuer header band (Siège: one address line per row, SIRET, TVA)
     row 8     B="Réf Facture/Devis", D=document_number, H="À l'attention de :"
-    rows 9-12 right column I = recipient name + address + tel
-    row 12 B  "Objet/Opération"
-    rows 13-14 C = project description / address
-    row 17 B  "<City>, DD/MM/YYYY"
+    rows 9+   right column I = recipient name + every address line + email + SIRET
+    row 12 B  "Objet/Opération"           ─┐ only when the document is linked
+    rows 13-14 C = project name / address ─┘ to a project
+    row 17 B  "<City>, DD/MM/YYYY", then "Valide jusqu'au" (devis) or
+              "Échéance" + "Conditions" (facture) on the rows below
     row 19 B  "Madame, Monsieur,"
     rows 20-21 C = standard greeting paragraphs (wrap)
     row 23    items header — ORANGE BG (FFF18728), bold, centered, borders
               B=Libellé G=U H=Qté I=PU(HT)en€ J=Avancement K=Montant(HT)en€ L=TVA
-    row 24    project name repeat row (bold dark grey, full-width-ish)
+    row 24    project name repeat row (bold dark grey, full-width-ish), if any
     rows 25+  section header rows (col C, bold, centered) interleaved with
               line-item rows (description merged C..F, plus G/H/I/J/K/L cells)
     row N+1   H="Total (HT)" K=SUM K-cells L="€"
-    row N+2   H="TVA" K=Total*0.1 L="€"
-    row N+3   H="Total (TTC)" K=K_HT+K_TVA L="€"
-    row N+5   B="Veuillez agréer, …" (full-width)
-    row N+7   B="COORDONNÉES BANCAIRES" — ORANGE BG, merged B..G, bold
-    row N+8   B="Domiciliation" / D=value (merged D..L)
-    row N+9   B="IBAN" / D=value
-    row N+10  B="BIC" / D=value
-    row N+12  A=Late-payment legal note — small font (sz=7), merged A..L
+    rows N+2… H="TVA <rate> %" K=VAT at that rate L="€" — one row per rate
+    then      H="Total (TTC)" K=K_HT+SUM(K_TVA) L="€"
+    then      Notes, Conditions générales (one row per line), signature box (H..L)
+    then      B="Veuillez agréer, …" (full-width)
+    +2        B="COORDONNÉES BANCAIRES" — ORANGE BG, merged B..G, bold
+              B="IBAN" / D=value, B="BIC" / D=value
+    +2        A=Late-payment legal note — small font (sz=7), merged A..L
 
 Returns raw bytes of an .xlsx file (Open Office XML).
 """
 
 from __future__ import annotations
 
+import math
 from io import BytesIO
 from typing import Optional
 
@@ -47,6 +50,8 @@ from app.domain.billing.sections import section_headings
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind
+from app.domain.entities.project import Project
+from app.domain.labor.export.format import format_decimal_fr
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +97,63 @@ def _align(h: str = "general", v: str = "center", wrap: bool = False) -> Alignme
     return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
 
 
+# Widths (character units) of the merged ranges free text is written into.
+_WIDTH_B_TO_H = sum(COL_WIDTHS[c] for c in "BCDEFGH")
+_WIDTH_C_TO_L = sum(COL_WIDTHS[c] for c in "CDEFGHIJKL")
+_WIDTH_H_TO_L = sum(COL_WIDTHS[c] for c in "HIJKL")
+_ROW_HEIGHT = 15  # points, Excel's default for Calibri 11
+
+
+def _wrapped_lines(text: str, width: float) -> int:
+    """How many lines *text* takes once wrapped in a cell *width* characters wide."""
+    return sum(max(1, math.ceil(len(line) / max(width - 1, 1))) for line in text.splitlines() or [""])
+
+
+def _fit_row_height(ws, row: int, text: str, width: float) -> None:
+    """Excel never grows a merged row to fit wrapped text, so size it from the text."""
+    lines = _wrapped_lines(text, width)
+    if lines > 1:
+        ws.row_dimensions[row].height = _ROW_HEIGHT * lines
+
+
+def _text_cell(ws, row: int, column: int, value: str):
+    """Write user text as text: openpyxl stores a string starting with '=' as a formula."""
+    c = ws.cell(row=row, column=column, value=value)
+    if isinstance(value, str) and value.startswith("="):
+        c.data_type = "s"
+    return c
+
+
+def _write_text_block(ws, row: int, title: str, text: str) -> int:
+    """Bold *title* in B, then one row per line of *text* (merged C..L). Returns the next free row."""
+    ws.cell(row=row, column=2, value=title).font = _font(11, bold=True)
+    ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=12)
+    row += 1
+    for line in text.splitlines():
+        if line.strip():
+            _text_cell(ws, row, 3, line).font = _font(11)
+            ws.cell(row=row, column=3).alignment = _align("left", "top", wrap=True)
+            _fit_row_height(ws, row, line, _WIDTH_C_TO_L)
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=12)
+        row += 1
+    return row + 1
+
+
+def _write_signature_block(ws, row: int, text: str) -> int:
+    """Signature block: B..G left blank, a bordered box on H..L holding *text* with room to sign.
+
+    Returns the next free row.
+    """
+    height = max(4, _wrapped_lines(text, _WIDTH_H_TO_L) + 3)
+    last = row + height - 1
+    c = _text_cell(ws, row, 8, text)
+    c.font = _font(11)
+    c.alignment = _align("left", "top", wrap=True)
+    c.border = _thin_box()  # merge_cells draws the anchor's sides along the edges of the range
+    ws.merge_cells(start_row=row, start_column=8, end_row=last, end_column=12)
+    return last + 2
+
+
 # ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
@@ -104,7 +166,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
     Stateless. Instantiate once and call render() per document.
     """
 
-    def render(self, doc: BillingDocument) -> bytes:
+    def render(self, doc: BillingDocument, project: Optional[Project] = None) -> bytes:
         wb = Workbook()
         ws = wb.active
         ws.title = "Devis" if doc.kind == BillingDocumentKind.DEVIS else "Facture"
@@ -123,86 +185,102 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         ws.cell(row=1, column=1).alignment = _align("center", "center")
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
 
-        # Row 2: address — merged C..L for room.
-        ws.cell(row=2, column=3, value=f"Siège : {doc.issuer_address or ''}")
-        ws.cell(row=2, column=3).font = _font(11)
-        ws.merge_cells(start_row=2, start_column=3, end_row=2, end_column=12)
+        # Rows 2-3: address, one line per row — merged C..L for room.
+        address_lines = [ln.strip() for ln in (doc.issuer_address or "").splitlines() if ln.strip()] or [""]
+        for r, line in enumerate(address_lines, start=2):
+            ws.cell(row=r, column=3, value=f"Siège : {line}" if r == 2 else line)
+            ws.cell(row=r, column=3).font = _font(11)
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=12)
 
-        # Row 4: SIRET on left (C..F), Tél on right (J..L) — placeholder ok.
+        # Row 4: SIRET on left (C..H), row 5: TVA on right (J..L) — lower when the address is longer.
+        siret_row = max(4, 2 + len(address_lines))
         if doc.issuer_siret:
-            ws.cell(row=4, column=3, value=f"SIRET {doc.issuer_siret}")
-            ws.cell(row=4, column=3).font = _font(11)
-            ws.merge_cells(start_row=4, start_column=3, end_row=4, end_column=8)
+            ws.cell(row=siret_row, column=3, value=f"SIRET {doc.issuer_siret}")
+            ws.cell(row=siret_row, column=3).font = _font(11)
+            ws.merge_cells(start_row=siret_row, start_column=3, end_row=siret_row, end_column=8)
 
-        # Row 5: TVA on right.
         if doc.issuer_tva_number:
-            ws.cell(row=5, column=10, value=f"TVA  {doc.issuer_tva_number}")
-            ws.cell(row=5, column=10).font = _font(11)
-            ws.merge_cells(start_row=5, start_column=10, end_row=5, end_column=12)
+            ws.cell(row=siret_row + 1, column=10, value=f"TVA  {doc.issuer_tva_number}")
+            ws.cell(row=siret_row + 1, column=10).font = _font(11)
+            ws.merge_cells(start_row=siret_row + 1, start_column=10, end_row=siret_row + 1, end_column=12)
+        # Rows the header grew by: every row below moves down with it.
+        top = siret_row - 4
 
         # ---- 2. Doc number row (row 8) -------------------------------------
-        ws.cell(row=8, column=2, value=f"Réf {kind_fr}").font = _font(11, bold=True)
-        ws.cell(row=8, column=4, value=doc.document_number).font = _font(11)
-        ws.cell(row=8, column=8, value="À l'attention de :").alignment = _align("left")
-        ws.cell(row=8, column=8).font = _font(11)
+        ref_row = 8 + top
+        ws.cell(row=ref_row, column=2, value=f"Réf {kind_fr}").font = _font(11, bold=True)
+        ws.cell(row=ref_row, column=4, value=doc.document_number).font = _font(11)
+        ws.cell(row=ref_row, column=8, value="À l'attention de :").alignment = _align("left")
+        ws.cell(row=ref_row, column=8).font = _font(11)
 
-        # ---- 3. Recipient block (rows 9-12, col I merged I..L) -------------
-        ws.cell(row=9, column=9, value=doc.recipient_name).font = _font(11, bold=True)
-        ws.cell(row=9, column=9).alignment = _align("left", "bottom")
-        ws.merge_cells(start_row=9, start_column=9, end_row=9, end_column=12)
-        if doc.recipient_address:
-            for offset, line in enumerate(doc.recipient_address.splitlines(), start=10):
-                if offset > 12:
-                    break
-                ws.cell(row=offset, column=9, value=line).font = _font(11)
-                ws.cell(row=offset, column=9).alignment = _align("left", "bottom")
-                ws.merge_cells(start_row=offset, start_column=9, end_row=offset, end_column=12)
+        # ---- 3. Recipient block (rows 9+, col I merged I..L) ---------------
+        # Name, every address line, email and SIRET — as many rows as it takes.
+        recipient_lines = [(doc.recipient_name, True)]
+        recipient_lines += [(ln, False) for ln in (doc.recipient_address or "").splitlines() if ln.strip()]
+        if doc.recipient_email:
+            recipient_lines.append((doc.recipient_email, False))
+        if doc.recipient_siret:
+            recipient_lines.append((f"SIRET : {doc.recipient_siret}", False))
+        for r, (value, bold) in enumerate(recipient_lines, start=ref_row + 1):
+            _text_cell(ws, r, 9, value).font = _font(11, bold=bold)
+            ws.cell(row=r, column=9).alignment = _align("left", "bottom")
+            ws.merge_cells(start_row=r, start_column=9, end_row=r, end_column=12)
+        recipient_last_row = ref_row + len(recipient_lines)
 
         # ---- 4. "Objet / Opération" (row 12 B + rows 13-14 C) ---------------
-        ws.cell(row=12, column=2, value="Objet/Opération").font = _font(11, bold=True)
-        # We don't have a dedicated project_title field. Use notes' first line
-        # as project description if available, else fall back to "—".
-        project_title = ""
-        project_addr = ""
-        if doc.notes:
-            lines = [ln for ln in doc.notes.splitlines() if ln.strip()]
-            if lines:
-                project_title = lines[0]
-            if len(lines) > 1:
-                project_addr = lines[1]
-        if not project_title:
-            project_title = doc.recipient_name  # last-resort fallback
-        ws.cell(row=13, column=3, value=project_title).font = _font(11)
-        ws.merge_cells(start_row=13, start_column=3, end_row=13, end_column=8)
-        if project_addr:
-            ws.cell(row=14, column=3, value=project_addr).font = _font(11)
-            ws.merge_cells(start_row=14, start_column=3, end_row=14, end_column=8)
+        # The project the document is linked to: its name, then its address.
+        project_title = project.name.strip() if project is not None and project.name else ""
+        address = project.address if project is not None and project.address else ""
+        project_addr = ", ".join(ln.strip() for ln in address.splitlines() if ln.strip())
+        objet_row = 12 + top
+        if project_title:
+            ws.cell(row=objet_row, column=2, value="Objet/Opération").font = _font(11, bold=True)
+            _text_cell(ws, objet_row + 1, 3, project_title).font = _font(11)
+            ws.merge_cells(start_row=objet_row + 1, start_column=3, end_row=objet_row + 1, end_column=8)
+            if project_addr and project_addr != project_title:
+                _text_cell(ws, objet_row + 2, 3, project_addr).font = _font(11)
+                ws.merge_cells(start_row=objet_row + 2, start_column=3, end_row=objet_row + 2, end_column=8)
 
-        # ---- 5. Issue date (row 17 B) --------------------------------------
+        # ---- 5. Issue date (row 17 B) + validity / due date / terms -------
         # Format: "<City>, DD/MM/YYYY" — the city is read from the free-text address.
+        date_row = 17 + top
         city = place_of_issue(doc.issuer_address)
         date_str = doc.issue_date.strftime("%d/%m/%Y")
         line = f"{city}, {date_str}" if city else date_str
-        ws.cell(row=17, column=2, value=line).font = _font(11)
-        ws.merge_cells(start_row=17, start_column=2, end_row=17, end_column=8)
+        ws.cell(row=date_row, column=2, value=line).font = _font(11)
+        ws.merge_cells(start_row=date_row, start_column=2, end_row=date_row, end_column=8)
+        meta_lines = []
+        if doc.kind == BillingDocumentKind.DEVIS and doc.validity_until:
+            meta_lines.append(f"Valide jusqu'au : {doc.validity_until.strftime('%d/%m/%Y')}")
+        if doc.kind == BillingDocumentKind.FACTURE:
+            if doc.payment_due_date:
+                meta_lines.append(f"Échéance : {doc.payment_due_date.strftime('%d/%m/%Y')}")
+            if doc.payment_terms:
+                meta_lines.append(f"Conditions : {doc.payment_terms}")
+        for r, text in enumerate(meta_lines, start=date_row + 1):
+            _text_cell(ws, r, 2, text).font = _font(11)
+            ws.cell(row=r, column=2).alignment = _align("left", "top", wrap=True)
+            ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=8)
+            _fit_row_height(ws, r, text, _WIDTH_B_TO_H)
 
         # ---- 6. Greeting (rows 19-21) --------------------------------------
-        ws.cell(row=19, column=2, value="Madame, Monsieur,").font = _font(11)
-        ws.cell(row=20, column=3, value=intro_sentence(doc.kind)).font = _font(11)
-        ws.cell(row=20, column=3).alignment = _align(wrap=True)
-        ws.merge_cells(start_row=20, start_column=3, end_row=20, end_column=12)
+        greeting_row = max(19 + top, date_row + len(meta_lines) + 2, recipient_last_row + 2)
+        ws.cell(row=greeting_row, column=2, value="Madame, Monsieur,").font = _font(11)
+        ws.cell(row=greeting_row + 1, column=3, value=intro_sentence(doc.kind)).font = _font(11)
+        ws.cell(row=greeting_row + 1, column=3).alignment = _align(wrap=True)
+        ws.merge_cells(start_row=greeting_row + 1, start_column=3, end_row=greeting_row + 1, end_column=12)
         ws.cell(
-            row=21,
+            row=greeting_row + 2,
             column=3,
             value="Je reste à votre disposition pour toute précision ou complément d'information.",
         ).font = _font(11)
-        ws.cell(row=21, column=3).alignment = _align(wrap=True)
-        ws.merge_cells(start_row=21, start_column=3, end_row=21, end_column=12)
-        ws.cell(row=19, column=2).font = _font(11)
-        ws.merge_cells(start_row=19, start_column=2, end_row=19, end_column=12)
+        ws.cell(row=greeting_row + 2, column=3).alignment = _align(wrap=True)
+        ws.merge_cells(start_row=greeting_row + 2, start_column=3, end_row=greeting_row + 2, end_column=12)
+        ws.cell(row=greeting_row, column=2).font = _font(11)
+        ws.merge_cells(start_row=greeting_row, start_column=2, end_row=greeting_row, end_column=12)
 
         # ---- 7. Items header (row 23) — ORANGE bg, bold, centered, borders -
-        items_header_row = 23
+        items_header_row = greeting_row + 4
         header_cells = [
             (2, "Libellé"),
             (7, "U"),
@@ -221,19 +299,20 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         # Description label spans B..F
         ws.merge_cells(start_row=items_header_row, start_column=2, end_row=items_header_row, end_column=6)
 
-        # ---- 8. Project repeat row (row 24) — bold dark grey ---------------
-        project_row = 24
-        c = ws.cell(row=project_row, column=2, value=project_title)
-        c.font = _font(11, bold=True, color=COLOR_DARK_GREY)
-        c.alignment = _align("left", "center", wrap=True)
-        c.border = _thin_box()
-        ws.merge_cells(start_row=project_row, start_column=2, end_row=project_row, end_column=6)
-        # Empty bordered cells for G-L
-        for col in range(7, 13):
-            ws.cell(row=project_row, column=col).border = _thin_box()
+        # ---- 8. Project repeat row (row 24) — bold dark grey, only with a project
+        row = items_header_row + 1
+        if project_title:
+            c = _text_cell(ws, row, 2, project_title)
+            c.font = _font(11, bold=True, color=COLOR_DARK_GREY)
+            c.alignment = _align("left", "center", wrap=True)
+            c.border = _thin_box()
+            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=6)
+            # Empty bordered cells for G-L
+            for col in range(7, 13):
+                ws.cell(row=row, column=col).border = _thin_box()
+            row += 1
 
         # ---- 9. Items + section headers (row 25+) --------------------------
-        row = items_header_row + 2  # row 25
         first_item_row = None
         last_item_row = None
         headings = section_headings(item.category for item in doc.items)
@@ -255,7 +334,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
                 first_item_row = row
             last_item_row = row
             # Description (merged C..F)
-            d = ws.cell(row=row, column=3, value=item.description)
+            d = _text_cell(ws, row, 3, item.description)
             d.font = _font(11)
             d.alignment = _align("left", "center", wrap=True)
             d.border = _thin_box()
@@ -272,7 +351,8 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             # I = PU HT
             ws.cell(row=row, column=9, value=float(item.unit_price)).font = _font(11)
             ws.cell(row=row, column=9).alignment = _align("center", "center")
-            ws.cell(row=row, column=9).number_format = "#,##0.00"
+            # Shows a price's own decimals (15.015, not 15.02) so Qté × PU gives the line amount.
+            ws.cell(row=row, column=9).number_format = "#,##0.00####"
             ws.cell(row=row, column=9).border = _thin_box()
             # J = Avancement (default 100% — we don't model partial advancement)
             ws.cell(row=row, column=10, value=1).font = _font(11)
@@ -300,8 +380,10 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             return buf.getvalue()
 
         totals_row_ht = row
-        totals_row_tva = row + 1
-        totals_row_ttc = row + 2
+        vat_rows = doc.vat_breakdown
+        first_tva_row = totals_row_ht + 1
+        last_tva_row = totals_row_ht + len(vat_rows)
+        totals_row_ttc = last_tva_row + 1
 
         # Total HT
         ws.cell(row=totals_row_ht, column=8, value="Total (HT)").font = _font(11, bold=True)
@@ -315,14 +397,15 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         ws.cell(row=totals_row_ht, column=12, value="€").font = _font(11, bold=True)
         ws.cell(row=totals_row_ht, column=12).alignment = _align("center", "center")
 
-        # TVA — we use the doc's computed total_tva (which respects mixed VAT rates)
-        # rather than =K_HT*0.1 (which only works for single-rate docs).
-        ws.cell(row=totals_row_tva, column=8, value="TVA").font = _font(11, bold=True)
-        ws.cell(row=totals_row_tva, column=8).alignment = _align("center", "center")
-        ws.cell(row=totals_row_tva, column=11, value=float(doc.total_tva)).font = _font(11, bold=True)
-        ws.cell(row=totals_row_tva, column=11).number_format = "#,##0.00"
-        ws.cell(row=totals_row_tva, column=12, value="€").font = _font(11, bold=True)
-        ws.cell(row=totals_row_tva, column=12).alignment = _align("center", "center")
+        # TVA — one row per rate, from the doc's computed breakdown (the same one the PDF
+        # prints) rather than =K_HT*rate, so mixed-rate documents add up exactly.
+        for r, (rate, _base_ht, tva_amt) in enumerate(vat_rows, start=first_tva_row):
+            ws.cell(row=r, column=8, value=f"TVA {format_decimal_fr(rate)}\u00a0%").font = _font(11, bold=True)
+            ws.cell(row=r, column=8).alignment = _align("center", "center")
+            ws.cell(row=r, column=11, value=float(tva_amt)).font = _font(11, bold=True)
+            ws.cell(row=r, column=11).number_format = "#,##0.00"
+            ws.cell(row=r, column=12, value="€").font = _font(11, bold=True)
+            ws.cell(row=r, column=12).alignment = _align("center", "center")
 
         # Total TTC
         ws.cell(row=totals_row_ttc, column=8, value="Total (TTC)").font = _font(11, bold=True)
@@ -330,14 +413,23 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         ws.cell(
             row=totals_row_ttc,
             column=11,
-            value=f"=K{totals_row_ht}+K{totals_row_tva}",
+            value=f"=K{totals_row_ht}+SUM(K{first_tva_row}:K{last_tva_row})",
         ).font = _font(11, bold=True)
         ws.cell(row=totals_row_ttc, column=11).number_format = "#,##0.00"
         ws.cell(row=totals_row_ttc, column=12, value="€").font = _font(11, bold=True)
         ws.cell(row=totals_row_ttc, column=12).alignment = _align("center", "center")
 
-        # ---- 11. Closing greeting (row N+5) -------------------------------
-        closing_row = totals_row_ttc + 2
+        # ---- 11. Notes, conditions générales, signature block --------------
+        row = totals_row_ttc + 2
+        if doc.notes and doc.notes.strip():
+            row = _write_text_block(ws, row, "Notes", doc.notes)
+        if doc.terms and doc.terms.strip():
+            row = _write_text_block(ws, row, "Conditions générales", doc.terms)
+        if doc.signature_block_text and doc.signature_block_text.strip():
+            row = _write_signature_block(ws, row, doc.signature_block_text)
+
+        # ---- 12. Closing greeting -------------------------------------------
+        closing_row = row
         ws.cell(
             row=closing_row,
             column=2,
@@ -345,7 +437,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         ).font = _font(11)
         ws.merge_cells(start_row=closing_row, start_column=2, end_row=closing_row, end_column=12)
 
-        # ---- 12. Bank coords block (rows N+7 .. N+10) ---------------------
+        # ---- 13. Bank coords block -----------------------------------------
         if doc.issuer_iban or doc.issuer_bic:
             bank_title_row = closing_row + 2
             c = ws.cell(row=bank_title_row, column=2, value="COORDONNÉES BANCAIRES")
@@ -372,7 +464,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         else:
             footer_anchor = closing_row + 2
 
-        # ---- 13. Late-payment legal note (factures only) ------------------
+        # ---- 14. Late-payment legal note (factures only) ------------------
         if doc.kind == BillingDocumentKind.FACTURE:
             note = (
                 "Indemnité forfaitaire de retard de paiement: 40€ "

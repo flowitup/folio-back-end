@@ -12,6 +12,7 @@ from app.application.project_documents.ports import (
 )
 from app.domain.exceptions.project_document_exceptions import ProjectDocumentNotFoundError
 from app.domain.project_document import ProjectDocument
+from app.domain.value_objects.display_filename import has_control_chars
 
 
 class RenameProjectDocumentUseCase:
@@ -58,6 +59,9 @@ class RenameProjectDocumentUseCase:
         new_filename = new_filename.strip()
         if not new_filename:
             raise ValueError("Filename cannot be empty")
+        if has_control_chars(new_filename):
+            # It would end up in the download's Content-Disposition header
+            raise ValueError("Filename cannot contain line breaks or other control characters")
 
         original_ext = os.path.splitext(doc.filename)[1].lower()
         new_ext = os.path.splitext(new_filename)[1].lower()

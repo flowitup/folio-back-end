@@ -53,7 +53,12 @@ from app.application.labor.validate_attendance import (
 from app.application.projects.ports import IProjectRepository
 from app.domain.authz.resolver import has_permission
 from app.domain.entities.labor_entry import STATUS_PENDING
-from app.domain.exceptions.labor_exceptions import InvalidLaborEntryError, WorkerInactiveError, WorkerNotFoundError
+from app.domain.exceptions.labor_exceptions import (
+    AttendanceDateOutOfRangeError,
+    InvalidLaborEntryError,
+    WorkerInactiveError,
+    WorkerNotFoundError,
+)
 from app.domain.time import business_today
 
 logger = logging.getLogger(__name__)
@@ -330,7 +335,7 @@ class LaborFeature:
         )
         try:
             response = self._bulk_log_usecase.execute(request)
-        except (WorkerNotFoundError, WorkerInactiveError):
+        except (WorkerNotFoundError, WorkerInactiveError, AttendanceDateOutOfRangeError):
             messenger.post_text(
                 user_id,
                 reply.render("error", lang),

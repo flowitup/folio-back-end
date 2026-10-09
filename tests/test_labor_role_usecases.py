@@ -64,8 +64,9 @@ class InMemoryLaborRoleRepository:
         return self._store.get(role_id)
 
     def find_by_name(self, name: str, company_id: Optional[UUID] = None) -> Optional[LaborRole]:
+        # Case-insensitive, as the SQLAlchemy repository.
         for role in self._store.values():
-            if role.name == name and role.company_id == company_id:
+            if role.name.lower() == name.lower() and role.company_id == company_id:
                 return role
         return None
 
@@ -124,6 +125,12 @@ class TestCreateLaborRoleUseCase:
 
         with pytest.raises(ValueError, match="hex"):
             uc.execute(name="Valid Name", color="not-a-color")
+
+    def test_create_color_with_a_trailing_newline_raises_value_error(self):
+        uc = CreateLaborRoleUseCase(repo=InMemoryLaborRoleRepository(), db_session=_mock_db_session())
+
+        with pytest.raises(ValueError, match="hex"):
+            uc.execute(name="Valid Name", color="#FFFFFF\n")
 
     def test_create_empty_name_raises_value_error(self):
         repo = InMemoryLaborRoleRepository()
@@ -201,6 +208,26 @@ class TestUpdateLaborRoleUseCase:
 
         with pytest.raises(DuplicateLaborRoleError):
             uc.execute(role_id=role_b.id, name="Role A")
+
+    def test_update_case_only_rename_of_the_same_role_is_allowed(self):
+        repo = InMemoryLaborRoleRepository()
+        existing = _make_role("électricien", "#E11D48")
+        repo.create(existing)
+        uc = UpdateLaborRoleUseCase(repo=repo, db_session=_mock_db_session())
+
+        updated = uc.execute(role_id=existing.id, name="Électricien")
+
+        assert updated.name == "Électricien"
+
+    def test_update_rename_to_another_role_in_another_case_raises(self):
+        repo = InMemoryLaborRoleRepository()
+        repo.create(_make_role("Électricien", "#E11D48"))
+        role_b = _make_role("Plombier", "#7C3AED")
+        repo.create(role_b)
+        uc = UpdateLaborRoleUseCase(repo=repo, db_session=_mock_db_session())
+
+        with pytest.raises(DuplicateLaborRoleError):
+            uc.execute(role_id=role_b.id, name="électricien")
 
     def test_update_not_found_raises(self):
         repo = InMemoryLaborRoleRepository()

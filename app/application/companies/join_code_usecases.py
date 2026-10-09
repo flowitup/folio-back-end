@@ -19,6 +19,7 @@ from app.application.companies.ports import (
     UserCompanyAccessRepositoryPort,
 )
 from app.domain.companies.exceptions import CompanyAlreadyAttachedError, CompanyNotFoundError
+from app.domain.companies.masking import mask_company
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 
@@ -153,7 +154,9 @@ class JoinCompanyByCodeUseCase:
         )
         self._ensure_company_person(user_id, company.id, now)
         db_session.commit()
-        return CompanyResponse.from_entity(company)
+        # The joiner is a plain member and the code is shareable: mask SIRET/TVA/IBAN/BIC
+        # like every other company read (only platform ops ever see them in full).
+        return CompanyResponse.from_entity(mask_company(company, full=False))
 
     def _ensure_company_person(self, user_id: UUID, company_id: UUID, now: datetime) -> None:
         """Keep the "attached ⇒ listed in the directory" invariant (shared helper)."""

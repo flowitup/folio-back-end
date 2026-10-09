@@ -7,7 +7,7 @@ Covers:
 Critical assertions:
   - Cache-Control: no-cache, must-revalidate header on GET response
   - 401 without JWT
-  - 403 dismiss of note in a project where user is not a member
+  - 404 dismiss of note in a project where user is not a member (same as a missing note)
   - 404 dismiss of non-existent note
   - 204 on successful dismiss
   - Idempotent dismiss (second call is 204, not 4xx)
@@ -102,6 +102,41 @@ class TestListNotificationsEndpoint:
         data = resp.get_json()
         assert data["count"] == len(data["items"])
 
+    def test_each_reminder_carries_its_due_date(self, inv_client, member_token, monkeypatch):
+        """The bell (web and mobile) shows when a reminder is for, so an overdue one stands out."""
+        from datetime import date, datetime, timezone
+
+        import wiring
+        from app.application.notes.dtos import DueNotificationDto, NoteDto
+
+        now = datetime(2026, 10, 9, 9, 0, tzinfo=timezone.utc)
+        dto = DueNotificationDto(
+            note=NoteDto(
+                id=uuid.uuid4(),
+                project_id=uuid.uuid4(),
+                created_by=uuid.uuid4(),
+                title="Permit renewal",
+                description=None,
+                category="general",
+                status="open",
+                created_at=now,
+                updated_at=now,
+            ),
+            due_date=date(2026, 10, 8),
+            lead_time_minutes=1440,
+        )
+
+        class _Due:
+            def execute(self, **_kwargs):
+                return [dto]
+
+        monkeypatch.setattr(wiring.get_container(), "list_due_notifications_usecase", _Due())
+        resp = inv_client.get(_NOTIFICATIONS_URL, headers=_auth(member_token))
+        assert resp.status_code == 200
+        note = resp.get_json()["items"][0]["note"]
+        assert note["due_date"] == "2026-10-08"
+        assert note["lead_time_minutes"] == 1440
+
     def test_500_on_unexpected_exception(self, inv_client, member_token, monkeypatch):
         """Monkeypatching the use-case ensures the 500 path is hit regardless of DB dialect."""
         import wiring
@@ -145,16 +180,18 @@ class TestDismissNotificationEndpoint:
         resp = inv_client.post(_dismiss_url(note_open))
         assert resp.status_code == 401
 
-    def test_403_non_member_cannot_dismiss_note_in_other_project(
+    def test_404_non_member_cannot_dismiss_note_in_other_project(
         self, inv_client, non_member_token, invitation_app, note_other_project
     ):
-        """User who is not a member of the note's project gets 403."""
+        """A note of a project the user is not on answers like a missing one: existence is not leaked."""
         note_id, _project_id = note_other_project
         resp = inv_client.post(
             _dismiss_url(note_id),
             headers=_auth(non_member_token),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 404
+        missing = inv_client.post(_dismiss_url(str(uuid.uuid4())), headers=_auth(non_member_token))
+        assert resp.get_json() == missing.get_json()
 
     def test_404_nonexistent_note(self, inv_client, member_token):
         resp = inv_client.post(

@@ -99,3 +99,16 @@ class LaborRoleNotInCompanyError(CompanyPersonsError):
         self.company_id = company_id
         self.labor_role_id = labor_role_id
         super().__init__(f"Labor role {labor_role_id} does not belong to company {company_id}")
+
+
+class LinkedMemberNotCancellableError(CompanyPersonsError):
+    """Raised when cancelling a profile whose person already has an account.
+
+    Only a pending invitation (no account yet) is cancelled this way; an
+    attached member is removed through the boot route instead.
+    """
+
+    def __init__(self, company_id: UUID, person_id: UUID) -> None:
+        self.company_id = company_id
+        self.person_id = person_id
+        super().__init__(f"Person {person_id} has an account in company {company_id}; remove the member instead")

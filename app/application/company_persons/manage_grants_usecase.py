@@ -16,7 +16,7 @@ surface for the underlying `company_member_grants` table.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 from uuid import UUID, uuid4
@@ -29,7 +29,7 @@ from app.application.company_persons.grants_ports import (
     ProjectCompanyResolverPort,
     UserCompanyAccessLookupPort,
 )
-from app.domain.authz.matrix import CUSTOMISABLE_PERMISSIONS, NON_DENIABLE
+from app.domain.authz.matrix import COMPANY_WIDE_ONLY_PERMISSIONS, CUSTOMISABLE_PERMISSIONS, NON_DENIABLE
 
 _VALID_EFFECTS = frozenset({"grant", "deny"})
 _CUSTOMISABLE_ROLES = frozenset({"manager", "member"})
@@ -51,6 +51,8 @@ class ListGrantsInput:
 class ListGrantsResult:
     grants: List[MemberGrant]
     customisable: List[str]
+    # Subset of `customisable` that only takes a company-wide row (no project scope).
+    company_wide_only: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,14 @@ class NonDeniablePermissionError(GrantsError):
 
     def __init__(self, permission: str) -> None:
         super().__init__(f"Permission {permission!r} can never be denied")
+        self.permission = permission
+
+
+class CompanyWideOnlyPermissionError(GrantsError):
+    """A project scope for a permission only ever checked company-wide (→ 400)."""
+
+    def __init__(self, permission: str) -> None:
+        super().__init__(f"Permission {permission!r} applies company-wide only and cannot be scoped to a project")
         self.permission = permission
 
 
@@ -212,7 +222,11 @@ class ManageGrantsUseCase:
         self._assert_caller_is_admin(inp.caller_id, inp.company_id)
         self._assert_target_customisable(inp.company_id, inp.user_id)
         grants = self._grant_repo.list_for_member(inp.company_id, inp.user_id)
-        return ListGrantsResult(grants=grants, customisable=sorted(CUSTOMISABLE_PERMISSIONS))
+        return ListGrantsResult(
+            grants=grants,
+            customisable=sorted(CUSTOMISABLE_PERMISSIONS),
+            company_wide_only=sorted(COMPANY_WIDE_ONLY_PERMISSIONS),
+        )
 
     def set_grant(self, inp: SetGrantInput) -> MemberGrant:
         """Grant or deny one permission to a manager/member (idempotent upsert)."""
@@ -224,6 +238,8 @@ class ManageGrantsUseCase:
             raise InvalidGrantPermissionError(inp.permission)
         if inp.effect == "deny" and inp.permission in NON_DENIABLE:
             raise NonDeniablePermissionError(inp.permission)
+        if inp.project_id is not None and inp.permission in COMPANY_WIDE_ONLY_PERMISSIONS:
+            raise CompanyWideOnlyPermissionError(inp.permission)
         self._assert_target_customisable(inp.company_id, inp.user_id)
         self._assert_project_in_company(inp.company_id, inp.project_id)
 

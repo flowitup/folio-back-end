@@ -17,7 +17,7 @@ from app.api.v1.notifications.schemas import (
     NotificationPreferencesResponse,
     UpdateNotificationPreferencesRequest,
 )
-from app.application.notes.exceptions import NoteNotFoundError, NotProjectMemberError
+from app.application.notes.exceptions import NoteNotFoundError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -76,6 +76,8 @@ def list_notifications() -> Any:
                 "category": dto.note.category,
                 "created_at": dto.note.created_at.isoformat(),
                 "updated_at": dto.note.updated_at.isoformat(),
+                "due_date": dto.due_date.isoformat() if dto.due_date else None,
+                "lead_time_minutes": dto.lead_time_minutes,
             },
             "dismissed": dto.dismissed,
         }
@@ -147,9 +149,8 @@ def dismiss_notification(note_id: UUID) -> Any:
             note_id=note_id,
         )
     except NoteNotFoundError:
+        # Also a note of a project the caller is not on: existence is not leaked.
         return _err(404, "NotFound", "Note not found")
-    except NotProjectMemberError:
-        return _err(403, "Forbidden", "Not a project member")
     except Exception:
         logger.exception("dismiss_notification unexpected error note_id=%s", note_id)
         return _err(500, "InternalError", "An unexpected error occurred.")

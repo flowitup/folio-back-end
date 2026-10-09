@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from io import BytesIO
 
 import openpyxl
 import pytest
 from pypdf import PdfReader
 
-from app.domain.labor.export.labels import _LABELS, SUPPORTED_LOCALES, month_label, range_label
+from app.domain.labor.export.labels import _LABELS, SUPPORTED_LOCALES, month_label, range_label, shift_label, t
 from app.domain.labor.export.pdf_builder import build_pdf
 from app.domain.labor.export.xlsx_builder import build_xlsx
-from tests.unit.domain.labor.export.test_xlsx_builder import _make_two_month_buckets
+from tests.unit.domain.labor.export.test_xlsx_builder import _make_entry, _make_two_month_buckets
 
 
 def _pdf_text(raw: bytes) -> str:
@@ -58,3 +59,46 @@ def test_pdf_follows_the_locale():
     assert "Export main-d'œuvre" in text
     assert "Coût total" in text
     assert "Labor Export" not in text
+
+
+@pytest.mark.parametrize(
+    ("locale", "full", "overtime", "supplement"),
+    [
+        ("en", "Full day", "Overtime", "Extra hrs (unpaid)"),
+        ("fr", "Journée complète", "Heures sup. (x1,5)", "Heures en plus (non payées)"),
+        ("vi", "Cả ngày", "Tăng ca", "Giờ thêm (không tính lương)"),
+    ],
+)
+def test_xlsx_day_log_names_shifts_in_the_locale(locale, full, overtime, supplement):
+    ctx, buckets = _make_two_month_buckets()
+    buckets[0].daily_entries.append(
+        _make_entry(entry_date="2026-04-02", shift_type="overtime", supplement_hours=2),
+    )
+    buckets[0].daily_entries.append(_make_entry(entry_date="2026-04-03", shift_type=None, supplement_hours=3))
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(dataclasses.replace(ctx, locale=locale), buckets)))
+    values = [[c.value for c in row] for row in wb[wb.sheetnames[1]].iter_rows()]
+    header = next(row for row in values if row[0] == t(locale, "date"))
+    assert header[3] == supplement
+    days = [row for row in values if isinstance(row[0], datetime)]
+    assert [(d[0], d[2]) for d in days] == [
+        (datetime(2026, 4, 1), full),
+        (datetime(2026, 4, 2), overtime),
+        (datetime(2026, 4, 3), None),  # supplement-only day: no shift
+    ]
+    # Unpaid extra hours never read as overtime ("Heures sup…") in French.
+    assert not (locale == "fr" and supplement.startswith("Heures sup"))
+
+
+def test_xlsx_worker_rate_is_formatted_like_the_pdf():
+    ctx, buckets = _make_two_month_buckets()
+    ctx = dataclasses.replace(ctx, locale="fr", worker_name="Bravo", worker_daily_rate=Decimal("100.56"))
+    ws = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, buckets))).active
+    assert ws["A5"].value == "Ouvrier : Bravo    Tarif : 100,56\u00a0€/jour"
+    assert "Tarif : 100,56 €/jour" in _pdf_text(build_pdf(ctx, buckets)).replace("\u00a0", " ")
+
+
+def test_shift_label_falls_back_to_the_raw_value():
+    assert shift_label("fr", "half") == "Demi-journée"
+    assert shift_label("de", "half") == "Half day"
+    assert shift_label("fr", None) == ""
+    assert shift_label("fr", "night") == "night"

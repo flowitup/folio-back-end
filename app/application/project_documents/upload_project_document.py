@@ -20,6 +20,7 @@ from app.application.project_documents.ports import (
     ITransactionalSession,
 )
 from app.domain.project_document import ProjectDocument, kind_for_extension
+from app.domain.value_objects.display_filename import strip_control_chars
 
 _log = logging.getLogger(__name__)
 
@@ -83,6 +84,16 @@ def validate_file_type(filename: str, mime_type: str) -> str:
     return kind_for_extension(ext)
 
 
+def stored_content_type(mime_type: str) -> str:
+    """The MIME type to store for an upload that passed validate_file_type.
+
+    DWG is accepted by extension alone, so its client MIME is free text of any
+    length (the column holds 255 characters): an unlisted value is stored as
+    the generic type instead.
+    """
+    return mime_type if mime_type in ALLOWED_MIME_TYPES else "application/octet-stream"
+
+
 class UploadProjectDocumentUseCase:
     """Validates, stores the file in object storage, and persists the metadata row."""
 
@@ -140,6 +151,7 @@ class UploadProjectDocumentUseCase:
 
         # --- Type validation (uses sanitized name; raises on disallowed type) ---
         validate_file_type(sanitized, content_type)
+        content_type = stored_content_type(content_type)
 
         # --- Build storage key using sanitized name to prevent path-traversal in key ---
         doc_id = uuid4()
@@ -153,7 +165,8 @@ class UploadProjectDocumentUseCase:
             id=doc_id,
             project_id=project_id,
             uploader_user_id=uploader_user_id,
-            filename=filename,
+            # Minus control characters: a line break would 500 every download
+            filename=strip_control_chars(filename),
             content_type=content_type,
             size_bytes=size_bytes,
             storage_key=storage_key,

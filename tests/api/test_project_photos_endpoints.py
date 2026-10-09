@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -114,6 +115,49 @@ class TestUploadProjectPhoto:
         )
         assert resp.status_code == 201
         assert "2025-06-01" in resp.get_json()["captured_at"]
+
+    @pytest.mark.parametrize(
+        "captured_at",
+        [
+            # UTC time before year 1: stored as a BC timestamp that cannot be read back
+            "0001-01-01T00:00:00+14:00",
+            "1899-12-31",
+            "9999-12-31T23:00:00-05:00",
+            (datetime.now(timezone.utc) + timedelta(days=3)).date().isoformat(),
+        ],
+    )
+    def test_422_captured_at_out_of_range(self, inv_client, admin_token, invitation_app, captured_at):
+        resp = _upload_jpeg(inv_client, admin_token, invitation_app._test_project_id, captured_at=captured_at)
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "INVALID_CAPTURED_AT"
+
+    def test_caption_capped_at_500_characters(self, inv_client, admin_token, invitation_app):
+        """The web and mobile caption fields stop at 500 characters; the API holds the same cap."""
+        pid = invitation_app._test_project_id
+        resp = _upload_jpeg(inv_client, admin_token, pid, caption="x" * 501)
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "INVALID_CAPTION"
+
+        resp = _upload_jpeg(inv_client, admin_token, pid, caption="x" * 500)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["caption"] == "x" * 500
+
+        # Surrounding blanks are trimmed before the cap, as on PATCH; blanks alone mean no caption
+        resp = _upload_jpeg(inv_client, admin_token, pid, caption="  " + "x" * 500 + "  ")
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["caption"] == "x" * 500
+        resp = _upload_jpeg(inv_client, admin_token, pid, caption="   ")
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["caption"] is None
+
+    def test_201_captured_at_offset_stored_as_utc(self, inv_client, admin_token, invitation_app):
+        resp = _upload_jpeg(
+            inv_client, admin_token, invitation_app._test_project_id, captured_at="2025-06-01T01:30:00+05:00"
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert datetime.fromisoformat(resp.get_json()["captured_at"]) == datetime(
+            2025, 5, 31, 20, 30, tzinfo=timezone.utc
+        )
 
     def test_400_empty_file(self, inv_client, admin_token, invitation_app):
         resp = inv_client.post(
@@ -353,6 +397,24 @@ class TestUpdateProjectPhoto:
         assert patch_resp.get_json()["caption"] is None
         assert patch_resp.get_json()["captured_at"].startswith("2025-01-20")
 
+    def test_patch_caption_capped_at_500_characters(self, inv_client, admin_token, invitation_app):
+        pid = invitation_app._test_project_id
+        photo = self._upload(inv_client, admin_token, pid, caption="kept")
+
+        patch_resp = inv_client.patch(
+            _photo_url(pid, photo["id"]), json={"caption": "x" * 501}, headers=_auth(admin_token)
+        )
+        assert patch_resp.status_code == 422, patch_resp.get_data(as_text=True)
+        assert patch_resp.get_json()["error"] == "INVALID_PARAMS"
+        assert "caption" in patch_resp.get_json()["message"]
+
+        # Surrounding blanks are trimmed before the length check
+        patch_resp = inv_client.patch(
+            _photo_url(pid, photo["id"]), json={"caption": " " + "x" * 500 + " "}, headers=_auth(admin_token)
+        )
+        assert patch_resp.status_code == 200, patch_resp.get_data(as_text=True)
+        assert patch_resp.get_json()["caption"] == "x" * 500
+
     def test_200_patch_captured_at_only_leaves_caption_unchanged(self, inv_client, admin_token, invitation_app):
         pid = invitation_app._test_project_id
         jpeg = _make_jpeg_bytes()
@@ -378,6 +440,33 @@ class TestUpdateProjectPhoto:
         patched = patch_resp.get_json()
         assert patched["caption"] == "keep this caption"
         assert "2025-12-25" in patched["captured_at"]
+
+    @pytest.mark.parametrize(
+        "captured_at",
+        [
+            # A positive offset on year 1 normalises to a BC timestamp in UTC
+            "0001-01-01T00:00:00+05:00",
+            "0001-01-01T00:00:00+14:00",
+            "1899-12-31T23:59:59Z",
+            "9999-12-31T23:00:00-05:00",
+            (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
+        ],
+    )
+    def test_422_patch_captured_at_out_of_range(self, inv_client, admin_token, invitation_app, captured_at):
+        pid = invitation_app._test_project_id
+        photo = self._upload(inv_client, admin_token, pid, captured_at="2025-01-20")
+
+        patch_resp = inv_client.patch(
+            _photo_url(pid, photo["id"]), json={"captured_at": captured_at}, headers=_auth(admin_token)
+        )
+        assert patch_resp.status_code == 422, patch_resp.get_data(as_text=True)
+        assert "captured_at" in patch_resp.get_json()["message"]
+
+        # The photo keeps its date and the project's list still loads
+        list_resp = inv_client.get(_photos_url(pid), headers=_auth(admin_token))
+        assert list_resp.status_code == 200
+        listed = next(p for p in list_resp.get_json()["items"] if p["id"] == photo["id"])
+        assert listed["captured_at"].startswith("2025-01-20")
 
     def test_404_patch_nonexistent_photo(self, inv_client, admin_token, invitation_app):
         resp = inv_client.patch(

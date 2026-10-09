@@ -449,22 +449,26 @@ def delete_product(product_id: UUID) -> Any:
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def upload_product_image(product_id: UUID) -> Any:
     """Upload image bytes for a product (multipart). Requires bibliotheque:manage."""
-    if "image" not in request.files:
-        return _err(422, "ValidationError", "Multipart field 'image' is required.")
-
-    file = request.files["image"]
-    content_type = file.content_type or "application/octet-stream"
-    # Read the stream into memory to get the byte length, then pass back as BytesIO.
-    # This is safe because IMAGE_MAX_SIZE_BYTES (10 MB) << MAX_CONTENT_LENGTH (151 MB).
-    raw = file.stream.read()
-    size_bytes = len(raw)
-    import io as _io
-
-    fileobj = _io.BytesIO(raw)
-
     requester_id = UUID(get_jwt_identity())
     c = get_container()
     try:
+        # Access before the upload is parsed or read: a caller who may not touch this
+        # product gets 404/403, never the upload's 422/413/415 validation answers.
+        c.bibliotheque_upload_image_usecase.authorize(requester_id=requester_id, product_id=product_id)
+
+        if "image" not in request.files:
+            return _err(422, "ValidationError", "Multipart field 'image' is required.")
+
+        file = request.files["image"]
+        content_type = file.content_type or "application/octet-stream"
+        # Read the stream into memory to get the byte length, then pass back as BytesIO.
+        # This is safe because IMAGE_MAX_SIZE_BYTES (10 MB) << MAX_CONTENT_LENGTH (151 MB).
+        raw = file.stream.read()
+        size_bytes = len(raw)
+        import io as _io
+
+        fileobj = _io.BytesIO(raw)
+
         key = c.bibliotheque_upload_image_usecase.execute(
             requester_id=requester_id,
             product_id=product_id,

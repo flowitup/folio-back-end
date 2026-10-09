@@ -1,9 +1,9 @@
 """Labor API schemas."""
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal, Optional, List
 
-from app.api.v1.numeric_bounds import MAX_DAILY_AMOUNT
+from app.api.v1.numeric_bounds import MAX_DAILY_AMOUNT, positive_cents
 
 # Shift type constraint shared by request and response schemas.
 ShiftTypeLiteral = Literal["full", "half", "overtime"]
@@ -38,6 +38,12 @@ class CreateWorkerRequest(BaseModel):
     person_id: Optional[str] = Field(None, min_length=36, max_length=36)
     role_id: Optional[str] = Field(None, min_length=36, max_length=36)
     user_id: Optional[str] = Field(None, min_length=36, max_length=36)
+
+    @field_validator("daily_rate")
+    @classmethod
+    def round_to_cents(cls, v: Optional[float]) -> Optional[float]:
+        # The column keeps 2 decimals: 0.004 passed "> 0" and was then stored as 0.00.
+        return positive_cents(v)
 
 
 class UpdateWorkerRequest(BaseModel):
@@ -386,6 +392,13 @@ class MonthlyWorkerSubRowResponse(BaseModel):
     total_cost: float
     # Share of total_cost earned by converting banked hours into paid days.
     bonus_cost: float
+    # Supplement hours banked that month and the bonus days they earned.
+    banked_hours: int = 0
+    bonus_days: float = 0
+    # The worker's rate on the month's last and first days (they differ when the
+    # rate changed during the month).
+    daily_rate: float = 0
+    month_start_rate: float = 0
 
 
 class MonthlySummaryRowResponse(BaseModel):
@@ -402,6 +415,9 @@ class MonthlySummaryRowResponse(BaseModel):
     total_cost: float
     total_bonus_cost: float
     workers: List[MonthlyWorkerSubRowResponse]
+    # Supplement hours banked that month and the bonus days they earned.
+    total_banked_hours: int = 0
+    total_bonus_days: float = 0
 
 
 class LaborMonthlySummaryResponse(BaseModel):

@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -79,10 +79,15 @@ class CompanyPersonModel(Base):
     __table_args__ = (
         UniqueConstraint("company_id", "person_id", name="uq_company_persons_company_person"),
         Index("ix_company_persons_company_id", "company_id"),
-        # NOTE: partial unique index on (company_id, phone_normalized) WHERE
-        # phone_normalized IS NOT NULL is declared only in the Alembic
-        # migration — postgresql_where is not SQLite-compatible, and
-        # declaring it here would break create_all() in SQLite-backed tests.
+        # A phone is unique within a company (migration 2ca24be9e3a8), on SQLite too.
+        Index(
+            "ix_company_persons_company_phone_unique",
+            "company_id",
+            "phone_normalized",
+            unique=True,
+            postgresql_where=text("phone_normalized IS NOT NULL"),
+            sqlite_where=text("phone_normalized IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:

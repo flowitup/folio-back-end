@@ -33,3 +33,12 @@ class ITaskRepository(ABC):
     @abstractmethod
     def max_position(self, project_id: UUID, status: TaskStatus) -> int:
         """Return the highest position in the given lane (0 if empty)."""
+
+    def clear_assignee(self, project_id: UUID, assignee_id: UUID) -> int:
+        """Unassign `assignee_id` from every task of the project (flush only, no commit).
+
+        Called when that user loses access to the project, so no task keeps
+        naming (and pushing to) someone who can no longer open it. Returns the
+        number of tasks changed.
+        """
+        raise NotImplementedError

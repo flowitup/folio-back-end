@@ -49,6 +49,9 @@ class MonthlyWorkerSubRow:
     daily_rate: Decimal = Decimal(
         "0"
     )  # resolved bonus rate — worker's latest rate effective on or before the month's last day
+    # The worker's rate on the month's first day; differs from daily_rate when the
+    # rate changed during the month.
+    month_start_rate: Decimal = Decimal("0")
 
 
 @dataclass

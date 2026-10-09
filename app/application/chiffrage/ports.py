@@ -51,6 +51,10 @@ class ChiffrageRepositoryPort(Protocol):
         """Return the highest poste position in the project, or 0 when empty."""
         ...
 
+    def postes_for_project(self, project_id: UUID) -> list[ChiffragePoste]:
+        """Return the project's postes in display order (position, then creation)."""
+        ...
+
     # -- article -----------------------------------------------------------
 
     def find_article(self, article_id: UUID) -> Optional[ChiffrageArticle]:
@@ -79,6 +83,10 @@ class ChiffrageRepositoryPort(Protocol):
 
     def max_article_position(self, poste_id: UUID) -> int:
         """Return the highest article position within the poste, or 0 when empty."""
+        ...
+
+    def articles_in_poste(self, poste_id: UUID) -> list[ChiffrageArticle]:
+        """Return the poste's articles in display order (position, then creation)."""
         ...
 
     # -- quote -------------------------------------------------------------
@@ -159,8 +167,11 @@ class ChiffrageRepositoryPort(Protocol):
         """Delete a store."""
         ...
 
-    def clear_store_from_quotes(self, store_id: UUID) -> None:
-        """Detach every quote recorded at this store, keeping the prices."""
+    def clear_store_from_quotes(self, store_id: UUID, snapshot_name: str) -> None:
+        """Detach every quote recorded at this store, keeping the prices.
+
+        Quotes with no ``supplier_name`` take ``snapshot_name`` so they stay attributed.
+        """
         ...
 
     def max_store_position(self, project_id: UUID) -> int:
@@ -207,12 +218,24 @@ class ChiffrageRepositoryPort(Protocol):
         """Return the owning project id of an article, walking poste -> project."""
         ...
 
-    def library_products_with_image(self, product_ids: list[UUID]) -> set[UUID]:
-        """Of the given library products, which actually have a stored image.
+    def library_products_with_image(self, product_ids: list[UUID], company_id: Optional[UUID]) -> set[UUID]:
+        """Of the given library products of this company, which actually have a stored image.
 
         Used to decide whether an article with no photo of its own can fall
         back to the image of the product its retained quote points at.
         """
+        ...
+
+    def company_id_for_project(self, project_id: UUID) -> Optional[UUID]:
+        """Return the company that owns the project, or None."""
+        ...
+
+    def company_id_for_supplier(self, supplier_id: UUID) -> Optional[UUID]:
+        """Return the company of a library supplier, or None if it does not exist."""
+        ...
+
+    def company_id_for_library_product(self, product_id: UUID) -> Optional[UUID]:
+        """Return the company of a library product, or None if it does not exist."""
         ...
 
     def project_id_for_quote(self, quote_id: UUID) -> Optional[UUID]:
