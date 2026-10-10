@@ -27,6 +27,10 @@ class ICompanyWorkerRoster(ABC):
         """Add every active worker of the company to ``project_id``. Returns rows added."""
 
     @abstractmethod
+    def set_person_active(self, project_id: UUID, person_id: UUID, active: bool) -> int:
+        """Stop or restart ``person_id`` on every project of ``project_id``'s company. Returns rows changed."""
+
+    @abstractmethod
     def sync_company(self, company_id: UUID) -> int:
         """Give every project of the company every active worker of the company. Returns rows added."""
 
@@ -49,6 +53,20 @@ class EnrollCompanyWorkersUseCase:
 
     def after_project_created(self, project_id: UUID) -> int:
         return self._safely(lambda: self._roster.enroll_company_workers_in_project(project_id), project_id)
+
+    def before_roster_listed(self, project_id: UUID) -> int:
+        """Pick up people added to the company directory (or workers added elsewhere) since the last visit."""
+        return self.after_project_created(project_id)
+
+    def after_worker_stopped(self, project_id: UUID, person_id: UUID | None) -> int:
+        if person_id is None:
+            return 0
+        return self._safely(lambda: self._roster.set_person_active(project_id, person_id, False), project_id)
+
+    def after_worker_restarted(self, project_id: UUID, person_id: UUID | None) -> int:
+        if person_id is None:
+            return 0
+        return self._safely(lambda: self._roster.set_person_active(project_id, person_id, True), project_id)
 
     def sync_company(self, company_id: UUID) -> int:
         return self._roster.sync_company(company_id)

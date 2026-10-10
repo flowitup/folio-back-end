@@ -10,21 +10,47 @@ from sqlalchemy.orm import Session
 
 from app.application.labor.enroll_company_workers import ICompanyWorkerRoster
 
-# The copy source for a person is their most recently created active worker row
+# The copy source for a person is their most recently created active worker row, or, when
+# they have none, their company directory profile with a default daily rate
 # (name, phone, rate, role, linked account). A role from another company and an
 # account already linked to a different worker of the target project are not copied.
+_LOCK = text("SELECT pg_advisory_xact_lock(hashtext(:key))")
+
+_SET_ACTIVE = text(
+    """
+    UPDATE workers
+    SET is_active = :active, updated_at = (now() AT TIME ZONE 'utc')
+    WHERE person_id = :person_id
+      AND is_active <> :active
+      AND project_id IN (SELECT id FROM projects WHERE company_id = :company_id)
+    """
+)
+
 _ENROLL = text(
     """
-    WITH src AS (
-        SELECT DISTINCT ON (w.person_id)
-               w.person_id, w.name, w.phone, w.daily_rate, w.role_id, w.user_id
+    WITH candidates AS (
+        SELECT w.person_id, w.name, w.phone, w.daily_rate, w.role_id, w.user_id,
+               0 AS source_rank, w.created_at AS source_at
         FROM workers w
         JOIN projects sp ON sp.id = w.project_id
         WHERE sp.company_id = :company_id
           AND w.is_active
           AND w.person_id IS NOT NULL
-          AND (CAST(:person_id AS uuid) IS NULL OR w.person_id = CAST(:person_id AS uuid))
-        ORDER BY w.person_id, w.created_at DESC
+        UNION ALL
+        SELECT cp.person_id, pe.name, pe.phone, cp.default_daily_rate, cp.labor_role_id, pe.user_id,
+               1, cp.created_at
+        FROM company_persons cp
+        JOIN persons pe ON pe.id = cp.person_id
+        WHERE cp.company_id = :company_id
+          AND cp.is_active
+          AND cp.pending_expires_at IS NULL
+          AND cp.default_daily_rate > 0
+    ),
+    src AS (
+        SELECT DISTINCT ON (person_id) person_id, name, phone, daily_rate, role_id, user_id
+        FROM candidates
+        WHERE (CAST(:person_id AS uuid) IS NULL OR person_id = CAST(:person_id AS uuid))
+        ORDER BY person_id, source_rank, source_at DESC
     )
     INSERT INTO workers
         (id, project_id, person_id, name, phone, daily_rate, role_id, user_id, is_active, created_at, updated_at)
@@ -56,6 +82,8 @@ class SqlAlchemyCompanyWorkerRoster(ICompanyWorkerRoster):
 
     def _enroll(self, company_id: UUID, project_id: Optional[UUID], person_id: Optional[UUID]) -> int:
         try:
+            # One writer per company at a time: two concurrent copies must not both add the same person.
+            self._session.execute(_LOCK, {"key": f"company-workers:{company_id}"})
             result = self._session.execute(
                 _ENROLL, {"company_id": company_id, "project_id": project_id, "person_id": person_id}
             )
@@ -72,6 +100,21 @@ class SqlAlchemyCompanyWorkerRoster(ICompanyWorkerRoster):
     def enroll_company_workers_in_project(self, project_id: UUID) -> int:
         company_id = self._company_of(project_id)
         return 0 if company_id is None else self._enroll(company_id, project_id, None)
+
+    def set_person_active(self, project_id: UUID, person_id: UUID, active: bool) -> int:
+        company_id = self._company_of(project_id)
+        if company_id is None:
+            return 0
+        try:
+            self._session.execute(_LOCK, {"key": f"company-workers:{company_id}"})
+            result = self._session.execute(
+                _SET_ACTIVE, {"active": active, "person_id": person_id, "company_id": company_id}
+            )
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        return result.rowcount or 0
 
     def sync_company(self, company_id: UUID) -> int:
         return self._enroll(company_id, None, None)
