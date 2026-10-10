@@ -33,7 +33,7 @@ def register_push_device():
     repo = get_container().push_device_repository
     if repo is None:
         raise RuntimeError("push_device_repository not wired in container")
-    repo.upsert(UUID(str(get_jwt_identity())), data.token, data.platform)
+    repo.upsert(UUID(str(get_jwt_identity())), data.token, data.platform, data.locale)
     return "", 204
 
 

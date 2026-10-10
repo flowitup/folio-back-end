@@ -17,18 +17,25 @@ class SQLAlchemyPushDeviceRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def upsert(self, user_id: UUID, token: str, platform: str) -> None:
+    def upsert(self, user_id: UUID, token: str, platform: str, locale: str | None = None) -> None:
         """A token belongs to one account: re-registering it moves it to the current user."""
         now = datetime.now(timezone.utc)
         row = self._session.query(PushDeviceOrm).filter_by(token=token).first()
         if row is None:
             row = PushDeviceOrm(
-                id=uuid4(), user_id=user_id, token=token, platform=platform, created_at=now, last_seen_at=now
+                id=uuid4(),
+                user_id=user_id,
+                token=token,
+                platform=platform,
+                locale=locale,
+                created_at=now,
+                last_seen_at=now,
             )
             self._session.add(row)
         else:
             row.user_id = user_id
             row.platform = platform
+            row.locale = locale
             row.last_seen_at = now
         self._session.commit()
 
@@ -54,6 +61,17 @@ class SQLAlchemyPushDeviceRepository:
         for user_id, token in rows:
             out.setdefault(user_id, []).append(token)
         return out
+
+    def locales_for_tokens(self, tokens: List[str]) -> Dict[str, str]:
+        """Language each device registered with; devices without one are left out."""
+        if not tokens:
+            return {}
+        rows = (
+            self._session.query(PushDeviceOrm.token, PushDeviceOrm.locale)
+            .filter(PushDeviceOrm.token.in_(tokens), PushDeviceOrm.locale.isnot(None))
+            .all()
+        )
+        return {token: locale for token, locale in rows}
 
     def validator_user_ids(self, project_id: UUID) -> List[UUID]:
         """Users who may validate attendance on the project (same rule as the bell).

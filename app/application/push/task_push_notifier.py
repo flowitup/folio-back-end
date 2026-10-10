@@ -87,19 +87,17 @@ class TaskPushNotifier:
             except InvalidAssigneeError:
                 return
             project = self._projects.find_by_id(task.project_id)
-            locale = self._dispatcher.locale
-            title, body = _TEXT[event][locale]
-            status = getattr(getattr(task, "status", None), "value", "") or ""
-            status = _STATUS_LABELS.get(locale, {}).get(status, status)
+            status_value = getattr(getattr(task, "status", None), "value", "") or ""
+
+            def render(locale: str) -> tuple[str, str]:
+                title, body = _TEXT[event][locale]
+                status = _STATUS_LABELS.get(locale, {}).get(status_value, status_value)
+                return title, body.format(title=task.title, project=project_label(project), status=status)
+
             self._dispatcher.dispatch(
                 category=NotificationCategory.TASKS.value,
                 recipients=[assignee],
-                title=title,
-                body=body.format(
-                    title=task.title,
-                    project=project_label(project),
-                    status=status,
-                ),
+                render=render,
                 data={
                     "kind": f"task_{event}",
                     "project_id": str(task.project_id),

@@ -87,12 +87,16 @@ class BillingPushNotifier:
             if status not in _REFUND_TEXT:
                 return
             project = self._projects.find_by_id(project_id)
-            title, body = _REFUND_TEXT[status][self._dispatcher.locale]
+            label = project_label(project)
+
+            def render(locale: str) -> tuple[str, str]:
+                title, body = _REFUND_TEXT[status][locale]
+                return title, body.format(project=label)
+
             self._dispatcher.dispatch(
                 category=NotificationCategory.BILLING.value,
                 recipients=[payer_id],
-                title=title,
-                body=body.format(project=project_label(project)),
+                render=render,
                 data={
                     "kind": "refund_completed" if status == "refunded" else "refund_requested",
                     "project_id": str(project_id),
@@ -122,12 +126,15 @@ class BillingPushNotifier:
                 recipients += [
                     a.user_id for a in self._access.list_for_company(company_id) if getattr(a, "role", "") == "admin"
                 ]
-            title, body = _STATUS_TEXT[status][self._dispatcher.locale]
+
+            def render(locale: str) -> tuple[str, str]:
+                title, body = _STATUS_TEXT[status][locale]
+                return title, body.format(number=number or "")
+
             self._dispatcher.dispatch(
                 category=NotificationCategory.BILLING.value,
                 recipients=set(recipients),
-                title=title,
-                body=body.format(number=number or ""),
+                render=render,
                 data={"kind": "billing_status", "document_id": str(document_id), "status": status},
                 exclude=actor_id,
             )

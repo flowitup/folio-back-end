@@ -186,3 +186,10 @@ def test_long_preview_is_truncated():
     notifier, sender = _build([Member(alice, "Alice"), Member(bob, "Bob")], unread={bob: 1})
     notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="x" * 500, sent_at=NOW)
     assert len(sender.sent[0].body) == 120
+
+
+def test_admin_channel_push_says_it_is_the_admin_channel():
+    alice, bob = uuid4(), uuid4()
+    notifier, sender = _build([Member(alice, "Alice"), Member(bob, "Bob")])
+    notifier.message_sent(channel=ChannelRef(kind="admin", id=uuid4()), sender_id=alice, preview="x", sent_at=NOW)
+    assert "Admin" in sender.sent[0].title and "Chantier Arcueil" in sender.sent[0].title

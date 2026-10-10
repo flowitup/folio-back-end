@@ -130,3 +130,25 @@ def test_invalid_token_is_forgotten():
 def test_unsupported_locale_falls_back_to_vi():
     assert PushDispatcher(StubDevices(), RecordingSender(), locale="de").locale == "vi"
     assert PushDispatcher(StubDevices(), RecordingSender(), locale="fr").locale == "fr"
+
+
+class LocaleDevices(StubDevices):
+    def __init__(self, tokens, locales) -> None:
+        super().__init__(tokens)
+        self._locales = locales
+
+    def locales_for_tokens(self, tokens):
+        return {t: self._locales[t] for t in tokens if t in self._locales}
+
+
+def test_render_writes_each_device_in_its_own_language():
+    alice, bob = uuid4(), uuid4()
+    devices = LocaleDevices({alice: ["tok-fr"], bob: ["tok-old"]}, {"tok-fr": "fr"})
+    sender = RecordingSender()
+    texts = {"fr": ("Bonjour", "corps"), "en": ("Hello", "body")}
+    _dispatcher(devices, sender).dispatch(
+        category=CATEGORY, recipients=[alice, bob], data={}, render=lambda loc: texts[loc]
+    )
+    by_token = {m.token: m.title for m in sender.sent}
+    # A device that never registered a language gets the dispatcher's default ("en" here).
+    assert by_token == {"tok-fr": "Bonjour", "tok-old": "Hello"}

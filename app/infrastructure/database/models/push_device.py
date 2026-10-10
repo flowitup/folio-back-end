@@ -22,5 +22,7 @@ class PushDeviceOrm(Base):
     )
     token: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    # App language at registration; NULL (older builds) falls back to the server default.
+    locale: Mapped[str | None] = mapped_column(String(5), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

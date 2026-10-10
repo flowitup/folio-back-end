@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict, Iterable, List, Optional, Protocol
+from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple
 from uuid import UUID
 
 from app.application.ports.push_sender import PushMessage, PushSenderPort
@@ -26,6 +26,9 @@ SUPPORTED_LOCALES = ("vi", "fr", "en")
 class PushDeviceReaderPort(Protocol):
     def tokens_for_users(self, user_ids: List[UUID]) -> Dict[UUID, List[str]]: ...
     def delete_token(self, token: str) -> None: ...
+
+    # Optional: `locales_for_tokens(tokens) -> {token: locale}` — devices that registered
+    # their app language. Probed with getattr, so a reader without it keeps the default.
 
 
 class NotificationPreferenceReaderPort(Protocol):
@@ -76,16 +79,21 @@ class PushDispatcher:
         *,
         category: str,
         recipients: Iterable[UUID],
-        title: str,
-        body: str,
+        title: str = "",
+        body: str = "",
         data: Dict[str, str],
         exclude: Optional[UUID] = None,
+        render: Optional[Callable[[str], Tuple[str, str]]] = None,
     ) -> None:
         """Deliver to every recipient who still wants ``category``.
 
         ``exclude`` drops the actor: nobody is notified about their own action. Recipient
         and token resolution stay synchronous (cheap indexed reads, and they must see the
         caller's committed transaction); only the provider call moves off-thread.
+
+        ``render(locale) -> (title, body)`` writes the message in each device's own app
+        language (the one it registered with, else the server default); without it every
+        device gets ``title`` / ``body`` as given.
         """
         targets = {u for u in recipients if u is not None and u != exclude}
         if not targets:
@@ -100,17 +108,36 @@ class PushDispatcher:
                 return
 
         tokens = self._devices.tokens_for_users(list(targets))
-        messages = [
-            PushMessage(token=token, title=title, body=body, data=data)
-            for user_tokens in tokens.values()
-            for token in user_tokens
-        ]
+        all_tokens = [token for user_tokens in tokens.values() for token in user_tokens]
+        locales = self._device_locales(all_tokens) if render is not None else {}
+        texts: Dict[str, Tuple[str, str]] = {}
+        messages = []
+        for token in all_tokens:
+            if render is None:
+                text = (title, body)
+            else:
+                locale = locales.get(token, self._locale)
+                if locale not in texts:
+                    texts[locale] = render(locale)
+                text = texts[locale]
+            messages.append(PushMessage(token=token, title=text[0], body=text[1], data=data))
         if not messages:
             return
         if self._run_async:
             threading.Thread(target=self._send, args=(messages,), daemon=True).start()
         else:
             self._send(messages)
+
+    def _device_locales(self, tokens: List[str]) -> Dict[str, str]:
+        reader = getattr(self._devices, "locales_for_tokens", None)
+        if reader is None or not tokens:
+            return {}
+        try:
+            return {t: loc for t, loc in reader(tokens).items() if loc in SUPPORTED_LOCALES}
+        except Exception:
+            # Falling back to the default language beats losing the notification.
+            logger.exception("push.locales failed")
+            return {}
 
     def _send(self, messages: List[PushMessage]) -> None:
         try:

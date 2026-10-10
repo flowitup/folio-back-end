@@ -10,6 +10,7 @@ class RegisterPushDeviceRequest(BaseModel):
 
     token: str = Field(..., min_length=10, max_length=255)
     platform: Literal["ios", "android"]
+    locale: Literal["vi", "fr", "en"] | None = None
 
 
 class UnregisterPushDeviceRequest(BaseModel):
