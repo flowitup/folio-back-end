@@ -311,3 +311,15 @@ def test_global_switch_mutes_every_category(client, linked_h, push_app):
         with push_app.app_context():
             repo = get_container().notification_preference_repository
             assert repo.muted_user_ids([linked_id], "chat") == set()
+
+
+def test_register_stores_the_app_language(client, owner_h, push_app):
+    from app import db
+    from app.infrastructure.database.models.push_device import PushDeviceOrm
+
+    body = {"token": OWNER_TOKEN, "platform": "ios", "locale": "fr"}
+    assert client.post("/api/v1/push/devices", json=body, headers=owner_h).status_code == 204
+    bad = {**body, "locale": "xx"}
+    assert client.post("/api/v1/push/devices", json=bad, headers=owner_h).status_code == 400
+    with push_app.app_context():
+        assert db.session.query(PushDeviceOrm).filter_by(token=OWNER_TOKEN).one().locale == "fr"

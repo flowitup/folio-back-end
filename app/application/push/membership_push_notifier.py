@@ -100,15 +100,17 @@ class MembershipPushNotifier:
                 name = project_label(entity)
             else:
                 name = getattr(entity, "name", None) or getattr(entity, "legal_name", "") or ""
-            locale = self._dispatcher.locale
-            title, body = _TEXT[event][locale]
-            role_label = _ROLE_LABELS.get(locale, {}).get(role or "", role or "")
             key = "project_id" if is_project else "company_id"
+
+            def render(locale: str) -> tuple[str, str]:
+                title, body = _TEXT[event][locale]
+                role_label = _ROLE_LABELS.get(locale, {}).get(role or "", role or "")
+                return title, body.format(name=name, role=role_label)
+
             self._dispatcher.dispatch(
                 category=NotificationCategory.MEMBERSHIP.value,
                 recipients=[user_id],
-                title=title,
-                body=body.format(name=name, role=role_label),
+                render=render,
                 data={"kind": event, key: str(entity_id)},
                 exclude=actor_id,
             )

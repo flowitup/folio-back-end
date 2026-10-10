@@ -141,12 +141,14 @@ class AttendancePushNotifier:
             return
         project = self._projects.find_by_id(project_id)
         project_name = project_label(project)
-        title, body = _TEXT[event][self._locale]
-        text = body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name)
+
+        def render(locale: str) -> tuple[str, str]:
+            title, body = _TEXT[event][locale]
+            return title, body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name)
+
         self._dispatcher.dispatch(
             category=NotificationCategory.ATTENDANCE.value,
             recipients=recipients,
-            title=title,
-            body=text,
+            render=render,
             data={"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)},
         )

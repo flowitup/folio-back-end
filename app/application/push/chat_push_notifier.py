@@ -36,6 +36,7 @@ _MORE = {
     "fr": "{preview} (+{count} messages non lus)",
     "en": "{preview} (+{count} unread)",
 }
+_ADMIN_LABEL = {"vi": "Quản trị", "fr": "Administration", "en": "Admin"}
 _IMAGE_ONLY = {"vi": "Đã gửi một ảnh", "fr": "A envoyé une image", "en": "Sent an image"}
 
 
@@ -89,26 +90,28 @@ class ChatPushNotifier:
             if not due:
                 return
 
-            locale = self._dispatcher.locale
             sender_name = self._directory.display_names([sender_id]).get(sender_id, "?")
             channel_name = self._names.channel_name(channel)
-            text = (preview or "").strip().replace("\n", " ")[:_MAX_PREVIEW] or _IMAGE_ONLY[locale]
-            title = _TEXT[locale][0].format(sender=sender_name, channel=channel_name)
+            preview_text = (preview or "").strip().replace("\n", " ")[:_MAX_PREVIEW]
 
             # A per-user unread count means a per-user body, so dispatch one group at a time.
             last_reads = self._reads.last_reads_for_channel(channel)
             for user_id in due:
                 unread = self._messages.count_since(channel, last_reads.get(user_id), user_id)
-                body = (
-                    _MORE[locale].format(preview=text, count=unread - 1)
-                    if unread > 1
-                    else _TEXT[locale][1].format(preview=text)
-                )
+
+                def render(locale: str, unread: int = unread) -> tuple[str, str]:
+                    text = preview_text or _IMAGE_ONLY[locale]
+                    # The admin channel shares its company's name; say which one this is.
+                    name = f"{_ADMIN_LABEL[locale]} · {channel_name}" if channel.kind == "admin" else channel_name
+                    title = _TEXT[locale][0].format(sender=sender_name, channel=name)
+                    if unread > 1:
+                        return title, _MORE[locale].format(preview=text, count=unread - 1)
+                    return title, _TEXT[locale][1].format(preview=text)
+
                 self._dispatcher.dispatch(
                     category=NotificationCategory.CHAT.value,
                     recipients=[user_id],
-                    title=title,
-                    body=body,
+                    render=render,
                     data={"kind": "chat_message", "channel_key": channel.key},
                 )
             self._markers.mark_notified(due, channel.key, sent_at)
