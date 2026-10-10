@@ -89,3 +89,11 @@ class FeaturesResponse(BaseModel):
     """Feature flags of this deployment, as seen by the apps."""
 
     chat: bool
+
+
+class ReportMessageBody(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class BlockedUsersResponse(BaseModel):
+    items: list[MemberResponse]

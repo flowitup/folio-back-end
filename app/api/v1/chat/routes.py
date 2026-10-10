@@ -25,12 +25,16 @@ from app.api.v1.chat.schemas import (
     FeaturesResponse,
     ListMessagesQuery,
     MessagePageResponse,
+    BlockedUsersResponse,
     MessageResponse,
+    ReportMessageBody,
     SendMessageBody,
 )
 from app.application.chat.dtos import ChannelDto, MessageDto
 from app.application.chat.exceptions import (
     AttachmentTooLargeError,
+    BlockTargetNotFoundError,
+    CannotBlockSelfError,
     ChatChannelNotFoundError,
     ChatMessageNotFoundError,
     EmptyMessageError,
@@ -343,3 +347,90 @@ def get_attachment(message_id: UUID) -> Any:
     response.headers["Content-Length"] = str(dto.content_length)
     response.headers["Cache-Control"] = "private, max-age=3600"
     return response
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/chat/messages/<id>/report
+# ---------------------------------------------------------------------------
+
+
+@chat_bp.post("/chat/messages/<uuid:message_id>/report")
+@openapi_doc(summary="Report a message (channel members only)", request=ReportMessageBody, tags=["chat"])
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def report_message(message_id: UUID) -> Any:
+    try:
+        parsed = ReportMessageBody.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        fields = safe_validation_fields(exc)
+        return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.report_chat_message_usecase is None:
+        raise RuntimeError("report_chat_message_usecase not wired in container")
+    try:
+        container.report_chat_message_usecase.execute(actor_id=actor_id, message_id=message_id, reason=parsed.reason)
+    except (ChatMessageNotFoundError, ChatChannelNotFoundError):
+        return _err(404, "NotFound", "Message not found")
+    except NotChannelMemberError:
+        return _err(403, "Forbidden", "Not a member of this channel")
+    except Exception:
+        logger.exception("report_message unexpected error message=%s", message_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/chat/blocks, PUT|DELETE /api/v1/chat/blocks/<user_id>
+# ---------------------------------------------------------------------------
+
+
+@chat_bp.get("/chat/blocks")
+@openapi_doc(summary="People the caller has blocked in chat", responses={200: BlockedUsersResponse}, tags=["chat"])
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("120 per minute", key_func=jwt_user_key)
+def list_blocks() -> Any:
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.list_blocked_chat_users_usecase is None:
+        raise RuntimeError("list_blocked_chat_users_usecase not wired in container")
+    members = container.list_blocked_chat_users_usecase.execute(actor_id=actor_id)
+    return jsonify({"items": [{"id": str(m.id), "name": m.name, "last_read_at": None} for m in members]})
+
+
+@chat_bp.put("/chat/blocks/<uuid:user_id>")
+@openapi_doc(summary="Block a person in chat (hides their messages and pushes)", tags=["chat"])
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def block_user(user_id: UUID) -> Any:
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.block_chat_user_usecase is None:
+        raise RuntimeError("block_chat_user_usecase not wired in container")
+    try:
+        container.block_chat_user_usecase.execute(actor_id=actor_id, target_id=user_id)
+    except CannotBlockSelfError:
+        return _err(400, "BadRequest", "You cannot block yourself")
+    except BlockTargetNotFoundError:
+        return _err(404, "NotFound", "User not found")
+    except Exception:
+        logger.exception("block_user unexpected error target=%s", user_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return "", 204
+
+
+@chat_bp.delete("/chat/blocks/<uuid:user_id>")
+@openapi_doc(summary="Unblock a person in chat", tags=["chat"])
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def unblock_user(user_id: UUID) -> Any:
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.unblock_chat_user_usecase is None:
+        raise RuntimeError("unblock_chat_user_usecase not wired in container")
+    container.unblock_chat_user_usecase.execute(actor_id=actor_id, target_id=user_id)
+    return "", 204

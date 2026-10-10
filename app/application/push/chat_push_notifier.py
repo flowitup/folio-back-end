@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 from uuid import UUID
 
 from app.application.push.dispatcher import PushDispatcher
@@ -71,6 +71,7 @@ class ChatPushNotifier:
         messages: ChatUnreadReader,
         names: ChannelNameReader,
         window_seconds: int = QUIET_WINDOW_SECONDS,
+        blocks: Any = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._directory = directory
@@ -79,11 +80,16 @@ class ChatPushNotifier:
         self._messages = messages
         self._names = names
         self._window = window_seconds
+        # Optional ``blocker_ids_of(user_id)``: people who blocked the sender are not pushed.
+        self._blocks = blocks
 
     def message_sent(self, *, channel: ChannelRef, sender_id: UUID, preview: str | None, sent_at: datetime) -> None:
         """Notify the channel's other members, at most once per window each."""
         try:
-            members = [m.id for m in self._directory.list_members(channel) if m.id != sender_id]
+            blockers = self._blocks.blocker_ids_of(sender_id) if self._blocks is not None else set()
+            members = [
+                m.id for m in self._directory.list_members(channel) if m.id != sender_id and m.id not in blockers
+            ]
             if not members:
                 return
             due = self._markers.due_recipients(members, channel.key, self._window, sent_at)

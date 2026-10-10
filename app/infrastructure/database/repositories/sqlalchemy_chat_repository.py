@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 from app.application.chat.ports import ChannelInfo, MemberInfo
 from app.domain.companies.roles import CompanyRole
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
-from app.infrastructure.database.models.chat_message import ChatChannelReadOrm, ChatMessageOrm
+from app.infrastructure.database.models.chat_message import (
+    ChatChannelReadOrm,
+    ChatMessageOrm,
+    ChatMessageReportOrm,
+    ChatUserBlockOrm,
+)
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.models.user import UserModel
@@ -56,7 +61,13 @@ class SqlAlchemyChatRepository:
         rows = self._session.execute(stmt.order_by(ChatMessageOrm.created_at.desc()).limit(limit)).scalars().all()
         return [row.to_entity() for row in reversed(rows)]
 
-    def count_since(self, channel: ChannelRef, since: Optional[datetime], exclude_sender: UUID) -> int:
+    def count_since(
+        self,
+        channel: ChannelRef,
+        since: Optional[datetime],
+        exclude_sender: UUID,
+        exclude_senders: Optional[set[UUID]] = None,
+    ) -> int:
         # Legacy rows with a NULL sender_id (from a retired feature) must still count as
         # "someone else": in SQL `NULL != x` is NULL (not true), hence the explicit or_().
         stmt = (
@@ -68,9 +79,49 @@ class SqlAlchemyChatRepository:
                 or_(ChatMessageOrm.sender_id.is_(None), ChatMessageOrm.sender_id != exclude_sender),
             )
         )
+        if exclude_senders:
+            stmt = stmt.where(or_(ChatMessageOrm.sender_id.is_(None), ChatMessageOrm.sender_id.notin_(exclude_senders)))
         if since is not None:
             stmt = stmt.where(ChatMessageOrm.created_at > since)
         return int(self._session.execute(stmt).scalar_one())
+
+    # ------------------------------------------------------------------
+    # Reports and blocks
+    # ------------------------------------------------------------------
+
+    def add_report(self, message_id: UUID, reporter_id: UUID, reason: Optional[str]) -> None:
+        """Idempotent: a second report of the same message by the same person is a no-op."""
+        already = self._session.execute(
+            select(ChatMessageReportOrm.id).where(
+                ChatMessageReportOrm.message_id == message_id, ChatMessageReportOrm.reporter_id == reporter_id
+            )
+        ).first()
+        if already is None:
+            self._session.add(ChatMessageReportOrm(message_id=message_id, reporter_id=reporter_id, reason=reason))
+            self._session.flush()
+
+    def block(self, blocker_id: UUID, blocked_id: UUID) -> None:
+        if self._session.get(ChatUserBlockOrm, (blocker_id, blocked_id)) is None:
+            self._session.add(ChatUserBlockOrm(blocker_id=blocker_id, blocked_id=blocked_id))
+            self._session.flush()
+
+    def unblock(self, blocker_id: UUID, blocked_id: UUID) -> None:
+        row = self._session.get(ChatUserBlockOrm, (blocker_id, blocked_id))
+        if row is not None:
+            self._session.delete(row)
+            self._session.flush()
+
+    def blocked_ids(self, blocker_id: UUID) -> set[UUID]:
+        rows = self._session.execute(
+            select(ChatUserBlockOrm.blocked_id).where(ChatUserBlockOrm.blocker_id == blocker_id)
+        ).scalars()
+        return set(rows)
+
+    def blocker_ids_of(self, blocked_id: UUID) -> set[UUID]:
+        rows = self._session.execute(
+            select(ChatUserBlockOrm.blocker_id).where(ChatUserBlockOrm.blocked_id == blocked_id)
+        ).scalars()
+        return set(rows)
 
     def last_message_at(self, channel: ChannelRef) -> Optional[datetime]:
         value = self._session.execute(
@@ -294,6 +345,10 @@ class SqlAlchemyChatRepository:
         if user_id in self._project_member_ids(channel.id):
             return True
         return self._is_superadmin(user_id)
+
+    def shares_channel(self, user_id: UUID, other_id: UUID) -> bool:
+        """True when both users can read at least one common channel."""
+        return any(self.is_member(other_id, info.channel) for info in self.list_channels_for_user(user_id))
 
     def list_members(self, channel: ChannelRef) -> list[MemberInfo]:
         if channel.kind == "admin":
