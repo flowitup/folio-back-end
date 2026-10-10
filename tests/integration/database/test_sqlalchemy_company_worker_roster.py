@@ -44,8 +44,12 @@ def session(engine):
 def _company(session, owner):
     now = datetime.now(timezone.utc)
     c = CompanyModel(
-        id=uuid4(), legal_name=f"Co {uuid4().hex[:6]}", address="1 rue X", created_by=owner.id,
-        created_at=now, updated_at=now,
+        id=uuid4(),
+        legal_name=f"Co {uuid4().hex[:6]}",
+        address="1 rue X",
+        created_by=owner.id,
+        created_at=now,
+        updated_at=now,
     )
     session.add(c)
     session.flush()
@@ -62,8 +66,12 @@ def _project(session, owner, company):
 def _person(session, owner, name):
     now = datetime.now(timezone.utc)
     p = PersonModel(
-        id=uuid4(), name=name, normalized_name=name.lower(), created_by_user_id=owner.id,
-        created_at=now, updated_at=now,
+        id=uuid4(),
+        name=name,
+        normalized_name=name.lower(),
+        created_by_user_id=owner.id,
+        created_at=now,
+        updated_at=now,
     )
     session.add(p)
     session.flush()
@@ -72,8 +80,13 @@ def _person(session, owner, name):
 
 def _worker(session, project, person, rate="100", role=None, active=True):
     w = WorkerModel(
-        id=uuid4(), project_id=project.id, person_id=person.id, name=person.name,
-        daily_rate=Decimal(rate), role_id=role.id if role else None, is_active=active,
+        id=uuid4(),
+        project_id=project.id,
+        person_id=person.id,
+        name=person.name,
+        daily_rate=Decimal(rate),
+        role_id=role.id if role else None,
+        is_active=active,
     )
     session.add(w)
     session.flush()

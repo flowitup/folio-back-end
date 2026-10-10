@@ -52,9 +52,7 @@ class SqlAlchemyCompanyWorkerRoster(ICompanyWorkerRoster):
         self._session = session
 
     def _company_of(self, project_id: UUID) -> Optional[UUID]:
-        return self._session.execute(
-            text("SELECT company_id FROM projects WHERE id = :p"), {"p": project_id}
-        ).scalar()
+        return self._session.execute(text("SELECT company_id FROM projects WHERE id = :p"), {"p": project_id}).scalar()
 
     def _enroll(self, company_id: UUID, project_id: Optional[UUID], person_id: Optional[UUID]) -> int:
         try:
