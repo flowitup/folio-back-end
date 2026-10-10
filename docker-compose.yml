@@ -28,26 +28,6 @@ services:
       retries: 3
       start_period: 10s
 
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python -m stack.queue.rq_worker
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-construction}:${POSTGRES_PASSWORD:-construction}@db:5432/${POSTGRES_DB:-construction}
-      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
-      - REDIS_URL=redis://redis:6379/0
-      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-smtp}
-      - SMTP_HOST=${SMTP_HOST:-localhost}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASS=${SMTP_PASS:-}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
   db:
     image: postgres:16-alpine
     environment:

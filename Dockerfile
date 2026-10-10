@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 COPY app/ app/
 COPY config/ config/
-COPY stack/ stack/
 COPY outbox/ outbox/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
@@ -28,8 +27,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # ffmpeg: extract poster frames from uploaded project videos
-# poppler-utils: pdf2image (Folio Assistant S1 extraction of a fetched/uploaded PDF page)
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

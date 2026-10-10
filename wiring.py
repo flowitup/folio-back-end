@@ -436,40 +436,6 @@ class Container:
     mark_chat_channel_read_usecase: Optional[Any] = None
     get_chat_attachment_usecase: Optional[Any] = None
 
-    # Assistant (Folio Assistant conversation, FEATURE_ASSISTANT)
-    assistant_dispatcher: Optional[Any] = None  # AssistantDispatcherPort (RqAssistantDispatcher in prod)
-    assistant_messenger: Optional[Any] = None  # AssistantMessenger
-    assistant_service: Optional[Any] = None  # AssistantService (called by the RQ jobs)
-    submit_assistant_action_usecase: Optional[Any] = None
-
-    # Assistant AI providers (phase 02) — NullX adapters when the matching key is empty.
-    assistant_vision_llm: Optional[Any] = None  # VisionLlmPort (DeepSeekVisionLlm | NullVisionLlm)
-    assistant_decision_port: Optional[Any] = None  # DecisionPort (JevDecisionPort | NullDecisionPort)
-    assistant_image_gen: Optional[Any] = None  # ImageGenPort (GeminiImageGen | NullImageGenPort)
-    assistant_cost_ledger: Optional[Any] = None  # CostLedgerPort (RedisCostLedger)
-    assistant_rate_limiter: Optional[Any] = None  # RateLimiterPort (RedisRateLimiter)
-    assistant_router: Optional[Any] = None  # Router (S0)
-    assistant_equipment_service: Optional[Any] = None  # EquipmentService
-    assistant_project_company_reader: Optional[Any] = None  # ProjectCompanyReaderPort (ProjectCompanyReader)
-
-    # Feature C / feature A (phase 03) — ticket-to-invoice and material-to-library.
-    assistant_import_repo: Optional[Any] = None  # SqlAlchemyAssistantImportRepository
-    assistant_ticket_feature: Optional[Any] = None  # TicketFeature
-    assistant_material_feature: Optional[Any] = None  # MaterialFeature
-    assistant_feature_handlers: Optional[Any] = None  # FeatureHandlers
-
-    # Feature B (phase 04) — invoice fetch via the browser worker container.
-    assistant_job_repo: Optional[Any] = None  # AssistantJobRepositoryPort (SqlAlchemyAssistantJobRepository)
-    assistant_invoice_fetch_feature: Optional[Any] = None  # InvoiceFetchFeature
-
-    # Phase 03 — confidential-class scope/redaction + supervision audit log.
-    assistant_audit_repo: Optional[Any] = None  # AssistantAuditPort (SqlAlchemyAssistantAuditRepository)
-
-    # Phase 04 — labor/tasks handlers on channels + admin-only finance/payroll answers.
-    assistant_labor_feature: Optional[Any] = None  # LaborFeature
-    assistant_tasks_feature: Optional[Any] = None  # TasksFeature
-    assistant_admin_answers: Optional[Any] = None  # AdminAnswersFeature
-
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
 

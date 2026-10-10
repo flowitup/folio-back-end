@@ -46,7 +46,7 @@ class TestFeatures:
     def test_features_reports_chat_flag(self, inv_client, member_token):
         resp = inv_client.get("/api/v1/features", headers=_auth(member_token))
         assert resp.status_code == 200
-        assert resp.get_json() == {"chat": True, "assistant": True}
+        assert resp.get_json() == {"chat": True}
 
     def test_features_requires_auth(self, inv_client):
         assert inv_client.get("/api/v1/features").status_code == 401
@@ -57,20 +57,9 @@ class TestFeatures:
             resp = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token))
             assert resp.status_code == 404
             assert resp.get_json()["error"] == "FeatureDisabled"
-            assert inv_client.get("/api/v1/features", headers=_auth(member_token)).get_json() == {
-                "chat": False,
-                "assistant": True,
-            }
+            assert inv_client.get("/api/v1/features", headers=_auth(member_token)).get_json() == {"chat": False}
         finally:
             invitation_app.config["FEATURE_CHAT"] = True
-
-    def test_features_reports_assistant_off_without_both_keys(self, inv_client, member_token, invitation_app):
-        invitation_app.config["TYPESAFE_API_KEY"] = ""
-        try:
-            resp = inv_client.get("/api/v1/features", headers=_auth(member_token))
-            assert resp.get_json() == {"chat": True, "assistant": False}
-        finally:
-            invitation_app.config["TYPESAFE_API_KEY"] = "test-typesafe-key"
 
 
 class TestChannels:
@@ -345,9 +334,8 @@ class TestAttachments:
 
 class TestRetiredAssistantChannel:
     """The old per-user `assistant:<user_id>` channel is retired: parsing that key
-    raises inside the domain entity, so every chat route (and `/assistant/actions`,
-    covered in test_assistant_endpoints.py) answers 404 exactly like any other unknown
-    channel — old rows are left in the database, simply unreachable."""
+    raises inside the domain entity, so every chat route answers 404 exactly like any
+    other unknown channel — old rows are left in the database, simply unreachable."""
 
     def _assistant_key(self, user_id: str) -> str:
         return f"assistant:{user_id}"
@@ -437,180 +425,72 @@ class TestAdminChannel:
         assert f"company:{invitation_app._test_company_id}" not in [c["key"] for c in items]
 
 
-class TestFolioReplies:
-    """`AssistantMessenger` posting into a shared channel — sender name, unread counts,
-    and the `card` wire contract, all through the same `GET .../messages` the apps poll."""
+class TestLegacyAssistantMessages:
+    """Rows written by the retired assistant feature stay in the database: listing a
+    channel and counting unread must keep working on them."""
 
-    def _channel(self, invitation_app) -> str:
-        return f"company:{invitation_app._test_company_id}"
+    def _add_legacy_rows(self, invitation_app) -> None:
+        from app import db
+        from app.infrastructure.database.models.chat_message import ChatMessageOrm
 
-    def test_reply_lands_in_the_target_channel_with_folio_as_sender(self, inv_client, member_token, invitation_app):
-        from app.domain.entities.chat_message import ChannelRef
-        from wiring import get_container
-
-        key = self._channel(invitation_app)
         with invitation_app.app_context():
-            get_container().assistant_messenger.post_text(
-                uuid.UUID(invitation_app._test_member_user_id),
-                "Salut !",
-                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
-                scope=None,
+            company_id = uuid.UUID(invitation_app._test_company_id)
+            db.session.add(
+                ChatMessageOrm(
+                    channel_kind="company",
+                    channel_id=company_id,
+                    sender_id=None,
+                    sender_type="assistant",
+                    content_type="text",
+                    body="Salut !",
+                )
             )
-        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
-        reply = page["items"][-1]
-        assert reply["sender_id"] is None
-        assert reply["sender_name"] == "Folio"
-        assert reply["sender_type"] == "assistant"
-        assert reply["mine"] is False
-
-    def test_reply_visible_to_every_channel_member(self, inv_client, member_token, admin_token, invitation_app):
-        """The assistant answered a mention in a shared channel — every member (not
-        just the asker) sees the reply, same as a human message (D19)."""
-        from app.domain.entities.chat_message import ChannelRef
-        from wiring import get_container
-
-        key = self._channel(invitation_app)
-        with invitation_app.app_context():
-            get_container().assistant_messenger.post_text(
-                uuid.UUID(invitation_app._test_member_user_id),
-                "Voici la réponse pour toute l'équipe.",
-                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
-                scope=None,
+            db.session.add(
+                ChatMessageOrm(
+                    channel_kind="company",
+                    channel_id=company_id,
+                    sender_id=None,
+                    sender_type="assistant",
+                    content_type="card",
+                    body="Ciment Lafarge 25kg",
+                    payload={"card": {"type": "material", "title": "Ciment Lafarge 25kg"}},
+                    mentions_assistant=True,
+                )
             )
-        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
-        assert page["items"][-1]["body"] == "Voici la réponse pour toute l'équipe."
+            db.session.commit()
 
-    def test_unread_count_includes_the_reply(self, inv_client, member_token, invitation_app):
-        from app.domain.entities.chat_message import ChannelRef
-        from wiring import get_container
+    def test_listing_tolerates_legacy_assistant_rows(self, inv_client, member_token, invitation_app):
+        key = f"company:{invitation_app._test_company_id}"
+        self._add_legacy_rows(invitation_app)
+        resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
+        assert resp.status_code == 200
+        items = resp.get_json()["items"]
+        card = items[-1]
+        assert card["sender_id"] is None
+        assert card["sender_name"] == "Folio"
+        assert card["sender_type"] == "assistant"
+        assert card["content_type"] == "card"
+        assert card["mine"] is False
+        assert "mentions_assistant" not in card
 
-        key = self._channel(invitation_app)
+    def test_legacy_rows_count_as_unread(self, inv_client, member_token, invitation_app):
+        key = f"company:{invitation_app._test_company_id}"
         inv_client.post(f"/api/v1/chat/channels/{key}/read", headers=_auth(member_token))
-        with invitation_app.app_context():
-            get_container().assistant_messenger.post_text(
-                uuid.UUID(invitation_app._test_member_user_id),
-                "Bonjour !",
-                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
-                scope=None,
-            )
+        self._add_legacy_rows(invitation_app)
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        company_channel = next(c for c in items if c["key"] == key)
-        assert company_channel["unread_count"] >= 1
-
-    def test_post_card_round_trips_with_the_wire_contract_shape(self, inv_client, member_token, invitation_app):
-        """A real `AssistantMessenger.post_card(...)` call, read back through the same
-        `GET .../messages` endpoint the app polls — proves the app's parser actually
-        receives `{"card": {type, id, project_id, title, subtitle, badge, thumbnail_url,
-        extra}}`, not the pre-fix ad-hoc shape (second addendum: the app's parser
-        rejected every real card and silently fell back to text)."""
-        from app.domain.entities.chat_message import ChannelRef
-        from wiring import get_container
-
-        key = self._channel(invitation_app)
-        product_id = uuid.uuid4()
-        with invitation_app.app_context():
-            get_container().assistant_messenger.post_card(
-                uuid.UUID(invitation_app._test_member_user_id),
-                card_type="material",
-                entity_id=product_id,
-                title="Ciment Lafarge 25kg",
-                subtitle="Confirmé",
-                badge="confirmed",
-                thumbnail_url="/api/v1/bibliotheque/products/x/image",
-                extra={"has_image": True},
-                channel=ChannelRef(kind="company", id=uuid.UUID(invitation_app._test_company_id)),
-                scope=None,
-            )
-        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
-        card_message = page["items"][-1]
-        assert card_message["content_type"] == "card"
-        assert card_message["payload"]["card"] == {
-            "type": "material",
-            "id": str(product_id),
-            "project_id": None,
-            "title": "Ciment Lafarge 25kg",
-            "subtitle": "Confirmé",
-            "badge": "confirmed",
-            "thumbnail_url": "/api/v1/bibliotheque/products/x/image",
-            "extra": {"has_image": True},
-        }
+        assert next(c for c in items if c["key"] == key)["unread_count"] >= 1
 
 
-class TestMentionDispatch:
-    """Send-time `@folio` detection / reply-to-assistant detection and the dispatch gate
-    (D18) — never other chat reaches the assistant pipeline."""
-
-    def test_message_without_mention_never_dispatches(self, inv_client, member_token, invitation_app):
+class TestReplies:
+    def test_mention_token_is_just_text(self, inv_client, member_token, invitation_app):
         key = _project_key(invitation_app)
-        invitation_app._assistant_dispatcher.messages_received.clear()
         sent = inv_client.post(
             f"/api/v1/chat/channels/{key}/messages",
-            json={"body": "Sáng nay đổ xong sàn mái"},
+            json={"body": "@folio salut"},
             headers=_auth(member_token),
         )
         assert sent.status_code == 201
-        assert sent.get_json()["mentions_assistant"] is False
-        assert invitation_app._assistant_dispatcher.messages_received == []
-
-    def test_mention_dispatches_case_insensitively(self, inv_client, member_token, invitation_app):
-        key = _project_key(invitation_app)
-        invitation_app._assistant_dispatcher.messages_received.clear()
-        sent = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages",
-            json={"body": "@Folio combien on a dépensé ?"},
-            headers=_auth(member_token),
-        )
-        assert sent.status_code == 201
-        data = sent.get_json()
-        assert data["mentions_assistant"] is True
-        message_id = uuid.UUID(data["id"])
-        user_id = uuid.UUID(invitation_app._test_member_user_id)
-        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
-
-    def test_reply_to_an_assistant_message_dispatches_without_the_token(self, inv_client, member_token, invitation_app):
-        from app.domain.entities.chat_message import ChannelRef
-        from wiring import get_container
-
-        key = _project_key(invitation_app)
-        with invitation_app.app_context():
-            assistant_reply = get_container().assistant_messenger.post_text(
-                uuid.UUID(invitation_app._test_member_user_id),
-                "Tu veux dire quoi exactement ?",
-                channel=ChannelRef(kind="project", id=uuid.UUID(invitation_app._test_project_id)),
-                scope=None,
-            )
-        invitation_app._assistant_dispatcher.messages_received.clear()
-        sent = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages",
-            json={"body": "le budget travaux", "reply_to_id": str(assistant_reply.id)},
-            headers=_auth(member_token),
-        )
-        assert sent.status_code == 201, sent.get_json()
-        data = sent.get_json()
-        assert data["mentions_assistant"] is True
-        assert data["reply_to_id"] == str(assistant_reply.id)
-        message_id = uuid.UUID(data["id"])
-        user_id = uuid.UUID(invitation_app._test_member_user_id)
-        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
-
-    def test_photo_caption_with_mention_dispatches(self, inv_client, member_token, invitation_app):
-        key = _project_key(invitation_app)
-        invitation_app._assistant_dispatcher.messages_received.clear()
-        resp = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages",
-            data={
-                "body": "@folio c'est quoi ce matériau ?",
-                "file": (io.BytesIO(b"\xff\xd8\xff" + b"1" * 10), "a.jpg", "image/jpeg"),
-            },
-            content_type="multipart/form-data",
-            headers=_auth(member_token),
-        )
-        assert resp.status_code == 201, resp.get_json()
-        data = resp.get_json()
-        assert data["mentions_assistant"] is True
-        message_id = uuid.UUID(data["id"])
-        user_id = uuid.UUID(invitation_app._test_member_user_id)
-        assert (user_id, message_id) in invitation_app._assistant_dispatcher.messages_received
+        assert sent.get_json()["body"] == "@folio salut"
 
     def test_reply_to_id_from_another_channel_400s(
         self, inv_client, member_token, admin_token, invitation_app, company_channel
@@ -624,7 +504,7 @@ class TestMentionDispatch:
         key = _project_key(invitation_app)
         resp = inv_client.post(
             f"/api/v1/chat/channels/{key}/messages",
-            json={"body": "@folio salut", "reply_to_id": other_channel_message["id"]},
+            json={"body": "salut", "reply_to_id": other_channel_message["id"]},
             headers=_auth(member_token),
         )
         assert resp.status_code == 400

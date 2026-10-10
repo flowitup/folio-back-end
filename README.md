@@ -29,7 +29,7 @@ The API is the engine behind the web and mobile apps. You only need to run it di
 
 ### Easiest way — Docker
 
-If Docker is installed, this starts the API, the background worker (used only by the assistant), PostgreSQL and Redis, then creates the database schema:
+If Docker is installed, this starts the API, PostgreSQL and Redis, then creates the database schema:
 
 ```bash
 docker compose up -d
@@ -76,18 +76,12 @@ If you'd rather run it on your own machine without Docker:
    uv run flask db upgrade
    ```
 
-   Video thumbnails need `ffmpeg` and the assistant's PDF reading needs `poppler-utils` on the machine (both are in the Docker image).
+   Video thumbnails need `ffmpeg` on the machine (it is in the Docker image).
 
 5. Start the API:
 
    ```bash
    uv run flask run
-   ```
-
-6. Only if you turn the assistant on (`FEATURE_ASSISTANT=1`): start the background worker in a second terminal. It runs the assistant's jobs from the `assistant` RQ queue; everything else happens inside the API process (invitation emails are sent inline, exports are built on request, notifications are computed when the app asks for them).
-
-   ```bash
-   uv run python -m stack.queue.rq_worker
    ```
 
 A quick health check:
@@ -120,7 +114,7 @@ The most useful settings, configured through environment variables:
 |---|---|
 | `DATABASE_URL` | Where Folio stores its data — PostgreSQL (the migrations use PostgreSQL-only SQL; SQLite is only used by the test suite). |
 | `SECRET_KEY` / `JWT_SECRET_KEY` | Flask session signing / sign-in token signing. Production refuses to boot while either is empty or still contains `dev-`; set long random values. |
-| `REDIS_URL` | Rate limits, the sign-out token blocklist (without Redis it falls back to per-process memory, so a signed-out token stays valid on other workers and after a restart) and the assistant's job queue, hourly limit and daily cost cap. |
+| `REDIS_URL` | Rate limits, the sign-out token blocklist (without Redis it falls back to per-process memory, so a signed-out token stays valid on other workers and after a restart). |
 | `S3_ENDPOINT_URL`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` | S3-compatible store for every uploaded file. Production refuses to boot on the MinIO default keys or a localhost endpoint. |
 | `CORS_ORIGINS` | Comma-separated origins allowed to call the API with credentials (browser CORS). Defaults to `http://localhost:3000`. |
 | `TRUSTED_PROXY_HOPS` | How many reverse proxies may name the caller through `X-Forwarded-For`. Rate limits are keyed on the caller's address, so a deployment behind a reverse proxy or tunnel must set it to the number of proxies in front of the API (e.g. `1` behind a single one), or everyone shares one bucket. Default `0` trusts nothing. |
@@ -132,39 +126,6 @@ The most useful settings, configured through environment variables:
 | `EXPOSE_DOCS` | Set to `1` to serve the OpenAPI spec and Swagger UI (see below) when `FLASK_ENV=production`; with any other `FLASK_ENV` they are always served. |
 
 A full template lives in `.env.example`.
-
----
-
-## Assistant (AI layer)
-
-Folio Assistant answers inside team chat: mention `@folio` in a company or project channel (or reply to one of its messages) to identify a material photo, import a ticket/receipt into an invoice, fetch an invoice from a merchant's website, find or move equipment, check the day's roster, log or validate attendance, create or list tasks, and answer questions about a site. Each company also has an admin channel for its admins, the only place where the assistant answers confidential questions (project income, salaries, unpaid client invoices, who asked it what). It needs team chat (`FEATURE_CHAT=1`) and ships **dark** until `FEATURE_ASSISTANT=1` and the two core provider keys are set.
-
-| Variable | What it controls |
-|---|---|
-| `FEATURE_ASSISTANT` | Master switch, off by default. When off, `@folio` messages are not handed to the assistant, `POST /assistant/actions` and `GET /assistant/audit` answer 404, jobs already queued do nothing when they run, and the `ai-browser` poller idles — a real kill switch, not just a UI toggle. |
-| `DEEPSEEK_API_KEY` | Vision + chat text (photo reading, scan generation verification, chit-chat); also drives the `ai-browser` agent on merchant sites. Required, with `TYPESAFE_API_KEY`, for the assistant to be considered "enabled". |
-| `TYPESAFE_API_KEY` | Jev (TypeSafe AI) — every routing/gating decision (`system_one`), never free text. |
-| `GEMINI_API_KEY` | Scan generation when `SCAN_MODE=genai` (a clean redraw of a receipt photo). |
-| `SCAN_MODE` | `genai` (default — Gemini redraws the receipt, the redraw is re-read and checked for faithfulness, falls back to `opencv` automatically) or `opencv` (local perspective-correct + threshold; asks DeepSeek for the page corners only when OpenCV cannot find the document outline — no image generation). |
-| `ASSISTANT_DAILY_COST_CAP_USD` | Daily USD spend cap across every provider; once reached, the pipeline answers a quota template instead of calling anything. A rolling per-user hourly rate limit (30 runs/hour) applies independently. |
-| `JOB_OFFPEAK_ONLY` | Read by the `ai-browser` container: only run merchant-site jobs after noon Europe/Paris. |
-| `BROWSER_CHROME_PATH` / `BROWSER_PROFILE_DIR` / `BROWSER_DOWNLOADS_DIR` | Read directly by the `ai-browser` container process (not through the app's `Config` class): its Chrome binary and persisted profile/downloads paths. |
-
-A missing DeepSeek or TypeSafe key gets a "not configured" reply instead of a 500; a missing Gemini key silently falls back to the OpenCV scan. The separate `ai-browser` container checks the same `FEATURE_ASSISTANT`/`DEEPSEEK_API_KEY`, plus a presence-only `TYPESAFE_API_KEY_CONFIGURED` flag (never the real TypeSafe key, which that container never calls), so it goes dark in lockstep with the web process.
-
-Invoice-fetch (`fetch_invoice`) and material product search (`find_product`) jobs both run on the shared RQ `assistant` queue (`stack.queue.rq_worker`) plus a dedicated **`ai-browser`** container (`Dockerfile.browser`, `docker/browser-entrypoint.sh`) that polls `assistant_jobs` directly with plain SQL — it never boots the Flask app.
-
-To sign into each merchant site once by hand, start the `ai-browser` image with the `login-session` argument (its entrypoint is `docker/browser-entrypoint.sh`) on the same profile volume the poller uses: it runs Chrome on that persistent profile behind Xvfb + x11vnc so you can log in over VNC. x11vnc runs **without a password** and listens on every interface inside the container — publish its port (5900) on loopback only and reach it through an SSH tunnel. The default poll-loop mode never logs in by itself (hard rule: it only browses sessions that are already authenticated).
-
-Material photo → library does not call a web-search API: once DeepSeek identifies the photo, the same browser agent that fetches invoices searches the allow-listed merchant sites' own search pages for a matching product page, and Jev picks the best candidate (or "none", which falls back to a photo-only library entry the user completes later).
-
-Accuracy against a hand-labelled gold set (S1 invoice extraction, A1 material ID):
-
-```bash
-uv run python -m scripts.ai_eval.run_eval --invoices eval/invoices --materials eval/materials
-```
-
-See `eval/README.md` for the gold format — this repo ships no real invoices/photos, only the harness and two example gold files.
 
 ---
 
@@ -194,8 +155,7 @@ Business endpoints live under `/api/v1/` (the health check is `/health`; interac
 | **Notifications** | Attendance waiting for validation, new company members (for admins) and reminders left on older dated notes (list, dismiss); push-notification category preferences |
 | **Push** | Register/unregister a device's push token |
 | **Chat** | Team chat channels, messages and attachments (`FEATURE_CHAT`) |
-| **Assistant** | Answer an assistant choice message; supervision audit log (`FEATURE_ASSISTANT`) |
-| **Features** | Which optional features (chat, assistant) this deployment has on |
+| **Features** | Which optional features (chat) this deployment has on |
 | **Project documents** | Upload, list, download, rename, delete, tag files |
 | **Project analyses** | Project-scoped library of uploaded HTML reports, with tags |
 | **Project photos** | Upload, list, thumbnail, edit, delete site photos and videos |

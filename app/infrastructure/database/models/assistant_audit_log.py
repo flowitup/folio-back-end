@@ -1,11 +1,9 @@
-"""ORM model for ``assistant_audit_log`` — one row per assistant mention the pipeline
-handled (D17 layer 4: "audit row per handled mention", readable from the admin channel
-and the web supervision page in a later phase).
+"""ORM model for ``assistant_audit_log``.
 
-Kept append-only and cheap to write: no foreign key on ``channel_key`` (channels are
-virtual, see ``app.domain.entities.chat_message``) and ``company_id``/``message_id`` are
-nullable so a row can still be written for a channel kind or a pipeline branch that has
-no company/message to point at.
+LEGACY / INERT: the feature that used this table has been removed; nothing reads or writes
+it any more. The model is kept only so it keeps matching the existing migrations (the
+model-vs-migration drift check, and `flask db migrate`, must not propose dropping the table
+or its data). Do not build on it.
 """
 
 from __future__ import annotations
