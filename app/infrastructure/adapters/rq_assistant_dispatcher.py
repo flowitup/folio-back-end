@@ -92,7 +92,7 @@ class RqAssistantDispatcher:
                 # genuinely distinct one for the same tap (`SubmitAssistantActionUseCase`
                 # resets the choice to unanswered and reports 503 whenever this raises,
                 # so the client always retries on a real failure).
-                job_id=f"action:{message_id}",
+                job_id=f"action-{message_id}",
             )
             return True
         except Exception:

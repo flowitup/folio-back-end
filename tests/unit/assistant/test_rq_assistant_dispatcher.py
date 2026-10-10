@@ -37,7 +37,7 @@ def test_action_received_uses_a_job_id_keyed_only_on_the_message_id(monkeypatch)
     dispatcher.action_received(user_id=uuid4(), message_id=message_id, action="confirm", payload={"a": 1})
 
     assert len(FakeQueue.calls) == 1
-    assert FakeQueue.calls[0]["kwargs"]["job_id"] == f"action:{message_id}"
+    assert FakeQueue.calls[0]["kwargs"]["job_id"] == f"action-{message_id}"
 
 
 def test_a_retry_with_a_different_action_on_the_same_message_reuses_the_same_job_id(monkeypatch) -> None:
@@ -57,4 +57,19 @@ def test_a_retry_with_a_different_action_on_the_same_message_reuses_the_same_job
     dispatcher.action_received(user_id=user_id, message_id=message_id, action="confirm", payload={})
 
     job_ids = [call["kwargs"]["job_id"] for call in FakeQueue.calls]
-    assert job_ids == [f"action:{message_id}", f"action:{message_id}"]
+    assert job_ids == [f"action-{message_id}", f"action-{message_id}"]
+
+
+def test_action_job_id_is_accepted_by_rq(monkeypatch) -> None:
+    """RQ rejects job ids with anything but letters, digits, `_` and `-`; the fake
+    queue above would not notice, so validate the id with RQ's own check."""
+    from rq.job import validate_job_id
+
+    FakeQueue.calls = []
+    monkeypatch.setattr(dispatcher_module, "Queue", FakeQueue)
+    monkeypatch.setattr(dispatcher_module, "Redis", FakeRedis)
+    dispatcher = RqAssistantDispatcher(redis_url="redis://unused", assistant_enabled=lambda: True)
+
+    dispatcher.action_received(user_id=uuid4(), message_id=uuid4(), action="confirm", payload={})
+
+    validate_job_id(FakeQueue.calls[0]["kwargs"]["job_id"])
