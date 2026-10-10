@@ -336,6 +336,10 @@ def create_project():
 
         _db.session.commit()
 
+    roster = container.enroll_company_workers_usecase
+    if roster is not None:
+        roster.after_project_created(UUID(result.id))
+
     new_perms = sorted(_effective_perms_for(UUID(result.id), user_id))
     return (
         jsonify(
