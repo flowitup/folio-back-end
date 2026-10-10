@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 from app.api.v1.numeric_bounds import positive_cents
 from app.domain.companies.bank_details import compact_identifier, normalize_bic, normalize_iban
 from app.domain.companies.masking import is_masked
+from app.domain.companies.sections import normalize_hidden_sections
 
 
 class _StrictBase(BaseModel):
@@ -147,6 +148,15 @@ class UpdateCompanyRequest(_StrictBase):
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+    # Sections hidden from every member's navigation; [] shows all, absent leaves unchanged.
+    hidden_sections: Optional[list[str]] = None
+
+    @field_validator("hidden_sections", mode="after")
+    @classmethod
+    def validate_hidden_sections(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is not None:
+            normalize_hidden_sections(v)
+        return v
 
     @field_validator("siret", "tva_number", "iban", "bic", mode="before")
     @classmethod

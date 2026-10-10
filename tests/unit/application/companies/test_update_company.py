@@ -94,3 +94,43 @@ class TestUpdateCompanyGuards:
         inp = UpdateCompanyInput(id=seeded_company.id, caller_id=admin_id, legal_name="  ")
         with pytest.raises(ValueError):
             usecase.execute(inp, fake_session)
+
+
+class TestHiddenSections:
+    def test_admin_hides_sections_in_canonical_order_without_duplicates(
+        self, usecase, seeded_company, admin_id, fake_session
+    ):
+        result = usecase.execute(
+            UpdateCompanyInput(
+                id=seeded_company.id,
+                caller_id=admin_id,
+                hidden_sections=["analyses", "chiffrage", "analyses"],
+            ),
+            fake_session,
+        )
+        assert result.hidden_sections == ["chiffrage", "analyses"]
+
+    def test_empty_list_shows_everything_again_and_none_leaves_unchanged(
+        self, usecase, seeded_company, admin_id, fake_session
+    ):
+        usecase.execute(
+            UpdateCompanyInput(id=seeded_company.id, caller_id=admin_id, hidden_sections=["notes"]),
+            fake_session,
+        )
+        unchanged = usecase.execute(
+            UpdateCompanyInput(id=seeded_company.id, caller_id=admin_id, legal_name="Other SAS"),
+            fake_session,
+        )
+        assert unchanged.hidden_sections == ["notes"]
+        cleared = usecase.execute(
+            UpdateCompanyInput(id=seeded_company.id, caller_id=admin_id, hidden_sections=[]),
+            fake_session,
+        )
+        assert cleared.hidden_sections == []
+
+    def test_unknown_section_is_refused(self, usecase, seeded_company, admin_id, fake_session):
+        with pytest.raises(ValueError):
+            usecase.execute(
+                UpdateCompanyInput(id=seeded_company.id, caller_id=admin_id, hidden_sections=["nope"]),
+                fake_session,
+            )

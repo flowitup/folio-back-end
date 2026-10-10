@@ -17,6 +17,7 @@ from app.application.companies.ports import (
     TransactionalSessionPort,
 )
 from app.domain.companies.exceptions import CompanyNotFoundError
+from app.domain.companies.sections import normalize_hidden_sections
 from app.domain.companies.masking import SENSITIVE_FIELDS, is_masked, mask_company
 
 # Optional company fields an explicit null clears (legal_name and address are required).
@@ -64,6 +65,8 @@ class UpdateCompanyUseCase:
         if inp.prefix_override is not None:
             _validate_prefix_override(inp.prefix_override)
             updates["prefix_override"] = inp.prefix_override
+        if inp.hidden_sections is not None:
+            updates["hidden_sections"] = normalize_hidden_sections(inp.hidden_sections)
         # Nullable fields — None in input means "leave unchanged"; an explicit
         # null from the client arrives in inp.clear_fields instead (below).
         for field in ("siret", "tva_number", "iban", "bic", "logo_url", "default_payment_terms"):

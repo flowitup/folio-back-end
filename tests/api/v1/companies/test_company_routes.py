@@ -150,6 +150,34 @@ class TestUpdateCompany:
         )
         assert resp.status_code == 404
 
+    def test_hidden_sections_round_trip_and_default_empty(self, inv_client, admin_token):
+        company = _make_company(inv_client, admin_token)
+        assert company["hidden_sections"] == []
+        resp = inv_client.put(
+            f"/api/v1/companies/{company['id']}",
+            json={"hidden_sections": ["analyses", "chiffrage"]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["hidden_sections"] == ["chiffrage", "analyses"]
+        read = inv_client.get(f"/api/v1/companies/{company['id']}", headers=_auth(admin_token))
+        assert read.get_json()["hidden_sections"] == ["chiffrage", "analyses"]
+        cleared = inv_client.put(
+            f"/api/v1/companies/{company['id']}",
+            json={"hidden_sections": []},
+            headers=_auth(admin_token),
+        )
+        assert cleared.get_json()["hidden_sections"] == []
+
+    def test_unknown_hidden_section_is_rejected(self, inv_client, admin_token):
+        company = _make_company(inv_client, admin_token)
+        resp = inv_client.put(
+            f"/api/v1/companies/{company['id']}",
+            json={"hidden_sections": ["nope"]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # GET /companies/me — list my companies
