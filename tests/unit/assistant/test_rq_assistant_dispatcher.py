@@ -4,8 +4,8 @@ dispatching a genuinely distinct second job for the same tap."""
 
 from __future__ import annotations
 
-from typing import Any
 import re
+from typing import Any
 from uuid import uuid4
 
 from app.infrastructure.adapters import rq_assistant_dispatcher as dispatcher_module
