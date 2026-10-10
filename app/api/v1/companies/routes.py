@@ -267,6 +267,7 @@ def update_company(company_id: str):
         logo_url=str(body.logo_url) if body.logo_url else None,
         default_payment_terms=body.default_payment_terms,
         prefix_override=body.prefix_override,
+        hidden_sections=body.hidden_sections,
         # An explicit null clears the field; an absent key, or a masked value sent
         # back (the schema turns it into None), leaves it unchanged.
         clear_fields=frozenset(f for f in CLEARABLE_FIELDS if f in payload and payload[f] is None),

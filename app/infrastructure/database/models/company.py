@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
+    JSON,
     Column,
     DateTime,
     ForeignKey,
@@ -52,6 +53,9 @@ class CompanyModel(Base):
     # this company's persons/company_persons rows. Ops-settable; defaults to
     # France, Folio's primary market.
     default_phone_region = Column(String(2), nullable=False, default="FR", server_default="FR")
+
+    # Navigation sections the company hides for its members (list of section keys).
+    hidden_sections = Column(JSON, nullable=False, default=list, server_default="[]")
 
     # Audit
     created_by = Column(

@@ -49,6 +49,7 @@ def deserialize_company_orm(row: CompanyModel) -> Company:
         prefix_override=row.prefix_override,
         join_code=row.join_code,
         default_phone_region=row.default_phone_region or "FR",
+        hidden_sections=tuple(row.hidden_sections or ()),
         created_by=row.created_by,
         created_at=_ensure_utc(row.created_at),
         updated_at=_ensure_utc(row.updated_at),
@@ -69,6 +70,7 @@ def serialize_company_to_orm(company: Company, row: CompanyModel) -> None:
     row.prefix_override = company.prefix_override
     row.join_code = company.join_code
     row.default_phone_region = company.default_phone_region
+    row.hidden_sections = list(company.hidden_sections)
     row.created_by = company.created_by
     row.created_at = company.created_at
     row.updated_at = company.updated_at

@@ -10,7 +10,7 @@ before populating CompanyResponse when the caller is not an admin.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -59,6 +59,8 @@ class UpdateCompanyInput:
     logo_url: Optional[str] = None
     default_payment_terms: Optional[str] = None
     prefix_override: Optional[str] = None
+    # None leaves the list unchanged; [] shows every section again.
+    hidden_sections: Optional[list[str]] = None
     # Optional fields the caller explicitly sent as null: stored as NULL. A None
     # field above that is not listed here is left unchanged.
     clear_fields: frozenset[str] = frozenset()
@@ -186,6 +188,7 @@ class CompanyResponse:
     prefix_override: Optional[str] = None
     # Only serialised for superadmins (see routes._company_to_dict).
     join_code: Optional[str] = None
+    hidden_sections: list[str] = field(default_factory=list)
 
     @staticmethod
     def from_entity(company: Company) -> "CompanyResponse":
@@ -205,6 +208,7 @@ class CompanyResponse:
             default_payment_terms=company.default_payment_terms,
             prefix_override=company.prefix_override,
             join_code=company.join_code,
+            hidden_sections=list(company.hidden_sections),
         )
 
 

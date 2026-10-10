@@ -57,6 +57,9 @@ class Company:
     # rows (Phase 2 onboarding). Ops-settable; defaults to France. ---
     default_phone_region: str = "FR"
 
+    # --- sections hidden from the navigation of every member (see sections.HIDEABLE_SECTIONS) ---
+    hidden_sections: tuple[str, ...] = ()
+
     # ------------------------------------------------------------------
     # Mutation helper
     # ------------------------------------------------------------------
