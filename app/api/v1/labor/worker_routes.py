@@ -182,6 +182,10 @@ def create_worker(project_id: str):
             409,
         )
 
+    roster = get_container().enroll_company_workers_usecase
+    if roster is not None:
+        roster.after_worker_created(UUID(project_id), UUID(result.person_id) if result.person_id else None)
+
     return jsonify(_worker_response(result).model_dump()), 201
 
 

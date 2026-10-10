@@ -599,6 +599,7 @@ class Container:
 
     # Labor use cases
     create_worker_usecase: Optional[CreateWorkerUseCase] = None
+    enroll_company_workers_usecase: Optional[Any] = None  # EnrollCompanyWorkersUseCase
     update_worker_usecase: Optional[UpdateWorkerUseCase] = None
     delete_worker_usecase: Optional[DeleteWorkerUseCase] = None
     list_workers_usecase: Optional[ListWorkersUseCase] = None
@@ -843,6 +844,13 @@ def configure_container(
     # Wire up labor use cases if repositories are available
     if worker_repository:
         container.create_worker_usecase = CreateWorkerUseCase(worker_repository)
+        from app import db as _roster_db
+        from app.application.labor.enroll_company_workers import EnrollCompanyWorkersUseCase
+        from app.infrastructure.adapters.sqlalchemy_company_worker_roster import SqlAlchemyCompanyWorkerRoster
+
+        container.enroll_company_workers_usecase = EnrollCompanyWorkersUseCase(
+            SqlAlchemyCompanyWorkerRoster(_roster_db.session)
+        )
         container.update_worker_usecase = UpdateWorkerUseCase(worker_repository)
         container.delete_worker_usecase = DeleteWorkerUseCase(worker_repository)
         # rate_change_repo is None here; re-wired in app/__init__.py once the repo
