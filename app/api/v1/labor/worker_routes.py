@@ -103,6 +103,9 @@ def _worker_response(w) -> WorkerResponse:
 def list_workers(project_id: str):
     """List workers for a project: active ones, or all with ?include_inactive=true."""
     include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true")
+    roster = get_container().enroll_company_workers_usecase
+    if roster is not None:
+        roster.before_roster_listed(UUID(project_id))
     try:
         workers = get_container().list_workers_usecase.execute(
             ListWorkersRequest(project_id=UUID(project_id), include_inactive=include_inactive)
@@ -226,6 +229,10 @@ def update_worker(project_id: str, worker_id: str):
                 return err
             update_kwargs["user_id"] = linked_user_id
         result = get_container().update_worker_usecase.execute(UpdateWorkerDTO(**update_kwargs))
+        if update_kwargs["reactivate"]:
+            roster = get_container().enroll_company_workers_usecase
+            if roster is not None:
+                roster.after_worker_restarted(UUID(project_id), UUID(result.person_id) if result.person_id else None)
     except InvalidWorkerPhoneError as e:
         # Its own code so a client can point at the phone field.
         return _error_response("InvalidPhone", str(e), 400)
@@ -246,12 +253,16 @@ def update_worker(project_id: str, worker_id: str):
 def delete_worker(project_id: str, worker_id: str):
     """Soft delete a worker (deactivate)."""
     try:
-        get_container().delete_worker_usecase.execute(
+        person_id = get_container().delete_worker_usecase.execute(
             DeleteWorkerDTO(worker_id=UUID(worker_id), project_id=UUID(project_id))
         )
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerNotFoundError:
         return _error_response("NotFound", f"Worker {worker_id} not found", 404)
+
+    roster = get_container().enroll_company_workers_usecase
+    if roster is not None:
+        roster.after_worker_stopped(UUID(project_id), person_id)
 
     return "", 204
