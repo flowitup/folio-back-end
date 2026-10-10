@@ -258,8 +258,53 @@ class TestUploadTypeValidation:
         assert result is not None
         storage.put.assert_called_once()
 
+    def test_dwg_with_overlong_unlisted_mime_stored_as_generic_type(self):
+        """An unlisted DWG MIME is free text; storing it as-is overflowed content_type (255) → 500."""
+        uc, repo, storage, session = _make_use_case()
+
+        result = uc.execute(
+            project_id=uuid4(),
+            filename="plan.dwg",
+            content_type="application/" + "x" * 300,
+            size_bytes=256,
+            fileobj=_fileobj(b"x" * 256),
+            uploader_user_id=uuid4(),
+        )
+
+        assert result.content_type == "application/octet-stream"
+        assert storage.put.call_args.args[2] == "application/octet-stream"
+
+    def test_dwg_with_listed_mime_keeps_it(self):
+        uc, repo, storage, session = _make_use_case()
+
+        result = uc.execute(
+            project_id=uuid4(),
+            filename="plan.dwg",
+            content_type="image/vnd.dwg",
+            size_bytes=256,
+            fileobj=_fileobj(b"x" * 256),
+            uploader_user_id=uuid4(),
+        )
+
+        assert result.content_type == "image/vnd.dwg"
+
 
 class TestUploadDangerousFilename:
+    def test_control_characters_dropped_from_stored_filename(self):
+        """A line break in the stored name 500s every download (Content-Disposition header)."""
+        uc, repo, storage, session = _make_use_case()
+
+        result = uc.execute(
+            project_id=uuid4(),
+            filename="Up\r\nload\t.pdf",
+            content_type="application/pdf",
+            size_bytes=10,
+            fileobj=_fileobj(b"x" * 10),
+            uploader_user_id=uuid4(),
+        )
+
+        assert result.filename == "Upload.pdf"
+
     def test_path_traversal_with_valid_ext_sanitized(self):
         """secure_filename('../../etc/passwd.txt') → 'etc_passwd.txt'; storage key is safe.
 

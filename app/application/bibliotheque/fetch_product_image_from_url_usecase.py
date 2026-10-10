@@ -115,18 +115,15 @@ class FetchProductImageFromUrlUseCase:
         """Fetch image from URL and store it. Returns the storage key.
 
         Raises:
-            SsrfBlockedError: URL is not HTTPS or host not in allowlist.
             ProductNotFoundError: product does not exist.
             CompanyAccessDeniedError: requester is not a company member.
             InsufficientPermissionError: requester lacks bibliotheque:manage.
+            SsrfBlockedError: URL is not HTTPS or host not in allowlist.
             ImageAlreadyExistsError: product already has an image and force=False.
             UnsupportedImageTypeError: remote content-type not in allowed set.
             ImageTooLargeError: remote bytes exceed IMAGE_MAX_SIZE_BYTES.
         """
-        # --- SSRF validation (before any DB access) ---
-        self._validate_url(url)
-
-        # --- Product + auth checks ---
+        # --- Product + auth checks (first: an outsider gets 404/403, never the allowlist) ---
         product = self._product_repo.find_by_id(product_id)
         if product is None:
             raise ProductNotFoundError(f"Product {product_id} not found.")
@@ -137,6 +134,9 @@ class FetchProductImageFromUrlUseCase:
             raise InsufficientPermissionError(
                 f"User {requester_id} lacks '{_MANAGE_PERMISSION}' in company " f"{product.company_id}."
             )
+
+        # --- SSRF validation (before any outbound request) ---
+        self._validate_url(url)
 
         # --- Idempotency: skip if already has image (unless force=True) ---
         if product.image_storage_key is not None and not force:

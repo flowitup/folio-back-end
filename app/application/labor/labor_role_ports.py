@@ -20,7 +20,7 @@ class ILaborRoleRepository(Protocol):
         ...
 
     def find_by_name(self, name: str, company_id: Optional[UUID] = None) -> Optional[LaborRole]:
-        """Return a role matching *name* exactly within *company_id*'s scope, or None.
+        """Return a role matching *name* case-insensitively within *company_id*'s scope, or None.
 
         `company_id=None` matches legacy/unscoped rows (`company_id IS NULL`)
         — the pre-Phase-2 default, still exercised by callers that have no

@@ -12,6 +12,8 @@ class CreateInviteRequest(BaseModel):
 
     project_id: UUID
     email: EmailStr
+    # Language of the email the invitee receives (and of the page its link opens).
+    locale: Literal["en", "fr", "vi"] = "en"
 
 
 class CreateInviteResponse(BaseModel):
@@ -25,10 +27,10 @@ class CreateInviteResponse(BaseModel):
     public-facing endpoint.
     """
 
-    kind: Literal["invitation_sent", "direct_added"]
+    kind: Literal["invitation_sent", "direct_added", "already_member"]
     invitation_id: Optional[UUID] = None
     expires_at: Optional[datetime] = None
-    user_id: Optional[UUID] = None  # set when kind='direct_added'
+    user_id: Optional[UUID] = None  # set when kind='direct_added' or 'already_member'
 
 
 class VerifyInviteResponse(BaseModel):
@@ -60,6 +62,18 @@ class AcceptInviteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+
+
+class AcceptInviteAsMeRequest(BaseModel):
+    """POST /invitations/accept-as-me request body: the signed-in session proves the account."""
+
+    token: str = Field(min_length=10, max_length=200)
+
+
+class AcceptInviteAsMeResponse(BaseModel):
+    """POST /invitations/accept-as-me — the project the signed-in user just joined."""
+
+    project_id: UUID
 
 
 class InvitationListItem(BaseModel):

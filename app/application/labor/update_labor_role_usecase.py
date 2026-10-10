@@ -18,7 +18,9 @@ class UpdateLaborRoleUseCase:
     """Update name and/or color of an existing labor role.
 
     Only fields passed as non-None are applied. Name uniqueness is checked
-    only when the name actually changes (self-collision excluded).
+    only when the name actually changes, and case-insensitively, so a
+    case-only rename ("électricien" → "Électricien") matches the role itself
+    and is allowed.
     """
 
     def __init__(self, repo: ILaborRoleRepository, db_session: object) -> None:
@@ -48,7 +50,7 @@ class UpdateLaborRoleUseCase:
 
         if name is not None and name != role.name:
             conflict = self._repo.find_by_name(name, company_id=role.company_id)
-            if conflict is not None:
+            if conflict is not None and conflict.id != role.id:
                 raise DuplicateLaborRoleError(name)
 
         updated = LaborRole(

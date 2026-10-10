@@ -111,10 +111,28 @@ class TestValidationErrorResponse:
         resp, status = validation_error_response(exc_info.value, status_code=422)
         assert status == 422
 
-    def test_empty_loc_does_not_crash(self, _flask_app) -> None:
+    def test_empty_loc_keeps_the_validator_reason(self, _flask_app) -> None:
         with pytest.raises(ValidationError) as exc_info:
             _AfterValidatorModel()
         resp, status = validation_error_response(exc_info.value)
         assert status == 400
         data = json.loads(resp.get_data(as_text=True))
-        assert "unknown" in data["message"]
+        assert data["message"] == "boom"
+
+    def test_message_names_field_and_reason(self, _flask_app) -> None:
+        class _TwoFields(BaseModel):
+            a: int
+            b: str
+
+        with pytest.raises(ValidationError) as exc_info:
+            _TwoFields(a="x")  # type: ignore[call-arg]
+        resp, _ = validation_error_response(exc_info.value)
+        message = json.loads(resp.get_data(as_text=True))["message"]
+        assert message == "a: Input should be a valid integer, unable to parse string as an integer; b: Field required"
+
+    def test_non_object_body_does_not_name_the_schema(self, _flask_app) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            _SingleFieldModel.model_validate([1, 2])
+        resp, _ = validation_error_response(exc_info.value)
+        message = json.loads(resp.get_data(as_text=True))["message"]
+        assert message == "Input should be an object"

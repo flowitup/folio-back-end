@@ -203,6 +203,84 @@ class TestWorkerFromPerson:
         assert resp.status_code == 400
 
 
+class TestOnePersonPerProject:
+    """A person is on a project's roster once, and a person added from "Add worker" is findable again."""
+
+    def test_same_person_twice_is_409_naming_the_existing_worker(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_dup1@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        person_id = _make_company_person(wfp_app, company_id, name="Dup Person", phone="+33611119201")
+        token = _login(wfp_client, "wfp_dup1@test.com")
+        url = f"/api/v1/projects/{project_id}/workers"
+
+        first = wfp_client.post(url, json={"person_id": str(person_id), "daily_rate": 120}, headers=_auth(token))
+        assert first.status_code == 201, first.get_data(as_text=True)
+        again = wfp_client.post(url, json={"person_id": str(person_id), "daily_rate": 100}, headers=_auth(token))
+        assert again.status_code == 409
+        body = again.get_json()
+        assert body["error"] == "WorkerAlreadyOnProject"
+        assert body["worker_id"] == first.get_json()["id"]
+        assert body["is_active"] is True
+
+        # The same phone typed inline is the same human: refused as well, no twin person.
+        inline = wfp_client.post(
+            url, json={"name": "Dup Twin", "phone": "06 11 11 92 01", "daily_rate": 90}, headers=_auth(token)
+        )
+        assert inline.status_code == 409
+        assert inline.get_json()["worker_id"] == first.get_json()["id"]
+
+    def test_inline_phone_of_a_company_person_reuses_that_person(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_dup2@test.com")
+        company_id, project_id = _make_company_and_project(wfp_app, admin_id)
+        person_id = _make_company_person(wfp_app, company_id, name="Known Phone", phone="+33611119202")
+        token = _login(wfp_client, "wfp_dup2@test.com")
+
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"name": "Typed Again", "phone": "+33611119202", "daily_rate": 90},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["person_id"] == str(person_id)
+
+    def test_inline_phone_typed_another_way_is_the_same_person(self, wfp_client, wfp_app):
+        """A person added inline keeps the number as typed; "0611…" and "+33 6 11…" still match it."""
+        admin_id = _make_user(wfp_app, "wfp_dup4@test.com")
+        _, project_id = _make_company_and_project(wfp_app, admin_id)
+        token = _login(wfp_client, "wfp_dup4@test.com")
+        url = f"/api/v1/projects/{project_id}/workers"
+
+        first = wfp_client.post(
+            url, json={"name": "Spaced Number", "phone": "06 11 11 92 04", "daily_rate": 90}, headers=_auth(token)
+        )
+        assert first.status_code == 201, first.get_data(as_text=True)
+        for typed in ("0611119204", "+33 6 11 11 92 04"):
+            again = wfp_client.post(
+                url, json={"name": "Spaced Twin", "phone": typed, "daily_rate": 90}, headers=_auth(token)
+            )
+            assert again.status_code == 409, typed
+            assert again.get_json()["worker_id"] == first.get_json()["id"]
+
+    def test_person_created_in_the_web_picker_is_listed_in_the_company(self, wfp_client, wfp_app):
+        admin_id = _make_user(wfp_app, "wfp_dup3@test.com")
+        _, project_id = _make_company_and_project(wfp_app, admin_id)
+        token = _login(wfp_client, "wfp_dup3@test.com")
+
+        created = wfp_client.post("/api/v1/persons", json={"name": "Picker Charlie"}, headers=_auth(token))
+        assert created.status_code == 201, created.get_data(as_text=True)
+        person_id = created.get_json()["id"]
+        resp = wfp_client.post(
+            f"/api/v1/projects/{project_id}/workers",
+            json={"name": "Picker Charlie", "person_id": person_id, "daily_rate": 80},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+        found = wfp_client.get("/api/v1/persons?q=Picker Charlie", headers=_auth(token))
+        assert found.status_code == 200
+        assert [p["id"] for p in found.get_json()["persons"]] == [person_id]
+
+
 class TestRateSetThroughTheApiIsInherited:
     """Closes the loop the pay-defaults endpoint exists for: a rate typed once
     at company level is what the next project's worker costs, with no rate in

@@ -314,6 +314,7 @@ class IInvoiceRepository(ABC):
         limit: int,
         offset: int,
         all_companies: bool = False,
+        search: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across projects of company_ids.
 
@@ -327,6 +328,8 @@ class IInvoiceRepository(ABC):
         refundable=True  → only rows where refundable_status IS NOT NULL
         refundable=False → only rows where refundable_status IS NULL
         refundable=None  → no status filter
+        search           → case-insensitive substring of invoice_number, recipient_name
+                           or project name, applied before count and paging
 
         Ordered by issue_date DESC, created_at DESC.
         Returns (rows, total_count).

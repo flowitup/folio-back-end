@@ -54,7 +54,13 @@ class SqlAlchemyCompanyRepository:
         base = select(CompanyModel)
         count_stmt = select(func.count()).select_from(base.subquery())
         total: int = self._session.execute(count_stmt).scalar_one()
-        rows_stmt = base.order_by(CompanyModel.legal_name).limit(limit).offset(offset)
+        # Alphabetical whatever the letter case: under the C collation a bare ORDER BY puts
+        # every uppercase letter before every lowercase one ("QA2-CS" before "QA2-api").
+        rows_stmt = (
+            base.order_by(func.lower(CompanyModel.legal_name), CompanyModel.legal_name, CompanyModel.id)
+            .limit(limit)
+            .offset(offset)
+        )
         rows = self._session.execute(rows_stmt).scalars().all()
         return ([deserialize_company_orm(r) for r in rows], total)
 

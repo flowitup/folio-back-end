@@ -36,6 +36,10 @@ class IWarehouseRepository(Protocol):
         """Delete a warehouse row. Returns True when a row was deleted."""
         ...
 
+    def lock_company(self, company_id: UUID) -> None:
+        """Hold the company's warehouse names until commit, so one name check runs at a time."""
+        ...
+
 
 class IInventoryItemRepository(Protocol):
     """Persistence contract for InventoryItem rows."""

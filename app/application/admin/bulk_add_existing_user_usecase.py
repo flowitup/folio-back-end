@@ -46,6 +46,7 @@ class BulkAddExistingUserUseCase:
         app_base_url: str,
         db_session: TransactionalSessionPort,
         role_checker: Any = None,  # RoleCheckerPort — is_platform_admin(user_id)
+        authz_reader: Any = None,  # AuthzReaderPort — company_role_for(user_id, company_id)
     ) -> None:
         self._user_repo = user_repo
         self._project_repo = project_repo
@@ -55,6 +56,11 @@ class BulkAddExistingUserUseCase:
         self._base_url = app_base_url.rstrip("/")
         self._db = db_session
         self._role_checker = role_checker
+        self._authz_reader = authz_reader
+
+    def set_authz_reader(self, authz_reader: Any) -> None:
+        """Late-wire the reader: the container builds it after this use case."""
+        self._authz_reader = authz_reader
 
     # ------------------------------------------------------------------
 
@@ -118,6 +124,15 @@ class BulkAddExistingUserUseCase:
                 )
                 continue
 
+            # Project access resolves through the company: someone without a
+            # company access row could not open the project, yet the membership
+            # would list them on it and in its chat. Attach them to the company first.
+            if not self._in_project_company(target_user.id, project.company_id):
+                results.append(
+                    BulkAddResultItemDto(project_id=pid, project_name=project.name, status=BulkAddStatus.NOT_IN_COMPANY)
+                )
+                continue
+
             # Try to insert; the repo returns True only if a row was actually
             # written (False on ON CONFLICT DO NOTHING). This avoids the H1 race
             # where two concurrent bulk-adds both see no assignment and both
@@ -158,6 +173,15 @@ class BulkAddExistingUserUseCase:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _in_project_company(self, user_id: UUID, company_id: UUID | None) -> bool:
+        """True when the user is attached (any role) to the project's company.
+
+        Not checked when the reader is not wired or the project has no company.
+        """
+        if self._authz_reader is None or company_id is None:
+            return True
+        return self._authz_reader.company_role_for(user_id, company_id) is not None
 
     def _enqueue_consolidated_email(
         self,

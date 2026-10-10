@@ -34,8 +34,9 @@ class TestMaskFunction:
     def test_none_returns_none(self):
         assert _mask(None) is None
 
-    def test_empty_string_returns_bullets(self):
-        assert _mask("") == "····"
+    def test_empty_string_returns_none(self):
+        # A cleared value must not read back as a mask, i.e. as if something were stored.
+        assert _mask("") is None
 
     def test_short_string_1_char_returns_bullets(self):
         assert _mask("A") == "····"

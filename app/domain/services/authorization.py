@@ -115,6 +115,19 @@ class AuthorizationService:
             return True
         return f"{permission.split(':', 1)[0]}:*" in perms
 
+    def get_permissions_in_company(self, user_id: UUID, company_id: UUID) -> Set[str]:
+        """What the caller can do in one company: the list `has_permission_in_company` checks.
+
+        `{"*:*"}` for platform ops. Lets a client gate company-scoped actions
+        (library, inventory) on the company it shows rather than on the primary
+        company the token's `permissions` claim is resolved from.
+        """
+        if self.is_platform_admin(user_id):
+            return {"*:*"}
+        if self._authz_reader is None:
+            return set()
+        return set(permissions_in_company(self._authz_reader, user_id, company_id))
+
     def get_user_permissions(self, user_id: UUID) -> Set[str]:
         """Resolver permissions for the caller's primary company (union when none).
 

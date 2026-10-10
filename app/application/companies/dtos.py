@@ -59,6 +59,9 @@ class UpdateCompanyInput:
     logo_url: Optional[str] = None
     default_payment_terms: Optional[str] = None
     prefix_override: Optional[str] = None
+    # Optional fields the caller explicitly sent as null: stored as NULL. A None
+    # field above that is not listed here is left unchanged.
+    clear_fields: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------

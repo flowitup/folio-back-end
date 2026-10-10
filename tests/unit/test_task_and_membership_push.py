@@ -112,6 +112,15 @@ def test_move_names_the_column_in_the_dispatcher_language():
     assert sender.sent[0].body == "Poser les cloisons → Terminé · Chantier Arcueil"
 
 
+def test_move_to_the_backlog_names_it_as_the_vietnamese_board_does():
+    sender = RecordingSender()
+    d = PushDispatcher(devices=StubDevices(), sender=sender, locale="vi", run_async=False)
+    task = _task(uuid4())
+    task.status = Status("backlog")
+    TaskPushNotifier(d, StubRepo()).task_moved(task=task, actor_id=uuid4())
+    assert sender.sent[0].body == "Poser les cloisons → Việc tồn đọng · Chantier Arcueil"
+
+
 def test_a_broken_project_lookup_never_raises():
     class Exploding:
         def find_by_id(self, entity_id):
@@ -144,7 +153,30 @@ def test_company_events_carry_the_company_id_and_name():
     user, company = uuid4(), uuid4()
     notifier.notify("company_member_role_changed", user_id=user, actor_id=uuid4(), entity_id=company, role="admin")
     assert sender.sent[0].data == {"kind": "company_member_role_changed", "company_id": str(company)}
-    assert sender.sent[0].body == "Flowitup SAS · admin"
+    assert sender.sent[0].body == "Flowitup SAS · Admin"
+
+
+def test_role_change_names_the_role_in_the_dispatcher_language():
+    cases = (
+        ("vi", "admin", "Quản trị viên"),
+        ("vi", "manager", "Quản lý"),
+        ("vi", "member", "Thành viên"),
+        ("fr", "manager", "Responsable"),
+        ("fr", "member", "Membre"),
+        ("en", "manager", "Manager"),
+    )
+    for locale, role, expected in cases:
+        sender = RecordingSender()
+        d = PushDispatcher(devices=StubDevices(), sender=sender, locale=locale, run_async=False)
+        notifier = MembershipPushNotifier(d, StubRepo(), StubRepo("Flowitup SAS"))
+        notifier.notify("company_member_role_changed", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4(), role=role)
+        assert sender.sent[0].body == f"Flowitup SAS · {expected}"
+
+
+def test_role_change_keeps_an_unknown_role_as_is():
+    notifier, sender = _membership()
+    notifier.notify("company_member_role_changed", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4(), role="owner")
+    assert sender.sent[0].body == "Flowitup SAS · owner"
 
 
 def test_changing_your_own_access_notifies_nobody():
@@ -165,3 +197,99 @@ def test_an_unknown_event_is_ignored():
     notifier, sender = _membership()
     notifier.notify("something_else", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
     assert sender.sent == []
+
+
+# -- tasks: the assignee must still be able to open the project ---------------
+
+
+class StubAuthz:
+    """Resolver reader: one company, `assigned` users are members on every project."""
+
+    def __init__(self, assigned=()) -> None:
+        self._assigned = set(assigned)
+        self._company = uuid4()
+
+    def project_company_id(self, project_id):
+        return self._company
+
+    def company_role_for(self, user_id, company_id):
+        return "member" if user_id in self._assigned else None
+
+    def is_assigned(self, user_id, project_id):
+        return user_id in self._assigned
+
+    def grants_for(self, user_id, company_id, project_id):
+        return []
+
+
+class StubUsers:
+    def __init__(self, inactive=()) -> None:
+        self._inactive = set(inactive)
+
+    def is_sign_in_allowed(self, user_id):
+        return user_id not in self._inactive
+
+    def find_by_id(self, user_id):
+        return object()
+
+
+def test_an_assignee_removed_from_the_project_is_not_told_about_the_move():
+    d, sender = _dispatcher()
+    notifier = TaskPushNotifier(d, StubRepo())
+    notifier.set_access_reader(StubAuthz(assigned=()), StubUsers())
+    notifier.task_moved(task=_task(uuid4()), actor_id=uuid4())
+    assert sender.sent == []
+
+
+def test_a_deactivated_assignee_is_not_told_about_the_move():
+    d, sender = _dispatcher()
+    assignee = uuid4()
+    notifier = TaskPushNotifier(d, StubRepo(), authz_reader=StubAuthz(assigned=[assignee]))
+    notifier.set_access_reader(StubAuthz(assigned=[assignee]), StubUsers(inactive=[assignee]))
+    notifier.task_moved(task=_task(assignee), actor_id=uuid4())
+    assert sender.sent == []
+
+
+def test_an_assignee_still_on_the_project_is_told_about_the_move():
+    d, sender = _dispatcher()
+    assignee = uuid4()
+    notifier = TaskPushNotifier(d, StubRepo())
+    notifier.set_access_reader(StubAuthz(assigned=[assignee]), StubUsers())
+    notifier.task_moved(task=_task(assignee), actor_id=uuid4())
+    assert [m.token for m in sender.sent] == [f"tok-{assignee}"]
+
+
+# -- project label: the site address the apps show, else the name -------------
+
+
+@dataclass
+class Located:
+    name: str
+    address: Optional[str]
+
+
+class LocatedRepo:
+    def __init__(self, address: Optional[str]) -> None:
+        self._address = address
+
+    def find_by_id(self, entity_id):
+        return Located("Chantier Arcueil", self._address)
+
+
+def test_task_push_names_the_project_by_its_address():
+    d, sender = _dispatcher()
+    TaskPushNotifier(d, LocatedRepo(" 3 rue QA ")).task_assigned(task=_task(uuid4()), actor_id=uuid4())
+    assert sender.sent[0].body == "Poser les cloisons · 3 rue QA"
+
+
+def test_task_push_falls_back_to_the_name_without_an_address():
+    d, sender = _dispatcher()
+    TaskPushNotifier(d, LocatedRepo("  ")).task_assigned(task=_task(uuid4()), actor_id=uuid4())
+    assert sender.sent[0].body == "Poser les cloisons · Chantier Arcueil"
+
+
+def test_project_membership_push_names_the_project_by_its_address():
+    d, sender = _dispatcher()
+    notifier = MembershipPushNotifier(d, LocatedRepo("3 rue QA"), StubRepo("Flowitup SAS"))
+    notifier.notify("project_member_added", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
+    assert sender.sent[0].body == "3 rue QA"

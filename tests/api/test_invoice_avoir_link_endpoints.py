@@ -766,6 +766,71 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
         assert refetched_data["applied_to_invoice_id"] is None
 
 
+class TestUpdateAvoirTargetKeepsAppliedCreditValid:
+    """Editing the TARGET of an avoir must not leave the applied credit on an invalid target:
+    it cannot shrink below the credit, nor become a return or a release (targets the avoir
+    side itself refuses)."""
+
+    def _target_with_avoir(self, client, app, token):
+        target = _create_target(client, app, token, amount=100.0, invoice_type="labor")
+        avoir = _create_return(client, app, token, applied_to=target["id"], settled_via="avoir", unit_price=-80.0)
+        assert avoir.status_code == 201, avoir.get_data(as_text=True)
+        return target
+
+    def test_shrinking_target_below_applied_avoir_400(self, avoir_client, avoir_app, admin_token):
+        target = self._target_with_avoir(avoir_client, avoir_app, admin_token)
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, target["id"]),
+            json={"items": [{"description": "Line item", "quantity": 1, "unit_price": 20.0}]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "AppliedExceedsTarget"
+
+    def test_shrinking_target_down_to_applied_avoir_succeeds(self, avoir_client, avoir_app, admin_token):
+        target = self._target_with_avoir(avoir_client, avoir_app, admin_token)
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, target["id"]),
+            json={"items": [{"description": "Line item", "quantity": 1, "unit_price": 80.0}]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_retyping_target_into_a_return_400(self, avoir_client, avoir_app, admin_token):
+        target = self._target_with_avoir(avoir_client, avoir_app, admin_token)
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, target["id"]),
+            json={"type": "return", "items": [{"description": "Line item", "quantity": 1, "unit_price": -5.0}]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert "Unlink the avoirs" in resp.get_json()["message"]
+        refetched = avoir_client.get(
+            _invoice_url(avoir_app._test_project_id, target["id"]), headers=_auth(admin_token)
+        ).get_json()
+        assert refetched["type"] == "labor"
+        assert refetched["total_amount"] == 100.0
+
+    def test_retyping_target_into_a_release_400(self, avoir_client, avoir_app, admin_token):
+        target = self._target_with_avoir(avoir_client, avoir_app, admin_token)
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, target["id"]),
+            json={"type": "released_funds"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert "Unlink the avoirs" in resp.get_json()["message"]
+
+    def test_retyping_target_to_another_expense_type_succeeds(self, avoir_client, avoir_app, admin_token):
+        target = self._target_with_avoir(avoir_client, avoir_app, admin_token)
+        resp = avoir_client.put(
+            _invoice_url(avoir_app._test_project_id, target["id"]),
+            json={"type": "others"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+
 # ---------------------------------------------------------------------------
 # Mutation responses carry paid_with_returns (M2)
 # ---------------------------------------------------------------------------

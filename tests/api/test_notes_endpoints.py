@@ -155,6 +155,7 @@ class TestCreateNoteEndpoint:
             headers=_auth(member_token),
         )
         assert resp.status_code == 422
+        assert resp.get_json()["message"] == "title: Field required"
 
     def test_422_title_too_long(self, inv_client, member_token, invitation_app):
         resp = inv_client.post(
@@ -230,6 +231,13 @@ class TestListNotesEndpoint:
             headers=_auth(non_member_token),
         )
         assert resp.status_code == 403
+
+    def test_404_unknown_project_like_the_task_list(self, inv_client, admin_token):
+        """A project that does not exist is 404 before any permission check, as on /tasks."""
+        missing = "00000000-0000-4000-8000-000000000000"
+        for url in (_notes_url(missing), f"/api/v1/projects/{missing}/tasks"):
+            resp = inv_client.get(url, headers=_auth(admin_token))
+            assert resp.status_code == 404, (url, resp.get_data(as_text=True))
 
 
 # ===========================================================================

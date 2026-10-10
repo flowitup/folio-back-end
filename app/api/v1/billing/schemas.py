@@ -6,12 +6,14 @@ Decimal is used for all monetary / rate values to avoid float precision issues.
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, HttpUrl
+from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
+
+from app.api.v1.date_bounds import BusinessDate
 
 
 class _StrictBase(BaseModel):
@@ -52,10 +54,10 @@ class CreateBillingDocumentRequest(_StrictBase):
     notes: Optional[str] = Field(None, max_length=2000)
     terms: Optional[str] = Field(None, max_length=2000)
     signature_block_text: Optional[str] = Field(None, max_length=500)
-    validity_until: Optional[date] = None
-    payment_due_date: Optional[date] = None
+    validity_until: Optional[BusinessDate] = None
+    payment_due_date: Optional[BusinessDate] = None
     payment_terms: Optional[str] = Field(None, max_length=500)
-    issue_date: Optional[date] = None
+    issue_date: Optional[BusinessDate] = None
 
 
 class UpdateBillingDocumentRequest(_StrictBase):
@@ -75,10 +77,10 @@ class UpdateBillingDocumentRequest(_StrictBase):
     notes: Optional[str] = Field(None, max_length=2000)
     terms: Optional[str] = Field(None, max_length=2000)
     signature_block_text: Optional[str] = Field(None, max_length=500)
-    validity_until: Optional[date] = None
-    payment_due_date: Optional[date] = None
+    validity_until: Optional[BusinessDate] = None
+    payment_due_date: Optional[BusinessDate] = None
     payment_terms: Optional[str] = Field(None, max_length=500)
-    issue_date: Optional[date] = None
+    issue_date: Optional[BusinessDate] = None
 
 
 class UpdateStatusRequest(_StrictBase):
@@ -100,8 +102,8 @@ class ConvertRequest(_StrictBase):
     Both fields are optional — empty body {} is accepted.
     """
 
-    payment_due_date: Optional[date] = None
-    payment_terms: Optional[str] = None
+    payment_due_date: Optional[BusinessDate] = None
+    payment_terms: Optional[str] = Field(None, max_length=500)
     company_id: Optional[UUID] = None  # None → inherit from source document
 
 
@@ -110,11 +112,12 @@ class ApplyTemplateRequest(_StrictBase):
 
     recipient_name: str = Field(..., min_length=1, max_length=255)
     company_id: Optional[UUID] = None  # None → resolved to caller's primary company
-    recipient_address: Optional[str] = None
+    # Same cap as a document's address, so the created document can be saved again.
+    recipient_address: Optional[str] = Field(None, max_length=500)
     recipient_email: Optional[EmailStr] = None
     recipient_siret: Optional[str] = Field(None, max_length=32)
     project_id: Optional[UUID] = None
-    issue_date: Optional[date] = None
+    issue_date: Optional[BusinessDate] = None
 
 
 class ImportBillingDocumentRequest(_StrictBase):
@@ -137,10 +140,10 @@ class ImportBillingDocumentRequest(_StrictBase):
     notes: Optional[str] = Field(None, max_length=2000)
     terms: Optional[str] = Field(None, max_length=2000)
     signature_block_text: Optional[str] = Field(None, max_length=500)
-    validity_until: Optional[date] = None
-    payment_due_date: Optional[date] = None
+    validity_until: Optional[BusinessDate] = None
+    payment_due_date: Optional[BusinessDate] = None
     payment_terms: Optional[str] = Field(None, max_length=500)
-    issue_date: Optional[date] = None
+    issue_date: Optional[BusinessDate] = None
     created_at: Optional[datetime] = None  # preserve historical timestamp
 
 
@@ -149,28 +152,38 @@ class ImportBillingDocumentRequest(_StrictBase):
 # ---------------------------------------------------------------------------
 
 
+def _vat_rate_cents(value: Optional[Decimal]) -> Optional[Decimal]:
+    """Round to the 2 decimals the Numeric(5, 2) column keeps, so the response shows what is stored."""
+    return None if value is None else value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 class CreateTemplateRequest(_StrictBase):
     """Request body for POST /billing-document-templates."""
 
     kind: Literal["devis", "facture"]
     name: str = Field(..., min_length=1, max_length=120)
-    items: list[ItemSchema] = Field(default_factory=list)
-    notes: Optional[str] = None
-    terms: Optional[str] = None
+    # Same caps as a document's lines, notes and terms, so a template always makes a savable document.
+    items: list[ItemSchema] = Field(default_factory=list, max_length=200)
+    notes: Optional[str] = Field(None, max_length=2000)
+    terms: Optional[str] = Field(None, max_length=2000)
     default_vat_rate: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
     # Phase 2: explicit target company (must be one the caller administers).
     # Omitted → falls back to the caller's own admin company, if any.
     company_id: Optional[str] = None
+
+    _round_vat = field_validator("default_vat_rate")(_vat_rate_cents)
 
 
 class UpdateTemplateRequest(_StrictBase):
     """Request body for PUT /billing-document-templates/<id>."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=120)
-    items: Optional[list[ItemSchema]] = None
-    notes: Optional[str] = None
-    terms: Optional[str] = None
+    items: Optional[list[ItemSchema]] = Field(None, max_length=200)
+    notes: Optional[str] = Field(None, max_length=2000)
+    terms: Optional[str] = Field(None, max_length=2000)
     default_vat_rate: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
+
+    _round_vat = field_validator("default_vat_rate")(_vat_rate_cents)
 
 
 # ---------------------------------------------------------------------------

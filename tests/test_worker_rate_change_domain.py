@@ -206,3 +206,40 @@ def test_resolve_rate_future_change_does_not_affect_earlier_entry():
     )
     today = date(2026, 6, 16)
     assert _resolve_rate(worker, today, [future_rc]) == Decimal("100")
+
+
+# ---------------------------------------------------------------------------
+# SetWorkerRateChangeUseCase — rate checked at the column's 2 decimals
+# ---------------------------------------------------------------------------
+
+
+def _set_rate(daily_rate):
+    from unittest.mock import Mock
+
+    from app.application.labor.set_worker_rate_change import (
+        SetWorkerRateChangeRequest,
+        SetWorkerRateChangeUseCase,
+    )
+
+    project_id, worker_id = uuid4(), uuid4()
+    worker_repo, rate_repo = Mock(), Mock()
+    worker_repo.find_by_id.return_value = Mock(project_id=project_id)
+    rate_repo.upsert.side_effect = lambda rc: rc
+    dto = SetWorkerRateChangeUseCase(worker_repo, rate_repo).execute(
+        SetWorkerRateChangeRequest(
+            project_id=project_id, worker_id=worker_id, effective_date=date(2026, 10, 10), daily_rate=daily_rate
+        )
+    )
+    return dto, rate_repo
+
+
+def test_set_rate_change_refuses_a_rate_that_rounds_to_zero():
+    # 0.004 passed "> 0" and was committed as 0.00 while the API answered 400.
+    with pytest.raises(InvalidRateChangeError):
+        _set_rate(Decimal("0.004"))
+
+
+def test_set_rate_change_saves_the_rate_rounded_to_the_cent():
+    dto, rate_repo = _set_rate(Decimal("0.005"))
+    assert rate_repo.upsert.call_args.args[0].daily_rate == Decimal("0.01")
+    assert dto.daily_rate == 0.01

@@ -91,3 +91,25 @@ def test_an_empty_object_is_refused_and_deleted():
         _confirm(uc)
     storage.delete.assert_called_once()
     repo.save.assert_not_called()
+
+
+def test_the_stored_filename_drops_control_characters_and_keeps_the_presigned_key():
+    uc, repo, _ = _use_case()
+    project_id, doc_id = uuid4(), uuid4()
+    doc = uc.execute(
+        project_id=project_id,
+        doc_id=doc_id,
+        # presign keyed the object on the sanitized original name
+        storage_key=f"project-documents/{project_id}/{doc_id}/Plan_X.pdf",
+        filename="Plan\nX.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        uploader_user_id=uuid4(),
+    )
+    assert doc.filename == "PlanX.pdf"
+
+
+def test_an_unlisted_dwg_mime_is_stored_as_the_generic_type():
+    uc, repo, _ = _use_case()
+    doc = _confirm(uc, filename="plan.dwg", content_type="application/" + "x" * 300)
+    assert doc.content_type == "application/octet-stream"

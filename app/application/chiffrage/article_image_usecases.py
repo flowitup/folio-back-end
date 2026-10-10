@@ -32,6 +32,7 @@ from app.application.chiffrage.ports import (
     TransactionalSessionPort,
 )
 from app.application.chiffrage.validation import owned_article
+from app.domain.value_objects.image_signature import sniff_image_stream
 
 _log = logging.getLogger(__name__)
 
@@ -98,7 +99,12 @@ class UploadArticleImageUseCase:
         article = owned_article(self._repo, article_id, project_id)
         if size > IMAGE_MAX_SIZE_BYTES:
             raise ImageTooLargeError(f"Image exceeds {IMAGE_MAX_SIZE_BYTES // (1024 * 1024)} MB.")
-        ct = _validate_type(content_type)
+        _validate_type(content_type)
+        # The header is only the client's label: the bytes must really be an
+        # allowed image, and they are stored under the type they actually are.
+        ct = sniff_image_stream(fileobj)
+        if ct not in ALLOWED_IMAGE_TYPES:
+            raise UnsupportedImageTypeError("File contents are not a PNG, JPEG or WebP image.")
 
         key = self._storage.build_key(article_id)
         self._storage.put(key, fileobj, ct)

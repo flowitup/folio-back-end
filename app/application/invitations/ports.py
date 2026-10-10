@@ -134,6 +134,10 @@ class UserWriteRepositoryPort(Protocol):
         """Persist a user (insert or update). Returns the saved instance."""
         ...
 
+    def is_sign_in_allowed(self, user_id: UUID) -> bool:
+        """True when the account exists, is active and has not been erased."""
+        ...
+
     def search_by_email_or_name(self, query: str, limit: int = 20) -> list[User]:
         """Search users by email or display_name (case-insensitive prefix/substring match).
 

@@ -214,6 +214,16 @@ class TestCreateLaborRole:
         resp = role_client.post(_ROLES_URL, json={"name": "DupRole", "color": "#0EA5E9"}, headers=_auth(admin_token))
         assert resp.status_code == 409
 
+    def test_create_duplicate_name_in_another_case_returns_409(self, role_client, admin_token):
+        """Same rule as payment-method labels: "electricien" duplicates "Electricien"."""
+        first = role_client.post(
+            _ROLES_URL, json={"name": "Electricien", "color": "#E11D48"}, headers=_auth(admin_token)
+        )
+        assert first.status_code == 201
+        for name in ("electricien", "ELECTRICIEN"):
+            resp = role_client.post(_ROLES_URL, json={"name": name, "color": "#0EA5E9"}, headers=_auth(admin_token))
+            assert resp.status_code == 409, name
+
     def test_create_invalid_color_returns_422_or_400(self, role_client, admin_token):
         resp = role_client.post(
             _ROLES_URL,
@@ -221,6 +231,15 @@ class TestCreateLaborRole:
             headers=_auth(admin_token),
         )
         assert resp.status_code in (400, 422)
+
+    def test_create_color_with_a_trailing_newline_is_refused(self, role_client, admin_token):
+        # re.match's "$" also matched before a trailing "\n": the 8 characters overflowed String(7), a 500.
+        resp = role_client.post(
+            _ROLES_URL,
+            json={"name": "Newline Color Role", "color": "#FFFFFF\n"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
 
     def test_create_empty_name_returns_400(self, role_client, admin_token):
         resp = role_client.post(
@@ -302,6 +321,18 @@ class TestUpdateLaborRole:
         )
         assert resp.status_code == 409
 
+    def test_update_rename_conflict_in_another_case_returns_409(self, role_client, admin_token):
+        self._create_role(role_client, admin_token, "CaseRoleA")
+        role_b_id = self._create_role(role_client, admin_token, "CaseRoleB")
+        resp = role_client.patch(_role_url(role_b_id), json={"name": "caserolea"}, headers=_auth(admin_token))
+        assert resp.status_code == 409
+
+    def test_update_case_only_rename_of_the_same_role_returns_200(self, role_client, admin_token):
+        role_id = self._create_role(role_client, admin_token, "plombier")
+        resp = role_client.patch(_role_url(role_id), json={"name": "Plombier"}, headers=_auth(admin_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["name"] == "Plombier"
+
     def test_update_invalid_color_returns_400(self, role_client, admin_token):
         role_id = self._create_role(role_client, admin_token, "BadColorUpdate")
         resp = role_client.patch(
@@ -310,6 +341,11 @@ class TestUpdateLaborRole:
             headers=_auth(admin_token),
         )
         assert resp.status_code in (400, 422)
+
+    def test_update_color_with_a_trailing_newline_is_refused(self, role_client, admin_token):
+        role_id = self._create_role(role_client, admin_token, "NewlineColorUpdate")
+        resp = role_client.patch(_role_url(role_id), json={"color": "#FFFFFF\n"}, headers=_auth(admin_token))
+        assert resp.status_code == 400, resp.get_data(as_text=True)
 
     def test_update_requires_auth(self, role_client, admin_token):
         role_id = self._create_role(role_client, admin_token, "UnauthPatch")

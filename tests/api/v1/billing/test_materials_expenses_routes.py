@@ -372,6 +372,30 @@ class TestRefundableFilter:
         assert inv_set_id in ids
 
 
+class TestMoneyIsRoundedToCents:
+    def test_list_and_summary_amounts_are_cents(self, mat_client, admin_tok, mat_exp_app):
+        """10 x 12.50 + 3 x 33.33 at 20 % is 269.988 unrounded; the ledger shows 269.99, so must this."""
+        url = "/api/v1/billing/materials-expenses?refundable=true&limit=200"
+        before = mat_client.get(url, headers=_auth(admin_tok)).get_json()["summary"]
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv.items = [
+                {"description": "Planks", "quantity": 10, "unit_price": 12.5, "vat_rate": 20},
+                {"description": "Screws", "quantity": 3, "unit_price": 33.33, "vat_rate": 20},
+            ]
+            db.session.commit()
+            inv_id = str(inv.id)
+
+        body = mat_client.get(url, headers=_auth(admin_tok)).get_json()
+        row = next(i for i in body["items"] if i["id"] == inv_id)
+        assert row["total_amount"] == 269.99
+        summary = body["summary"]
+        for key, value in summary.items():
+            if isinstance(value, float):
+                assert value == round(value, 2), key
+        assert summary["refundable_amount"] == pytest.approx(before["refundable_amount"] + 269.99)
+
+
 # ---------------------------------------------------------------------------
 # PATCH set / clear / transition
 # ---------------------------------------------------------------------------
@@ -1155,3 +1179,109 @@ class TestRefundSummary:
             "refunded_by_bank": 0.0,
             "refunded_by_both": 0.0,
         }
+
+
+# ---------------------------------------------------------------------------
+# ?q= search — server-side, so it reaches expenses past the loaded page
+# ---------------------------------------------------------------------------
+
+
+class TestSearch:
+    def _seed(self, mat_exp_app) -> tuple[str, dict[str, str]]:
+        """A company of its own: 3 candidates, the oldest one on a page of its own."""
+        now = datetime.now(timezone.utc)
+        company = CompanyModel(
+            id=uuid4(),
+            legal_name="Search Test Co",
+            address="4 rue de la Paix",
+            created_by=mat_exp_app._admin_user_id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(company)
+        db.session.flush()
+        project = ProjectModel(name="Chantier Vauban", owner_id=mat_exp_app._admin_user_id, company_id=company.id)
+        db.session.add(project)
+        db.session.commit()
+
+        ids = {}
+        for n, (recipient, number, day) in enumerate(
+            [
+                ("Supplier 000", "INV-SRCH-0001", date(2025, 1, 1)),
+                ("Supplier 001", "INV-SRCH-0002", date(2025, 1, 2)),
+                ("100% Béton_Plus", "INV-SRCH-0003", date(2025, 1, 3)),
+            ]
+        ):
+            inv = _make_invoice(project.id, mat_exp_app._admin_user_id)
+            inv.recipient_name = recipient
+            inv.invoice_number = number
+            inv.issue_date = day
+            db.session.commit()
+            ids[recipient] = str(inv.id)
+        return str(company.id), ids
+
+    def _get(self, client, tok, company_id: str, q: str, extra: str = "") -> dict:
+        from urllib.parse import quote
+
+        resp = client.get(
+            f"/api/v1/billing/materials-expenses?refundable=false&company_id={company_id}&q={quote(q)}{extra}",
+            headers=_auth(tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def test_q_finds_the_oldest_expense_beyond_the_first_page(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company_id, ids = self._seed(mat_exp_app)
+
+        # Without q the oldest expense is not on a 1-row first page...
+        body = self._get(mat_client, admin_tok, company_id, "", "&limit=1")
+        assert body["total"] == 3
+        assert [i["id"] for i in body["items"]] != [ids["Supplier 000"]]
+
+        # ...with q it is the whole result, counted as such.
+        body = self._get(mat_client, admin_tok, company_id, "supplier 000", "&limit=1")
+        assert body["total"] == 1
+        assert [i["id"] for i in body["items"]] == [ids["Supplier 000"]]
+
+    def test_q_matches_invoice_number_and_project_name(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company_id, ids = self._seed(mat_exp_app)
+
+        body = self._get(mat_client, admin_tok, company_id, "srch-0002")
+        assert [i["id"] for i in body["items"]] == [ids["Supplier 001"]]
+
+        body = self._get(mat_client, admin_tok, company_id, "vauban")
+        assert body["total"] == 3
+
+    def test_q_wildcards_match_literally(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company_id, ids = self._seed(mat_exp_app)
+
+        assert [i["id"] for i in self._get(mat_client, admin_tok, company_id, "100%")["items"]] == [
+            ids["100% Béton_Plus"]
+        ]
+        assert self._get(mat_client, admin_tok, company_id, "%")["total"] == 1
+        assert self._get(mat_client, admin_tok, company_id, "n_P")["total"] == 1
+        assert self._get(mat_client, admin_tok, company_id, "r_0")["total"] == 0
+
+    def test_blank_q_is_no_filter_and_long_q_is_capped(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company_id, _ids = self._seed(mat_exp_app)
+
+        assert self._get(mat_client, admin_tok, company_id, "   ")["total"] == 3
+        assert self._get(mat_client, admin_tok, company_id, "x" * 5000)["total"] == 0
+
+    def test_summary_ignores_q(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            company_id, ids = self._seed(mat_exp_app)
+            inv = db.session.get(InvoiceModel, UUID(ids["Supplier 000"]))
+            inv.refundable_status = "refundable"
+            db.session.commit()
+
+        url = f"/api/v1/billing/materials-expenses?refundable=true&company_id={company_id}"
+        full = mat_client.get(url, headers=_auth(admin_tok)).get_json()
+        searched = mat_client.get(f"{url}&q=nothing-matches", headers=_auth(admin_tok)).get_json()
+        assert searched["total"] == 0
+        assert searched["summary"] == full["summary"]
+        assert full["summary"]["refundable_amount"] == pytest.approx(1000.0)

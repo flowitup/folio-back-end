@@ -15,6 +15,7 @@ from uuid import UUID
 from app.application.labor.ports import IWorkerRepository
 from app.application.ports.push_sender import PushSenderPort
 from app.application.push.dispatcher import PushDispatcher
+from app.application.push.project_label import project_label
 from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ class AttendancePushNotifier:
         if not recipients:
             return
         project = self._projects.find_by_id(project_id)
-        project_name = project.name if project is not None else ""
+        project_name = project_label(project)
         title, body = _TEXT[event][self._locale]
         text = body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name)
         self._dispatcher.dispatch(

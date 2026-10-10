@@ -35,6 +35,14 @@ class StoreAlreadyExistsError(Exception):
     """
 
 
+class LibraryProductNotFoundError(Exception):
+    """Raised when a quote names a library product outside the project's company."""
+
+
+class LibrarySupplierNotFoundError(Exception):
+    """Raised when a quote names a library supplier outside the project's company."""
+
+
 class UnitNotFoundError(Exception):
     """Raised when a requested custom unit does not exist."""
 

@@ -7,8 +7,6 @@ Phase 05 tightening:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from app.application.billing._helpers import (
     _build_doc_from_inputs,
     _effective_prefix_from_company,
@@ -30,6 +28,7 @@ from app.application.billing.ports import (
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.exceptions import MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
+from app.domain.time import business_today
 
 
 class CreateBillingDocumentUseCase:
@@ -95,7 +94,8 @@ class CreateBillingDocumentUseCase:
             raise ValueError("Recipient name is required")
 
         # 5. Atomically generate document number
-        issue_date = inp.issue_date if inp.issue_date is not None else datetime.now(timezone.utc).date()
+        # Default to today on the business (Paris) calendar, not UTC's: it also picks the number's year.
+        issue_date = inp.issue_date if inp.issue_date is not None else business_today()
         validate_document_dates(issue_date, inp.validity_until, inp.payment_due_date)
         year = issue_date.year
         sequence = self._counter_repo.next_value(counter_key, inp.kind, year)

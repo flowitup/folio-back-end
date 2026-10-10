@@ -24,7 +24,10 @@ class ChiffrageArticleModel(Base):
     """
 
     __tablename__ = "chiffrage_articles"
-    __table_args__ = (Index("ix_chiffrage_articles_poste_position", "poste_id", "position"),)
+    __table_args__ = (
+        Index("ix_chiffrage_articles_poste_position", "poste_id", "position"),
+        Index("ix_chiffrage_articles_room_id", "room_id"),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     poste_id: Mapped[UUID] = mapped_column(

@@ -15,7 +15,12 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app.api._helpers.pydantic_errors import validation_message
 from app.api.openapi import openapi_doc
 from app.api.v1.project_photos import project_photos_bp
-from app.api.v1.project_photos.schemas import ListQueryParams, UpdatePhotoBody
+from app.api.v1.project_photos.schemas import (
+    MAX_CAPTION_LENGTH,
+    ListQueryParams,
+    UpdatePhotoBody,
+    bounded_captured_at,
+)
 from app.api.v1.projects.decorators import (
     _effective_perms_for,
     _has_permission,
@@ -76,7 +81,8 @@ def _parse_captured_at(raw: str | None) -> datetime | None:
     A date-only value is normalized to UTC midnight so the DB always stores a
     tz-aware timestamp.
 
-    Returns None if raw is None. Raises ValueError on invalid format.
+    Returns None if raw is None. Raises ValueError on invalid format or a date
+    outside the accepted range (see bounded_captured_at).
     """
     if raw is None:
         return None
@@ -84,17 +90,14 @@ def _parse_captured_at(raw: str | None) -> datetime | None:
     # Try full ISO datetime first
     try:
         dt = datetime.fromisoformat(raw)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
     except ValueError:
-        pass
-    # Try date-only YYYY-MM-DD
-    try:
-        d = date.fromisoformat(raw)
-        return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-    except ValueError:
-        raise ValueError(f"Invalid captured_at value '{raw}' — expected ISO datetime or YYYY-MM-DD")
+        # Try date-only YYYY-MM-DD
+        try:
+            d = date.fromisoformat(raw)
+        except ValueError:
+            raise ValueError(f"Invalid captured_at value '{raw}' — expected ISO datetime or YYYY-MM-DD")
+        dt = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    return bounded_captured_at(dt)
 
 
 @project_photos_bp.route("/projects/<project_id>/photos", methods=["POST"])
@@ -128,7 +131,10 @@ def upload_project_photo(project_id: str):
     # Size is within bounds — safe to buffer the body (≤ 50 MiB).
     data = file.stream.read()
 
-    caption = request.form.get("caption") or None
+    # Trimmed first, as the PATCH body is, so surrounding blanks never count toward the cap
+    caption = (request.form.get("caption") or "").strip() or None
+    if caption is not None and len(caption) > MAX_CAPTION_LENGTH:
+        return _error_response("INVALID_CAPTION", f"Caption must be at most {MAX_CAPTION_LENGTH} characters", 422)
     raw_captured_at = request.form.get("captured_at")
     try:
         captured_at = _parse_captured_at(raw_captured_at)
@@ -302,11 +308,8 @@ def update_project_photo(project_id: str, photo_id: str):
     if caption_sent:
         update_kwargs["caption"] = params.caption or None
     if params.captured_at is not None:
-        # Normalize to UTC if no tzinfo provided
-        dt = params.captured_at
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        update_kwargs["captured_at"] = dt
+        # Already UTC and range-checked by UpdatePhotoBody
+        update_kwargs["captured_at"] = params.captured_at
 
     try:
         photo = container.update_project_photo_usecase.execute(

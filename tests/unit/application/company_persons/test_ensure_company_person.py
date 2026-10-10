@@ -49,6 +49,9 @@ class FakeCompanyPersons:
         self.rows = [r for r in self.rows if r.id != profile.id] + [profile]
         return profile
 
+    def add_if_absent(self, profile):
+        return self.find(profile.company_id, profile.person_id) or self.save(profile)
+
 
 def _person(phone="+33611111111", user_id=None):
     return Person(

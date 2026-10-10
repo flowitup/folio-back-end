@@ -29,6 +29,83 @@ from app.infrastructure.database.models import (
 )
 
 
+def bonus_rates_by_worker_month(session: Session, rows) -> dict:
+    """Map (worker_id, (year, month)) -> the rate a bonus day is worth that month.
+
+    ``rows`` carry ``worker_id``, ``year``, ``month`` and ``base_rate``. The rate is the
+    worker's latest rate change effective on or before the month's last day, falling
+    back to their base rate. ``get_summary`` resolves the bonus rate as of its
+    ``date_to``; for a month bucket that boundary is the month's last day, so the
+    monthly rollup and a summary requested for the same month price the bonus
+    identically. Shared with the project spent reader so project labor totals price
+    the bonus the same way.
+    """
+    if not rows:
+        return {}
+
+    changes: dict = {}
+    for change in (
+        session.query(
+            WorkerRateChangeModel.worker_id,
+            WorkerRateChangeModel.effective_date,
+            WorkerRateChangeModel.daily_rate,
+        )
+        .filter(WorkerRateChangeModel.worker_id.in_({row.worker_id for row in rows}))
+        .filter(WorkerRateChangeModel.daily_rate > 0)  # a 0.00 row (sub-cent rate) is ignored everywhere
+        .order_by(WorkerRateChangeModel.effective_date.desc())
+        .all()
+    ):
+        changes.setdefault(change.worker_id, []).append(change)
+
+    resolved: dict = {}
+    for row in rows:
+        key = (int(row.year), int(row.month))
+        month_end = date(key[0], key[1], calendar.monthrange(key[0], key[1])[1])
+        rate = Decimal(str(row.base_rate)) if row.base_rate is not None else Decimal("0")
+        for change in changes.get(row.worker_id, ()):
+            if change.effective_date <= month_end:
+                rate = Decimal(str(change.daily_rate))
+                break
+        resolved[(row.worker_id, key)] = rate
+    return resolved
+
+
+def month_start_rates_by_worker_month(session: Session, rows) -> dict:
+    """Map (worker_id, (year, month)) -> the worker's rate on the month's first day.
+
+    Same inputs as ``bonus_rates_by_worker_month``; next to that month-end rate it
+    tells whether the rate changed during the month.
+    """
+    if not rows:
+        return {}
+
+    changes: dict = {}
+    for change in (
+        session.query(
+            WorkerRateChangeModel.worker_id,
+            WorkerRateChangeModel.effective_date,
+            WorkerRateChangeModel.daily_rate,
+        )
+        .filter(WorkerRateChangeModel.worker_id.in_({row.worker_id for row in rows}))
+        .filter(WorkerRateChangeModel.daily_rate > 0)  # a 0.00 row (sub-cent rate) is ignored everywhere
+        .order_by(WorkerRateChangeModel.effective_date.desc())
+        .all()
+    ):
+        changes.setdefault(change.worker_id, []).append(change)
+
+    resolved: dict = {}
+    for row in rows:
+        key = (int(row.year), int(row.month))
+        month_start = date(key[0], key[1], 1)
+        rate = Decimal(str(row.base_rate)) if row.base_rate is not None else Decimal("0")
+        for change in changes.get(row.worker_id, ()):
+            if change.effective_date <= month_start:
+                rate = Decimal(str(change.daily_rate))
+                break
+        resolved[(row.worker_id, key)] = rate
+    return resolved
+
+
 class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
     """SQLAlchemy adapter for labor entry persistence."""
 
@@ -135,6 +212,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             select(WorkerRateChangeModel.daily_rate)
             .where(WorkerRateChangeModel.worker_id == LaborEntryModel.worker_id)
             .where(WorkerRateChangeModel.effective_date <= LaborEntryModel.date)
+            .where(WorkerRateChangeModel.daily_rate > 0)
             .order_by(WorkerRateChangeModel.effective_date.desc())
             .limit(1)
             .correlate(LaborEntryModel, WorkerModel)
@@ -175,7 +253,9 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         # — group_by stays on (WorkerModel.id, display_name, WorkerModel.daily_rate).
         # The resolved rate is returned in the "daily_rate" column and consumed
         # by the use-case layer to price bonus days (decision D6).
-        _br = select(WorkerRateChangeModel.daily_rate).where(WorkerRateChangeModel.worker_id == WorkerModel.id)
+        _br = select(WorkerRateChangeModel.daily_rate).where(
+            WorkerRateChangeModel.worker_id == WorkerModel.id, WorkerRateChangeModel.daily_rate > 0
+        )
         if date_to is not None:
             _br = _br.where(WorkerRateChangeModel.effective_date <= date_to)
         bonus_rate = func.coalesce(
@@ -277,6 +357,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             select(WorkerRateChangeModel.daily_rate)
             .where(WorkerRateChangeModel.worker_id == LaborEntryModel.worker_id)
             .where(WorkerRateChangeModel.effective_date <= LaborEntryModel.date)
+            .where(WorkerRateChangeModel.daily_rate > 0)
             .order_by(WorkerRateChangeModel.effective_date.desc())
             .limit(1)
             .correlate(LaborEntryModel, WorkerModel)
@@ -337,6 +418,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         # empty row.
         rows = query.all()
         bonus_rates = self._bonus_rates_by_worker_month(rows)
+        start_rates = month_start_rates_by_worker_month(self._session, rows)
 
         buckets: dict[tuple[int, int], MonthlyLaborSummaryRow] = {}
         order: List[tuple[int, int]] = []
@@ -354,6 +436,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 total_cost=cost,
                 banked_hours=banked,
                 daily_rate=bonus_rates[(row.worker_id, key)],
+                month_start_rate=start_rates[(row.worker_id, key)],
             )
             bucket = buckets.get(key)
             if bucket is None:
@@ -373,41 +456,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         return [buckets[k] for k in order]
 
     def _bonus_rates_by_worker_month(self, rows) -> dict:
-        """Map (worker_id, (year, month)) -> the rate a bonus day is worth that month.
-
-        That is the worker's latest rate change effective on or before the month's last
-        day, falling back to their base rate. ``get_summary`` resolves the bonus rate as
-        of its ``date_to``; for a month bucket that boundary is the month's last day, so
-        the monthly rollup and a summary requested for the same month price the bonus
-        identically.
-        """
-        if not rows:
-            return {}
-
-        changes: dict = {}
-        for change in (
-            self._session.query(
-                WorkerRateChangeModel.worker_id,
-                WorkerRateChangeModel.effective_date,
-                WorkerRateChangeModel.daily_rate,
-            )
-            .filter(WorkerRateChangeModel.worker_id.in_({row.worker_id for row in rows}))
-            .order_by(WorkerRateChangeModel.effective_date.desc())
-            .all()
-        ):
-            changes.setdefault(change.worker_id, []).append(change)
-
-        resolved: dict = {}
-        for row in rows:
-            key = (int(row.year), int(row.month))
-            month_end = date(key[0], key[1], calendar.monthrange(key[0], key[1])[1])
-            rate = Decimal(str(row.base_rate)) if row.base_rate is not None else Decimal("0")
-            for change in changes.get(row.worker_id, ()):
-                if change.effective_date <= month_end:
-                    rate = Decimal(str(change.daily_rate))
-                    break
-            resolved[(row.worker_id, key)] = rate
-        return resolved
+        return bonus_rates_by_worker_month(self._session, rows)
 
     def list_by_project_in_range(
         self,
@@ -458,6 +507,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 PersonModel.name.label("person_name"),
                 OtherProject.id.label("other_project_id"),
                 OtherProject.name.label("other_project_name"),
+                LaborEntryModel.id.label("entry_id"),
                 LaborEntryModel.shift_type.label("shift_type"),
                 LaborEntryModel.supplement_hours.label("supplement_hours"),
             )
@@ -477,6 +527,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 TargetProject.company_id.isnot(None),
                 LaborEntryModel.date == date,
             )
+            # A person with two worker rows here would otherwise list each entry twice.
+            .distinct()
             .order_by(PersonModel.name.asc(), OtherProject.name.asc())
         )
         if person_ids:
@@ -510,7 +562,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             id=model.id,
             worker_id=model.worker_id,
             date=model.date,
-            amount_override=Decimal(str(model.amount_override)) if model.amount_override else None,
+            amount_override=Decimal(str(model.amount_override)) if model.amount_override is not None else None,
             note=model.note,
             shift_type=model.shift_type,  # pass-through; may be None for supplement-only entries
             supplement_hours=model.supplement_hours if model.supplement_hours is not None else 0,

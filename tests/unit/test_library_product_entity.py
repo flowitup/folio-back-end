@@ -337,8 +337,8 @@ class TestLibraryProductWithEnrichment:
             category="Software",
         )
 
-        # name always gets overwritten
-        assert enriched.name == "New Name"
+        # A curated (non-blank) name is never overwritten by a re-import
+        assert enriched.name == "Original Name"
         # Other fields should preserve original
         assert enriched.description == "Original description"
         assert enriched.size == "Large"
@@ -441,3 +441,29 @@ class TestLibraryProductWithEnrichment:
 
         # updated_at should be strictly later (or equal depending on timing)
         assert enriched.updated_at >= original_updated
+
+    def test_enrichment_fills_blank_name(self):
+        """A blank stored name is filled from the import."""
+        product = LibraryProduct.create(
+            company_id=uuid4(),
+            supplier_id=uuid4(),
+            supplier_reference="REF-001",
+            name="  ",
+        )
+
+        assert product.with_enrichment(name="Imported Name").name == "Imported Name"
+
+    def test_enrichment_no_op_returns_self_with_same_timestamp(self):
+        """Nothing to fill: the product is returned unchanged, so a re-import is not an update."""
+        product = LibraryProduct.create(
+            company_id=uuid4(),
+            supplier_id=uuid4(),
+            supplier_reference="REF-001",
+            name="Curated Name",
+            description="Desc",
+        )
+
+        enriched = product.with_enrichment(name="Imported Name", description="Other desc")
+
+        assert enriched is product
+        assert enriched.updated_at == product.updated_at

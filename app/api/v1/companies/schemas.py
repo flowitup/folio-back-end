@@ -15,7 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
-from app.domain.companies.bank_details import normalize_bic, normalize_iban
+from app.api.v1.numeric_bounds import positive_cents
+from app.domain.companies.bank_details import compact_identifier, normalize_bic, normalize_iban
 from app.domain.companies.masking import is_masked
 
 
@@ -41,9 +42,10 @@ def _validate_logo_url(v: Optional[HttpUrl]) -> Optional[HttpUrl]:
     if host is None:
         raise ValueError("logo_url must have a valid hostname")
     # N8: HttpUrl already enforces http/https scheme; redundant check removed.
-    # M5 (DNS-rebinding): BE validates once at save time; the FE/PDF renderer does
-    # its own DNS lookup later which is a documented acceptable risk (same-host
-    # SSRF surface is small since BE does not fetch the URL itself).
+    # M5 (DNS-rebinding): BE validates once at save time. The BE does fetch the URL
+    # later, when the billing PDF renderer embeds the logo: it re-validates the URL
+    # and every redirect hop then (_fetch_logo), but its own DNS lookup can still
+    # differ from this one, a documented acceptable risk.
     # Attempt to resolve hostname; catch all DNS errors gracefully
     try:
         addrs = socket.getaddrinfo(host, None)
@@ -73,6 +75,12 @@ def _validate_bic(v: Optional[str]) -> Optional[str]:
     return normalize_bic(v) if v else v
 
 
+def _compact_identifier(v):
+    """SIRET and TVA as printed ("552 100 554 00025", "fr40552100554") are checked and stored
+    compact, as IBAN and BIC are."""
+    return compact_identifier(v) if isinstance(v, str) else v
+
+
 def _reject_blank(v: Optional[str]) -> Optional[str]:
     """A name or address of spaces only is as empty as ''."""
     if v is not None and not v.strip():
@@ -97,6 +105,11 @@ class CreateCompanyRequest(_StrictBase):
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+
+    @field_validator("siret", "tva_number", mode="before")
+    @classmethod
+    def compact_identifiers(cls, v):
+        return _compact_identifier(v)
 
     @field_validator("legal_name", "address", mode="after")
     @classmethod
@@ -141,6 +154,12 @@ class UpdateCompanyRequest(_StrictBase):
         # A form seeded from the masked read sends "····0189" back; treat it as
         # "leave unchanged" instead of failing the SIRET/TVA pattern or storing it.
         return None if isinstance(v, str) and is_masked(v) else v
+
+    @field_validator("siret", "tva_number", mode="before")
+    @classmethod
+    def compact_identifiers(cls, v):
+        # Commutes with masked_means_unchanged: compacting leaves a mask a mask.
+        return _compact_identifier(v)
 
     @field_validator("legal_name", "address", mode="after")
     @classmethod
@@ -280,6 +299,12 @@ class UpdateMemberPayDefaultsRequest(_StrictBase):
     # and CreateWorkerUseCase would refuse it anyway.
     default_daily_rate: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999999.99"))
     labor_role_id: Optional[UUID] = None
+
+    @field_validator("default_daily_rate")
+    @classmethod
+    def round_to_cents(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        # Rounded before the "> 0" rule applies: 0.004 passed it and was then stored as 0.00.
+        return positive_cents(v)
 
 
 class ImportMembersRequest(_StrictBase):

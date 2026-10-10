@@ -35,8 +35,11 @@ def _assert_assignee_can_read(authz_reader, assignee_id: Optional[UUID], project
     """
     if assignee_id is None:
         return
-    # A deactivated account keeps its company role but can no longer sign in.
+    # A deactivated account keeps its company role but can no longer sign in. An
+    # unknown id cannot sign in either, but it is "not a member", never "deactivated".
     if user_repo is not None and not user_repo.is_sign_in_allowed(assignee_id):
+        if user_repo.find_by_id(assignee_id) is None:
+            raise InvalidAssigneeError("Assignee must be a member of this project")
         raise InvalidAssigneeError("Assignee's account is deactivated")
     if authz_reader is None:
         return

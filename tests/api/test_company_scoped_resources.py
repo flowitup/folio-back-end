@@ -299,6 +299,13 @@ class TestPersonsSearchCompanyScope:
         names = [p["name"] for p in resp.get_json()["persons"]]
         assert "Only In B" in names
 
+    def test_wildcards_in_q_match_only_themselves(self, client, admin_b_h):
+        # "%%" would match everyone and "y_i" would match "onl[y i]n b" if '%'/'_' were wildcards.
+        for q in ("%%", "y_i"):
+            resp = client.get("/api/v1/persons", query_string={"q": q}, headers=admin_b_h)
+            assert resp.status_code == 200
+            assert resp.get_json()["persons"] == []
+
     def test_member_only_caller_gets_403(self, client, member_a_h):
         resp = client.get("/api/v1/persons?q=only", headers=member_a_h)
         assert resp.status_code == 403

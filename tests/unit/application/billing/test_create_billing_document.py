@@ -123,9 +123,16 @@ class TestCreateBillingDocumentErrors:
         assert exc_info.value.user_id == user_id
 
     def test_unattached_company_raises(self, usecase, fake_session, user_id):
-        """company_id provided but company not found → ValueError from ports helper."""
-        with pytest.raises((ValueError, MissingCompanyProfileError)):
+        """Unknown company id → the same 403 error as a company the caller has no role in."""
+        with pytest.raises(ForbiddenCompanyBillingError):
             usecase.execute(_inp(user_id, company_id=uuid4()), fake_session)
+
+    def test_company_the_caller_never_belonged_to_is_forbidden(self, usecase, company_repo, fake_session):
+        """An outsider gets the non-admin 403, not a 'no longer attached' conflict."""
+        cid = uuid4()
+        company_repo.save(make_company(owner_id=uuid4(), company_id=cid))
+        with pytest.raises(ForbiddenCompanyBillingError):
+            usecase.execute(_inp(uuid4(), company_id=cid), fake_session)
 
     def test_empty_items_raises(self, usecase, fake_session, user_id, company_id, seeded_company):
         with pytest.raises(ValueError, match="At least one line item"):

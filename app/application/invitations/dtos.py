@@ -20,9 +20,10 @@ class CreateInvitationResultDto:
 
     kind='invitation_sent' — new invitation was created and email queued.
     kind='direct_added'   — email matched an existing user; membership added directly.
+    kind='already_member' — email matched a user already on the project; nothing changed.
     """
 
-    kind: Literal["invitation_sent", "direct_added"]
+    kind: Literal["invitation_sent", "direct_added", "already_member"]
     invitation_id: Optional[UUID] = None
     expires_at: Optional[datetime] = None
     user_id: Optional[UUID] = None

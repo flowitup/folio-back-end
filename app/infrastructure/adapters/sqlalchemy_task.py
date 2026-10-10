@@ -99,3 +99,13 @@ class SQLAlchemyTaskRepository(ITaskRepository):
             .scalar()
         )
         return int(result or 0)
+
+    def clear_assignee(self, project_id: UUID, assignee_id: UUID) -> int:
+        # Flush only: the membership change that triggers this commits both together.
+        changed = (
+            self._session.query(TaskModel)
+            .filter_by(project_id=project_id, assignee_id=assignee_id)
+            .update({TaskModel.assignee_id: None}, synchronize_session=False)
+        )
+        self._session.flush()
+        return int(changed or 0)

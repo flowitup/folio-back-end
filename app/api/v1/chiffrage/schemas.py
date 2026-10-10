@@ -12,9 +12,20 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.api.v1.numeric_bounds import MAX_ARTICLE_QUANTITY, MAX_QUOTE_UNIT_PRICE
+
+
+def _reject_null(value: object, info: ValidationInfo) -> object:
+    """A PATCH field that may be omitted but never cleared: explicit null is refused.
+
+    Without this, null passes the Optional type and reaches the use case, which
+    stored the text "None" as a name or crashed converting a null number.
+    """
+    if value is None:
+        raise ValueError(f"{info.field_name} cannot be null.")
+    return value
 
 
 class PosteCreateBody(BaseModel):
@@ -29,6 +40,8 @@ class PosteUpdateBody(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     note: Optional[str] = Field(default=None, max_length=2000)
+
+    _no_null = field_validator("name", mode="before")(_reject_null)
 
 
 class ImageFromUrlBody(BaseModel):
@@ -64,6 +77,8 @@ class StoreUpdateBody(BaseModel):
     address: Optional[str] = Field(default=None, max_length=500)
     website_url: Optional[str] = Field(default=None, max_length=500)
 
+    _no_null = field_validator("name", mode="before")(_reject_null)
+
 
 class ArticleCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -84,6 +99,8 @@ class ArticleUpdateBody(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
+
+    _no_null = field_validator("name", "quantity", mode="before")(_reject_null)
 
 
 class QuoteCreateBody(BaseModel):
@@ -122,6 +139,8 @@ class QuoteUpdateBody(BaseModel):
     library_product_id: Optional[UUID] = None
     product_url: Optional[str] = Field(default=None, max_length=500)
     note: Optional[str] = Field(default=None, max_length=2000)
+
+    _no_null = field_validator("unit_price_ht", "tva_rate", mode="before")(_reject_null)
 
 
 class ReorderBody(BaseModel):

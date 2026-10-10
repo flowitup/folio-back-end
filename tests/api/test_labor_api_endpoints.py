@@ -226,6 +226,39 @@ class TestWorkerRoutes:
         )
         assert resp.status_code == 400
 
+    def test_worker_phone_must_be_a_phone_number(self, labor_client, admin_token, labor_app):
+        pid = labor_app._test_project_id
+        bad = labor_client.post(
+            _workers_url(pid),
+            json={"name": "Phone Worker", "daily_rate": 90.0, "phone": "hello world"},
+            headers=_auth(admin_token),
+        )
+        assert bad.status_code == 400
+        assert bad.get_json()["error"] == "InvalidPhone"
+
+        created = labor_client.post(
+            _workers_url(pid),
+            json={"name": "Phone Worker", "daily_rate": 90.0, "phone": "06 12 34 56 78"},
+            headers=_auth(admin_token),
+        )
+        assert created.status_code == 201
+        worker_id = created.get_json()["id"]
+        assert created.get_json()["phone"] == "06 12 34 56 78"
+
+        edited = labor_client.put(_worker_url(pid, worker_id), json={"phone": "<b>abc</b>"}, headers=_auth(admin_token))
+        assert edited.status_code == 400
+        assert edited.get_json()["error"] == "InvalidPhone"
+
+        international = labor_client.put(
+            _worker_url(pid, worker_id), json={"phone": "+84 912 345 678"}, headers=_auth(admin_token)
+        )
+        assert international.status_code == 200
+        assert international.get_json()["phone"] == "+84 912 345 678"
+
+        cleared = labor_client.put(_worker_url(pid, worker_id), json={"phone": ""}, headers=_auth(admin_token))
+        assert cleared.status_code == 200
+        assert cleared.get_json()["phone"] is None
+
     def test_update_worker_success(self, labor_client, admin_token, labor_app):
         pid = labor_app._test_project_id
         # Create first
@@ -339,6 +372,21 @@ class TestWorkerRoutes:
             headers=_auth(admin_token),
         )
         assert resp.status_code == 400
+
+    def test_validation_message_keeps_the_reason(self, labor_client, admin_token, labor_app):
+        """A body-level rule keeps its own text; a non-object body says so (was "Invalid input: unknown")."""
+        pid = labor_app._test_project_id
+        worker_id = labor_client.post(
+            _workers_url(pid), json={"name": "Reason Worker", "daily_rate": 80.0}, headers=_auth(admin_token)
+        ).get_json()["id"]
+        empty = labor_client.post(
+            _entries_url(pid), json={"worker_id": worker_id, "date": "2026-03-04"}, headers=_auth(admin_token)
+        )
+        assert empty.status_code == 400
+        assert empty.get_json()["message"] == "Empty entry: must set shift_type or supplement_hours > 0"
+        not_object = labor_client.post(_entries_url(pid), json=[1, 2], headers=_auth(admin_token))
+        assert not_object.status_code == 400
+        assert not_object.get_json()["message"] == "Input should be an object"
 
     def test_update_worker_daily_rate_ignored(self, labor_client, admin_token, labor_app):
         """daily_rate on PUT is silently ignored — base rate is immutable after creation.
@@ -676,6 +724,36 @@ class TestLaborEntryRoutes:
         assert body["amount_override"] == 95.0
         assert body["note"] == "keep me"
 
+    def test_zero_override_is_kept_on_create_list_and_note_only_edit(self, labor_client, admin_token, labor_app):
+        """A 0 € override is a real value: stored, listed at 0 and kept by an edit that does not touch it."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, "Zero Override Worker")
+        create_resp = labor_client.post(
+            _entries_url(pid),
+            json={"worker_id": worker_id, "date": "2026-03-07", "shift_type": "full", "amount_override": 0},
+            headers=_auth(admin_token),
+        )
+        assert create_resp.status_code == 201
+        assert create_resp.get_json()["amount_override"] == 0.0
+        entry_id = create_resp.get_json()["id"]
+
+        resp = labor_client.put(
+            _entry_url(pid, entry_id),
+            json={"note": "note only edit"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["amount_override"] == 0.0
+
+        listed = labor_client.get(
+            _entries_url(pid) + "?from=2026-03-07&to=2026-03-07",
+            headers=_auth(admin_token),
+        ).get_json()["entries"]
+        row = next(e for e in listed if e["id"] == entry_id)
+        assert row["amount_override"] == 0.0
+        assert row["effective_cost"] == 0.0
+        assert row["note"] == "note only edit"
+
     def test_update_attendance_clear_shift_keeps_supplement_only_row(self, labor_client, admin_token, labor_app):
         """Explicit shift_type null converts the entry to supplement-only."""
         pid = labor_app._test_project_id
@@ -859,7 +937,7 @@ class TestLaborEntryRoutes:
             _entries_url(pid),
             json={
                 "worker_id": worker_id,
-                "date": "2026-11-03",
+                "date": "2025-11-03",
                 "shift_type": "full",
                 "supplement_hours": 8,
             },
@@ -868,7 +946,7 @@ class TestLaborEntryRoutes:
         assert create.status_code == 201, create.get_json()
 
         summary = labor_client.get(
-            _summary_url(pid) + "?from=2026-11-01&to=2026-11-30",
+            _summary_url(pid) + "?from=2025-11-01&to=2025-11-30",
             headers=_auth(admin_token),
         )
         assert summary.status_code == 200
@@ -878,7 +956,7 @@ class TestLaborEntryRoutes:
 
         monthly = labor_client.get(_monthly_summary_url(pid), headers=_auth(admin_token))
         assert monthly.status_code == 200
-        november = next(r for r in monthly.get_json()["rows"] if (r["year"], r["month"]) == (2026, 11))
+        november = next(r for r in monthly.get_json()["rows"] if (r["year"], r["month"]) == (2025, 11))
         monthly_row = next(w for w in november["workers"] if w["worker_id"] == worker_id)
 
         assert monthly_row["total_cost"] == pytest.approx(summary_row["total_cost"])
@@ -887,6 +965,10 @@ class TestLaborEntryRoutes:
         assert monthly_row["days_worked"] == pytest.approx(summary_row["days_worked"])
         assert november["total_bonus_cost"] >= 100.0
         assert november["total_cost"] == pytest.approx(sum(w["total_cost"] for w in november["workers"]))
+        # Banked hours and bonus days ride along so an all-history view can total them.
+        assert (monthly_row["banked_hours"], monthly_row["bonus_days"]) == (8, 1.0)
+        assert november["total_banked_hours"] == sum(w["banked_hours"] for w in november["workers"])
+        assert november["total_bonus_days"] == pytest.approx(sum(w["bonus_days"] for w in november["workers"]))
 
     def test_get_labor_monthly_summary_empty_project_returns_empty_rows(self, labor_client, admin_token, labor_app):
         """Endpoint returns 200 with rows=[] for a project with no entries."""
@@ -1006,6 +1088,31 @@ class TestLaborEntryRoutes:
         labor_client.post(_entries_url(pid), json=payload, headers=_auth(admin_token))
         resp = labor_client.post(_entries_url(pid), json=payload, headers=_auth(admin_token))
         assert resp.status_code == 409
+
+    @pytest.mark.parametrize("day", ["2031-12-25", "1900-01-01"])
+    def test_log_and_bulk_log_refuse_a_day_out_of_range(self, labor_client, admin_token, labor_app, day):
+        """A far-future or ancient day is a typo that would be priced and paid: refused, nothing saved."""
+        pid = labor_app._test_project_id
+        worker_id = self._create_worker(labor_client, admin_token, labor_app, f"Range Worker {day}")
+
+        resp = labor_client.post(
+            _entries_url(pid),
+            json={"worker_id": worker_id, "date": day, "shift_type": "full"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "AttendanceDateOutOfRange"
+
+        resp = labor_client.post(
+            f"/api/v1/projects/{pid}/labor-entries/bulk",
+            json={"date": day, "entries": [{"worker_id": worker_id, "shift_type": "full"}]},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "AttendanceDateOutOfRange"
+
+        listed = labor_client.get(_entries_url(pid) + f"?worker_id={worker_id}", headers=_auth(admin_token))
+        assert listed.get_json()["entries"] == []
 
     def test_standalone_supplement_row_round_trips_through_to_entity(self, labor_client, admin_token, labor_app):
         """Regression: shift_type=None entry round-trips through _to_entity correctly."""

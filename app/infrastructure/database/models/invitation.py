@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.infrastructure.database.models.base import Base
@@ -14,12 +14,26 @@ class InvitationModel(Base):
     """SQLAlchemy mapping for the invitations table."""
 
     __tablename__ = "invitations"
+    # Indexes of migration e3f1a2b4c5d6, declared so autogenerate keeps them.
+    __table_args__ = (
+        Index("ix_invitations_email", "email"),
+        Index("ix_invitations_project_id_status", "project_id", "status"),
+        # Only one pending invitation per (email, project).
+        Index(
+            "uq_invitations_pending_email_project",
+            "email",
+            "project_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     email = Column(Text, nullable=False)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     token_hash = Column(Text, nullable=False, unique=True)
-    status = Column(String(20), nullable=False, default="pending")
+    status = Column(Text, nullable=False, default="pending")
     expires_at = Column(DateTime(timezone=True), nullable=False)
     invited_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

@@ -7,7 +7,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
-from app.api._helpers.validation_error import safe_validation_fields
+from app.api._helpers.pydantic_errors import validation_message
 
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
 from app.api.openapi import openapi_doc
@@ -49,8 +49,7 @@ def _err(code: int, error: str, message: str):
 
 
 def _validation_err(e: ValidationError):
-    fields = safe_validation_fields(e)
-    return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+    return _err(422, "ValidationError", validation_message(e))
 
 
 def _require_platform_ops():

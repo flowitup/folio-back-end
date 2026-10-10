@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from app.application.persons.ports import IPersonRepository
 from app.domain.entities.person import Person
+from app.domain.value_objects.phone_number import is_phone_number
 
 
 class InvalidPersonDataError(ValueError):
@@ -51,6 +52,8 @@ class CreatePersonUseCase:
         phone = (request.phone or "").strip() or None
         if phone and len(phone) > 50:
             raise InvalidPersonDataError("Phone exceeds 50 characters")
+        if phone and not is_phone_number(phone):
+            raise InvalidPersonDataError("Invalid phone number")
 
         person = Person(
             id=uuid4(),

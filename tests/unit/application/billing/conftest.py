@@ -81,6 +81,7 @@ class InMemoryBillingDocumentRepository:
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> tuple[list[BillingDocument], int]:
         company_ids = company_ids or []
         docs = []
@@ -88,7 +89,10 @@ class InMemoryBillingDocumentRepository:
             if d.kind != kind:
                 continue
             if not all_documents:
-                visible = (owner_id is not None and d.user_id == owner_id) or (d.company_id in company_ids)
+                owned = owner_id is not None and d.user_id == owner_id
+                if owned and owner_company_ids is not None and d.company_id is not None:
+                    owned = d.company_id in owner_company_ids
+                visible = owned or (d.company_id in company_ids)
                 if not visible:
                     continue
             docs.append(d)
@@ -117,9 +121,9 @@ class InMemoryBillingDocumentRepository:
                 return doc
         return None
 
-    def map_facture_ids_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, UUID]:
+    def map_factures_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, tuple[UUID, str]]:
         wanted = set(devis_ids)
-        return {d.source_devis_id: d.id for d in self._store.values() if d.source_devis_id in wanted}
+        return {d.source_devis_id: (d.id, d.status.value) for d in self._store.values() if d.source_devis_id in wanted}
 
     def aggregate_item_suggestions(self, user_id, category, q, limit):
         """In-memory aggregation — delegates to the SQLite path of the real repo."""
@@ -257,9 +261,16 @@ class InMemoryBillingNumberCounterRepository:
 
 
 class FakePdfRenderer:
-    """Returns a minimal PDF byte string without calling ReportLab."""
+    """Returns a minimal PDF byte string without calling ReportLab.
 
-    def render(self, doc: BillingDocument) -> bytes:
+    Records the project each render received in ``projects``.
+    """
+
+    def __init__(self) -> None:
+        self.projects: list = []
+
+    def render(self, doc: BillingDocument, project=None) -> bytes:
+        self.projects.append(project)
         return b"%PDF-1.4 fake"
 
 

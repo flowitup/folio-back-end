@@ -287,6 +287,7 @@ def test_export_422_when_from_after_to(export_client, export_app, admin_token):
     assert resp.status_code == 422
     data = resp.get_json()
     assert data["error"] == "validation_error"
+    assert data["message"] == "'from' must be <= 'to'"
 
 
 def test_export_422_when_span_exceeds_24_months(export_client, export_app, admin_token):

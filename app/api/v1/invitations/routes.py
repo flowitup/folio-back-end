@@ -3,15 +3,18 @@
 from uuid import UUID
 
 from flask import jsonify, make_response, request
-from flask_jwt_extended import get_jwt_identity, jwt_required, set_access_cookies, set_refresh_cookies
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
 from app.api._helpers.validation_error import safe_validation_fields
 
 from app.api.openapi import openapi_doc
 from app.api.v1.invitations import invitations_bp
 from app.api.v1.invitations.schemas import (
+    AcceptInviteAsMeRequest,
+    AcceptInviteAsMeResponse,
     AcceptInviteRequest,
     AcceptedUserResponse,
     AcceptInviteResponse,
@@ -24,6 +27,7 @@ from app.api.v1.invitations.schemas import (
 )
 from app.api.v1.auth.schemas import ErrorResponse, OtpRequestResponse
 from app.application.invitations.exceptions import (
+    InviteeDeactivatedError,
     PermissionDeniedError,
     RateLimitedError,
     ProjectNotFoundError,
@@ -35,12 +39,15 @@ from app.domain.exceptions.auth_exceptions import (
     PhoneAlreadyRegisteredError,
 )
 from app.domain.exceptions.invitation_exceptions import (
+    InvitationAccountExistsError,
     InvitationAlreadyAcceptedError,
     InvitationExpiredError,
     InvitationNotFoundError,
     InvitationRevokedError,
     InvalidInvitationTokenError,
+    InvitationWrongAccountError,
 )
+from app.domain.entities.invitation import InvalidInvitationEmailError
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.infrastructure.rate_limiter import limiter
@@ -64,11 +71,26 @@ def _gone(reason: str, message: str):
 def _conflict(reason: str, message: str):
     """409 Conflict with a `reason` discriminator the frontend uses to pick the error UI.
 
-    reason ∈ {'phone_registered'}.
+    reason ∈ {'phone_registered', 'account_exists'}.
     """
     body = ErrorResponse(error="Conflict", message=message, status_code=409).model_dump()
     body["reason"] = reason
     return jsonify(body), 409
+
+
+# The invited address already has an account: the invitee signs in to it (its own phone, or a
+# session) instead of proving some other number.
+_ACCOUNT_EXISTS_MESSAGE = "This invitation is for an existing account: use that account's phone number."
+
+
+def _unprocessable(reason: str, message: str):
+    """422 with a `reason` discriminator, for the refusals the invite dialog explains differently.
+
+    reason ∈ {'invalid_email', 'account_deactivated'}.
+    """
+    body = ErrorResponse(error="ValidationError", message=message, status_code=422).model_dump()
+    body["reason"] = reason
+    return jsonify(body), 422
 
 
 def _validation_err(e: ValidationError):
@@ -116,6 +138,7 @@ def create_invitation():
             inviter_id=user_id,
             project_id=data.project_id,
             email=str(data.email),
+            locale=data.locale,
         )
     except PermissionDeniedError as e:
         return _err(403, "Forbidden", str(e))
@@ -123,6 +146,11 @@ def create_invitation():
         return _err(404, "NotFound", str(e))
     except RateLimitedError as e:
         return _err(429, "RateLimited", str(e))
+    except InvalidInvitationEmailError:
+        # EmailStr lets through addresses (o'brien@…, accents) that accounts cannot carry.
+        return _unprocessable("invalid_email", "Invalid input: email")
+    except InviteeDeactivatedError:
+        return _unprocessable("account_deactivated", "This account is deactivated and cannot be assigned")
     except Exception:
         return _err(500, "InternalError", "An unexpected error occurred.")
 
@@ -302,6 +330,8 @@ def request_invite_code():
         return _err(400, "ValidationError", str(e))
     except PhoneAlreadyRegisteredError:
         return _conflict("phone_registered", "This phone number already has an account.")
+    except InvitationAccountExistsError:
+        return _conflict("account_exists", _ACCOUNT_EXISTS_MESSAGE)
     except OtpThrottledError as e:
         error, message, headers = otp_throttled(e)
         body, status = _err(429, error, message)
@@ -368,6 +398,10 @@ def accept_invitation():
     except PhoneAlreadyRegisteredError:
         db.session.commit()
         return _conflict("phone_registered", "This phone number already has an account.")
+    except InvitationAccountExistsError:
+        # The code is spent either way; persist that.
+        db.session.commit()
+        return _conflict("account_exists", _ACCOUNT_EXISTS_MESSAGE)
     except ValueError as e:
         return _err(422, "ValidationError", str(e))
     except Exception:
@@ -394,6 +428,57 @@ def accept_invitation():
         ),
     )
     response = make_response(jsonify(body.model_dump(mode="json")), 200)
-    set_access_cookies(response, result.access_token)
-    set_refresh_cookies(response, result.refresh_token)
+    set_auth_cookies(response, result.access_token, result.refresh_token)
     return response
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/invitations/accept-as-me  — signed in
+# ---------------------------------------------------------------------------
+
+
+@invitations_bp.route("/accept-as-me", methods=["POST"])
+@openapi_doc(
+    summary="Accept an invitation with the signed-in account the invitation was sent to",
+    request=AcceptInviteAsMeRequest,
+    responses={200: AcceptInviteAsMeResponse},
+    tags=["invitations"],
+)
+@jwt_required()
+@limiter.limit("10 per minute", key_func=jwt_user_key)
+def accept_invitation_as_me():
+    """Join the invited project as the signed-in user; the session proves the account, no phone code."""
+    try:
+        data = AcceptInviteAsMeRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return _validation_err(e)
+
+    container = get_container()
+    if container.accept_invitation_usecase is None:
+        return _err(503, "ServiceUnavailable", "Invitation service not configured.")
+
+    user_id = UUID(get_jwt_identity())
+    try:
+        accepted = container.accept_invitation_usecase.accept_as(raw_token=data.token, user_id=user_id)
+    except InvalidInvitationTokenError:
+        return _err(404, "NotFound", "Invitation not found.")
+    except InvitationExpiredError as e:
+        return _gone("expired", str(e))
+    except InvitationRevokedError as e:
+        return _gone("revoked", str(e))
+    except InvitationAlreadyAcceptedError as e:
+        return _gone("accepted", str(e))
+    except InvitationWrongAccountError as e:
+        return _err(403, "Forbidden", str(e))
+    except Exception:
+        return _err(500, "InternalError", "An unexpected error occurred.")
+
+    notifier = container.membership_push_notifier
+    if notifier is not None and accepted.invited_by is not None:
+        notifier.notify(
+            "invitation_accepted",
+            user_id=accepted.invited_by,
+            actor_id=user_id,
+            entity_id=accepted.project_id,
+        )
+    return jsonify(AcceptInviteAsMeResponse(project_id=accepted.project_id).model_dump(mode="json")), 200

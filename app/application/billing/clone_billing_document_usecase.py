@@ -8,7 +8,6 @@ Phase 05 tightening:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.application.billing._helpers import (
@@ -32,6 +31,7 @@ from app.application.billing.ports import (
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, MissingCompanyProfileError
 from app.domain.billing.numbering import next_document_number
+from app.domain.time import business_today
 
 
 class CloneBillingDocumentUseCase:
@@ -99,7 +99,7 @@ class CloneBillingDocumentUseCase:
         assert_project_read_access(self._project_repo, source.project_id, inp.user_id, self._access_repo)
 
         # 6. Atomically generate new document number
-        today = datetime.now(timezone.utc).date()
+        today = business_today()  # the Paris day, not UTC's: it dates and numbers the copy
         sequence = self._counter_repo.next_value(counter_key, target_kind, today.year)
         document_number = next_document_number(
             prefix_override=effective_prefix,

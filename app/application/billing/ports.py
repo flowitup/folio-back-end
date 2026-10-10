@@ -15,13 +15,13 @@ from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.exceptions import (
-    CompanyNotAttachedError,
     ForbiddenCompanyBillingError,
     ForbiddenProjectAccessError,
 )
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
+from app.domain.entities.project import Project
 
 if TYPE_CHECKING:
     from app.application.billing.dtos import ActivitySuggestionsResponse
@@ -73,13 +73,16 @@ class BillingDocumentRepositoryPort(Protocol):
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> tuple[list[BillingDocument], int]:
         """Return paginated documents visible to a caller, with total count.
 
         Visibility (unless ``all_documents`` for superadmins, which lifts all
         owner/company restrictions): a document is visible when the caller owns
         it (``user_id == owner_id``) OR it belongs to a company the caller
-        administers (``company_id IN company_ids``).
+        administers (``company_id IN company_ids``). When ``owner_company_ids``
+        is given, an owned company document only counts while its company is in
+        that list (the companies the caller is still attached to).
 
         ``company_id`` is an additional exact filter (e.g. the UI scoping to one
         company). ``status``/``project_id``/``kind`` filter as usual. ``search``
@@ -103,8 +106,8 @@ class BillingDocumentRepositoryPort(Protocol):
         """
         ...
 
-    def map_facture_ids_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, UUID]:
-        """Return {devis_id: facture_id} for the devis among *devis_ids* already converted.
+    def map_factures_by_source_devis(self, devis_ids: list[UUID]) -> dict[UUID, tuple[UUID, str]]:
+        """Return {devis_id: (facture_id, facture_status)} for the devis among *devis_ids* already converted.
 
         Unconverted devis are simply absent from the mapping. Batch form so a
         list page resolves every conversion link in one query.
@@ -308,6 +311,17 @@ def admin_company_ids(
     return [a.company_id for a in access_repo.list_for_user(user_id) if a.role == CompanyRole.ADMIN.value]
 
 
+def attached_company_ids(
+    access_repo: Optional[UserCompanyAccessRepositoryPort],
+    user_id: UUID,
+) -> Optional[list[UUID]]:
+    """Return the company_ids the user is attached to (any role), or None when the
+    repo is None (test/legacy context: no restriction is applied then)."""
+    if access_repo is None:
+        return None
+    return [a.company_id for a in access_repo.list_for_user(user_id)]
+
+
 def assert_company_admin(
     access_repo: Optional[UserCompanyAccessRepositoryPort],
     user_id: UUID,
@@ -333,8 +347,10 @@ def assert_user_company_access(
     """Verify the user is attached to company_id and return the full Company snapshot.
 
     Returns None when company_id is None (no company context; backwards-compatible).
-    Raises CompanyNotAttachedError if the user has no access row (race condition guard).
-    Raises ValueError if the company does not exist.
+    Raises ForbiddenCompanyBillingError when the user has no access row or the
+    company does not exist: an outsider gets the same 403 as a non-admin member,
+    whether or not the id names a real company (a missing access row alone cannot
+    tell "never attached" from "detached mid-flow", so it is not a 409 race).
     No-op (returns None) when either repo is None (test / legacy context).
     """
     if company_id is None:
@@ -342,13 +358,10 @@ def assert_user_company_access(
     if access_repo is None or company_repo is None:
         return None
 
-    company = company_repo.find_by_id(company_id)
-    if company is None:
-        raise ValueError(f"Company {company_id} not found")
-
     access = access_repo.find(user_id, company_id)
-    if access is None:
-        raise CompanyNotAttachedError(user_id, company_id)
+    company = company_repo.find_by_id(company_id) if access is not None else None
+    if company is None:
+        raise ForbiddenCompanyBillingError(company_id)
 
     return company
 
@@ -356,8 +369,11 @@ def assert_user_company_access(
 class BillingDocumentPdfRendererPort(Protocol):
     """PDF rendering contract for billing documents."""
 
-    def render(self, doc: BillingDocument) -> bytes:
-        """Render a billing document to a PDF byte string."""
+    def render(self, doc: BillingDocument, project: Optional[Project] = None) -> bytes:
+        """Render a billing document to a PDF byte string.
+
+        *project* is the project the document is linked to, printed as its "Objet".
+        """
         ...
 
 
@@ -369,8 +385,11 @@ class BillingDocumentXlsxRendererPort(Protocol):
     section dividers → totals → bank coordinates).
     """
 
-    def render(self, doc: BillingDocument) -> bytes:
-        """Render a billing document to an XLSX byte string."""
+    def render(self, doc: BillingDocument, project: Optional[Project] = None) -> bytes:
+        """Render a billing document to an XLSX byte string.
+
+        *project* is the project the document is linked to, printed as its "Objet/Opération".
+        """
         ...
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from app.application.billing._helpers import _assert_billing_doc_access
+from app.application.billing._helpers import _assert_billing_doc_write_access
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     FundsReleasePort,
@@ -17,7 +17,8 @@ from app.domain.billing.exceptions import BillingDocumentNotFoundError
 
 
 class DeleteBillingDocumentUseCase:
-    """Hard-delete a billing document. Owner or company-admin may delete.
+    """Hard-delete a billing document. A company-admin may delete (the owner, for a
+    document with no company).
 
     A paid facture linked to a project owns an auto-generated released_funds
     expense. It is removed before the facture, like the paid → cancelled
@@ -44,7 +45,7 @@ class DeleteBillingDocumentUseCase:
         doc = self._doc_repo.find_by_id(doc_id)
         if doc is None:
             raise BillingDocumentNotFoundError(doc_id)
-        _assert_billing_doc_access(doc, user_id, self._access_repo)
+        _assert_billing_doc_write_access(doc, user_id, self._access_repo)
         if self._funds_release is not None and doc.kind == BillingDocumentKind.FACTURE:
             self._funds_release.delete_funds_release(doc.id)
         self._doc_repo.delete(doc_id)

@@ -51,3 +51,5 @@ class MemberGrantsListResponse(BaseModel):
 
     grants: List[MemberGrantRow]
     customisable: List[str]
+    # Permissions of `customisable` that take a company-wide row only (no project scope).
+    company_wide_only: List[str]

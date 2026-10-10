@@ -30,6 +30,13 @@ class MonthlyWorkerSubRow:
     total_cost: float
     # Share of total_cost earned by converting banked hours into paid days.
     bonus_cost: float
+    # Supplement hours banked that month and the bonus days they earned.
+    banked_hours: int = 0
+    bonus_days: float = 0.0
+    # The worker's rate on the month's last and first days (they differ when the
+    # rate changed during the month) — not today's rate, which may be later.
+    daily_rate: float = 0.0
+    month_start_rate: float = 0.0
 
 
 @dataclass
@@ -42,6 +49,10 @@ class MonthlySummaryRow:
     total_cost: float
     total_bonus_cost: float
     workers: List[MonthlyWorkerSubRow]
+    # Supplement hours banked that month and the bonus days they earned, so an
+    # all-history view can total them from the months it shows.
+    total_banked_hours: int = 0
+    total_bonus_days: float = 0.0
 
 
 @dataclass
@@ -66,10 +77,14 @@ class GetMonthlyLaborSummaryUseCase:
         for r in self._repo.get_monthly_summary(project_id=request.project_id):
             workers: List[MonthlyWorkerSubRow] = []
             month_bonus_cost = Decimal("0")
+            month_bonus_days = Decimal("0")
+            month_banked_hours = 0
 
             for w in r.workers:
                 bonus = bonus_for_banked_hours(w.banked_hours, w.daily_rate)
                 month_bonus_cost += bonus.cost
+                month_bonus_days += bonus.days
+                month_banked_hours += w.banked_hours or 0
                 workers.append(
                     MonthlyWorkerSubRow(
                         worker_id=str(w.worker_id),
@@ -77,6 +92,10 @@ class GetMonthlyLaborSummaryUseCase:
                         days_worked=float(w.days_worked),
                         total_cost=float(w.total_cost + bonus.cost),
                         bonus_cost=float(bonus.cost),
+                        banked_hours=w.banked_hours or 0,
+                        bonus_days=float(bonus.days),
+                        daily_rate=float(w.daily_rate),
+                        month_start_rate=float(w.month_start_rate),
                     )
                 )
 
@@ -88,6 +107,8 @@ class GetMonthlyLaborSummaryUseCase:
                     total_cost=float(r.total_cost + month_bonus_cost),
                     total_bonus_cost=float(month_bonus_cost),
                     workers=workers,
+                    total_banked_hours=month_banked_hours,
+                    total_bonus_days=float(month_bonus_days),
                 )
             )
 

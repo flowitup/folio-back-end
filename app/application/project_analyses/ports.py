@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from datetime import datetime
 from typing import Optional, Protocol
 from uuid import UUID
 
@@ -63,6 +65,12 @@ class ProjectAnalysisRepositoryPort(Protocol):
 
     def list_tags_for_project(self, project_id: UUID) -> list[str]:
         """Return all distinct tags used by active analyses in a project."""
+        ...
+
+    def find_uploaders(
+        self, user_ids: Iterable[UUID]
+    ) -> list[tuple[UUID, Optional[str], str, Optional[str], Optional[datetime]]]:
+        """Return (user_id, display_name, email, phone, deleted_at) of the given accounts."""
         ...
 
     def add(self, analysis: ProjectAnalysis) -> ProjectAnalysis:

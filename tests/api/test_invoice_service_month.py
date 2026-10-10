@@ -363,3 +363,44 @@ class TestInvoiceListGetIncludeServiceMonth:
         )
         assert resp_get.status_code == 200
         assert resp_get.get_json()["service_month"] == "2026-07-01"
+
+
+# ---------------------------------------------------------------------------
+# Date bounds (issue_date / service_month outside 2000-2100)
+# ---------------------------------------------------------------------------
+
+
+class TestInvoiceDateBounds:
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"issue_date": "9999-12-31"},
+            {"issue_date": "0001-01-01"},
+            {"issue_date": "1900-01-01"},
+            {"service_month": "9999-12-01"},
+        ],
+    )
+    def test_create_with_out_of_range_date_returns_400(self, inv_sm_client, inv_sm_app, admin_token, overrides):
+        resp = inv_sm_client.post(
+            _create_invoice_url(inv_sm_app._test_project_id),
+            json=_labor_invoice_body(**overrides),
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["message"] == f"{next(iter(overrides))}: Date must be between 2000-01-01 and 2100-12-31"
+
+    def test_update_to_out_of_range_issue_date_returns_400(self, inv_sm_client, inv_sm_app, admin_token):
+        resp_create = inv_sm_client.post(
+            _create_invoice_url(inv_sm_app._test_project_id),
+            json=_labor_invoice_body(),
+            headers=_auth(admin_token),
+        )
+        assert resp_create.status_code == 201
+        invoice_id = resp_create.get_json()["id"]
+
+        resp = inv_sm_client.put(
+            _invoice_url(inv_sm_app._test_project_id, invoice_id),
+            json={"issue_date": "9999-12-31"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)

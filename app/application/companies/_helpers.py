@@ -57,7 +57,7 @@ def _assert_company_admin(role_checker: "RoleCheckerPort", caller_id: UUID, comp
 
 def _validate_prefix_override(prefix_override: Optional[str]) -> None:
     """Raise ValueError if prefix_override does not match [A-Z0-9]{1,8}."""
-    if prefix_override is not None and not _PREFIX_PATTERN.match(prefix_override):
+    if prefix_override is not None and not _PREFIX_PATTERN.fullmatch(prefix_override):
         raise ValueError(f"prefix_override must match ^[A-Z0-9]{{1,8}}$, got: {prefix_override!r}")
 
 

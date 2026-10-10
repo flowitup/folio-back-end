@@ -9,12 +9,11 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity,
     get_jwt,
-    set_access_cookies,
-    set_refresh_cookies,
     unset_jwt_cookies,
 )
 from pydantic import ValidationError
 
+from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
@@ -123,8 +122,7 @@ def _login_response(container, result: LoginResult):
     )
     response = make_response(jsonify(response_data.model_dump()))
     # Set cookies for browser clients
-    set_access_cookies(response, result.access_token)
-    set_refresh_cookies(response, result.refresh_token)
+    set_auth_cookies(response, result.access_token, result.refresh_token)
     return response
 
 
@@ -285,7 +283,7 @@ def refresh():
 
     response_data = RefreshResponse(access_token=new_access_token)
     response = make_response(jsonify(response_data.model_dump()))
-    set_access_cookies(response, new_access_token)
+    set_auth_cookies(response, new_access_token)
 
     return response
 
@@ -388,7 +386,7 @@ def request_phone_change_code():
     ``PhoneUnchanged`` when it is already the caller's number.
     """
     try:
-        data = PhoneChangeRequestBody(**(request.get_json(silent=True) or {}))
+        data = PhoneChangeRequestBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone")
     container = get_container()
@@ -405,8 +403,10 @@ def request_phone_change_code():
         return _error(409, "Conflict", _PHONE_TAKEN)
     except UserInactiveError:
         return _error(401, "Unauthorized", "User account is deactivated")
-    except OtpThrottledError:
-        return _error(429, "TooManyRequests", "A code was sent recently. Wait a minute and try again.")
+    except OtpThrottledError as exc:
+        error, message, headers = otp_throttled(exc)
+        body, status = _error(429, error, message)
+        return body, status, headers
     except SmsSendError:
         return _error(503, "ServiceUnavailable", "The SMS could not be sent. Try again later.")
     from app import db
@@ -437,7 +437,7 @@ def confirm_phone_change():
     attempt). 409 if another account took the number in the meantime.
     """
     try:
-        data = PhoneChangeConfirmBody(**(request.get_json(silent=True) or {}))
+        data = PhoneChangeConfirmBody.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
         return _error(400, "ValidationError", "Invalid input: phone, code")
     container = get_container()
@@ -475,8 +475,7 @@ def confirm_phone_change():
         **_me_payload(container, user).model_dump(), access_token=access_token, refresh_token=refresh_token
     )
     response = make_response(jsonify(body.model_dump(mode="json")))
-    set_access_cookies(response, access_token)
-    set_refresh_cookies(response, refresh_token)
+    set_auth_cookies(response, access_token, refresh_token)
     return response
 
 

@@ -98,6 +98,10 @@ class LaborEntry:
 
     def apply_change(self, by_user_id: UUID, at: datetime) -> None:
         """Manager accepts the proposal: it becomes the priced day, re-validated by them."""
+        # A manager's price override was set for the old shift: it no longer applies
+        # once the shift changes (and cannot stay on a supplement-only row).
+        if self.proposed_shift_type != self.shift_type:
+            self.amount_override = None
         self.shift_type = self.proposed_shift_type
         self.supplement_hours = self.proposed_supplement_hours or 0
         self.note = self.proposed_note

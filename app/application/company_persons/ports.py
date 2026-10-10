@@ -42,6 +42,10 @@ class CompanyPersonRepositoryPort(Protocol):
         """Insert or update a profile. Returns the persisted instance."""
         ...
 
+    def add_if_absent(self, profile: CompanyPerson) -> CompanyPerson:
+        """Insert a new profile, or return the one a concurrent request inserted for the same person."""
+        ...
+
     def deactivate(self, company_id: UUID, person_id: UUID) -> bool:
         """Set is_active=False for a profile (boot/detach). Returns True if a row was updated."""
         ...

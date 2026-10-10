@@ -34,5 +34,5 @@ class LaborRole:
             raise ValueError("Role name must not be empty")
         if len(self.name) > 100:
             raise ValueError("Role name must not exceed 100 characters")
-        if not re.match(r"^#[0-9a-fA-F]{6}$", self.color):
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", self.color):
             raise ValueError("Color must be a valid hex color (#RRGGBB)")

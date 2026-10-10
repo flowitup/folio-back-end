@@ -47,6 +47,11 @@ _LABELS: dict[str, dict[str, str]] = {
         "unit_price": "Unit price",
         "notes": "Notes",
         "cash_advance": "cash advance",
+        "bank_refund_line": "Bank refund — {number}",
+        "vat_rate": "VAT %",
+        "total_ht": "Subtotal (excl. VAT)",
+        "total_vat": "VAT",
+        "total_ttc": "Total (incl. VAT)",
     },
     "fr": {
         "export_title": "EXPORT DES DÉPENSES",
@@ -85,6 +90,11 @@ _LABELS: dict[str, dict[str, str]] = {
         "unit_price": "Prix unitaire",
         "notes": "Notes",
         "cash_advance": "avance de trésorerie",
+        "bank_refund_line": "Remboursement banque — {number}",
+        "vat_rate": "TVA %",
+        "total_ht": "Total HT",
+        "total_vat": "TVA",
+        "total_ttc": "Total TTC",
     },
     "vi": {
         "export_title": "XUẤT CHI PHÍ",
@@ -96,7 +106,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "no_invoices": "Không có hóa đơn từ {start} đến {end}",
         "total_invoices": "Tổng số hóa đơn",
         "total_expenses": "Tổng chi phí",
-        "released_funds": "Tiền đã giải ngân",
+        "released_funds": "Vốn đã giải ngân",
         "from": "Từ",
         "to": "Đến",
         "from_month": "Từ tháng",
@@ -123,6 +133,11 @@ _LABELS: dict[str, dict[str, str]] = {
         "unit_price": "Đơn giá",
         "notes": "Ghi chú",
         "cash_advance": "tạm ứng",
+        "bank_refund_line": "Ngân hàng hoàn tiền — {number}",
+        "vat_rate": "VAT %",
+        "total_ht": "Tổng chưa thuế",
+        "total_vat": "VAT",
+        "total_ttc": "Tổng gồm thuế",
     },
 }
 
@@ -142,7 +157,7 @@ _TYPE_LABELS: dict[str, dict[str, str]] = {
         "return": "Retour",
     },
     "vi": {
-        "released_funds": "Tiền giải ngân",
+        "released_funds": "Vốn giải ngân",
         "labor": "Nhân công",
         "materials_services": "Vật tư & dịch vụ",
         "others": "Khác",

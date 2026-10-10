@@ -47,6 +47,13 @@ class InvalidWorkerDataError(LaborError):
         super().__init__(message)
 
 
+class InvalidWorkerPhoneError(InvalidWorkerDataError):
+    """Raised when a worker's phone does not read as a phone number ("hello world")."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid phone number")
+
+
 class InvalidLaborEntryError(LaborError):
     """Raised when a LaborEntry violates domain invariants.
 
@@ -110,6 +117,19 @@ class WorkerAlreadyLinkedError(LaborError):
         self.project_id = project_id
         self.user_id = user_id
         super().__init__(f"User {user_id} already has a worker on project {project_id}")
+
+
+class WorkerAlreadyOnProjectError(LaborError):
+    """Raised when adding a worker for a person who already has a worker row on the project.
+
+    One person is on a project's roster once: a second row would pay the same day twice.
+    ``is_active`` tells the caller whether to edit that worker or reactivate it.
+    """
+
+    def __init__(self, worker_id: str, is_active: bool) -> None:
+        self.worker_id = worker_id
+        self.is_active = is_active
+        super().__init__("This person is already a worker on this project")
 
 
 class WorkerNotLinkedError(LaborError):

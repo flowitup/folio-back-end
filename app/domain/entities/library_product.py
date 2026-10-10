@@ -129,13 +129,14 @@ class LibraryProduct:
     ) -> "LibraryProduct":
         """Return a copy with enrichment fields applied to empty slots only.
 
-        Never overwrites an existing non-null field with a null value.
-        This allows re-importing records with partial enrichment without
-        clobbering manually curated data.
+        Never overwrites an existing non-null field (nor a non-blank name), so
+        re-importing records does not clobber manually curated data. Returns
+        self unchanged (same updated_at) when nothing would change, so callers
+        can tell a real update from a no-op.
         """
-        return replace(
+        candidate = replace(
             self,
-            name=name if name is not None else self.name,
+            name=name if name and not (self.name or "").strip() else self.name,
             description=description if description is not None and self.description is None else self.description,
             size=size if size is not None and self.size is None else self.size,
             category=category if category is not None and self.category is None else self.category,
@@ -145,8 +146,10 @@ class LibraryProduct:
                 else self.image_storage_key
             ),
             product_url=product_url if product_url is not None and self.product_url is None else self.product_url,
-            updated_at=datetime.now(timezone.utc),
         )
+        if candidate == self:
+            return self
+        return replace(candidate, updated_at=datetime.now(timezone.utc))
 
     # Sentinel so callers can distinguish "leave field unchanged" (omitted) from
     # an explicit clear. _UNSET means "don't touch"; None would mean "set to null".

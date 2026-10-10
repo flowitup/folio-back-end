@@ -37,3 +37,13 @@ class Project:
 
     def __hash__(self) -> int:
         return hash(self.id)
+
+
+def project_display_label(project: Project) -> str:
+    """The label a project is shown under: its site address, or its name when it has none.
+
+    Mirrors the clients' `projectDisplayName`, so someone invited to a project reads the
+    same label in the invitation as in the app once they have joined.
+    """
+    address = project.address.strip() if isinstance(project.address, str) else ""
+    return address or project.name

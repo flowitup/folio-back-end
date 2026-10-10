@@ -2,7 +2,8 @@
 
 Single source of truth for two questions every spend KPI has to answer the same way:
 
-1. **How much is this invoice worth?** — ``items_total`` (TTC: quantity x unit_price x (1 + vat/100)).
+1. **How much is this invoice worth?** — ``items_total`` (TTC: each line's quantity x unit_price x
+   (1 + vat/100) rounded to the cent, summed).
 2. **Was it funded with company money?** — ``is_company_paid``.
 
 Both the Expense-page KPIs (``SqlAlchemyInvoiceRepository``) and the projects-list spend
@@ -18,9 +19,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.domain.value_objects.invoice_item import round_to_cents
+
 
 def items_total(items: Optional[list]) -> Decimal:
-    """TTC total of a raw JSONB items list: sum of qty x unit_price x (1 + vat/100).
+    """TTC total of a raw JSONB items list: sum of each line's qty x unit_price x (1 + vat/100),
+    rounded half-up to the cent per line.
 
     Mirrors InvoiceItem.total / Invoice.total_amount exactly. Every Python-side aggregation
     over raw JSONB rows must go through this single helper so the math can never drift
@@ -31,7 +35,8 @@ def items_total(items: Optional[list]) -> Decimal:
         qty = Decimal(str(it.get("quantity", 0)))
         price = Decimal(str(it.get("unit_price", 0)))
         vat = Decimal(str(it.get("vat_rate", 0)))
-        total += qty * price * (1 + vat / Decimal("100"))
+        ht = qty * price
+        total += round_to_cents(ht + ht * vat / Decimal("100"))
     return total
 
 

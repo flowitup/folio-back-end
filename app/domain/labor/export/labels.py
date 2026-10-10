@@ -42,12 +42,15 @@ _LABELS: dict[str, dict[str, str]] = {
         "banked_hours": "Banked hours",
         "date": "Date",
         "shift": "Shift",
-        "supplement_hrs": "Supplement hrs",
+        "supplement_hrs": "Extra hrs (unpaid)",
         "override": "Override",
         "effective_cost": "Effective cost",
         "note": "Note",
         "activity": "Activity",
         "description": "Description",
+        "shift_full": "Full day",
+        "shift_half": "Half day",
+        "shift_overtime": "Overtime",
     },
     "fr": {
         "title": "Folio · Export main-d'œuvre",
@@ -79,12 +82,15 @@ _LABELS: dict[str, dict[str, str]] = {
         "banked_hours": "Heures en banque",
         "date": "Date",
         "shift": "Poste",
-        "supplement_hrs": "Heures supp.",
+        "supplement_hrs": "Heures en plus (non payées)",
         "override": "Montant forcé",
         "effective_cost": "Coût retenu",
         "note": "Note",
         "activity": "Activité",
         "description": "Description",
+        "shift_full": "Journée complète",
+        "shift_half": "Demi-journée",
+        "shift_overtime": "Heures sup. (x1,5)",
     },
     "vi": {
         "title": "Folio · Xuất nhân công",
@@ -116,12 +122,15 @@ _LABELS: dict[str, dict[str, str]] = {
         "banked_hours": "Giờ tích lũy",
         "date": "Ngày",
         "shift": "Ca",
-        "supplement_hrs": "Giờ bổ sung",
+        "supplement_hrs": "Giờ thêm (không tính lương)",
         "override": "Số tiền ghi đè",
         "effective_cost": "Chi phí thực tế",
         "note": "Ghi chú",
         "activity": "Hoạt động",
         "description": "Mô tả",
+        "shift_full": "Cả ngày",
+        "shift_half": "Nửa ngày",
+        "shift_overtime": "Tăng ca",
     },
 }
 
@@ -140,6 +149,14 @@ def t(locale: str, key: str, **kwargs: object) -> str:
     """Label `key` in `locale` (English fallback), formatted with `kwargs`."""
     text = _LABELS[normalize_locale(locale)].get(key) or _LABELS[DEFAULT_LOCALE][key]
     return text.format(**kwargs) if kwargs else text
+
+
+def shift_label(locale: str, shift_type: str | None) -> str:
+    """A day's shift ("full", "half", "overtime") in `locale`; blank for a supplement-only day."""
+    if not shift_type:
+        return ""
+    key = f"shift_{shift_type}"
+    return t(locale, key) if key in _LABELS[DEFAULT_LOCALE] else shift_type
 
 
 def month_label(month: date, locale: str = DEFAULT_LOCALE) -> str:

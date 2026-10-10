@@ -193,6 +193,12 @@ class UpdateTemplateInput:
     notes: Optional[str] = None
     terms: Optional[str] = None
     default_vat_rate: Optional[Decimal] = None
+    # Optional fields the caller explicitly sent as null: they are cleared, while
+    # an omitted field is left unchanged. Only CLEARABLE_TEMPLATE_FIELDS apply.
+    cleared: frozenset[str] = frozenset()
+
+
+CLEARABLE_TEMPLATE_FIELDS = frozenset({"notes", "terms", "default_vat_rate"})
 
 
 @dataclass(frozen=True)
@@ -272,11 +278,15 @@ class BillingDocumentResponse:
     # from it. None on a facture and on a devis nobody converted yet, which is what
     # tells a client the conversion is still on offer.
     converted_to_facture_id: Optional[UUID] = None
+    # Status of that facture: the devis stays locked (no edit, no status change)
+    # until it is "cancelled". None whenever converted_to_facture_id is None.
+    converted_facture_status: Optional[str] = None
 
     @staticmethod
     def from_entity(
         doc: BillingDocument,
         converted_to_facture_id: Optional[UUID] = None,
+        converted_facture_status: Optional[str] = None,
     ) -> "BillingDocumentResponse":
         """Build response DTO from a domain entity.
 
@@ -330,6 +340,7 @@ class BillingDocumentResponse:
             issuer_logo_url=doc.issuer_logo_url,
             source_devis_id=doc.source_devis_id,
             converted_to_facture_id=converted_to_facture_id,
+            converted_facture_status=converted_facture_status,
         )
 
 

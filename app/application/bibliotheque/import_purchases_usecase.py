@@ -98,6 +98,10 @@ class ImportPurchasesUseCase:
         purchases_added = 0
         skipped = 0
 
+        # Products created or updated so far, so each product counts once per import.
+        created_ids: set[UUID] = set()
+        updated_ids: set[UUID] = set()
+
         # Process in batches to bound memory usage on large payloads
         for i in range(0, max(1, len(records)), _BATCH_SIZE):
             batch = records[i : i + _BATCH_SIZE]
@@ -105,6 +109,8 @@ class ImportPurchasesUseCase:
                 company_id=company_id,
                 supplier_id=supplier.id,
                 batch=batch,
+                created_ids=created_ids,
+                updated_ids=updated_ids,
             )
             created += _c
             updated += _u
@@ -125,9 +131,17 @@ class ImportPurchasesUseCase:
         company_id: UUID,
         supplier_id: UUID,
         batch: list[ImportRecordDTO],
+        created_ids: set[UUID] | None = None,
+        updated_ids: set[UUID] | None = None,
     ) -> tuple[int, int, int, int]:
-        """Process one batch of records. Returns (created, updated, added, skipped)."""
+        """Process one batch of records. Returns (created, updated, added, skipped).
+
+        `created` and `updated` count distinct products: a product is counted once, and a
+        product created earlier in the same import is never counted as updated.
+        """
         created = updated = purchases_added = skipped = 0
+        created_ids = set() if created_ids is None else created_ids
+        updated_ids = set() if updated_ids is None else updated_ids
 
         for rec in batch:
             # Normalise category once per record before any DB access.
@@ -139,6 +153,7 @@ class ImportPurchasesUseCase:
             # Step 2a: find or create product by supplier reference
             product = self._product_repo.find_by_reference(company_id, supplier_id, rec.supplier_reference)
             is_new = product is None
+            changed = False  # existing product modified by this record (counted once in `updated`)
 
             if is_new:
                 product = LibraryProduct.create(
@@ -152,6 +167,7 @@ class ImportPurchasesUseCase:
                     product_url=rec.product_url,
                 )
                 product = self._product_repo.upsert(product)
+                created_ids.add(product.id)
                 created += 1
             else:
                 # Apply enrichment to empty fields only (never overwrite non-null)
@@ -164,7 +180,7 @@ class ImportPurchasesUseCase:
                 )
                 if enriched != product:
                     product = self._product_repo.upsert(enriched)
-                    updated += 1
+                    changed = True
 
             # Step 2b: attempt idempotent purchase insert
             # Coerce naive datetimes to UTC so comparisons with the timezone-aware
@@ -200,8 +216,12 @@ class ImportPurchasesUseCase:
                     )
                     self._product_repo.upsert(updated_product)
                     if not is_new:
-                        updated += 1
+                        changed = True
             else:
                 skipped += 1
+            product_id = product.id  # type: ignore[union-attr]
+            if changed and product_id not in created_ids and product_id not in updated_ids:
+                updated_ids.add(product_id)
+                updated += 1
 
         return created, updated, purchases_added, skipped

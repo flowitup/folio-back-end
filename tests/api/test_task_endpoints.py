@@ -24,6 +24,8 @@ def test_assigning_an_unknown_user_is_a_400_not_a_500(inv_client, admin_token, i
         inv_client, admin_token, invitation_app._test_project_id, assignee_id="00000000-0000-4000-8000-000000000001"
     )
     assert resp.status_code == 400, resp.get_data(as_text=True)
+    # Nobody by that id: not "deactivated", which would describe an account that exists.
+    assert resp.get_json()["message"] == "Assignee must be a member of this project"
 
 
 def test_assigning_a_member_of_the_project_is_accepted(inv_client, admin_token, invitation_app):
@@ -108,3 +110,23 @@ def test_labels_and_description_are_bounded(inv_client, admin_token, invitation_
         f"/api/v1/tasks/{created.get_json()['id']}", json={"labels": ["y" * 51]}, headers=_auth(admin_token)
     )
     assert too_long.status_code in (400, 422)
+
+
+def test_repeated_labels_are_kept_once_ignoring_case(inv_client, admin_token, invitation_app):
+    pid = invitation_app._test_project_id
+    created = _create(inv_client, admin_token, pid, labels=["Électricité", "Électricité", " électricité ", "a", "A"])
+    assert created.status_code == 201, created.get_data(as_text=True)
+    assert created.get_json()["labels"] == ["Électricité", "a"]
+
+    updated = inv_client.put(
+        f"/api/v1/tasks/{created.get_json()['id']}", json={"labels": ["dup", "Dup", "b"]}, headers=_auth(admin_token)
+    )
+    assert updated.status_code == 200, updated.get_data(as_text=True)
+    assert updated.get_json()["labels"] == ["dup", "b"]
+
+
+def test_a_malformed_project_or_task_id_is_a_400_not_a_missing_permission(inv_client, admin_token):
+    """An id that is not a UUID names no row: telling an admin they lack project:read is wrong."""
+    for url in ("/api/v1/projects/not-a-uuid/tasks", "/api/v1/tasks/not-a-uuid"):
+        resp = inv_client.get(url, headers=_auth(admin_token))
+        assert resp.status_code == 400, (url, resp.get_data(as_text=True))

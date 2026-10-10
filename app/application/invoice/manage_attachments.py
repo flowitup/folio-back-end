@@ -7,7 +7,8 @@ from typing import BinaryIO
 from uuid import UUID
 
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository
-from app.domain.entities.invoice_attachment import InvoiceAttachment
+from app.domain.entities.invoice_attachment import MAX_ATTACHMENT_FILENAME_LENGTH, InvoiceAttachment
+from app.domain.value_objects.display_filename import has_control_chars
 
 
 class AttachmentNotFoundError(LookupError):
@@ -61,6 +62,11 @@ class RenameAttachmentUseCase:
         new_filename = new_filename.strip()
         if not new_filename:
             raise ValueError("Filename cannot be empty")
+        if len(new_filename) > MAX_ATTACHMENT_FILENAME_LENGTH:
+            raise ValueError(f"Filename is too long (max {MAX_ATTACHMENT_FILENAME_LENGTH} characters)")
+        if has_control_chars(new_filename):
+            # It would end up in the download's Content-Disposition header
+            raise ValueError("Filename cannot contain line breaks or other control characters")
 
         original_ext = os.path.splitext(att.filename)[1].lower()
         new_ext = os.path.splitext(new_filename)[1].lower()

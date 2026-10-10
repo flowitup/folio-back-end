@@ -6,6 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.chiffrage.ports import ChiffrageRepositoryPort, TransactionalSessionPort
+from app.application.chiffrage.ordering import free_slot, renumber_around
 from app.application.chiffrage.units import POSITION_STEP
 from app.application.chiffrage.validation import (
     MAX_POSTE_NAME,
@@ -47,7 +48,11 @@ class UpdatePosteUseCase:
         poste = owned_poste(self._repo, poste_id, project_id)
         U = ChiffragePoste._UNSET
         updated = poste.with_updates(
-            name=(U if name is U else clean_name(str(name), field="Poste name", max_length=MAX_POSTE_NAME)),
+            name=(
+                U
+                if name is U
+                else clean_name(None if name is None else str(name), field="Poste name", max_length=MAX_POSTE_NAME)
+            ),
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
         )
         self._repo.save_poste(updated)
@@ -93,17 +98,16 @@ class ReorderPosteUseCase:
         before = owned_poste(self._repo, before_id, project_id) if before_id else None
         after = owned_poste(self._repo, after_id, project_id) if after_id else None
 
-        if before and after:
-            new_pos = (before.position + after.position) // 2
-            if new_pos == before.position:
-                # Integer gap exhausted between these two neighbours.
-                new_pos = before.position + 1
-        elif before:
-            new_pos = before.position + POSITION_STEP
-        elif after:
-            new_pos = max(0, after.position - POSITION_STEP)
-        else:
-            new_pos = self._repo.max_poste_position(project_id) + POSITION_STEP
+        new_pos = free_slot(before, after, lambda: self._repo.max_poste_position(project_id))
+        if new_pos is None:
+            # No free integer between the neighbours (gap used up, or tied rows).
+            new_pos = renumber_around(
+                self._repo.postes_for_project(project_id),
+                poste,
+                before_id,
+                after_id,
+                lambda sibling, position: self._repo.save_poste(sibling.with_position(position)),
+            )
 
         moved = poste.with_position(new_pos)
         self._repo.save_poste(moved)

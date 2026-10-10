@@ -233,3 +233,132 @@ class TestTemplateLineSections:
         )
         assert applied.status_code == 201, applied.get_data(as_text=True)
         assert [it["category"] for it in applied.get_json()["items"]] == ["Kitchen", "Hall"]
+
+
+class TestTemplateTextLimits:
+    """Template notes and terms use the document caps, so a template always makes a savable document."""
+
+    def test_create_with_notes_over_2000_characters_returns_422(self, inv_client, billing_token):
+        body = {"kind": "devis", "name": f"Long {uuid.uuid4().hex[:6]}", "notes": "n" * 2001}
+        resp = inv_client.post("/api/v1/billing-document-templates", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert "notes" in resp.get_json()["message"]
+
+    def test_update_with_terms_over_2000_characters_returns_422(self, inv_client, billing_token, seeded_template):
+        resp = inv_client.put(
+            f"/api/v1/billing-document-templates/{seeded_template['id']}",
+            json={"terms": "t" * 2001},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert "terms" in resp.get_json()["message"]
+
+    def test_2000_characters_are_accepted(self, inv_client, billing_token, seeded_template):
+        resp = inv_client.put(
+            f"/api/v1/billing-document-templates/{seeded_template['id']}",
+            json={"notes": "n" * 2000, "terms": "t" * 2000},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def _lines(self, count: int) -> list[dict]:
+        return [
+            {"description": f"Line {i}", "quantity": "1", "unit_price": "1", "vat_rate": "20"} for i in range(count)
+        ]
+
+    def test_more_than_200_lines_returns_422_on_create_and_update(self, inv_client, billing_token, seeded_template):
+        body = {"kind": "devis", "name": f"Many {uuid.uuid4().hex[:6]}", "items": self._lines(201)}
+        created = inv_client.post("/api/v1/billing-document-templates", json=body, headers=_auth(billing_token))
+        assert created.status_code == 422, created.get_data(as_text=True)
+        assert "items" in created.get_json()["message"]
+        updated = inv_client.put(
+            f"/api/v1/billing-document-templates/{seeded_template['id']}",
+            json={"items": self._lines(201)},
+            headers=_auth(billing_token),
+        )
+        assert updated.status_code == 422, updated.get_data(as_text=True)
+        assert "items" in updated.get_json()["message"]
+
+    def test_200_lines_are_accepted(self, inv_client, billing_token):
+        body = {"kind": "devis", "name": f"Full {uuid.uuid4().hex[:6]}", "items": self._lines(200)}
+        resp = inv_client.post("/api/v1/billing-document-templates", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_apply_with_address_over_500_characters_returns_422(
+        self, inv_client, billing_token, billing_profile, seeded_template
+    ):
+        url = f"/api/v1/billing-documents/from-template/{seeded_template['id']}"
+        body = {"recipient_name": "Client", "company_id": billing_profile["company_id"]}
+        too_long = inv_client.post(url, json={**body, "recipient_address": "A" * 501}, headers=_auth(billing_token))
+        assert too_long.status_code == 422, too_long.get_data(as_text=True)
+        assert "recipient_address" in too_long.get_json()["message"]
+        fits = inv_client.post(url, json={**body, "recipient_address": "A" * 500}, headers=_auth(billing_token))
+        assert fits.status_code == 201, fits.get_data(as_text=True)
+
+
+class TestTemplateDefaultVatRate:
+    """The column keeps 2 decimals: create and update answer with the rounded rate that is stored."""
+
+    def test_create_and_update_return_the_stored_rate(self, inv_client, billing_token):
+        body = {"kind": "devis", "name": f"Vat {uuid.uuid4().hex[:6]}", "default_vat_rate": "5.555"}
+        created = inv_client.post("/api/v1/billing-document-templates", json=body, headers=_auth(billing_token))
+        assert created.status_code == 201, created.get_data(as_text=True)
+        tpl_id = created.get_json()["id"]
+        assert created.get_json()["default_vat_rate"] == "5.56"
+
+        updated = inv_client.put(
+            f"/api/v1/billing-document-templates/{tpl_id}",
+            json={"default_vat_rate": "7.777"},
+            headers=_auth(billing_token),
+        )
+        assert updated.status_code == 200, updated.get_data(as_text=True)
+        assert updated.get_json()["default_vat_rate"] == "7.78"
+        fetched = inv_client.get(f"/api/v1/billing-document-templates/{tpl_id}", headers=_auth(billing_token))
+        assert fetched.get_json()["default_vat_rate"] == "7.78"
+
+
+class TestTemplateUpdateClearsAndConflicts:
+    def test_null_clears_notes_terms_and_default_vat(self, inv_client, billing_token, seeded_template):
+        url = f"/api/v1/billing-document-templates/{seeded_template['id']}"
+        set_resp = inv_client.put(
+            url,
+            json={"notes": "Note à effacer", "terms": "CGV à effacer", "default_vat_rate": "10"},
+            headers=_auth(billing_token),
+        )
+        assert set_resp.status_code == 200, set_resp.get_data(as_text=True)
+
+        cleared = inv_client.put(
+            url, json={"notes": None, "terms": None, "default_vat_rate": None}, headers=_auth(billing_token)
+        )
+        assert cleared.status_code == 200, cleared.get_data(as_text=True)
+        data = inv_client.get(url, headers=_auth(billing_token)).get_json()
+        assert (data["notes"], data["terms"], data["default_vat_rate"]) == (None, None, None)
+
+    def test_omitted_fields_are_left_alone(self, inv_client, billing_token, seeded_template):
+        url = f"/api/v1/billing-document-templates/{seeded_template['id']}"
+        inv_client.put(url, json={"notes": "Garde-moi", "default_vat_rate": "10"}, headers=_auth(billing_token))
+        resp = inv_client.put(url, json={"name": f"Renamed {uuid.uuid4().hex[:6]}"}, headers=_auth(billing_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["notes"] == "Garde-moi"
+        assert resp.get_json()["default_vat_rate"] is not None
+
+    def test_rename_onto_an_existing_name_returns_409(self, inv_client, billing_token):
+        names = [f"Dup A {uuid.uuid4().hex[:6]}", f"Dup B {uuid.uuid4().hex[:6]}"]
+        ids = []
+        for name in names:
+            resp = inv_client.post(
+                "/api/v1/billing-document-templates",
+                json={"kind": "facture", "name": name},
+                headers=_auth(billing_token),
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+            ids.append(resp.get_json()["id"])
+
+        resp = inv_client.put(
+            f"/api/v1/billing-document-templates/{ids[1]}", json={"name": names[0]}, headers=_auth(billing_token)
+        )
+        assert resp.status_code == 409, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "Conflict"
+        # The session is usable again and B kept its name.
+        kept = inv_client.get(f"/api/v1/billing-document-templates/{ids[1]}", headers=_auth(billing_token))
+        assert kept.get_json()["name"] == names[1]

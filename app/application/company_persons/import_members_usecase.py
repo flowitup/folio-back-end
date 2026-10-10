@@ -7,7 +7,9 @@ already-linked user account as a `member` of the target company.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import dataclasses
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from uuid import uuid4
 
 from app.application.companies._helpers import _assert_company_admin
@@ -16,6 +18,7 @@ from app.application.companies.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
+from app.application.company_persons.add_member_by_phone_usecase import _PENDING_WINDOW_DAYS
 from app.application.company_persons.dtos import ImportedMember, ImportMembersInput, ImportMembersResult
 from app.application.company_persons.exceptions import SourceCompanyNotAccessibleError
 from app.application.company_persons.ports import CompanyPersonRepositoryPort
@@ -65,6 +68,18 @@ class ImportMembersUseCase:
                 skipped_person_ids.append(person_id)
                 continue
 
+            # Someone without an account only joins on sign-up through a pending
+            # profile (`list_pending_by_phone`), so their copy here is pending too,
+            # as a member (the import role; "member" is stored as None).
+            pending_expires_at: Optional[datetime] = None
+            if person.user_id is None:
+                source_until = source_profile.pending_expires_at
+                pending_expires_at = (
+                    source_until
+                    if source_until is not None and source_until > now
+                    else now + timedelta(days=_PENDING_WINDOW_DAYS)
+                )
+
             target_profile = self._company_persons.find(inp.company_id, person_id)
             added = target_profile is None
             if target_profile is None:
@@ -76,11 +91,21 @@ class ImportMembersUseCase:
                         created_at=now,
                         is_active=True,
                         phone_normalized=source_profile.phone_normalized,
+                        pending_expires_at=pending_expires_at,
                         created_by_user_id=inp.caller_id,
                         # No pay data copied: labor_role_id / default_daily_rate
                         # left unset — the destination company sets its own rate.
                     )
                 )
+            elif not target_profile.is_active:
+                # Booted earlier: bring the profile back, or the re-attached user
+                # stays hidden from the directory and the assign-member pickers.
+                target_profile = self._company_persons.save(
+                    dataclasses.replace(
+                        target_profile, is_active=True, pending_expires_at=pending_expires_at, pending_company_role=None
+                    )
+                )
+                added = True
 
             if person.user_id is not None and self._access.find(person.user_id, inp.company_id) is None:
                 self._access.save(

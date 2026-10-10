@@ -69,20 +69,48 @@ class TestCreateBillingDocument:
         assert resp.status_code == 422
 
     def test_create_doc_with_unattached_company_returns_4xx(self, inv_client, billing_token, billing_profile):
-        """Spec #7: company_id provided but company doesn't exist → 4xx error."""
+        """Spec #7: company_id provided but company doesn't exist → the same 403 as a company
+        the caller has no role in, so the answer does not reveal whether the id exists."""
         import uuid
 
         fake_company_id = str(uuid.uuid4())
         body = {**_CREATE_BASE, "company_id": fake_company_id}
         resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
-        assert resp.status_code in (400, 409, 422)
+        assert resp.status_code == 403
+        assert resp.get_json()["error"] == "Forbidden"
 
-    def test_create_missing_company_profile_returns_409(self, inv_client, other_token, billing_profile):
-        """Spec #6: user not attached to any company → 409 with reason=company_profile_missing."""
+    def test_create_for_a_company_the_caller_never_belonged_to_returns_403(
+        self, inv_client, other_token, billing_profile
+    ):
+        """Spec #6: a user with no role in the company gets the non-admin 403, never the
+        409 'company_no_longer_attached' reason meant for someone who was attached."""
         # other_token user has no company attachment — pass a valid-format company_id
         body = {**_CREATE_BASE, "company_id": billing_profile["company_id"]}
         resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(other_token))
-        assert resp.status_code in (409, 422)
+        assert resp.status_code == 403
+        assert resp.get_json()["error"] == "Forbidden"
+        assert "reason" not in resp.get_json()
+
+    def test_import_answers_an_outsider_alike_for_a_real_and_an_unknown_company(
+        self, inv_client, other_token, billing_profile
+    ):
+        import uuid
+
+        body = {
+            "kind": "devis",
+            "recipient_name": "Client",
+            "document_number": f"IMP-{uuid.uuid4().hex[:8]}",
+            "status": "draft",
+            "items": [_ITEM],
+        }
+        answers = [
+            inv_client.post(
+                "/api/v1/billing-documents/import", json={**body, "company_id": cid}, headers=_auth(other_token)
+            )
+            for cid in (billing_profile["company_id"], str(uuid.uuid4()))
+        ]
+        assert [r.status_code for r in answers] == [403, 403]
+        assert answers[0].get_json() == answers[1].get_json()
 
     def test_pydantic_strict_extra_field_returns_422(self, inv_client, billing_token, billing_profile):
         """Spec #13: unknown field on POST body → 422."""
@@ -391,6 +419,17 @@ class TestBillingDocumentDates:
         moved = inv_client.put(url, json={"issue_date": "2026-03-02"}, headers=_auth(billing_token))
         assert moved.status_code == 200
         assert "02 Mar 2026" in moved.get_json()["issue_date"]
+
+    @pytest.mark.parametrize("kind", ["devis", "facture"])
+    @pytest.mark.parametrize("issue_date", ["9999-12-31", "0001-01-15"])
+    def test_issue_date_outside_2000_2100_is_refused(
+        self, inv_client, billing_token, billing_profile, kind, issue_date
+    ):
+        # 9999-12-31 overflowed the +30-day default date (500); year 1 was numbered "FAC-1-001".
+        body = {**_create(billing_profile["company_id"]), "kind": kind, "issue_date": issue_date}
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert "issue_date" in resp.get_json()["message"]
 
 
 class TestBillingDocumentSearch:

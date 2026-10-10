@@ -27,14 +27,19 @@ class GetChiffrageTreeUseCase:
         stores = self._repo.stores_for_project(project_id)
 
         # One keyed lookup for the whole tree: which linked library products
-        # actually have an image an article can borrow as its thumbnail.
+        # actually have an image an article can borrow as its thumbnail. Only
+        # the project's own company library counts.
         product_ids = [
             q.library_product_id
             for quotes in quotes_by_article.values()
             for q in quotes
             if q.library_product_id is not None
         ]
-        library_with_image = self._repo.library_products_with_image(product_ids)
+        library_with_image = (
+            self._repo.library_products_with_image(product_ids, self._repo.company_id_for_project(project_id))
+            if product_ids
+            else set()
+        )
 
         return build_tree_response(
             project_id,

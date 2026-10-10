@@ -10,7 +10,9 @@ errors keep that envelope too.
 from __future__ import annotations
 
 from flask import Flask, Response, jsonify, request
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, InternalServerError
+
+from app.api._helpers.nul_guard import is_nul_storage_error, nul_error_response
 
 
 def _is_api_request() -> bool:
@@ -20,6 +22,9 @@ def _is_api_request() -> bool:
 def _json_http_error(exc: HTTPException) -> HTTPException | tuple[Response, int]:
     if not _is_api_request() or exc.code is None:
         return exc
+    if isinstance(exc, InternalServerError) and is_nul_storage_error(exc.original_exception):
+        # A NUL the request guard could not see reached the database: still the client's input.
+        return nul_error_response()
     body = {
         "error": exc.name.replace(" ", ""),
         "message": exc.description or exc.name,

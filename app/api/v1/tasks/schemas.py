@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Annotated, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+
+from app.api.v1.date_bounds import BusinessDate
 
 VALID_STATUSES = {"backlog", "todo", "in_progress", "blocked", "done"}
 VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
@@ -18,14 +19,29 @@ MAX_LABELS = 20
 Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 
 
+def _unique_labels(labels: list[str]) -> list[str]:
+    """Labels are a set: keep the first spelling of each, ignoring case, in the order sent."""
+    seen: set[str] = set()
+    unique = []
+    for label in labels:
+        key = label.casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(label)
+    return unique
+
+
+Labels = Annotated[list[Label], AfterValidator(_unique_labels)]
+
+
 class CreateTaskSchema(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: Optional[str] = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
     status: str = Field(default="backlog", pattern="^(backlog|todo|in_progress|blocked|done)$")
     priority: str = Field(default="medium", pattern="^(low|medium|high|urgent)$")
     assignee_id: Optional[UUID] = None
-    due_date: Optional[date] = None
-    labels: list[Label] = Field(default_factory=list, max_length=MAX_LABELS)
+    due_date: Optional[BusinessDate] = None
+    labels: Labels = Field(default_factory=list, max_length=MAX_LABELS)
 
 
 class UpdateTaskSchema(BaseModel):
@@ -35,8 +51,8 @@ class UpdateTaskSchema(BaseModel):
     description: Optional[str] = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
     priority: Optional[str] = Field(default=None, pattern="^(low|medium|high|urgent)$")
     assignee_id: Optional[UUID] = None
-    due_date: Optional[date] = None
-    labels: Optional[list[Label]] = Field(default=None, max_length=MAX_LABELS)
+    due_date: Optional[BusinessDate] = None
+    labels: Optional[Labels] = Field(default=None, max_length=MAX_LABELS)
 
 
 class MoveTaskSchema(BaseModel):

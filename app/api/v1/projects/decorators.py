@@ -75,7 +75,9 @@ def _resolve_project_ref(kwargs: dict) -> "tuple[UUID | None, bool]":
     permission is evaluated, which is the pre-existing contract on these routes
     and matches the roster rule. An id that is present but unparseable, or a
     route carrying no project reference at all, yields `(None, False)` — the
-    permission check then answers as usual.
+    permission check then answers as usual (`require_permission` has already
+    answered 400 for an unparseable project / invoice / task / attachment id,
+    see `_malformed_child_id_label`).
     """
     from wiring import get_container
 
@@ -115,6 +117,26 @@ def _resolve_project_ref(kwargs: dict) -> "tuple[UUID | None, bool]":
         invoice = invoice_repo.find_by_id(attachment.invoice_id)
         return (invoice.project_id, False) if invoice else (None, True)
     return None, False
+
+
+_CHILD_ID_KWARGS = (
+    ("project_id", "Project"),
+    ("invoice_id", "Invoice"),
+    ("task_id", "Task"),
+    ("attachment_id", "Attachment"),
+)
+
+
+def _malformed_child_id_label(kwargs: dict) -> "str | None":
+    """Label of the project / invoice / task / attachment id in the URL that is not a UUID, else None.
+
+    Such an id names no row at all, so the request is malformed (400) — not a
+    permission problem the context-free check would wrongly answer with 403.
+    """
+    for key, label in _CHILD_ID_KWARGS:
+        if kwargs.get(key) and _as_uuid(kwargs[key]) is None:
+            return label
+    return None
 
 
 def _resolve_project_id(kwargs: dict) -> "UUID | None":
@@ -211,6 +233,9 @@ def require_permission(permission: str):
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            malformed = _malformed_child_id_label(kwargs)
+            if malformed is not None:
+                return _invalid_id(malformed)
             project_id, ref_is_missing = _resolve_project_ref(kwargs)
             if ref_is_missing:
                 return _not_found(_missing_ref_message(kwargs))
@@ -282,6 +307,15 @@ def _not_found(message: str):
     )
 
 
+def _invalid_id(label: str):
+    """400 for a URL id that is not a UUID (it can name no row, so it is neither 403 nor 404)."""
+    message = f"Invalid {label.lower()} id"
+    return (
+        jsonify(ErrorResponse(error="INVALID_ID", message=message, status_code=400).model_dump()),
+        400,
+    )
+
+
 def require_project_access(write: bool = False, permission: str = "project:update"):
     """Decorator: load the project from `<project_id>` → check the caller may read/write it.
 
@@ -345,11 +379,17 @@ def _require_entity_access(
                 return _forbidden(f"Missing {label.lower()} id")
             entity_id = _as_uuid(raw)
             if entity_id is None:
-                return _forbidden(f"Invalid {label.lower()} id")
+                return _invalid_id(label)
 
             project, missing = project_for(get_container(), entity_id)
             if project is None:
                 return _not_found(missing or f"{label} {raw} not found")
+            # A `/projects/<project_id>/...` URL must name the entity's own project:
+            # `require_permission` evaluated the URL project, so another project the
+            # caller can open must not reach this one's rows. Same 404 as a missing row.
+            url_project_id = kwargs.get("project_id")
+            if url_project_id and _as_uuid(url_project_id) != project.id:
+                return _not_found(f"{label} {raw} not found")
 
             user_id = UUID(str(get_jwt_identity()))
             allowed = can_mutate_project(project, user_id, permission) if write else can_read_project(project, user_id)
@@ -393,8 +433,9 @@ def require_invoice_access(write: bool = False, permission: str = "project:manag
     """Decorator: load invoice → its project → resolve the caller's permission.
 
     Apply to any route whose path includes `<invoice_id>`; runs after
-    `@jwt_required()`. 404 when the invoice (or its project) is gone, 403 when
-    the caller lacks `project:read` (reads) or `permission` (writes). Company
+    `@jwt_required()`. 404 when the invoice (or its project) is gone or belongs
+    to another project than the URL's `<project_id>`, 403 when the caller
+    lacks `project:read` (reads) or `permission` (writes). Company
     admins pass through the resolver like any other caller — their read of a
     company project needs no special case.
     """

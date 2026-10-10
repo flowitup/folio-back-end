@@ -34,12 +34,3 @@ def list_users():
     users = container.user_repository.search_by_email(query, limit=10, sharing_company_with=scope)
 
     return jsonify({"users": [{"id": str(u[0]), "email": u[1]} for u in users], "total": len(users)})
-
-
-@bp.route("/users/<user_id>", methods=["GET"])
-def get_user(user_id: str):
-    """Get a user by ID - stub returning 501."""
-    return (
-        jsonify({"error": "Not Implemented", "message": f"GET /users/{user_id} is not yet implemented"}),
-        501,
-    )

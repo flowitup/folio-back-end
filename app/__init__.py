@@ -43,8 +43,11 @@ def create_app(config_class: type = Config) -> Flask:
     app.json = FiniteJSONProvider(app)
     # HTTP errors under /api/ (bad JSON, unknown URL, unhandled 500) answer JSON, not HTML.
     from app.api._helpers.http_errors import register_json_error_handlers
+    from app.api._helpers.nul_guard import register_nul_guard
 
     register_json_error_handlers(app)
+    # A NUL character in a request's text is a 400 up front, not a 500 from the database.
+    register_nul_guard(app)
 
     # Production security check — fail fast rather than run with insecure defaults
     _flask_env = os.environ.get("FLASK_ENV", "development")
@@ -653,7 +656,14 @@ def _configure_di_container() -> None:
         if _c.invitation_repo is not None:
             from app.application.invitations.accept_invitation_usecase import RequestInviteOtpUseCase
 
-            _c.request_invite_otp_usecase = RequestInviteOtpUseCase(_c.invitation_repo, _c.request_signup_otp_usecase)
+            # An invitation to an address that already has an account is taken up with a
+            # sign-in code sent to that account's own phone.
+            _c.request_invite_otp_usecase = RequestInviteOtpUseCase(
+                _c.invitation_repo,
+                _c.request_signup_otp_usecase,
+                user_repo=_c.user_repository,
+                request_signin_otp=_c.request_otp_usecase,
+            )
 
     # -----------------------------------------------------------------------
     # Companies DI wiring (phase 03)
@@ -757,6 +767,10 @@ def _configure_di_container() -> None:
     if _role_checker is not None and hasattr(_role_checker, "set_authz_reader"):
         _role_checker.set_authz_reader(_c.authz_reader)
 
+    # Task pushes go only to an assignee who can still open the project.
+    if _c.task_push_notifier is not None:
+        _c.task_push_notifier.set_access_reader(_c.authz_reader, _c.user_repository)
+
     # Same reason: the invitation use-cases resolve `project:invite` themselves.
     for _invitation_usecase in (
         _c.create_invitation_usecase,
@@ -795,6 +809,7 @@ def _configure_di_container() -> None:
         company_repo=_company_repo,
         role_checker=_role_checker,
         authz_reader=_c.authz_reader,
+        access_repo=_access_repo,
     )
     _c.list_all_companies_usecase = _ListAllCompaniesUseCase(
         company_repo=_company_repo,
@@ -855,6 +870,9 @@ def _configure_di_container() -> None:
     # Renaming a worker renames the shared Person it is linked to.
     if _c.update_worker_usecase is not None:
         _c.update_worker_usecase.set_person_repo(_person_repo)
+    # A verified phone change moves the account's Person to the new number too.
+    if getattr(_c, "confirm_phone_change_usecase", None) is not None:
+        _c.confirm_phone_change_usecase.set_person_repo(_person_repo)
     _c.create_person_usecase = _CreatePersonUseCase(person_repo=_person_repo)
     _c.search_persons_usecase = _SearchPersonsUseCase(person_repo=_person_repo)
     _c.merge_persons_usecase = _MergePersonsUseCase(
@@ -940,16 +958,23 @@ def _configure_di_container() -> None:
         company_person_repo=_c.company_person_repo,
         person_repo=_person_repo,
         authz_reader=_c.authz_reader,
+        user_repo=_c.user_repository,
     )
 
     # Re-wire boot/detach with the Phase 2 onboarding cleanup collaborators
-    # (project assignments + directory profile + join code rotation) now
-    # that person_repo/company_person_repo exist — both use cases are
-    # constructed earlier (companies admin/user use-case block) without them.
+    # (project assignments + directory profile + D8 grants + join code
+    # rotation) now that person_repo/company_person_repo exist — both use
+    # cases are constructed earlier (companies admin/user use-case block)
+    # without them.
     from app.application.companies.boot_attached_user_usecase import (
         BootAttachedUserUseCase as _BootAttachedUserUseCaseV2,
     )
     from app.application.companies.detach_company_usecase import DetachCompanyUseCase as _DetachCompanyUseCaseV2
+    from app.infrastructure.database.repositories.sqlalchemy_company_member_grant_repository import (
+        SqlAlchemyCompanyMemberGrantRepository as _MemberGrantRepo,
+    )
+
+    _member_grant_repo = _MemberGrantRepo(db.session)
 
     _c.boot_attached_user_usecase = _BootAttachedUserUseCaseV2(
         company_repo=_company_repo,
@@ -960,6 +985,8 @@ def _configure_di_container() -> None:
         person_repo=_person_repo,
         company_person_repo=_c.company_person_repo,
         clock=_clock,
+        grant_repo=_member_grant_repo,
+        task_repo=_c.task_repository,
     )
     _c.detach_company_usecase = _DetachCompanyUseCaseV2(
         access_repo=_access_repo,
@@ -967,6 +994,8 @@ def _configure_di_container() -> None:
         membership_repo=_c.project_membership_repo,
         person_repo=_person_repo,
         company_person_repo=_c.company_person_repo,
+        grant_repo=_member_grant_repo,
+        task_repo=_c.task_repository,
     )
 
     # Project assignment use cases: admin/manager assign or unassign an
@@ -992,6 +1021,7 @@ def _configure_di_container() -> None:
             authz_reader=_c.authz_reader,
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
+            task_repo=_c.task_repository,
         )
 
     # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
@@ -1223,11 +1253,13 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         pdf_renderer=_billing_pdf_renderer,
         access_repo=_access_repo,  # company-admin may render company billing
+        project_repo=_project_repo,  # the linked project is printed as the document's Objet
     )
     _c.render_billing_document_xlsx_usecase = RenderBillingDocumentXlsxUseCase(
         doc_repo=_billing_doc_repo,
         xlsx_renderer=_billing_xlsx_renderer,
         access_repo=_access_repo,  # company-admin may render company billing
+        project_repo=_project_repo,  # the linked project is printed as the document's Objet
     )
 
     # billing-template use-cases
@@ -1240,6 +1272,7 @@ def _configure_di_container() -> None:
     )
     _c.list_billing_templates_usecase = ListTemplatesUseCase(
         template_repo=_billing_tpl_repo,
+        access_repo=_access_repo,  # a removed author no longer lists the company's templates
     )
     _c.get_billing_template_usecase = GetTemplateUseCase(
         template_repo=_billing_tpl_repo,

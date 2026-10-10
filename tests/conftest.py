@@ -683,9 +683,11 @@ def invitation_app():
         _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             project_repo=project_repo,  # needed for project_id link/unlink access checks
+            access_repo=_access_repo,  # changes to company billing need the admin role, as in production
         )
         _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
             doc_repo=_billing_doc_repo,
+            access_repo=_access_repo,
         )
         _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
             doc_repo=_billing_doc_repo,
@@ -697,14 +699,19 @@ def invitation_app():
         )
         _c.delete_billing_document_usecase = DeleteBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
+            access_repo=_access_repo,
         )
         _c.render_billing_document_pdf_usecase = RenderBillingDocumentPdfUseCase(
             doc_repo=_billing_doc_repo,
             pdf_renderer=_billing_pdf_renderer,
+            access_repo=_access_repo,
+            project_repo=project_repo,  # the linked project is printed as the document's Objet
         )
         _c.render_billing_document_xlsx_usecase = RenderBillingDocumentXlsxUseCase(
             doc_repo=_billing_doc_repo,
             xlsx_renderer=_billing_xlsx_renderer,
+            access_repo=_access_repo,
+            project_repo=project_repo,  # the linked project is printed as the document's Objet
         )
         _c.create_billing_template_usecase = CreateTemplateUseCase(
             template_repo=_billing_tpl_repo,
@@ -715,6 +722,7 @@ def invitation_app():
         )
         _c.list_billing_templates_usecase = ListTemplatesUseCase(
             template_repo=_billing_tpl_repo,
+            access_repo=_access_repo,
         )
         _c.get_billing_template_usecase = GetTemplateUseCase(
             template_repo=_billing_tpl_repo,
@@ -739,6 +747,7 @@ def invitation_app():
             counter_repo=_billing_counter_repo,
             company_repo=_company_repo,
             access_repo=_access_repo,
+            project_repo=project_repo,  # project:read authorization, as in production
         )
         _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
             doc_repo=_billing_doc_repo,
@@ -1396,7 +1405,7 @@ def invitation_app():
         from app.application.usecases.change_phone import RequestPhoneChangeCodeUseCase as _RequestPhoneChangeUC
 
         _c.request_phone_change_code_usecase = _RequestPhoneChangeUC(user_repo, _otp_repo, _sms)
-        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(user_repo, _otp_repo)
+        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(user_repo, _otp_repo, person_repo=_c.person_repo)
 
         # Invitation acceptance proves a phone by the same sign-up code flow (phase 02) —
         # mirrors app/__init__.py's wiring, which this fixture had drifted from (the
@@ -1406,7 +1415,12 @@ def invitation_app():
                 RequestInviteOtpUseCase as _RequestInviteOtpUC,
             )
 
-            _c.request_invite_otp_usecase = _RequestInviteOtpUC(_c.invitation_repo, _c.request_signup_otp_usecase)
+            _c.request_invite_otp_usecase = _RequestInviteOtpUC(
+                _c.invitation_repo,
+                _c.request_signup_otp_usecase,
+                user_repo=user_repo,
+                request_signin_otp=_c.request_otp_usecase,
+            )
         test_app._sms = _sms
 
         yield test_app

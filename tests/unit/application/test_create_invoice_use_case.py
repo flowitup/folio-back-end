@@ -617,6 +617,7 @@ class TestUpdateInvoiceServiceMonth:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.update.side_effect = lambda inv: inv
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = UpdateInvoiceUseCase(inv_repo)
 
         result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, type=InvoiceType.OTHERS))
@@ -645,6 +646,7 @@ class TestUpdateInvoiceServiceMonth:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.update.side_effect = lambda inv: inv
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = UpdateInvoiceUseCase(inv_repo)
 
         result = use_case.execute(
@@ -819,6 +821,7 @@ class TestUpdateInvoiceWorkerLink:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.update.side_effect = lambda inv: inv
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = UpdateInvoiceUseCase(inv_repo)
 
         result = use_case.execute(UpdateInvoiceRequest(invoice_id=invoice.id, type=InvoiceType.OTHERS))
@@ -878,6 +881,7 @@ class TestUpdateInvoiceWorkerLink:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.update.side_effect = lambda inv: inv
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         worker_reader = _make_worker_reader(worker)
         use_case = UpdateInvoiceUseCase(inv_repo, worker_reader=worker_reader)
 

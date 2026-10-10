@@ -3,9 +3,9 @@
 from datetime import date
 from typing import List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.api.v1.numeric_bounds import MAX_DAILY_AMOUNT
+from app.api.v1.numeric_bounds import MAX_DAILY_AMOUNT, positive_cents
 
 
 class CreateRateChangeRequest(BaseModel):
@@ -13,8 +13,14 @@ class CreateRateChangeRequest(BaseModel):
 
     effective_date: date
     daily_rate: float = Field(
-        ..., gt=0, le=float(MAX_DAILY_AMOUNT), description="Daily rate in currency units; must be > 0"
+        ..., gt=0, le=float(MAX_DAILY_AMOUNT), description="Daily rate in currency units; at least 0.01"
     )
+
+    @field_validator("daily_rate")
+    @classmethod
+    def round_to_cents(cls, v: float) -> float:
+        # The column keeps 2 decimals: 0.004 passed "> 0" and was then stored as 0.00.
+        return positive_cents(v)
 
 
 class RateChangeResponse(BaseModel):

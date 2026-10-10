@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.api._helpers.requester_identity import get_requester_email
+from app.api._helpers.requester_identity import get_requester_label
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices.schemas import ExportInvoicesQuery
 from app.api.v1.projects.budget_scope import caller_sees_budget
@@ -58,9 +58,9 @@ def export_invoices(project_id: str):
     except ValidationError as exc:
         return format_validation_error(exc)
 
-    # --- Resolve acting user email (needed for file metadata) ---
+    # --- Resolve how the acting user is named in the file metadata ---
     container = get_container()
-    requester_email = get_requester_email(container.user_repository)
+    requester_label = get_requester_label(container.user_repository)
 
     # --- Execute use-case ---
     try:
@@ -70,7 +70,7 @@ def export_invoices(project_id: str):
                 from_month=query.from_month,
                 to_month=query.to_month,
                 format=query.format,
-                acting_user_email=requester_email,
+                acting_user_email=requester_label,
                 type_filter=InvoiceType(query.type) if query.type else None,
                 # Financing side stays out of a manager's export, whether they
                 # asked for every type or for released_funds specifically.

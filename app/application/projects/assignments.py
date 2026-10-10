@@ -30,6 +30,7 @@ from uuid import UUID
 
 from app.application.companies._helpers import ForbiddenCompanyError
 from app.application.companies.dtos import SetMemberRoleInput
+from app.domain.authz.resolver import effective_permissions
 from app.domain.companies.roles import CompanyRole
 from app.domain.entities.project_membership import ProjectMembership
 
@@ -186,10 +187,12 @@ class UnassignProjectMemberUseCase:
         authz_reader: "AuthzReaderPort",
         access_repo: "UserCompanyAccessRepositoryPort",
         membership_repo: "ProjectMembershipRepositoryPort",
+        task_repo: Any = None,  # anything with clear_assignee(project_id, user_id)
     ) -> None:
         self._authz = authz_reader
         self._access = access_repo
         self._membership = membership_repo
+        self._tasks = task_repo
 
     def execute(self, caller_id: UUID, project_id: UUID, target_user_id: UUID) -> None:
         company_id, caller_role = _resolve_caller_scope(self._authz, caller_id, project_id)
@@ -203,3 +206,10 @@ class UnassignProjectMemberUseCase:
         _forbid_manager_on_a_non_member(self._authz, caller_role, target_user_id, company_id)
 
         self._membership.remove(target_user_id, project_id)
+
+        # Their tasks on this project go back to "unassigned" once they can no
+        # longer open it (a company admin still can, without an assignment).
+        if self._tasks is not None and "project:read" not in effective_permissions(
+            self._authz, target_user_id, project_id=project_id
+        ):
+            self._tasks.clear_assignee(project_id, target_user_id)

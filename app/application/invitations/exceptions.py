@@ -19,3 +19,9 @@ class RateLimitedError(Exception):
     """Raised when a project-level daily invitation cap is exceeded."""
 
     pass
+
+
+class InviteeDeactivatedError(Exception):
+    """Raised when the invited address belongs to a deactivated (or erased) account."""
+
+    pass

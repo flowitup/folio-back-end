@@ -18,6 +18,7 @@ from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.value_objects import BillingDocumentItem
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
+from app.domain.time import business_today
 from app.application.billing.dtos import ItemInput
 
 _DEFAULT_VALIDITY_DAYS = 30  # devis
@@ -26,16 +27,27 @@ _DEFAULT_PAYMENT_DAYS = 30  # facture
 
 def _funds_release_items(doc: BillingDocument) -> list[dict]:
     """A facture's lines as released_funds items: one per line, each with its own
-    vat_rate, so the release's TTC total matches the facture's."""
-    return [
-        {
-            "description": it.description,
-            "quantity": str(it.quantity),
-            "unit_price": str(it.unit_price),
-            "vat_rate": str(it.vat_rate),
-        }
-        for it in doc.items
-    ]
+    vat_rate, so the release's TTC total matches the facture's.
+
+    The facture rounds a line's HT to the cent before its TVA, while an expense line
+    rounds only its TTC. Both agree when quantity × unit_price is already at the cent,
+    so such a line keeps its quantity and unit price; any other line becomes one unit
+    at its rounded HT (2.5 × 19.99 → 1 × 49.98), else the release would be a cent off.
+    """
+    items = []
+    for it in doc.items:
+        quantity, unit_price = it.quantity, it.unit_price
+        if quantity * unit_price != it.total_ht:
+            quantity, unit_price = Decimal("1"), it.total_ht
+        items.append(
+            {
+                "description": it.description,
+                "quantity": str(quantity),
+                "unit_price": str(unit_price),
+                "vat_rate": str(it.vat_rate),
+            }
+        )
+    return items
 
 
 def _assert_owner(doc: BillingDocument, user_id: UUID) -> None:
@@ -45,38 +57,76 @@ def _assert_owner(doc: BillingDocument, user_id: UUID) -> None:
 
 
 def _assert_billing_doc_access(doc: BillingDocument, user_id: UUID, access_repo=None) -> None:
-    """Allow the document owner OR a company-admin of the doc's company.
+    """Read access: a company-admin of the doc's company, or its author while still
+    attached to that company (a demoted author keeps seeing what they wrote; a
+    removed one does not). A document with no company stays private to its author.
 
     Raises ForbiddenBillingDocumentError otherwise. ``access_repo`` is the
     UserCompanyAccessRepositoryPort; when None (legacy/test wiring) the check
     degrades to owner-only — never widens access by accident.
     """
-    if doc.user_id == user_id:
-        return
-    if access_repo is not None and doc.company_id is not None:
-        access = access_repo.find(user_id, doc.company_id)
-        if access is not None and access.role == CompanyRole.ADMIN.value:
+    if access_repo is None or doc.company_id is None:
+        if doc.user_id == user_id:
             return
+        raise ForbiddenBillingDocumentError(doc.id)
+    access = access_repo.find(user_id, doc.company_id)
+    if access is not None and (access.role == CompanyRole.ADMIN.value or doc.user_id == user_id):
+        return
+    raise ForbiddenBillingDocumentError(doc.id)
+
+
+def _assert_billing_doc_write_access(doc: BillingDocument, user_id: UUID, access_repo=None) -> None:
+    """Changes (edit, status, delete, convert) to a company document need the
+    company-admin role, the same rule as creating one: authorship alone is not
+    enough once its author was demoted or removed. A document with no company
+    stays its author's. Raises ForbiddenBillingDocumentError otherwise."""
+    if access_repo is None or doc.company_id is None:
+        if doc.user_id == user_id:
+            return
+        raise ForbiddenBillingDocumentError(doc.id)
+    access = access_repo.find(user_id, doc.company_id)
+    if access is not None and access.role == CompanyRole.ADMIN.value:
+        return
     raise ForbiddenBillingDocumentError(doc.id)
 
 
 def _assert_billing_template_access(template: BillingDocumentTemplate, user_id: UUID, access_repo=None) -> None:
-    """Company templates are shared: the author OR a company-admin of the template's
-    company may read, edit, apply and delete it (the same rule as company billing
-    documents). A template with no company stays private to its author."""
+    """Company templates are shared: a company-admin of the template's company may
+    read and apply it, and so may its author while still attached to that company
+    (the same rule as company billing documents). A template with no company stays
+    private to its author."""
     _assert_billing_doc_access(template, user_id, access_repo)  # type: ignore[arg-type]
 
 
-def _converted_facture_id(doc_repo, doc: BillingDocument) -> Optional[UUID]:
-    """Id of the facture created from *doc*, or None.
+def _assert_billing_template_write_access(template: BillingDocumentTemplate, user_id: UUID, access_repo=None) -> None:
+    """Editing or deleting a company template needs the company-admin role."""
+    _assert_billing_doc_write_access(template, user_id, access_repo)  # type: ignore[arg-type]
 
-    Always None for a facture and for a devis nobody converted — that absence is
-    what lets a client stop offering the conversion a second time.
+
+def _linked_project(project_repo, doc: BillingDocument):
+    """The project *doc* is linked to — printed as the document's "Objet" — or None.
+
+    None too when the project no longer exists or no project_repo is wired (tests).
+    """
+    if doc.project_id is None or project_repo is None:
+        return None
+    return project_repo.find_by_id(doc.project_id)
+
+
+def _conversion_link(doc_repo, doc: BillingDocument) -> tuple[Optional[UUID], Optional[str]]:
+    """(id, status) of the facture created from *doc*, or (None, None).
+
+    Always (None, None) for a facture and for a devis nobody converted — that
+    absence is what lets a client stop offering the conversion a second time. The
+    status tells a client whether that facture still locks the devis (it does
+    until it is cancelled).
     """
     if doc.kind != BillingDocumentKind.DEVIS:
-        return None
+        return None, None
     facture = doc_repo.find_by_source_devis_id(doc.id)
-    return facture.id if facture is not None else None
+    if facture is None:
+        return None, None
+    return facture.id, facture.status.value
 
 
 def _assert_devis_not_locked(doc_repo, doc: BillingDocument) -> None:
@@ -192,7 +242,8 @@ def _build_doc_from_inputs(
       - payment_due_date (facture) → issue_date + 30 days
     """
     now = datetime.now(timezone.utc)
-    resolved_issue_date: date = issue_date if issue_date is not None else now.date()
+    # Today on the business (Paris) calendar: the UTC day lags it after midnight.
+    resolved_issue_date: date = issue_date if issue_date is not None else business_today(now)
 
     resolved_validity_until: Optional[date] = validity_until
     resolved_payment_due_date: Optional[date] = payment_due_date

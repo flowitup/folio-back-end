@@ -124,6 +124,29 @@ def test_update_accepts_an_assigned_member(reader):
     assert updated.assignee_id == ASSIGNED_MEMBER
 
 
+class _Users:
+    """Every id signs in except the deactivated ones — and an unknown id, like the real repository."""
+
+    def __init__(self, known: set, inactive: set) -> None:
+        self._known = known
+        self._inactive = inactive
+
+    def is_sign_in_allowed(self, user_id):
+        return user_id in self._known and user_id not in self._inactive
+
+    def find_by_id(self, user_id):
+        return object() if user_id in self._known else None
+
+
+def test_an_unknown_assignee_is_told_apart_from_a_deactivated_one(reader):
+    users = _Users(known={ADMIN, ASSIGNED_MEMBER}, inactive={ASSIGNED_MEMBER})
+    usecase = CreateTaskUseCase(_Repo(), reader, user_repo=users)
+    with pytest.raises(InvalidAssigneeError, match="must be a member of this project"):
+        usecase.execute(CreateTaskRequest(PROJECT, "Pour slab", assignee_id=UNKNOWN))
+    with pytest.raises(InvalidAssigneeError, match="deactivated"):
+        usecase.execute(CreateTaskRequest(PROJECT, "Pour slab", assignee_id=ASSIGNED_MEMBER))
+
+
 def test_invalid_assignee_is_a_value_error_so_routes_answer_400():
     assert issubclass(InvalidAssigneeError, ValueError)
 

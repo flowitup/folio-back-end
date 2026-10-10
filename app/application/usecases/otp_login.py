@@ -62,6 +62,36 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def placeholder_email(phone: str) -> str:
+    """The synthetic address of an account that signs in with ``phone`` (see ``SIGNUP_EMAIL_DOMAIN``)."""
+    return f"phone-{phone.lstrip('+')}@{SIGNUP_EMAIL_DOMAIN}"
+
+
+def is_placeholder_email(email: Optional[str]) -> bool:
+    return email is not None and email.strip().lower().endswith(f"@{SIGNUP_EMAIL_DOMAIN}")
+
+
+def claim_placeholder_email(users: UserRepositoryPort, phone: str, user_id: Optional[UUID]) -> str:
+    """``placeholder_email(phone)`` for the account ``user_id`` (None: not created yet), freed first if needed.
+
+    The address names a number, so it follows the account that signs in with that number. An account
+    that left the number while keeping its address (a phone change before the address followed it, or
+    a number edited by platform ops) blocked the next sign-up with it on the unique e-mail. Callers have
+    checked that no other account signs in with ``phone``, so any other holder is such a stale account:
+    it moves to its own number's address, or to one built from its id when that is taken too.
+    """
+    email = placeholder_email(phone)
+    holder = users.find_by_email(email)
+    if holder is not None and holder.id != user_id:
+        moved = placeholder_email(holder.phone) if holder.phone else None
+        if moved is None or users.find_by_email(moved) is not None:
+            moved = f"user-{holder.id.hex}@{SIGNUP_EMAIL_DOMAIN}"
+        holder.email = moved
+        users.save(holder)
+        logger.info("auth.placeholder_email.reclaimed from_user=%s", holder.id)
+    return email
+
+
 @dataclass
 class LoginResult:
     """Result of a successful sign-in. Shared by OTP login, OTP signup and (from
@@ -198,8 +228,11 @@ def _consume_code(
     comparison — the single point where the non-production ``OTP_TEST_CODE`` bypass
     (``_test_code_accepted``) and the store-review account's fixed code
     (``_reviewer_code_for``) are honoured.
+
+    The code's row stays locked until the caller's transaction ends: concurrent guesses at one code
+    are checked one after another, so ``max_attempts`` really bounds them and a code is used once.
     """
-    otp = otps.latest_for_phone(phone, purpose)
+    otp = otps.latest_for_phone(phone, purpose, for_update=True)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
         raise OtpInvalidError("Invalid or expired code")
     submitted = code.strip()
@@ -384,7 +417,7 @@ class VerifySignupOtpUseCase:
 
         # No password: the account signs in by SMS code only.
         user = User.create(
-            email=f"phone-{phone.lstrip('+')}@{SIGNUP_EMAIL_DOMAIN}",
+            email=claim_placeholder_email(self._users, phone, None),
             display_name=name,
             phone=phone,
         )

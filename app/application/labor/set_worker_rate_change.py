@@ -7,12 +7,14 @@ a valid worker UUID from another project.
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from app.application.labor.ports import IWorkerRepository, IWorkerRateChangeRepository
 from app.domain.entities.worker_rate_change import WorkerRateChange
 from app.domain.exceptions.labor_exceptions import InvalidRateChangeError, WorkerNotFoundError
+
+_CENT = Decimal("0.01")
 
 
 @dataclass
@@ -53,14 +55,19 @@ class SetWorkerRateChangeUseCase:
         if worker is None or worker.project_id != request.project_id:
             raise WorkerNotFoundError(str(request.worker_id))
 
-        if request.daily_rate is None or request.daily_rate <= 0:
+        if request.daily_rate is None:
             raise InvalidRateChangeError("daily_rate must be > 0")
+        # Checked as the 2-decimal column will store it: 0.004 passed "> 0" and
+        # was committed as 0.00, a row the entity then refused on every read.
+        daily_rate = Decimal(str(request.daily_rate)).quantize(_CENT, rounding=ROUND_HALF_UP)
+        if daily_rate <= 0:
+            raise InvalidRateChangeError("daily_rate must be at least 0.01")
 
         entity = WorkerRateChange(
             id=uuid4(),
             worker_id=request.worker_id,
             effective_date=request.effective_date,
-            daily_rate=Decimal(str(request.daily_rate)),
+            daily_rate=daily_rate,
             created_at=datetime.now(timezone.utc),
         )
         saved = self._rate_repo.upsert(entity)

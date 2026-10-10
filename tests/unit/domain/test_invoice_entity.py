@@ -59,6 +59,24 @@ class TestInvoiceTotalAmount:
         expected = Decimal("3") * Decimal("10.50") + Decimal("2") * Decimal("7.25")
         assert invoice.total_amount == expected
 
+    def test_total_is_the_sum_of_the_lines_rounded_to_the_cent(self):
+        """2 x (2.5 x 19.99) shows two 49.98 lines, so the total is 99.96, not 99.95."""
+        items = [
+            InvoiceItem(description="A", quantity=Decimal("2.5"), unit_price=Decimal("19.99")),
+            InvoiceItem(description="B", quantity=Decimal("2.5"), unit_price=Decimal("19.99")),
+        ]
+        invoice = make_invoice(items=items)
+        assert [item.total for item in items] == [Decimal("49.98"), Decimal("49.98")]
+        assert invoice.total_amount == Decimal("99.96")
+
+    def test_sub_cent_lines_round_half_up_before_summing(self):
+        items = [InvoiceItem(description=c, quantity=Decimal("1"), unit_price=Decimal("0.125")) for c in "AB"]
+        assert make_invoice(items=items).total_amount == Decimal("0.26")
+
+    def test_negative_lines_round_half_away_from_zero(self):
+        items = [InvoiceItem(description=c, quantity=Decimal("1"), unit_price=Decimal("-0.125")) for c in "AB"]
+        assert make_invoice(items=items).total_amount == Decimal("-0.26")
+
 
 class TestInvoiceItemTotal:
     """Tests for InvoiceItem.total (TTC), total_ht, total_tva, and vat_rate."""
@@ -116,12 +134,18 @@ class TestInvoiceItemTotal:
             InvoiceItem(description="X", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("101"))
 
     def test_regression_66287_at_20_percent(self):
-        """Real-world: HT 66287.23 @ 20% → TTC 79544.676 (no rounding at domain)."""
+        """Real-world: HT 66287.23 @ 20% → TTC 79544.676, shown and summed as 79544.68."""
         item = InvoiceItem(
             description="A3%", quantity=Decimal("1"), unit_price=Decimal("66287.23"), vat_rate=Decimal("20")
         )
         assert item.total_ht == Decimal("66287.23")
-        assert item.total == Decimal("79544.676")
+        assert item.total_tva == Decimal("13257.446")
+        assert item.total == Decimal("79544.68")
+
+    def test_oversized_line_rounds_instead_of_raising(self):
+        """quantize() at the default 28-digit precision raises on huge values; the line still totals."""
+        item = InvoiceItem(description="Big", quantity=Decimal("1e30"), unit_price=Decimal("1.005"))
+        assert item.total == Decimal("1.005e30")
 
 
 class TestInvoiceEquality:

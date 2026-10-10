@@ -131,3 +131,50 @@ def test_assigned_member_does_not_see_the_company_billing_of_the_project(
 
     as_admin = inv_client.get(f"/api/v1/projects/{project_id}/billing-documents", headers=_auth(admin_token))
     assert doc_id in {d["id"] for d in as_admin.get_json()["billing_documents"]}
+
+
+def test_company_admin_imports_into_unassigned_company_project(
+    inv_client, admin_token, invitation_app, unassigned_projects
+):
+    """Import follows the create rule: a company admin may link any project of their company."""
+    body = {
+        "kind": "facture",
+        "recipient_name": "Client",
+        "company_id": invitation_app._test_company_id,
+        "document_number": f"IMP-{uuid4().hex[:8]}",
+        "status": "paid",
+        "items": [{"description": "Labour", "quantity": "1", "unit_price": "100", "vat_rate": "20"}],
+    }
+    own = inv_client.post(
+        "/api/v1/billing-documents/import",
+        json={**body, "project_id": unassigned_projects["own"]},
+        headers=_auth(admin_token),
+    )
+    assert own.status_code == 201, own.get_data(as_text=True)
+    assert own.get_json()["project_id"] == unassigned_projects["own"]
+
+    foreign = inv_client.post(
+        "/api/v1/billing-documents/import",
+        json={**body, "document_number": f"IMP-{uuid4().hex[:8]}", "project_id": unassigned_projects["foreign"]},
+        headers=_auth(admin_token),
+    )
+    assert foreign.status_code == 403
+
+
+def test_import_refuses_a_due_date_before_the_issue_date(inv_client, admin_token, invitation_app):
+    resp = inv_client.post(
+        "/api/v1/billing-documents/import",
+        json={
+            "kind": "devis",
+            "recipient_name": "Client",
+            "company_id": invitation_app._test_company_id,
+            "document_number": f"IMP-{uuid4().hex[:8]}",
+            "status": "sent",
+            "issue_date": "2026-05-10",
+            "validity_until": "2026-01-01",
+            "items": [{"description": "Labour", "quantity": "1", "unit_price": "100", "vat_rate": "20"}],
+        },
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 400, resp.get_data(as_text=True)
+    assert "validity_until cannot be before issue_date" in resp.get_json()["message"]

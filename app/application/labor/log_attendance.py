@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
 
+from app.application.labor.attendance_dates import check_manager_attendance_date
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
@@ -20,6 +21,8 @@ class LogAttendanceRequest:
     note: Optional[str] = None
     shift_type: Optional[str] = None  # "full" | "half" | "overtime" | None
     supplement_hours: int = 0
+    # Injected clock for tests; any instant, read on the business calendar.
+    now: Optional[datetime] = None
 
 
 @dataclass
@@ -46,6 +49,8 @@ class LogAttendanceUseCase:
         self._entry_repo = entry_repo
 
     def execute(self, request: LogAttendanceRequest) -> LogAttendanceResponse:
+        check_manager_attendance_date(request.date, request.now)
+
         # Verify worker exists and belongs to project
         worker = self._worker_repo.find_by_id(request.worker_id)
         if not worker or worker.project_id != request.project_id:
@@ -71,7 +76,7 @@ class LogAttendanceUseCase:
             id=str(saved.id),
             worker_id=str(saved.worker_id),
             date=saved.date.isoformat(),
-            amount_override=float(saved.amount_override) if saved.amount_override else None,
+            amount_override=float(saved.amount_override) if saved.amount_override is not None else None,
             note=saved.note,
             shift_type=saved.shift_type,
             supplement_hours=saved.supplement_hours,

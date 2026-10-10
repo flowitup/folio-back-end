@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Protocol
 from uuid import UUID
 
 from app.application.push.dispatcher import PushDispatcher
+from app.application.push.project_label import project_label
 from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ class BillingPushNotifier:
                 category=NotificationCategory.BILLING.value,
                 recipients=[payer_id],
                 title=title,
-                body=body.format(project=project.name if project is not None else ""),
+                body=body.format(project=project_label(project)),
                 data={
                     "kind": "refund_completed" if status == "refunded" else "refund_requested",
                     "project_id": str(project_id),

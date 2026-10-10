@@ -91,11 +91,13 @@ def list_materials_expenses():
       company_id  : optional UUID — restrict to one company
       limit       : int (default 50, max 200)
       offset      : int (default 0)
+      q           : optional search (invoice number, recipient or project name;
+                    case-insensitive substring, first 100 characters)
 
     Response: { items: [...], total, limit, offset, summary }
     summary is { refundable_amount, refunded_total, refunded_by_company, refunded_by_bank }
-    (aggregated over the full filter set, not just the page) when refundable=true,
-    else null.
+    (aggregated over the full filter set, not just the page, and regardless of q)
+    when refundable=true, else null.
     """
     # Parse refundable param — default True
     refundable_str = request.args.get("refundable", "true").strip().lower()
@@ -130,6 +132,7 @@ def list_materials_expenses():
             refundable=refundable,
             limit=limit,
             offset=offset,
+            search=(request.args.get("q") or "")[:100],
         )
     except ForbiddenCompanyBillingError:
         return _err("Forbidden", "You do not have admin access to the requested company", 403)

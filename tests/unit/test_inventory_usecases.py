@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -40,6 +41,11 @@ from app.domain.entities.warehouse import Warehouse
 class FakeWarehouseRepo:
     def __init__(self) -> None:
         self.rows: dict[UUID, Warehouse] = {}
+        # What happened, in order: ("lock", company_id) and ("list", company_id).
+        self.calls: list[tuple[str, UUID]] = []
+
+    def lock_company(self, company_id: UUID) -> None:
+        self.calls.append(("lock", company_id))
 
     def add(self, warehouse: Warehouse) -> Warehouse:
         self.rows[warehouse.id] = warehouse
@@ -53,6 +59,7 @@ class FakeWarehouseRepo:
         return self.rows.get(warehouse_id)
 
     def list_by_company(self, company_id: UUID) -> list[Warehouse]:
+        self.calls.append(("list", company_id))
         return sorted((w for w in self.rows.values() if w.company_id == company_id), key=lambda w: w.name)
 
     def delete(self, warehouse_id: UUID) -> bool:
@@ -277,6 +284,21 @@ class TestInventoryItemEntity:
         )
         assert item.with_updates(name="x", quantity=1) is item
 
+    def test_site_row_left_by_a_deleted_project_can_still_be_edited_in_place(self):
+        # Deleting the project sets project_id to NULL (FK ON DELETE SET NULL) on a "site" row.
+        item = InventoryItem.create(
+            company_id=uuid4(), name="x", quantity=1, condition="working", location_type="site", project_id=uuid4()
+        )
+        orphan = replace(item, project_id=None)
+        edited = orphan.with_updates(name="renamed", quantity=2, condition="damaged")
+        assert (edited.name, edited.quantity, edited.condition) == ("renamed", 2, "damaged")
+        assert edited.location_type == "site" and edited.project_id is None
+        # A move still has to name its new place.
+        with pytest.raises(InvalidInventoryItemError):
+            orphan.with_updates(location_type="warehouse")
+        moved = orphan.with_updates(project_id=uuid4())
+        assert moved.project_id is not None
+
     def test_blank_optional_strings_become_null(self):
         item = InventoryItem.create(
             company_id=uuid4(),
@@ -311,6 +333,19 @@ class TestWarehouseUseCases:
         created = uc.execute(requester_id=world["manager"], company_id=world["company_a"], name=" Kho 2 ", address=" ")
         assert created.name == "Kho 2" and created.address is None
         assert world["session"].commits == 1
+
+    def test_name_check_runs_under_the_company_lock(self, world):
+        """Without the lock two concurrent creates both found the name free and both inserted it."""
+        repo = world["warehouses"]
+        create = CreateWarehouseUseCase(repo, world["membership"], world["checker"], world["session"])
+        repo.calls.clear()
+        create.execute(requester_id=world["manager"], company_id=world["company_a"], name="Kho 3")
+        assert repo.calls[:2] == [("lock", world["company_a"]), ("list", world["company_a"])]
+
+        rename = UpdateWarehouseUseCase(repo, world["membership"], world["checker"], world["session"])
+        repo.calls.clear()
+        rename.execute(requester_id=world["manager"], warehouse_id=world["wh_a"].id, name="Kho 4")
+        assert repo.calls[:2] == [("lock", world["company_a"]), ("list", world["company_a"])]
 
     def test_manage_in_one_company_never_unlocks_another(self, world):
         uc = CreateWarehouseUseCase(world["warehouses"], world["membership"], world["checker"], world["session"])

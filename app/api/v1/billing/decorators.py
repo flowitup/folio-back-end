@@ -3,14 +3,16 @@
 require_billing_document_owner:
   - Loads billing document by <doc_id> URL param via the repo directly.
   - If not found → 404 (no existence leak).
-  - If found but caller is not owner (and lacks *:* superadmin) → 404
-    (mirrors invoice route pattern — avoids existence leak via 403).
+  - If found but the caller may not read it → 404 (mirrors invoice route
+    pattern — avoids existence leak via 403). Readers: a superadmin, an admin of
+    the document's company, or its author while still attached to that company.
   - On success: injects `billing_doc` keyword arg into the wrapped handler.
 
 require_billing_template_owner:
   - Same pattern for <template_id> → injects `billing_template`. Company
-    templates are shared: the author, a superadmin or a company-admin of the
-    template's company may access it; a template with no company stays private.
+    templates are shared: a superadmin, a company-admin of the template's
+    company or its still-attached author may access it; a template with no
+    company stays private.
 """
 
 from __future__ import annotations
@@ -40,14 +42,20 @@ def _has_superadmin() -> bool:
 def _can_access_billing_doc(doc, caller_id: UUID, container) -> bool:
     """Return True if caller may access this billing document or template.
 
-    Allowed when the caller is a superadmin, owns the document, OR holds the
-    'admin' role in the document's company (company-scoped billing sharing).
+    Allowed when the caller is a superadmin, holds the 'admin' role in the
+    document's company (company-scoped billing sharing), or wrote it and is still
+    attached to that company. Changes are checked again (admin only) by the use cases.
     """
-    from app.application.billing.ports import is_company_admin
+    from app.application.billing._helpers import _assert_billing_doc_access
+    from app.domain.billing.exceptions import ForbiddenBillingDocumentError
 
-    if _has_superadmin() or doc.user_id == caller_id:
+    if _has_superadmin():
         return True
-    return is_company_admin(container.user_company_access_repo, caller_id, doc.company_id)
+    try:
+        _assert_billing_doc_access(doc, caller_id, container.user_company_access_repo)
+    except ForbiddenBillingDocumentError:
+        return False
+    return True
 
 
 def require_billing_document_owner(fn):

@@ -95,6 +95,7 @@ class ListMaterialsExpensesUseCase:
         refundable: Optional[bool] = True,
         limit: int = 50,
         offset: int = 0,
+        search: Optional[str] = None,
     ) -> MaterialsExpensesResult:
         if is_superadmin:
             # Superadmin: pass company_id as single-element list or None to signal "all"
@@ -131,6 +132,7 @@ class ListMaterialsExpensesUseCase:
             limit=limit,
             offset=offset,
             all_companies=is_superadmin and company_id is None,
+            search=(search or "").strip() or None,
         )
 
         row_ids = [UUID(r["id"]) for r in rows]
@@ -169,6 +171,7 @@ class ListMaterialsExpensesUseCase:
             for r in rows
         ]
 
+        # The summary ignores `search`: it totals the whole company scope.
         summary: Optional[MaterialsExpensesSummary] = None
         if refundable is True:
             agg = self._invoice_repo.materials_services_refund_summary(

@@ -54,7 +54,7 @@ from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.company_person import CompanyPerson
 from app.domain.entities.person import Person
-from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_french_phone, normalize_phone
+from app.domain.value_objects.phone_number import normalize_french_phone, normalize_phone
 
 _PENDING_WINDOW_DAYS = 30
 _ASSIGNABLE_ROLES = (CompanyRole.MEMBER.value, CompanyRole.MANAGER.value)
@@ -115,14 +115,13 @@ class AddMemberByPhoneUseCase:
         if inp.role not in _ASSIGNABLE_ROLES:
             raise AdminRoleNotAssignableError(f"role must be one of {_ASSIGNABLE_ROLES}, got {inp.role!r}")
 
-        try:
-            phone = normalize_phone(inp.phone, default_region=company.default_phone_region)
-            # Members sign in with a French number only (sign-up and sign-in take no other), so a
-            # foreign one is refused whatever it matches — an existing account with a foreign
-            # number included, which must not be attached through the back door.
-            normalize_french_phone(phone)
-        except InvalidPhoneNumberError as exc:
-            raise ValueError(str(exc)) from exc
+        # Both raise InvalidPhoneNumberError (a ValueError), left as is so the route can answer
+        # with its own reason code.
+        phone = normalize_phone(inp.phone, default_region=company.default_phone_region)
+        # Members sign in with a French number only (sign-up and sign-in take no other), so a
+        # foreign one is refused whatever it matches — an existing account with a foreign
+        # number included, which must not be attached through the back door.
+        normalize_french_phone(phone)
 
         now = datetime.now(timezone.utc)
 
@@ -253,9 +252,14 @@ class AddMemberByPhoneUseCase:
             # (whether pending or not) keeps its state — a plain idempotent
             # resend — except that a still-pending row takes the role chosen now.
             if not existing.is_active:
+                # A cancelled invitation re-added for someone still without an
+                # account must be pending again, or sign-up would never link it.
                 return self._company_persons.save(
                     dataclasses.replace(
-                        existing, is_active=True, pending_expires_at=None, pending_company_role=role_to_keep
+                        existing,
+                        is_active=True,
+                        pending_expires_at=(now + timedelta(days=_PENDING_WINDOW_DAYS)) if pending else None,
+                        pending_company_role=role_to_keep,
                     )
                 )
             if pending and existing.pending_expires_at is not None and existing.pending_company_role != role_to_keep:

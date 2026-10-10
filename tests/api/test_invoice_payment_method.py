@@ -186,7 +186,9 @@ def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _make_pm_row(app, company_id: str, label="Wire Transfer", is_builtin=False, is_active=True):
+def _make_pm_row(
+    app, company_id: str, label="Wire Transfer", is_builtin=False, is_active=True, is_company_payment=False
+):
     """Insert a PaymentMethodModel directly and return its string UUID."""
     from app import db
 
@@ -198,6 +200,7 @@ def _make_pm_row(app, company_id: str, label="Wire Transfer", is_builtin=False, 
             label=label,
             is_builtin=is_builtin,
             is_active=is_active,
+            is_company_payment=is_company_payment,
             created_by=UUID(app._test_admin_user_id),
             created_at=now,
             updated_at=now,
@@ -229,6 +232,27 @@ def _make_auto_generated_release_row(app, project_id: str, payment_method_id=Non
             is_auto_generated=True,
             payment_method_id=UUID(payment_method_id) if payment_method_id else None,
             payment_method_label=label,
+        )
+        db.session.add(row)
+        db.session.commit()
+        return str(row.id)
+
+
+def _make_expense_row(app, project_id: str, payment_method_id: str, refundable_status=None):
+    """Insert a materials_services expense paid with `payment_method_id`, optionally refund-tracked."""
+    from app import db
+
+    with app.app_context():
+        row = InvoiceModel(
+            id=uuid4(),
+            project_id=UUID(project_id),
+            invoice_number=f"INV-{uuid4().hex[:8]}",
+            type="materials_services",
+            issue_date=date.today(),
+            recipient_name="Hardware Store",
+            items=[{"description": "Screws", "quantity": 1, "unit_price": 100, "vat_rate": 0}],
+            payment_method_id=UUID(payment_method_id),
+            refundable_status=refundable_status,
         )
         db.session.add(row)
         db.session.commit()
@@ -362,6 +386,61 @@ class TestUpdateInvoicePaymentMethod:
         data = resp.get_json()
         assert data["payment_method_id"] == pm_id
         assert data["payment_method_label"] == "Wire F"
+
+    @pytest.mark.parametrize("status", ["refundable", "refund_pending"])
+    def test_refund_tracked_expense_cannot_move_to_a_company_method(
+        self, inv_pm_client, inv_pm_app, admin_token, status
+    ):
+        """Same invariant as PATCH refundable_status: a company-paid expense is never owed back."""
+        personal_id = _make_pm_row(inv_pm_app, inv_pm_app._test_company_a_id, label=f"Perso card {status}")
+        company_id = _make_pm_row(
+            inv_pm_app, inv_pm_app._test_company_a_id, label=f"Company card {status}", is_company_payment=True
+        )
+        invoice_id = _make_expense_row(inv_pm_app, inv_pm_app._test_project_id, personal_id, refundable_status=status)
+
+        resp = inv_pm_client.put(
+            _invoice_url(inv_pm_app._test_project_id, invoice_id),
+            json={"payment_method_id": company_id},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert "already paid by the company" in resp.get_json()["message"]
+
+        stored = inv_pm_client.get(
+            _invoice_url(inv_pm_app._test_project_id, invoice_id), headers=_auth(admin_token)
+        ).get_json()
+        assert stored["payment_method_id"] == personal_id
+        assert stored["refundable_status"] == status
+
+    def test_refund_tracked_expense_may_switch_to_another_non_company_method(
+        self, inv_pm_client, inv_pm_app, admin_token
+    ):
+        old_id = _make_pm_row(inv_pm_app, inv_pm_app._test_company_a_id, label="Perso card G")
+        new_id = _make_pm_row(inv_pm_app, inv_pm_app._test_company_a_id, label="Perso cash G")
+        invoice_id = _make_expense_row(inv_pm_app, inv_pm_app._test_project_id, old_id, refundable_status="refundable")
+
+        resp = inv_pm_client.put(
+            _invoice_url(inv_pm_app._test_project_id, invoice_id),
+            json={"payment_method_id": new_id},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["payment_method_id"] == new_id
+
+    def test_untracked_expense_may_move_to_a_company_method(self, inv_pm_client, inv_pm_app, admin_token):
+        old_id = _make_pm_row(inv_pm_app, inv_pm_app._test_company_a_id, label="Perso card H")
+        company_id = _make_pm_row(
+            inv_pm_app, inv_pm_app._test_company_a_id, label="Company card H", is_company_payment=True
+        )
+        invoice_id = _make_expense_row(inv_pm_app, inv_pm_app._test_project_id, old_id)
+
+        resp = inv_pm_client.put(
+            _invoice_url(inv_pm_app._test_project_id, invoice_id),
+            json={"payment_method_id": company_id},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["payment_method_id"] == company_id
 
 
 class TestInvoiceListGetIncludesPaymentMethodFields:

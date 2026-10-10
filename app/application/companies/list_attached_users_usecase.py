@@ -45,6 +45,8 @@ class ListAttachedUsersUseCase:
         # 3. Return paginated access rows
         all_accesses = self._access_repo.list_for_company(inp.company_id)
         total = len(all_accesses)
-        page = all_accesses[inp.offset : inp.offset + inp.limit]
+        # Negative values would count from the end of the list instead of failing.
+        offset, limit = max(0, inp.offset), max(1, inp.limit)
+        page = all_accesses[offset : offset + limit]
         items = [UserCompanyAccessResponse.from_entity(a) for a in page]
         return ListAttachedUsersResult(items=items, total=total)

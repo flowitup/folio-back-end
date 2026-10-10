@@ -12,6 +12,11 @@ def _compact(value: str) -> str:
     return re.sub(r"\s+", "", value).upper()
 
 
+def compact_identifier(value: str) -> str:
+    """Return ``value`` without whitespace, upper-cased: how a SIRET or TVA number is checked and stored."""
+    return _compact(value)
+
+
 def normalize_iban(value: str) -> str:
     """Return the IBAN without spaces, upper-cased; raise ValueError if it is not a valid IBAN.
 

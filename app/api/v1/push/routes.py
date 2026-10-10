@@ -6,6 +6,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.pydantic_errors import validation_message
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.push import push_bp
@@ -28,7 +29,7 @@ def register_push_device():
     try:
         data = RegisterPushDeviceRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _bad_request(exc.errors()[0].get("msg", "invalid body"))
+        return _bad_request(validation_message(exc))
     repo = get_container().push_device_repository
     if repo is None:
         raise RuntimeError("push_device_repository not wired in container")
@@ -44,9 +45,10 @@ def unregister_push_device():
     try:
         data = UnregisterPushDeviceRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError as exc:
-        return _bad_request(exc.errors()[0].get("msg", "invalid body"))
+        return _bad_request(validation_message(exc))
     repo = get_container().push_device_repository
     if repo is None:
         raise RuntimeError("push_device_repository not wired in container")
-    repo.delete_token(data.token)
+    # Scoped to the caller; 204 either way, so the answer never says whose a token is.
+    repo.delete_token_for_user(UUID(get_jwt_identity()), data.token)
     return "", 204

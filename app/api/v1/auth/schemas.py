@@ -1,9 +1,9 @@
 """Pydantic schemas for auth endpoints."""
 
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class OtpRequestBody(BaseModel):
@@ -46,7 +46,8 @@ class SignupVerifyBody(BaseModel):
 
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
-    display_name: str = Field(..., min_length=1, max_length=80)
+    # Trimmed before the length check: a name of spaces only is refused here (400), not deep in the use case.
+    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
 
 
 class PhoneChangeRequestBody(BaseModel):

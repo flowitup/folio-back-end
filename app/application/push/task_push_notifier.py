@@ -12,6 +12,8 @@ from typing import Dict, Optional, Protocol
 from uuid import UUID
 
 from app.application.push.dispatcher import PushDispatcher
+from app.application.push.project_label import project_label
+from app.application.task.use_cases import InvalidAssigneeError, _assert_assignee_can_read
 from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
@@ -31,7 +33,13 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
 
 # Column names as the board shows them (web messages `tasks.column`, plus backlog).
 _STATUS_LABELS: Dict[str, Dict[str, str]] = {
-    "vi": {"backlog": "Backlog", "todo": "Cần làm", "in_progress": "Đang làm", "blocked": "Bị chặn", "done": "Xong"},
+    "vi": {
+        "backlog": "Việc tồn đọng",
+        "todo": "Cần làm",
+        "in_progress": "Đang làm",
+        "blocked": "Bị chặn",
+        "done": "Xong",
+    },
     "fr": {"backlog": "Backlog", "todo": "À faire", "in_progress": "En cours", "blocked": "Bloqué", "done": "Terminé"},
     "en": {"backlog": "Backlog", "todo": "To do", "in_progress": "In progress", "blocked": "Blocked", "done": "Done"},
 }
@@ -42,9 +50,22 @@ class ProjectNameReader(Protocol):
 
 
 class TaskPushNotifier:
-    def __init__(self, dispatcher: PushDispatcher, project_repo: ProjectNameReader) -> None:
+    def __init__(
+        self,
+        dispatcher: PushDispatcher,
+        project_repo: ProjectNameReader,
+        authz_reader=None,
+        user_repo=None,
+    ) -> None:
         self._dispatcher = dispatcher
         self._projects = project_repo
+        self._authz_reader = authz_reader
+        self._user_repo = user_repo
+
+    def set_access_reader(self, authz_reader, user_repo=None) -> None:
+        """Wired after construction: the authz reader is built later than the push stack."""
+        self._authz_reader = authz_reader
+        self._user_repo = user_repo
 
     def task_assigned(self, *, task, actor_id: UUID) -> None:
         """A task gained an assignee (on create, or a changed assignee on update)."""
@@ -59,6 +80,12 @@ class TaskPushNotifier:
             assignee: Optional[UUID] = getattr(task, "assignee_id", None)
             if assignee is None or assignee == actor_id:
                 return
+            # An assignee removed from the project (or the company, or deactivated)
+            # keeps the stale task row; they must not hear about it any more.
+            try:
+                _assert_assignee_can_read(self._authz_reader, assignee, task.project_id, self._user_repo)
+            except InvalidAssigneeError:
+                return
             project = self._projects.find_by_id(task.project_id)
             locale = self._dispatcher.locale
             title, body = _TEXT[event][locale]
@@ -70,7 +97,7 @@ class TaskPushNotifier:
                 title=title,
                 body=body.format(
                     title=task.title,
-                    project=project.name if project is not None else "",
+                    project=project_label(project),
                     status=status,
                 ),
                 data={

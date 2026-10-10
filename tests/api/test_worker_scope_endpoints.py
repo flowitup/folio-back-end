@@ -12,6 +12,7 @@ invoices export, project money fields.
 
 from __future__ import annotations
 
+import io
 
 import pytest
 
@@ -221,6 +222,57 @@ def test_invoice_detail_of_another_worker_is_hidden(client, ids, seeded, linked_
     assert client.get(f"{base}/{seeded['own']}", headers=linked_h).status_code == 200
     assert client.get(f"{base}/{seeded['other']}/attachments", headers=linked_h).status_code == 404
     assert client.get(f"{base}/{seeded['own']}/attachments", headers=linked_h).status_code == 200
+
+
+def test_attachments_answer_404_through_another_projects_url(ws_app, client, ids, seeded, owner_h, linked_h):
+    """The URL project must be the invoice's own: a second project where the caller holds
+    more (here a view_pay grant) must not widen the labor scope, nor take uploads for
+    another project's invoice."""
+    from datetime import datetime, timezone
+    from uuid import UUID, uuid4
+
+    from app import db
+    from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
+
+    with ws_app.app_context():
+        company_id = db.session.get(ProjectModel, UUID(ids["project"])).company_id
+        owner_id = db.session.query(UserModel.id).filter_by(email="owner@ws-test.com").scalar()
+        linked_id = db.session.query(UserModel.id).filter_by(email="linked@ws-test.com").scalar()
+        second = ProjectModel(name="Chantier WS 2", owner_id=owner_id, company_id=company_id)
+        db.session.add(second)
+        db.session.flush()
+        for uid in (owner_id, linked_id):
+            db.session.execute(user_projects.insert().values(user_id=uid, project_id=second.id))
+        db.session.add(
+            CompanyMemberGrantModel(
+                id=uuid4(),
+                company_id=company_id,
+                user_id=linked_id,
+                permission="project:view_pay",
+                effect="grant",
+                project_id=second.id,
+                granted_by_user_id=None,
+                granted_at=datetime.now(timezone.utc),
+            )
+        )
+        db.session.commit()
+        second_id = str(second.id)
+
+    own_url = f"/api/v1/projects/{ids['project']}/invoices/{seeded['other']}/attachments"
+    cross_url = f"/api/v1/projects/{second_id}/invoices/{seeded['other']}/attachments"
+    # Restricted on the invoice's own project → hidden; the grant on the second project changes nothing.
+    assert client.get(own_url, headers=linked_h).status_code == 404
+    assert client.get(cross_url, headers=linked_h).status_code == 404
+    # A manager of both projects reads through the right URL only, and cannot upload through the wrong one.
+    assert client.get(own_url, headers=owner_h).status_code == 200
+    assert client.get(cross_url, headers=owner_h).status_code == 404
+    resp = client.post(
+        cross_url,
+        data={"file": (io.BytesIO(b"%PDF-1.4 test"), "t.pdf", "application/pdf")},
+        headers=owner_h,
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 404
 
 
 def test_labor_payments_summary_only_own_worker(client, ids, seeded, owner_h, linked_h, unlinked_h):

@@ -33,7 +33,13 @@ class SQLAlchemyPushDeviceRepository:
         self._session.commit()
 
     def delete_token(self, token: str) -> None:
+        """Drop a token whoever owns it — only for the provider's invalid-token cleanup."""
         self._session.query(PushDeviceOrm).filter_by(token=token).delete()
+        self._session.commit()
+
+    def delete_token_for_user(self, user_id: UUID, token: str) -> None:
+        """Sign-out: a user can only forget their own device; another user's token is left alone."""
+        self._session.query(PushDeviceOrm).filter_by(token=token, user_id=user_id).delete()
         self._session.commit()
 
     def tokens_for_users(self, user_ids: List[UUID]) -> Dict[UUID, List[str]]:

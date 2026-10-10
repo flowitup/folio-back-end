@@ -28,11 +28,14 @@ NOW = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
 class FakeOtps:
     def __init__(self) -> None:
         self.rows: list[LoginOtp] = []
+        self.locked_reads: list[str] = []
 
     def save(self, otp: LoginOtp) -> None:
         self.rows = [r for r in self.rows if r.id != otp.id] + [otp]
 
-    def latest_for_phone(self, phone: str, purpose=None):
+    def latest_for_phone(self, phone: str, purpose=None, *, for_update=False):
+        if for_update:
+            self.locked_reads.append(phone)
         rows = [r for r in self.rows if r.phone == phone and (purpose is None or r.purpose == purpose)]
         return max(rows, key=lambda r: r.created_at) if rows else None
 
@@ -150,6 +153,14 @@ class TestConsumeCode:
         self._seed(otps, REVIEWER)
         with pytest.raises(OtpInvalidError):
             _consume_code(otps, phone=REVIEWER, code=CODE, now=NOW, max_attempts=5)
+
+    def test_code_is_read_under_a_row_lock(self):
+        """Parallel guesses must queue on the code's row, or each one writes back the same counter."""
+        otps = FakeOtps()
+        self._seed(otps, OTHER)
+        with pytest.raises(OtpInvalidError):
+            _consume_code(otps, phone=OTHER, code="000000", now=NOW, max_attempts=5)
+        assert otps.locked_reads == [OTHER]
 
     def test_reviewer_still_needs_a_requested_code(self, monkeypatch):
         """No /otp/request first → nothing active → refused, like everyone else."""

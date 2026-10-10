@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -71,9 +72,10 @@ class SQLAlchemyLaborRoleRepository(ILaborRoleRepository):
         return self._to_entity(model) if model else None
 
     def find_by_name(self, name: str, company_id: Optional[UUID] = None) -> Optional[LaborRole]:
+        # Case-insensitive, like payment-method labels: "électricien" duplicates "Électricien".
         model = (
             self._session.query(LaborRoleModel)
-            .filter(LaborRoleModel.name == name, LaborRoleModel.company_id == company_id)
+            .filter(func.lower(LaborRoleModel.name) == func.lower(name), LaborRoleModel.company_id == company_id)
             .first()
         )
         return self._to_entity(model) if model else None

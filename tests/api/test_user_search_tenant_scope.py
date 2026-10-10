@@ -35,3 +35,10 @@ def test_user_without_company_finds_nobody(inv_client, outsider_token):
 def test_platform_ops_search_is_not_restricted(inv_client, superadmin_token):
     emails = _emails(inv_client, superadmin_token)
     assert {"outsider@invite-test.com", "admin@invite-test.com"} <= emails
+
+
+def test_there_is_no_unauthenticated_user_lookup_by_id(inv_client, invitation_app):
+    """The old `GET /users/<id>` stub answered anonymous callers (501, echoing the id); it is gone."""
+    resp = inv_client.get(f"/api/v1/users/{invitation_app._test_member_user_id}")
+    assert resp.status_code == 404
+    assert invitation_app._test_member_user_id not in resp.get_data(as_text=True)

@@ -5,6 +5,9 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
+# The filename column holds at most this many characters (String(255)).
+MAX_ATTACHMENT_FILENAME_LENGTH = 255
+
 
 @dataclass
 class InvoiceAttachment:

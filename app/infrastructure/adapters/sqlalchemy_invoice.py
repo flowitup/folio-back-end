@@ -16,6 +16,7 @@ from app.domain.exceptions.invoice_exceptions import (
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
 )
+from app.domain.time import business_today
 from app.domain.value_objects.invoice_item import InvoiceItem
 from app.infrastructure.database.invoice_spend_rules import (
     is_company_paid,
@@ -245,14 +246,15 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
     def next_funds_release_number(self, project_id: UUID, year: Optional[int] = None) -> str:
         """Generate next sequential funds-release number: FR-YYYY-NNNN.
 
-        year defaults to the current UTC year when omitted, preserving the
-        existing facture-driven behaviour. Bank-refund releases pass the
+        year defaults to the current year on the business (Paris) calendar when
+        omitted, preserving the existing facture-driven behaviour (UTC's year lags
+        it on the night of 1 January). Bank-refund releases pass the
         SOURCE expense's issue_date year instead, so the FR number matches the
         year the expense actually happened (live path and migration backfill
         stay in parity).
         """
         if year is None:
-            year = datetime.now(timezone.utc).year
+            year = business_today().year
         return self._claim_number(project_id, f"FR-{year}-")
 
     def get_labor_payments_summary(self, project_id: UUID) -> List[LaborPaymentsMonthRow]:
@@ -416,9 +418,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         """Split released_funds rows into (company_total, personal_total, cash_advanced_total).
 
         personal_total: released_funds invoices whose payment_method_id belongs to a
-        method flagged is_personal_payment. company_total: every other released_funds
-        invoice (company-flagged, unflagged, or NULL payment_method_id). Soft-deleted
-        (is_active=false) personal-payment methods still count, mirroring
+        method flagged is_personal_payment, plus bank-refund releases (refunds_invoice_id
+        set) whose method is not flagged is_company_payment — unflagged or NULL included:
+        a bank refund repays whoever paid the expense, never the company, so it is
+        personal released money whatever method the expense carried. company_total: every
+        other released_funds invoice (company-flagged, unflagged, or NULL payment_method_id).
+        Soft-deleted (is_active=false) flagged methods still count, mirroring
         sum_company_spent. items is JSONB — computed in Python to stay DB-agnostic.
 
         cash_advanced_total: rows flagged is_cash_advance — company money handed to a
@@ -431,8 +436,10 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         """
         company_id = _project_company_id(self._session, project_id)
         personal_paid_ids: set[UUID] = set()
+        company_paid_ids: set[UUID] = set()
         if company_id is not None:
             personal_paid_ids = load_personal_method_ids(self._session, [company_id]).get(company_id, set())
+            company_paid_ids = load_company_paid_method_ids(self._session, [company_id]).get(company_id, set())
 
         rows = (
             self._session.query(InvoiceModel)
@@ -450,6 +457,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             if m.is_cash_advance:
                 cash_advanced_total += amount
             elif m.payment_method_id is not None and m.payment_method_id in personal_paid_ids:
+                personal_total += amount
+            elif m.refunds_invoice_id is not None and m.payment_method_id not in company_paid_ids:
                 personal_total += amount
             else:
                 company_total += amount
@@ -683,6 +692,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         limit: int,
         offset: int,
         all_companies: bool = False,
+        search: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across all projects of given companies.
 
@@ -725,6 +735,18 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             ).filter(
                 InvoiceModel.refundable_status.is_(None),
                 or_(PaymentMethodModel.id.is_(None), PaymentMethodModel.is_company_payment.isnot(True)),
+            )
+
+        if search:
+            # Before count and paging, so a search reaches expenses past the loaded page.
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            query = query.filter(
+                or_(
+                    InvoiceModel.invoice_number.ilike(pattern, escape="\\"),
+                    InvoiceModel.recipient_name.ilike(pattern, escape="\\"),
+                    ProjectModel.name.ilike(pattern, escape="\\"),
+                )
             )
 
         total: int = query.count()
@@ -778,7 +800,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                     "invoice_number": entity.invoice_number,
                     "recipient_name": entity.recipient_name,
                     "issue_date": entity.issue_date.isoformat(),
-                    "total_amount": float(entity.total_amount),
+                    "total_amount": money(entity.total_amount),
                     "refundable_status": entity.refundable_status,
                     "refunded_by": entity.refunded_by,
                     "attachments": attachments_by_invoice.get(inv_model.id, []),
@@ -861,11 +883,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                     refunded_by_both += row_total
 
         return {
-            "refundable_amount": float(refundable_amount),
-            "refunded_total": float(refunded_total),
-            "refunded_by_company": float(refunded_by_company),
-            "refunded_by_bank": float(refunded_by_bank),
-            "refunded_by_both": float(refunded_by_both),
+            "refundable_amount": money(refundable_amount),
+            "refunded_total": money(refunded_total),
+            "refunded_by_company": money(refunded_by_company),
+            "refunded_by_bank": money(refunded_by_bank),
+            "refunded_by_both": money(refunded_by_both),
         }
 
     def next_invoice_number(self, project_id: UUID) -> str:
@@ -878,7 +900,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         project_row = self._session.query(ProjectModel.invoice_prefix).filter_by(id=project_id).first()
         tag = project_row[0] if project_row and project_row[0] else "INV"
 
-        year = datetime.now(timezone.utc).year
+        year = business_today().year  # the Paris year, not UTC's
         return self._claim_number(project_id, f"{tag}-{year}-")
 
     def _claim_number(self, project_id: UUID, prefix: str) -> str:

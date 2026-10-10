@@ -108,6 +108,22 @@ class TestPhoneSignup:
         )
         assert no_name.status_code == 400
 
+    def test_signup_refuses_a_name_of_spaces_only(self, inv_client, invitation_app):
+        """Used to pass the length check untrimmed and 500 in the use case."""
+        assert inv_client.post("/api/v1/auth/signup/request", json={"phone": "0600005577"}).status_code == 202
+        code = _code_from_sms(invitation_app)
+        blank = inv_client.post(
+            "/api/v1/auth/signup/verify", json={"phone": "0600005577", "code": code, "display_name": "   "}
+        )
+        assert blank.status_code == 400, blank.get_json()
+        assert blank.get_json()["error"] == "ValidationError"
+        # Refused before the code is checked: it still works, and the name is stored trimmed.
+        ok = inv_client.post(
+            "/api/v1/auth/signup/verify", json={"phone": "0600005577", "code": code, "display_name": "  Lan  "}
+        )
+        assert ok.status_code == 201, ok.get_json()
+        assert ok.get_json()["user"]["display_name"] == "Lan"
+
     def test_signup_refuses_numbers_outside_france(self, inv_client, invitation_app):
         """Sign-up follows sign-in: an account can only be created on a French number."""
         sent_before = len(invitation_app._sms.sent)
@@ -158,6 +174,37 @@ class TestJoinCode:
 
         again = inv_client.post("/api/v1/companies/join", json={"code": code}, headers=_auth(token))
         assert again.status_code == 409
+        # The clients map this reason to their localized "already attached" message.
+        assert again.get_json()["reason"] == "company_already_attached"
+
+    def test_join_response_masks_bank_and_tax_details(self, inv_client, invitation_app, superadmin_token):
+        """The code is shareable and the joiner a plain member: the join response is masked like GET."""
+        created = inv_client.post(
+            "/api/v1/companies",
+            json={
+                "legal_name": f"Chantier {uuid.uuid4().hex[:6]}",
+                "address": "1 rue de Paris",
+                "iban": "FR7630006000011234567890189",
+                "bic": "BNPAFRPP",
+                "siret": "55210055400025",
+                "tva_number": "FR40552100554",
+            },
+            headers=_auth(superadmin_token),
+        )
+        assert created.status_code == 201, created.get_json()
+        company = created.get_json()
+        code = inv_client.post(
+            f"/api/v1/companies/{company['id']}/join-code", headers=_auth(superadmin_token)
+        ).get_json()["join_code"]
+        user = _signup(inv_client, invitation_app, "0600004040", "Worker Masked")
+        joined = inv_client.post("/api/v1/companies/join", json={"code": code}, headers=_auth(user["access_token"]))
+        assert joined.status_code == 200, joined.get_json()
+        body = joined.get_json()
+        assert body["id"] == company["id"]
+        assert body["iban"] == "····0189"
+        assert body["bic"] == "····FRPP"
+        assert body["siret"] == "····0025"
+        assert body["tva_number"] == "····0554"
 
     def test_unknown_and_revoked_codes(self, inv_client, invitation_app, superadmin_token):
         company = _make_company(inv_client, superadmin_token)

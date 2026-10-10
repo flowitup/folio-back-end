@@ -312,6 +312,17 @@ class TestWarehouses:
         )
         assert resp.status_code == 422
 
+    def test_422_on_a_blank_or_null_name(self, client, admin, inventory_app):
+        cid = inventory_app._inv["company_id"]
+        blank = client.post("/api/v1/inventory/warehouses", json={"company_id": cid, "name": "   "}, headers=admin)
+        assert blank.status_code == 422
+
+        warehouse = _warehouse(client, admin, cid, name="Kho tên trống")
+        for name in ("   ", None):
+            resp = client.patch(f"/api/v1/inventory/warehouses/{warehouse['id']}", json={"name": name}, headers=admin)
+            assert resp.status_code == 422, name
+        assert client.delete(f"/api/v1/inventory/warehouses/{warehouse['id']}", headers=admin).status_code == 204
+
 
 # ---------------------------------------------------------------------------
 # Items
@@ -419,6 +430,51 @@ class TestItems:
         )
         assert client.get(f"/api/v1/inventory/items?company_id={cid}&warehouse_id=x", headers=admin).status_code == 422
 
+    def test_search_treats_percent_and_underscore_literally(self, client, admin, inventory_app):
+        cid = inventory_app._inv["company_id"]
+        warehouse = _warehouse(client, admin, cid, name="Kho wildcard")
+        for name in ("Wildcard 50% bin", "Wildcard a_b", "Wildcard axb"):
+            assert _item(client, admin, cid, name=name, warehouse_id=warehouse["id"]).status_code == 201
+
+        def names(q: str) -> list[str]:
+            resp = client.get("/api/v1/inventory/items", query_string={"company_id": cid, "q": q}, headers=admin)
+            assert resp.status_code == 200, resp.get_json()
+            return [i["name"] for i in resp.get_json()["items"]]
+
+        assert names("%") == ["Wildcard 50% bin"]
+        assert names("a_b") == ["Wildcard a_b"]
+        assert names("wildcard") == ["Wildcard 50% bin", "Wildcard a_b", "Wildcard axb"]
+
+    def test_site_row_of_a_deleted_project_can_be_renamed_and_recounted(self, client, admin, inventory_app):
+        from uuid import UUID
+
+        from app import db
+        from app.infrastructure.database.models.inventory_item import InventoryItemModel
+
+        cid = inventory_app._inv["company_id"]
+        created = _item(
+            client, admin, cid, name="Orphan ladder", location_type="site", project_id=inventory_app._inv["project_id"]
+        ).get_json()
+        # What deleting the project does to the row (FK ON DELETE SET NULL).
+        with inventory_app.app_context():
+            db.session.get(InventoryItemModel, UUID(created["id"])).project_id = None
+            db.session.commit()
+
+        url = f"/api/v1/inventory/items/{created['id']}"
+        renamed = client.patch(url, json={"name": "Orphan ladder renamed", "quantity": 2}, headers=admin)
+        assert renamed.status_code == 200, renamed.get_json()
+        body = renamed.get_json()
+        assert (body["name"], body["quantity"], body["location_type"], body["project_id"]) == (
+            "Orphan ladder renamed",
+            2,
+            "site",
+            None,
+        )
+        # Moving it still needs a real place.
+        assert client.patch(url, json={"location_type": "warehouse"}, headers=admin).status_code == 422
+        placed = client.patch(url, json={"project_id": inventory_app._inv["project_id"]}, headers=admin)
+        assert placed.status_code == 200 and placed.get_json()["project_id"] == inventory_app._inv["project_id"]
+
     def test_patch_is_a_diff_and_can_move_the_row(self, client, admin, inventory_app):
         cid = inventory_app._inv["company_id"]
         warehouse = _warehouse(client, admin, cid, name="Kho patch")
@@ -459,6 +515,17 @@ class TestItems:
         assert client.delete(f"/api/v1/inventory/items/{created['id']}", headers=admin).status_code == 204
         assert client.get(f"/api/v1/inventory/items/{created['id']}", headers=admin).status_code == 404
         assert client.delete(f"/api/v1/inventory/items/{created['id']}", headers=admin).status_code == 404
+
+    def test_422_on_a_null_name(self, client, admin, inventory_app):
+        """null used to pass the Optional field and be saved as the text "None"."""
+        cid = inventory_app._inv["company_id"]
+        warehouse = _warehouse(client, admin, cid, name="Kho tên null")
+        created = _item(client, admin, cid, warehouse_id=warehouse["id"]).get_json()
+        resp = client.patch(f"/api/v1/inventory/items/{created['id']}", json={"name": None}, headers=admin)
+        assert resp.status_code == 422
+        assert (
+            client.get(f"/api/v1/inventory/items/{created['id']}", headers=admin).get_json()["name"] == created["name"]
+        )
 
 
 # ---------------------------------------------------------------------------

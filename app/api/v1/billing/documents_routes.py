@@ -64,7 +64,11 @@ from app.application.billing import (
     MissingCompanyProfileError,
 )
 from app.application.billing.dtos import ImportBillingDocumentInput
-from app.domain.billing.exceptions import BillingDocumentAlreadyExistsError, ForbiddenCompanyBillingError
+from app.domain.billing.exceptions import (
+    BillingDocumentAlreadyExistsError,
+    BillingDocumentRenderError,
+    ForbiddenCompanyBillingError,
+)
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -234,11 +238,11 @@ def create_billing_document():
 @require_billing_document_owner
 def get_billing_document(doc_id: str, billing_doc):
     """Retrieve a single billing document by ID (ownership enforced by decorator)."""
-    from app.application.billing._helpers import _converted_facture_id
+    from app.application.billing._helpers import _conversion_link
     from app.application.billing.dtos import BillingDocumentResponse
 
-    converted_id = _converted_facture_id(get_container().billing_document_repo, billing_doc)
-    return jsonify(_doc_to_json(BillingDocumentResponse.from_entity(billing_doc, converted_id)))
+    link = _conversion_link(get_container().billing_document_repo, billing_doc)
+    return jsonify(_doc_to_json(BillingDocumentResponse.from_entity(billing_doc, *link)))
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +301,7 @@ def update_billing_document(doc_id: str, billing_doc):
     except ForbiddenProjectAccessError:
         return _err("Forbidden", "You do not have access to the specified project", 403)
     except DevisLockedByFactureError as exc:
-        return _err("Conflict", str(exc), 409)
+        return jsonify({"error": "Conflict", "reason": "devis_locked_by_facture", "message": str(exc)}), 409
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -477,8 +481,10 @@ def update_billing_document_status(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
-    except (InvalidStatusTransitionError, DevisLockedByFactureError) as exc:
+    except InvalidStatusTransitionError as exc:
         return _err("Conflict", str(exc), 409)
+    except DevisLockedByFactureError as exc:
+        return jsonify({"error": "Conflict", "reason": "devis_locked_by_facture", "message": str(exc)}), 409
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
@@ -518,6 +524,8 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
+    except BillingDocumentRenderError:
+        return _err("ValidationError", "This document cannot be laid out as a PDF", 422)
 
     # RFC-5987 percent-encoding for filenames that may contain non-ASCII chars
     ascii_name = pdf_result.filename.encode("ascii", "replace").decode("ascii").replace("?", "_")

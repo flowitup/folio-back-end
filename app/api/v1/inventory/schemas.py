@@ -5,10 +5,22 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.v1.numeric_bounds import MAX_INT_QUANTITY
 from app.domain.value_objects.inventory import InventoryCategory, InventoryCondition, InventoryLocationType
+
+
+def _strip(v: object) -> object:
+    """Trim a name before min_length runs, so a name of spaces only is a 422, not a blank warehouse."""
+    return v.strip() if isinstance(v, str) else v
+
+
+def _strip_required(v: object) -> object:
+    """Same as _strip for an optional PATCH name: omitted keeps it, but an explicit null is refused."""
+    if v is None:
+        raise ValueError("name cannot be null")
+    return _strip(v)
 
 
 class CreateWarehouseSchema(BaseModel):
@@ -20,6 +32,8 @@ class CreateWarehouseSchema(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     address: Optional[str] = Field(default=None, max_length=500)
 
+    _strip_name = field_validator("name", mode="before")(_strip)
+
 
 class UpdateWarehouseSchema(BaseModel):
     """Request body for PATCH /api/v1/inventory/warehouses/<id>; absent key = unchanged, null = cleared."""
@@ -28,6 +42,8 @@ class UpdateWarehouseSchema(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     address: Optional[str] = Field(default=None, max_length=500)
+
+    _strip_name = field_validator("name", mode="before")(_strip_required)
 
 
 class CreateInventoryItemSchema(BaseModel):
@@ -61,6 +77,8 @@ class UpdateInventoryItemSchema(BaseModel):
     location_type: Optional[InventoryLocationType] = None
     warehouse_id: Optional[UUID] = None
     project_id: Optional[UUID] = None
+
+    _strip_name = field_validator("name", mode="before")(_strip_required)
 
 
 class InventoryItemsQuerySchema(BaseModel):

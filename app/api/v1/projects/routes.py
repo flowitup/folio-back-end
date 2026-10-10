@@ -7,7 +7,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from pydantic import ValidationError
 
-from app.api._helpers.validation_error import safe_validation_fields
+from app.api._helpers.pydantic_errors import validation_message
 
 from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
@@ -29,7 +29,13 @@ from app.api.v1.projects.decorators import (
     _is_platform_admin,
 )
 from app.application.billing.ports import admin_company_ids
+from app.application.invoice.dtos import money
 from app.application.projects import CreateProjectRequest as CreateDTO
+from app.application.projects.assignments import (
+    AssignmentForbiddenError,
+    ProjectCompanyUnresolvedError,
+    TargetNotCompanyMemberError,
+)
 from app.application.projects.ports import ProjectSpent
 from app.domain.authz.resolver import effective_permissions as _authz_effective_permissions
 from app.domain.entities.project_membership import ProjectMembership
@@ -76,16 +82,16 @@ def _budget_visible(perms: list) -> bool:
 
 
 def _spend_fields(rollup: ProjectSpent) -> dict:
-    """Serialize a spend rollup into the ProjectResponse money fields."""
+    """Serialize a spend rollup into the ProjectResponse money fields, rounded to cents like the ledger."""
     return {
-        "spent": float(rollup.total),
-        "spent_invoiced": float(rollup.invoiced),
-        "spent_by_credits": float(rollup.by_credits),
-        "spent_personal": float(rollup.personal),
-        "labor_accrued": float(rollup.labor_accrued),
-        "labor_paid": float(rollup.labor_paid),
-        "labor_unpaid": float(rollup.labor_unpaid),
-        "personal_by_type": {k: float(v) for k, v in rollup.personal_by_type.items()},
+        "spent": money(rollup.total),
+        "spent_invoiced": money(rollup.invoiced),
+        "spent_by_credits": money(rollup.by_credits),
+        "spent_personal": money(rollup.personal),
+        "labor_accrued": money(rollup.labor_accrued),
+        "labor_paid": money(rollup.labor_paid),
+        "labor_unpaid": money(rollup.labor_unpaid),
+        "personal_by_type": {k: money(v) for k, v in rollup.personal_by_type.items()},
     }
 
 
@@ -221,12 +227,11 @@ def create_project():
     try:
         data = CreateProjectRequest.model_validate(request.get_json())
     except ValidationError as e:
-        error_fields = safe_validation_fields(e)
         return (
             jsonify(
                 ErrorResponse(
                     error="ValidationError",
-                    message=f"Invalid input: {', '.join(str(f) for f in error_fields)}",
+                    message=validation_message(e),
                     status_code=400,
                 ).model_dump()
             ),
@@ -429,12 +434,11 @@ def update_project(project_id: str):
     try:
         data = UpdateProjectRequest.model_validate(request.get_json())
     except ValidationError as e:
-        error_fields = safe_validation_fields(e)
         return (
             jsonify(
                 ErrorResponse(
                     error="ValidationError",
-                    message=f"Invalid input: {', '.join(str(f) for f in error_fields)}",
+                    message=validation_message(e),
                     status_code=400,
                 ).model_dump()
             ),
@@ -675,30 +679,62 @@ def get_project_members(project_id: UUID):
 @jwt_required()
 @require_permission("project:manage_users")
 def remove_user_from_project(project_id: str, user_id: str):
-    """Remove a user from a project."""
+    """Remove a user from a project.
+
+    Legacy twin of DELETE /projects/<id>/assignments/<user_id>, with the same
+    rules: a company admin may remove anyone, a manager assigned to the project
+    only a company `member`. The one extra case kept here is a company admin
+    clearing someone who no longer belongs to the project's company (the
+    assignments route answers 404 for them, and the web falls back to this one).
+    """
+    from app import db
+
+    def _error(status: int, error: str, message: str):
+        return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
+
     container = get_container()
     caller_id = UUID(get_jwt_identity())
 
     try:
-        project = container.get_project_usecase.execute(UUID(project_id))
+        project_uuid = UUID(project_id)
+    except ValueError:
+        return _error(404, "NotFound", f"Project {project_id} not found")
+    try:
+        target_uuid = UUID(user_id)
+    except ValueError:
+        return _error(404, "NotFound", f"User {user_id} not found")
+
+    try:
+        project = container.get_project_usecase.execute(project_uuid)
     except ProjectNotFoundError:
-        return (
-            jsonify(
-                ErrorResponse(error="NotFound", message=f"Project {project_id} not found", status_code=404).model_dump()
-            ),
-            404,
-        )
+        return _error(404, "NotFound", f"Project {project_id} not found")
 
     if not can_mutate_project(project, caller_id, "project:manage_users"):
-        return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
+        return _error(403, "Forbidden", "Access denied")
 
-    container.project_repository.remove_user(UUID(project_id), UUID(user_id))
+    removed = True
+    try:
+        container.unassign_project_member_usecase.execute(caller_id, project_uuid, target_uuid)
+    except ProjectCompanyUnresolvedError:
+        return _error(404, "NotFound", f"Project {project_id} not found")
+    except AssignmentForbiddenError as exc:
+        return _error(403, "Forbidden", str(exc))
+    except TargetNotCompanyMemberError:
+        if container.authz_reader.company_role_for(caller_id, project.company_id) != "admin":
+            return _error(403, "Forbidden", "A manager may only assign or unassign a company 'member'")
+        # Only someone who was actually on the project is told they were removed.
+        removed = container.project_membership_repo.remove(target_uuid, project_uuid)
+        # Out of the company: they cannot open the project, so their tasks go back to "unassigned".
+        if container.task_repository is not None:
+            container.task_repository.clear_assignee(project_uuid, target_uuid)
+    db.session.commit()
+
     notifier = container.membership_push_notifier
-    if notifier is not None:
+    if notifier is not None and removed:
         notifier.notify(
             "project_member_removed",
-            user_id=UUID(user_id),
+            user_id=target_uuid,
             actor_id=caller_id,
-            entity_id=UUID(project_id),
+            entity_id=project_uuid,
         )
     return "", 204

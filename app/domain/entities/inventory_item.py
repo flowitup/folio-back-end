@@ -73,8 +73,13 @@ class InventoryItem:
         item.validate()
         return item
 
-    def validate(self) -> None:
-        """Raise InvalidInventoryItemError unless every invariant holds."""
+    def validate(self, *, check_location: bool = True) -> None:
+        """Raise InvalidInventoryItemError unless every invariant holds.
+
+        `check_location=False` skips the warehouse/site id rules, for an edit that keeps the
+        row where it is: deleting a project sets a site row's project_id to NULL, and such a
+        row must still be renamable or recountable without being moved first.
+        """
         if not self.name:
             raise InvalidInventoryItemError("name is required.")
         if not isinstance(self.quantity, int) or isinstance(self.quantity, bool) or self.quantity < 0:
@@ -85,6 +90,8 @@ class InventoryItem:
             raise InvalidInventoryItemError(f"location_type must be one of {sorted(INVENTORY_LOCATION_TYPES)}.")
         if self.category is not None and not is_valid_inventory_category(self.category):
             raise InvalidInventoryItemError(f"Invalid category slug {self.category!r}.")
+        if not check_location:
+            return
         if self.location_type == "warehouse":
             if self.warehouse_id is None:
                 raise InvalidInventoryItemError("warehouse_id is required when location_type is 'warehouse'.")
@@ -142,7 +149,12 @@ class InventoryItem:
         if updated == self:
             return self
         updated = replace(updated, updated_at=datetime.now(timezone.utc))
-        updated.validate()
+        moved = (next_location, next_warehouse, next_project) != (
+            self.location_type,
+            self.warehouse_id,
+            self.project_id,
+        )
+        updated.validate(check_location=moved)
         return updated
 
 

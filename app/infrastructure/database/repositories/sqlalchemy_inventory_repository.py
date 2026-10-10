@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.domain.entities.inventory_item import InventoryItem
 from app.domain.entities.warehouse import Warehouse
+from app.infrastructure.database.like_pattern import LIKE_ESCAPE, contains_pattern
+from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.inventory_item import InventoryItemModel
 from app.infrastructure.database.models.inventory_warehouse import InventoryWarehouseModel
 
@@ -58,6 +60,18 @@ class SqlAlchemyInventoryWarehouseRepository:
         self._session.flush()
         return True
 
+    def lock_company(self, company_id: UUID) -> None:
+        """Lock the company row until commit (no-op on SQLite).
+
+        Names are unique per company in the use case only: two concurrent creates
+        both found the name free and both inserted it. Taking this lock first makes
+        the second wait and then see the first's row. FOR NO KEY UPDATE does not
+        block the foreign-key checks of rows that point at the company.
+        """
+        self._session.execute(
+            select(CompanyModel.id).where(CompanyModel.id == company_id).with_for_update(key_share=True)
+        )
+
 
 class SqlAlchemyInventoryItemRepository:
     """Implements IInventoryItemRepository against a SQLAlchemy session."""
@@ -103,12 +117,13 @@ class SqlAlchemyInventoryItemRepository:
         if condition:
             stmt = stmt.where(InventoryItemModel.condition == condition)
         if q:
-            needle = f"%{q.strip().lower()}%"
+            # Literal substring: "%" and "_" in the search text match only themselves.
+            needle = contains_pattern(q.strip().lower())
             stmt = stmt.where(
                 or_(
-                    func.lower(InventoryItemModel.name).like(needle),
-                    func.lower(func.coalesce(InventoryItemModel.reference, "")).like(needle),
-                    func.lower(func.coalesce(InventoryItemModel.description, "")).like(needle),
+                    func.lower(InventoryItemModel.name).like(needle, escape=LIKE_ESCAPE),
+                    func.lower(func.coalesce(InventoryItemModel.reference, "")).like(needle, escape=LIKE_ESCAPE),
+                    func.lower(func.coalesce(InventoryItemModel.description, "")).like(needle, escape=LIKE_ESCAPE),
                 )
             )
         stmt = stmt.order_by(InventoryItemModel.name, InventoryItemModel.created_at)

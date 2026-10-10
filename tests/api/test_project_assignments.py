@@ -243,6 +243,36 @@ class TestUnassign:
             ).fetchone()
             assert row is None
 
+    def test_unassigning_clears_their_tasks_but_not_a_company_admins(self, assign_client, assign_app):
+        """Someone who can no longer open the project stops being named as a task's assignee."""
+        admin_id = _make_user(assign_app, "asg_admin_tasks@test.com")
+        member_id = _make_user(assign_app, "asg_member_tasks@test.com")
+        coadmin_id = _make_user(assign_app, "asg_coadmin_tasks@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        _attach(assign_app, member_id, company_id, "member")
+        _attach(assign_app, coadmin_id, company_id, "admin")
+        token = _login(assign_client, "asg_admin_tasks@test.com")
+        task_ids = {}
+        for target_id in (member_id, coadmin_id):
+            assign_client.put(f"/api/v1/projects/{project_id}/assignments/{target_id}", headers=_auth(token))
+            resp = assign_client.post(
+                f"/api/v1/projects/{project_id}/tasks",
+                json={"title": "Poser les cloisons", "assignee_id": str(target_id)},
+                headers=_auth(token),
+            )
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+            task_ids[target_id] = resp.get_json()["id"]
+
+        for target_id in (member_id, coadmin_id):
+            resp = assign_client.delete(f"/api/v1/projects/{project_id}/assignments/{target_id}", headers=_auth(token))
+            assert resp.status_code == 204
+
+        member_task = assign_client.get(f"/api/v1/tasks/{task_ids[member_id]}", headers=_auth(token)).get_json()
+        coadmin_task = assign_client.get(f"/api/v1/tasks/{task_ids[coadmin_id]}", headers=_auth(token)).get_json()
+        assert member_task["assignee_id"] is None
+        # A company admin still sees every project without an assignment.
+        assert coadmin_task["assignee_id"] == str(coadmin_id)
+
     def test_unassigning_a_stranger_answers_404_like_assigning_does(self, assign_client, assign_app):
         """Same state, same answer for both callers and both verbs."""
         admin_id = _make_user(assign_app, "asg_admin7@test.com")
@@ -259,6 +289,95 @@ class TestUnassign:
                 headers=_auth(token),
             )
             assert resp.status_code == 404, resp.get_data(as_text=True)
+
+
+class TestLegacyRemoveRoute:
+    """DELETE /projects/<id>/users/<user_id> applies the same rules as DELETE /assignments."""
+
+    def _assigned(self, app, user_id, project_id) -> bool:
+        from app import db
+        from sqlalchemy import text
+
+        with app.app_context():
+            row = db.session.execute(
+                text("SELECT 1 FROM user_projects WHERE user_id=:u AND project_id=:p"),
+                {"u": str(user_id), "p": str(project_id)},
+            ).fetchone()
+            return row is not None
+
+    def _setup(self, client, app, tag: str):
+        admin_id = _make_user(app, f"asg_legacy_admin{tag}@test.com")
+        manager_id = _make_user(app, f"asg_legacy_mgr{tag}@test.com")
+        company_id, project_id = _make_company_and_project(app, admin_id)
+        _attach(app, manager_id, company_id, "manager")
+        admin_token = _login(client, f"asg_legacy_admin{tag}@test.com")
+        for uid in (admin_id, manager_id):
+            client.put(f"/api/v1/projects/{project_id}/assignments/{uid}", headers=_auth(admin_token))
+        return admin_id, manager_id, company_id, project_id, admin_token
+
+    def test_manager_cannot_remove_another_manager_or_an_admin(self, assign_client, assign_app):
+        admin_id, _manager_id, company_id, project_id, admin_token = self._setup(assign_client, assign_app, "1")
+        peer_id = _make_user(assign_app, "asg_legacy_peer1@test.com")
+        _attach(assign_app, peer_id, company_id, "manager")
+        assign_client.put(f"/api/v1/projects/{project_id}/assignments/{peer_id}", headers=_auth(admin_token))
+        manager_token = _login(assign_client, "asg_legacy_mgr1@test.com")
+
+        for target_id in (peer_id, admin_id):
+            resp = assign_client.delete(
+                f"/api/v1/projects/{project_id}/users/{target_id}", headers=_auth(manager_token)
+            )
+            assert resp.status_code == 403, resp.get_data(as_text=True)
+            assert resp.get_json()["message"] == "A manager may only assign or unassign a company 'member'"
+            assert self._assigned(assign_app, target_id, project_id)
+
+    def test_manager_removes_a_company_member(self, assign_client, assign_app):
+        _admin_id, _manager_id, company_id, project_id, admin_token = self._setup(assign_client, assign_app, "2")
+        member_id = _make_user(assign_app, "asg_legacy_member2@test.com")
+        _attach(assign_app, member_id, company_id, "member")
+        assign_client.put(f"/api/v1/projects/{project_id}/assignments/{member_id}", headers=_auth(admin_token))
+        manager_token = _login(assign_client, "asg_legacy_mgr2@test.com")
+
+        resp = assign_client.delete(f"/api/v1/projects/{project_id}/users/{member_id}", headers=_auth(manager_token))
+        assert resp.status_code == 204, resp.get_data(as_text=True)
+        assert not self._assigned(assign_app, member_id, project_id)
+
+    def test_only_an_admin_clears_someone_outside_the_company(self, assign_client, assign_app):
+        """The web falls back here when /assignments answers 404 for a former company member."""
+        from app import db
+        from app.infrastructure.database.models.task import TaskModel
+        from sqlalchemy import text
+
+        _admin_id, _manager_id, _company_id, project_id, admin_token = self._setup(assign_client, assign_app, "3")
+        former_id = _make_user(assign_app, "asg_legacy_former3@test.com")
+        task_id = uuid4()
+        with assign_app.app_context():
+            db.session.execute(
+                text("INSERT INTO user_projects (user_id, project_id) VALUES (:u, :p)"),
+                {"u": str(former_id), "p": str(project_id)},
+            )
+            db.session.add(
+                TaskModel(id=task_id, project_id=project_id, title="Poser les cloisons", assignee_id=former_id)
+            )
+            db.session.commit()
+        manager_token = _login(assign_client, "asg_legacy_mgr3@test.com")
+
+        resp = assign_client.delete(f"/api/v1/projects/{project_id}/users/{former_id}", headers=_auth(manager_token))
+        assert resp.status_code == 403, resp.get_data(as_text=True)
+        assert self._assigned(assign_app, former_id, project_id)
+
+        resp = assign_client.delete(f"/api/v1/projects/{project_id}/users/{former_id}", headers=_auth(admin_token))
+        assert resp.status_code == 204, resp.get_data(as_text=True)
+        assert not self._assigned(assign_app, former_id, project_id)
+        # They cannot open the project any more, so their task goes back to "unassigned".
+        task = assign_client.get(f"/api/v1/tasks/{task_id}", headers=_auth(admin_token)).get_json()
+        assert task["assignee_id"] is None
+
+    def test_malformed_user_id_is_a_json_404(self, assign_client, assign_app):
+        _admin_id, _manager_id, _company_id, project_id, admin_token = self._setup(assign_client, assign_app, "4")
+
+        resp = assign_client.delete(f"/api/v1/projects/{project_id}/users/not-a-uuid", headers=_auth(admin_token))
+        assert resp.status_code == 404
+        assert resp.get_json()["message"] == "User not-a-uuid not found"
 
 
 class TestAssignWithRole:

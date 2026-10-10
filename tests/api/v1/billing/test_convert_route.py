@@ -122,11 +122,14 @@ class TestConvertedToFactureId:
         detail = inv_client.get(f"/api/v1/billing-documents/{devis_id}", headers=_auth(billing_token))
         assert detail.status_code == 200
         assert detail.get_json()["converted_to_facture_id"] == facture["id"]
+        assert detail.get_json()["converted_facture_status"] == "draft"
 
         listing = inv_client.get("/api/v1/billing-documents?kind=devis", headers=_auth(billing_token))
         assert listing.status_code == 200
-        listed = {d["id"]: d["converted_to_facture_id"] for d in listing.get_json()["items"]}
-        assert listed[devis_id] == facture["id"]
+        listed = {
+            d["id"]: (d["converted_to_facture_id"], d["converted_facture_status"]) for d in listing.get_json()["items"]
+        }
+        assert listed[devis_id] == (facture["id"], "draft")
 
     def test_unconverted_devis_carries_null(self, inv_client, billing_token, seeded_accepted_devis):
         detail = inv_client.get(
@@ -134,6 +137,7 @@ class TestConvertedToFactureId:
         )
         assert detail.status_code == 200
         assert detail.get_json()["converted_to_facture_id"] is None
+        assert detail.get_json()["converted_facture_status"] is None
 
 
 class TestConvertedDevisIsLocked:
@@ -153,6 +157,8 @@ class TestConvertedDevisIsLocked:
         self._convert(inv_client, billing_token, seeded_accepted_devis["id"])
         resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "sent")
         assert resp.status_code == 409, resp.get_data(as_text=True)
+        # A machine-readable reason, so a client can tell this lock from a status race.
+        assert resp.get_json()["reason"] == "devis_locked_by_facture"
         doc = inv_client.get(
             f"/api/v1/billing-documents/{seeded_accepted_devis['id']}", headers=_auth(billing_token)
         ).get_json()
@@ -166,16 +172,67 @@ class TestConvertedDevisIsLocked:
             headers=_auth(billing_token),
         )
         assert resp.status_code == 409
+        assert resp.get_json()["reason"] == "devis_locked_by_facture"
 
     def test_cancelling_the_facture_releases_the_devis(self, inv_client, billing_token, seeded_accepted_devis):
         facture = self._convert(inv_client, billing_token, seeded_accepted_devis["id"])
         assert self._status(inv_client, billing_token, facture["id"], "sent").status_code == 200
         assert self._status(inv_client, billing_token, facture["id"], "cancelled").status_code == 200
+        detail = inv_client.get(
+            f"/api/v1/billing-documents/{seeded_accepted_devis['id']}", headers=_auth(billing_token)
+        ).get_json()
+        assert detail["converted_to_facture_id"] == facture["id"]
+        assert detail["converted_facture_status"] == "cancelled"
         resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "sent")
         assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["converted_facture_status"] == "cancelled"
 
     def test_unconverted_accepted_devis_can_still_go_back_to_sent(
         self, inv_client, billing_token, seeded_accepted_devis
     ):
         resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "sent")
         assert resp.status_code == 200
+
+    def test_a_plain_invalid_transition_carries_no_lock_reason(self, inv_client, billing_token, seeded_accepted_devis):
+        resp = self._status(inv_client, billing_token, seeded_accepted_devis["id"], "expired")
+        assert resp.status_code == 409, resp.get_data(as_text=True)
+        assert "reason" not in resp.get_json()
+
+
+class TestConvertAppliesTheDocumentRules:
+    """The facture a convert makes must be savable: same date and length rules as create/update."""
+
+    def _convert(self, inv_client, token, doc_id, body):
+        return inv_client.post(
+            f"/api/v1/billing-documents/{doc_id}/convert-to-facture", json=body, headers=_auth(token)
+        )
+
+    def test_due_date_before_today_returns_400(self, inv_client, billing_token, seeded_accepted_devis):
+        resp = self._convert(inv_client, billing_token, seeded_accepted_devis["id"], {"payment_due_date": "2026-01-15"})
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "payment_due_date cannot be before issue_date" in resp.get_json()["message"]
+        # Nothing was created: the devis can still be converted.
+        assert self._convert(inv_client, billing_token, seeded_accepted_devis["id"], {}).status_code == 201
+
+    def test_payment_terms_over_500_characters_return_422(self, inv_client, billing_token, seeded_accepted_devis):
+        resp = self._convert(inv_client, billing_token, seeded_accepted_devis["id"], {"payment_terms": "x" * 501})
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert "payment_terms" in resp.get_json()["message"]
+
+    def test_future_due_date_and_500_character_terms_are_accepted(
+        self, inv_client, billing_token, seeded_accepted_devis
+    ):
+        resp = self._convert(
+            inv_client,
+            billing_token,
+            seeded_accepted_devis["id"],
+            {"payment_due_date": "2100-12-31", "payment_terms": "x" * 500},
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        # ...and the facture saves back as it is.
+        saved = inv_client.put(
+            f"/api/v1/billing-documents/{resp.get_json()['id']}",
+            json={"payment_due_date": "2100-12-31", "payment_terms": "x" * 500},
+            headers=_auth(billing_token),
+        )
+        assert saved.status_code == 200, saved.get_data(as_text=True)

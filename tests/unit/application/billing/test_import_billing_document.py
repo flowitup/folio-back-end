@@ -7,7 +7,7 @@ Broader tests land in phase 08.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -121,6 +121,27 @@ class TestImportBillingDocumentUseCase:
         # Counter should still be at default 1 (no bump happened)
         next_val = setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2025)
         assert next_val == 1
+
+    @pytest.mark.parametrize("doc_number", ["FAC202403151230459", "F-2024-2147483646", "FAC-2024-99999999999-A"])
+    def test_import_oversized_sequence_keeps_the_counter(self, setup, doc_number):
+        """A foreign number the INTEGER counter cannot continue from is imported without moving it."""
+        inp = _minimal_input(setup["user_id"], setup["company_id"], doc_number=doc_number)
+        result = setup["uc"].execute(inp, setup["session"])
+        assert result.document_number == doc_number
+        assert setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2024) == 1
+
+    @pytest.mark.parametrize("doc_number", ["FAC-2024-1000000", "FAC-2024-2147483646", "FAC-2024-99999999999"])
+    def test_import_refuses_own_format_number_beyond_the_counter(self, setup, doc_number):
+        """The counter would hand FAC-2024-1000000 out again once past 999 999: every later facture would 500."""
+        inp = _minimal_input(setup["user_id"], setup["company_id"], doc_number=doc_number)
+        with pytest.raises(ValueError, match="must not exceed"):
+            setup["uc"].execute(inp, setup["session"])
+        assert setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2024) == 1
+
+    def test_import_largest_counted_sequence_still_bumps(self, setup):
+        inp = _minimal_input(setup["user_id"], setup["company_id"], doc_number="FAC-2024-999999")
+        setup["uc"].execute(inp, setup["session"])
+        assert setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2024) == 1_000_000
 
     def test_import_preserves_created_at(self, setup):
         historical_dt = datetime(2025, 3, 15, 12, 0, 0, tzinfo=timezone.utc)
@@ -259,3 +280,46 @@ class TestImportAuthorization:
         uc._project_repo = _ProjectRepo(project)
         inp = replace(_minimal_input(user_id, company_id), project_id=project.id)
         assert uc.execute(inp, _FakeSession()).document_number == "FAC2025001"
+
+    def test_company_admin_can_import_into_any_project_of_their_company(self):
+        # Company admins read every project of their company, as on create.
+        uc, user_id, company_id = self._usecase()
+        project = _Project(owner_id=uuid4())
+        project.company_id = company_id
+        uc._project_repo = _ProjectRepo(project)
+        inp = replace(_minimal_input(user_id, company_id), project_id=project.id)
+        assert uc.execute(inp, _FakeSession()).project_id == project.id
+
+
+class TestImportDateOrder:
+    """An imported devis cannot expire, nor a facture fall due, before it is issued (as on create)."""
+
+    def _usecase(self):
+        uc, user_id, company_id = TestImportAuthorization()._usecase()
+        return uc, user_id, company_id
+
+    def test_devis_valid_until_before_its_issue_date_is_refused(self):
+        uc, user_id, company_id = self._usecase()
+        inp = replace(
+            _minimal_input(user_id, company_id, doc_number="DEV2026001"),
+            kind=BillingDocumentKind.DEVIS,
+            issue_date=date(2026, 5, 10),
+            validity_until=date(2026, 1, 1),
+        )
+        with pytest.raises(ValueError, match="validity_until cannot be before issue_date"):
+            uc.execute(inp, _FakeSession())
+
+    def test_facture_due_before_its_issue_date_is_refused(self):
+        uc, user_id, company_id = self._usecase()
+        inp = replace(
+            _minimal_input(user_id, company_id), issue_date=date(2026, 5, 10), payment_due_date=date(2026, 1, 1)
+        )
+        with pytest.raises(ValueError, match="payment_due_date cannot be before issue_date"):
+            uc.execute(inp, _FakeSession())
+
+    def test_due_date_on_the_issue_date_is_accepted(self):
+        uc, user_id, company_id = self._usecase()
+        inp = replace(
+            _minimal_input(user_id, company_id), issue_date=date(2026, 5, 10), payment_due_date=date(2026, 5, 10)
+        )
+        assert uc.execute(inp, _FakeSession()).payment_due_date == date(2026, 5, 10)

@@ -17,8 +17,13 @@ from app.application.project_documents.ports import (
     IProjectDocumentRepository,
     ITransactionalSession,
 )
-from app.application.project_documents.upload_project_document import MAX_SIZE_BYTES, validate_file_type
+from app.application.project_documents.upload_project_document import (
+    MAX_SIZE_BYTES,
+    stored_content_type,
+    validate_file_type,
+)
 from app.domain.project_document import ProjectDocument
+from app.domain.value_objects.display_filename import strip_control_chars
 
 _log = logging.getLogger(__name__)
 
@@ -99,13 +104,13 @@ class ConfirmProjectDocumentUploadUseCase:
                 raise EmptyFileError("Uploaded file has no content (size <= 0 bytes)")
             raise DocumentFileTooLargeError(f"File size {actual_size} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
 
-        # --- Build entity with original filename preserved ---
+        # --- Build entity with original filename preserved (minus control characters) ---
         doc = ProjectDocument(
             id=doc_id,
             project_id=project_id,
             uploader_user_id=uploader_user_id,
-            filename=filename,
-            content_type=content_type,
+            filename=strip_control_chars(filename),
+            content_type=stored_content_type(content_type),
             size_bytes=actual_size,
             storage_key=storage_key,
             created_at=datetime.now(timezone.utc),

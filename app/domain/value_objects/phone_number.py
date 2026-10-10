@@ -46,6 +46,15 @@ def normalize_phone(raw: str, default_region: str = "FR") -> str:
     return candidate
 
 
+def is_phone_number(raw: str) -> bool:
+    """Whether ``raw`` reads as a phone number of any country ("06 12 34 56 78", "+84 912…"), not free text."""
+    try:
+        normalize_phone(raw)
+    except InvalidPhoneNumberError:
+        return False
+    return True
+
+
 # Sign-in codes leave through a French SMS gateway, so phone authentication takes French numbers
 # only. Everywhere else — persons, workers, company members — numbers stay international.
 _FRENCH_E164 = re.compile(r"^\+33[1-9]\d{8}$")

@@ -17,7 +17,7 @@ class BulkAddResultItem(BaseModel):
 
     project_id: UUID
     project_name: str | None
-    status: Literal["added", "already_member", "project_not_found"]
+    status: Literal["added", "already_member", "project_not_found", "not_in_company"]
 
 
 class BulkAddResponse(BaseModel):

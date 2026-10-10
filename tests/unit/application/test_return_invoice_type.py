@@ -23,7 +23,11 @@ from app.application.invoice.create_invoice import CreateInvoiceRequest, CreateI
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.invoice.update_invoice import UpdateInvoiceRequest, UpdateInvoiceUseCase, _UNSET
 from app.domain.entities.invoice import Invoice, InvoiceType, MIXED_SIGN_TYPES
-from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, RefundExceedsSourceError
+from app.domain.exceptions.invoice_exceptions import (
+    AppliedAmountExceedsTargetError,
+    InvalidInvoiceDataError,
+    RefundExceedsSourceError,
+)
 from app.domain.value_objects.invoice_item import InvoiceItem
 
 
@@ -69,6 +73,7 @@ def _make_mock_repo(find_by_id_result=None, sum_refunds: Decimal = Decimal("0"))
     repo.find_by_id.return_value = find_by_id_result
     repo.update.side_effect = lambda inv: inv
     repo.sum_refunds_for_source.return_value = sum_refunds
+    repo.sum_applied_for_target.return_value = Decimal("0")
     return repo
 
 
@@ -456,6 +461,82 @@ class TestUpdateEffectiveTypeSignGuard:
         uc = UpdateInvoiceUseCase(repo)
         with pytest.raises(InvalidInvoiceDataError):
             uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, items=[_make_item(-5.0)]))
+
+    @pytest.mark.parametrize(
+        "new_type",
+        [InvoiceType.OTHERS, InvoiceType.LABOR, InvoiceType.RELEASED_FUNDS],
+    )
+    def test_type_only_patch_of_a_return_to_a_positive_only_type_raises(self, new_type):
+        """Retyping without resending lines keeps the stored -50 line: same rule as resending it."""
+        existing = _make_invoice(invoice_type=InvoiceType.RETURN, unit_price=-50.0)
+        repo = _make_mock_repo(find_by_id_result=existing)
+        uc = UpdateInvoiceUseCase(repo)
+        with pytest.raises(InvalidInvoiceDataError, match=f"cannot be negative for invoice type '{new_type.value}'"):
+            uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, type=new_type))
+        repo.update.assert_not_called()
+
+    def test_type_only_patch_of_a_return_to_materials_services_is_allowed(self):
+        """materials_services is mixed-sign, so negative stored lines may stay."""
+        existing = _make_invoice(invoice_type=InvoiceType.RETURN, unit_price=-50.0)
+        uc = UpdateInvoiceUseCase(_make_mock_repo(find_by_id_result=existing))
+        result = uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, type=InvoiceType.MATERIALS_SERVICES))
+        assert result.type == "materials_services"
+        assert result.total_amount == -50.0
+
+
+# ---------------------------------------------------------------------------
+# Update: the target side of avoirs (returns applied as credit to this invoice)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateAvoirTarget:
+    def _target_with_applied(self, applied: Decimal, invoice_type=InvoiceType.LABOR, unit_price=100.0):
+        existing = _make_invoice(invoice_type=invoice_type, unit_price=unit_price)
+        repo = _make_mock_repo(find_by_id_result=existing)
+        repo.sum_applied_for_target.return_value = applied
+        return existing, repo
+
+    def test_shrinking_below_the_applied_avoirs_raises(self):
+        existing, repo = self._target_with_applied(Decimal("-80"))
+        with pytest.raises(AppliedAmountExceedsTargetError, match="80.00"):
+            UpdateInvoiceUseCase(repo).execute(UpdateInvoiceRequest(invoice_id=existing.id, items=[_make_item(20.0)]))
+        repo.sum_applied_for_target.assert_called_once_with(existing.id)
+        repo.update.assert_not_called()
+
+    def test_shrinking_down_to_the_applied_avoirs_is_allowed(self):
+        existing, repo = self._target_with_applied(Decimal("-80"))
+        result = UpdateInvoiceUseCase(repo).execute(
+            UpdateInvoiceRequest(invoice_id=existing.id, items=[_make_item(80.0)])
+        )
+        assert result.total_amount == 80.0
+
+    @pytest.mark.parametrize("new_type,unit_price", [(InvoiceType.RETURN, -5.0), (InvoiceType.RELEASED_FUNDS, 100.0)])
+    def test_retyping_a_target_into_a_return_or_release_raises(self, new_type, unit_price):
+        existing, repo = self._target_with_applied(Decimal("-80"))
+        with pytest.raises(InvalidInvoiceDataError, match="Unlink the avoirs"):
+            UpdateInvoiceUseCase(repo).execute(
+                UpdateInvoiceRequest(invoice_id=existing.id, type=new_type, items=[_make_item(unit_price)])
+            )
+        repo.update.assert_not_called()
+
+    def test_retyping_a_target_to_another_expense_type_is_allowed(self):
+        existing, repo = self._target_with_applied(Decimal("-80"))
+        result = UpdateInvoiceUseCase(repo).execute(
+            UpdateInvoiceRequest(invoice_id=existing.id, type=InvoiceType.OTHERS)
+        )
+        assert result.type == "others"
+
+    def test_an_invoice_without_applied_avoirs_can_still_become_a_return(self):
+        existing, repo = self._target_with_applied(Decimal("0"))
+        result = UpdateInvoiceUseCase(repo).execute(
+            UpdateInvoiceRequest(invoice_id=existing.id, type=InvoiceType.RETURN, items=[_make_item(-5.0)])
+        )
+        assert result.type == "return"
+
+    def test_edits_that_touch_neither_type_nor_lines_skip_the_lookup(self):
+        existing, repo = self._target_with_applied(Decimal("-80"))
+        UpdateInvoiceUseCase(repo).execute(UpdateInvoiceRequest(invoice_id=existing.id, recipient_name="Renamed"))
+        repo.sum_applied_for_target.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

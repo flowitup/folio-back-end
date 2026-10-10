@@ -25,7 +25,10 @@ PayloadJSON = JSON().with_variant(JSONB(), "postgresql")
 
 class ChatMessageOrm(Base):
     __tablename__ = "chat_messages"
-    __table_args__ = (Index("ix_chat_messages_channel_created", "channel_kind", "channel_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_chat_messages_channel_created", "channel_kind", "channel_id", "created_at"),
+        Index("ix_chat_messages_reply_to_id", "reply_to_id"),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     channel_kind: Mapped[str] = mapped_column(String(16), nullable=False)

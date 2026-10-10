@@ -198,3 +198,20 @@ class TestCrossProjectConflicts:
         )
         assert len(result) == 1
         assert result[0].person_id == hugo.id
+
+    def test_two_worker_rows_here_list_the_other_entry_once(self, session, owner, company):
+        """Legacy duplicates (one person, two rows on this project) must not double each entry."""
+        worker_repo = SQLAlchemyWorkerRepository(session)
+        entry_repo = SQLAlchemyLaborEntryRepository(session)
+
+        project_a = _make_project(session, owner, company, "A")
+        project_b = _make_project(session, owner, company, "B")
+        hugo = _make_person(session, owner, "Hugo")
+        _make_worker(worker_repo, project_a, hugo)
+        _make_worker(worker_repo, project_a, hugo)
+        wb = _make_worker(worker_repo, project_b, hugo)
+        _log(entry_repo, wb.id, date(2026, 5, 13), shift_type="half")
+
+        result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
+        assert len(result) == 1
+        assert [(e.project_name, e.shift_type) for e in result[0].entries] == [("B", "half")]

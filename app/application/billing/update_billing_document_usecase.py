@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.application.billing._helpers import (
-    _assert_billing_doc_access,
+    _assert_billing_doc_write_access,
     _assert_devis_not_locked,
-    _converted_facture_id,
+    _conversion_link,
     _funds_release_items,
     _items_from_inputs,
 )
@@ -78,7 +78,7 @@ class UpdateBillingDocumentUseCase:
         doc = self._doc_repo.find_by_id(inp.id)
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
-        _assert_billing_doc_access(doc, inp.user_id, self._access_repo)
+        _assert_billing_doc_write_access(doc, inp.user_id, self._access_repo)
         _assert_devis_not_locked(self._doc_repo, doc)
 
         # M3: Reject kind-incompatible field updates before touching the DB.
@@ -160,4 +160,4 @@ class UpdateBillingDocumentUseCase:
                 created_by=saved.user_id,
             )
 
-        return BillingDocumentResponse.from_entity(saved, _converted_facture_id(self._doc_repo, saved))
+        return BillingDocumentResponse.from_entity(saved, *_conversion_link(self._doc_repo, saved))

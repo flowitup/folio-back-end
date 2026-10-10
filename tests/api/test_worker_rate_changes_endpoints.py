@@ -545,12 +545,12 @@ class TestRateResolutionInMonthlySummary:
         worker = _create_worker(rc_client, admin_token, pid, "Monthly Rate Worker", rate=100.0)
         wid = worker["id"]
 
-        _log_entry(rc_client, admin_token, pid, wid, "2026-10-05")  # base 100
-        _log_entry(rc_client, admin_token, pid, wid, "2026-10-20")  # new 180
+        _log_entry(rc_client, admin_token, pid, wid, "2025-10-05")  # base 100
+        _log_entry(rc_client, admin_token, pid, wid, "2025-10-20")  # new 180
 
         rc_client.post(
             _rate_changes_url(pid, wid),
-            json={"effective_date": "2026-10-15", "daily_rate": 180.0},
+            json={"effective_date": "2025-10-15", "daily_rate": 180.0},
             headers=_auth(admin_token),
         )
 
@@ -560,11 +560,36 @@ class TestRateResolutionInMonthlySummary:
         )
         assert resp.status_code == 200
         rows = resp.get_json()["rows"]
-        oct_row = next((r for r in rows if r["year"] == 2026 and r["month"] == 10), None)
+        oct_row = next((r for r in rows if r["year"] == 2025 and r["month"] == 10), None)
         assert oct_row is not None
         # 100 + 180 = 280 total for October for this worker
         oct_worker = next(w for w in oct_row["workers"] if w["worker_id"] == wid)
         assert oct_worker["total_cost"] == pytest.approx(280.0)
+        # The rates of that month (first day -> last day), not today's rate.
+        assert oct_worker["month_start_rate"] == pytest.approx(100.0)
+        assert oct_worker["daily_rate"] == pytest.approx(180.0)
+
+    def test_monthly_summary_rates_are_those_of_each_month_not_todays(self, rc_client, admin_token, rate_app):
+        """A past month keeps the rate it was paid at after a later rate change."""
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "Past Month Rate Worker", rate=95.5)
+        wid = worker["id"]
+
+        _log_entry(rc_client, admin_token, pid, wid, "2025-08-04")
+        rc_client.post(
+            _rate_changes_url(pid, wid),
+            json={"effective_date": "2025-09-01", "daily_rate": 100.56},
+            headers=_auth(admin_token),
+        )
+
+        rows = rc_client.get(
+            f"/api/v1/projects/{pid}/labor-monthly-summary",
+            headers=_auth(admin_token),
+        ).get_json()["rows"]
+        aug_row = next(r for r in rows if (r["year"], r["month"]) == (2025, 8))
+        aug_worker = next(w for w in aug_row["workers"] if w["worker_id"] == wid)
+        assert aug_worker["month_start_rate"] == pytest.approx(95.5)
+        assert aug_worker["daily_rate"] == pytest.approx(95.5)
 
 
 # ---------------------------------------------------------------------------
@@ -638,3 +663,108 @@ class TestCurrentDailyRateOnWorkerList:
         # current_daily_rate must NOT jump to the future rate
         assert w["current_daily_rate"] == pytest.approx(100.0)
         assert w["daily_rate"] == pytest.approx(100.0)
+
+
+# ---------------------------------------------------------------------------
+# Sub-cent rates — the column keeps 2 decimals
+# ---------------------------------------------------------------------------
+
+
+class TestSubCentRates:
+    def test_sub_cent_rate_is_refused_and_not_saved(self, rc_client, admin_token, rate_app):
+        """0.004 passed "> 0" but was committed as 0.00 while the API answered 400."""
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "RC Sub Cent")
+
+        for bad in (0.004, 1e-9, "0.004"):
+            resp = rc_client.post(
+                _rate_changes_url(pid, worker["id"]),
+                json={"effective_date": "2026-10-10", "daily_rate": bad},
+                headers=_auth(admin_token),
+            )
+            assert resp.status_code == 400, resp.get_data(as_text=True)
+
+        listed = rc_client.get(_rate_changes_url(pid, worker["id"]), headers=_auth(admin_token))
+        assert listed.status_code == 200
+        assert listed.get_json()["rate_changes"] == []
+
+    def test_rate_is_rounded_to_the_cent(self, rc_client, admin_token, rate_app):
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "RC Round Cent")
+
+        resp = rc_client.post(
+            _rate_changes_url(pid, worker["id"]),
+            json={"effective_date": "2026-10-11", "daily_rate": 0.005},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["daily_rate"] == 0.01
+
+    def test_worker_create_refuses_a_sub_cent_rate(self, rc_client, admin_token, rate_app):
+        pid = rate_app._test_project_id
+        for bad in (0.004, 1e-9):
+            resp = rc_client.post(
+                f"/api/v1/projects/{pid}/workers",
+                json={"name": "RC Sub Cent Worker", "daily_rate": bad},
+                headers=_auth(admin_token),
+            )
+            assert resp.status_code == 400, resp.get_data(as_text=True)
+
+        rounded = _create_worker(rc_client, admin_token, pid, "RC Rounded Worker", rate=99.995)
+        assert rounded["daily_rate"] == 100.0
+
+    def test_a_stored_zero_rate_row_does_not_break_labor_reads(self, rc_client, admin_token, rate_app):
+        """A 0.00 row left by the old bug is skipped instead of failing every read with a 500."""
+        from datetime import date, datetime, timezone
+        from decimal import Decimal
+        from uuid import UUID
+
+        from app import db
+        from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
+
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "RC Zero Row", rate=100.0)
+        wid = worker["id"]
+        _log_entry(rc_client, admin_token, pid, wid, "2025-03-20")
+        bad_id = uuid4()
+        db.session.add(
+            WorkerRateChangeModel(
+                id=bad_id,
+                worker_id=UUID(wid),
+                effective_date=date(2025, 3, 10),
+                daily_rate=Decimal("0.00"),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        db.session.commit()
+
+        listed = rc_client.get(_rate_changes_url(pid, wid), headers=_auth(admin_token))
+        assert listed.status_code == 200
+        assert listed.get_json()["rate_changes"] == []
+
+        workers = rc_client.get(f"/api/v1/projects/{pid}/workers", headers=_auth(admin_token))
+        assert workers.status_code == 200
+
+        # Priced at the base rate by the entry list and the summary alike: the 0.00 row is ignored everywhere.
+        march = {"date_from": "2025-03-01", "date_to": "2025-03-31"}
+        entries = rc_client.get(
+            f"/api/v1/projects/{pid}/labor-entries",
+            query_string={**march, "worker_id": wid},
+            headers=_auth(admin_token),
+        )
+        assert entries.status_code == 200
+        assert [e["effective_cost"] for e in entries.get_json()["entries"]] == [pytest.approx(100.0)]
+
+        summary = rc_client.get(f"/api/v1/projects/{pid}/labor-summary", query_string=march, headers=_auth(admin_token))
+        assert summary.status_code == 200
+        row = next(r for r in summary.get_json()["rows"] if r["worker_id"] == wid)
+        assert row["total_cost"] == pytest.approx(100.0)
+
+        # A valid rate for the same date replaces the bad row (upsert).
+        fixed = rc_client.post(
+            _rate_changes_url(pid, wid),
+            json={"effective_date": "2025-03-10", "daily_rate": 150.0},
+            headers=_auth(admin_token),
+        )
+        assert fixed.status_code == 201
+        assert fixed.get_json()["id"] == str(bad_id)

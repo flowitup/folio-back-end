@@ -5,12 +5,17 @@ profile was attached in the last 7 days AND who have no `user_projects`
 assignment on any of that company's projects yet — a dead end an admin
 should notice (finding 12: no notification store; this list is always
 computed fresh, never persisted).
+
+Only people an admin can act on are listed: a company admin (the caller
+included) sees every project without an assignment, someone who has left the
+company has nothing to be assigned to, and a deactivated account is refused
+by the assignment itself.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any, List
 from uuid import UUID
 
 from app.application.companies.dtos import NewMemberEvent
@@ -32,11 +37,13 @@ class ListNewMembersUseCase:
         company_person_repo: CompanyPersonRepositoryPort,
         person_repo: IPersonRepository,
         authz_reader: "AuthzReaderPort",
+        user_repo: Any = None,  # anything with is_sign_in_allowed(user_id) -> bool
     ) -> None:
         self._access = access_repo
         self._company_persons = company_person_repo
         self._persons = person_repo
         self._authz = authz_reader
+        self._users = user_repo
 
     def execute(self, admin_user_id: UUID) -> List[NewMemberEvent]:
         admin_company_ids = [
@@ -67,12 +74,18 @@ class ListNewMembersUseCase:
             }
             linked_user_ids = [p.user_id for p in persons_by_id.values() if p.user_id is not None]
             assigned_by_user = self._authz.assigned_project_ids_for_users(company_id, linked_user_ids)
+            role_by_user = {a.user_id: a.role for a in self._access.list_for_company(company_id)}
 
             for profile in recent_profiles:
                 person = persons_by_id.get(profile.person_id)
                 if person is None or person.user_id is None:
                     continue
                 if assigned_by_user.get(person.user_id):
+                    continue
+                # Admins need no assignment; a departed member has none to get.
+                if role_by_user.get(person.user_id) in (None, CompanyRole.ADMIN.value):
+                    continue
+                if self._users is not None and not self._users.is_sign_in_allowed(person.user_id):
                     continue
                 events.append(
                     NewMemberEvent(

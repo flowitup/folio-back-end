@@ -13,6 +13,7 @@ from app.application.invitations.ports import (
 )
 from app.domain.companies.roles import CompanyRole
 from app.domain.entities.invitation import InvitationStatus
+from app.domain.entities.project import project_display_label
 from app.domain.exceptions.invitation_exceptions import (
     InvalidInvitationTokenError,
     InvitationExpiredError,
@@ -70,7 +71,8 @@ class VerifyInvitationUseCase:
 
         # Load related entities for the response DTO
         project = self._project_repo.find_by_id(inv.project_id)
-        project_name = project.name if project else str(inv.project_id)
+        # Named the way the app will show it once joined: by its address.
+        project_name = project_display_label(project) if project else str(inv.project_id)
 
         inviter = self._user_repo.find_by_id(inv.invited_by)
         inviter_name = inviter.display_or_email if inviter else str(inv.invited_by)

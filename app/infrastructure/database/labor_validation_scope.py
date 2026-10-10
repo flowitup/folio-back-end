@@ -7,7 +7,7 @@ must agree with `app.domain.authz.resolver` on `project:manage_labor`:
     company admin of the project's company
     OR company manager assigned to the project
     OR an explicit D8 grant of `project:manage_labor` (company-wide, or on this
-       project)
+       project) held by someone who still has a role in that company
     AND no D8 deny of the same permission in scope
 
 Platform ops is handled by the callers (the bell shows ops everything; push
@@ -30,14 +30,15 @@ from app.infrastructure.database.uuid_matching import is_sqlite, uuid_eq
 MANAGE_LABOR = "project:manage_labor"
 
 
-def _access_exists(sqlite: bool, user_col, company_col, role: str):
-    return exists(
-        select(1).where(
-            uuid_eq(sqlite, UserCompanyAccessModel.user_id, user_col),
-            uuid_eq(sqlite, UserCompanyAccessModel.company_id, company_col),
-            UserCompanyAccessModel.role == role,
-        )
-    )
+def _access_exists(sqlite: bool, user_col, company_col, role: "str | None" = None):
+    """The user holds a role in the company (`role` given: exactly that role)."""
+    conditions = [
+        uuid_eq(sqlite, UserCompanyAccessModel.user_id, user_col),
+        uuid_eq(sqlite, UserCompanyAccessModel.company_id, company_col),
+    ]
+    if role is not None:
+        conditions.append(UserCompanyAccessModel.role == role)
+    return exists(select(1).where(*conditions))
 
 
 def _assignment_exists(sqlite: bool, user_col, project_col):
@@ -79,7 +80,12 @@ def may_validate_clause(session: Session, user_col, project_col, company_col):
             _access_exists(sqlite, user_col, company_col, "manager"),
             _assignment_exists(sqlite, user_col, project_col),
         ),
-        _grant_exists(sqlite, user_col, company_col, project_col, "grant"),
+        # A grant only counts while its holder still has a role in the company,
+        # as in the resolver: a member who left or was removed keeps nothing.
+        and_(
+            _access_exists(sqlite, user_col, company_col),
+            _grant_exists(sqlite, user_col, company_col, project_col, "grant"),
+        ),
     )
     return and_(allowed, not_(_grant_exists(sqlite, user_col, company_col, project_col, "deny")))
 

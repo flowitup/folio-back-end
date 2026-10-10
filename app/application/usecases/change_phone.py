@@ -9,15 +9,18 @@ throttle, hourly cap and attempt limit (``_issue_code`` / ``_consume_code``). A 
 by another account is refused without saying whose it is. A confirmed change signs the account out
 of every other device: tokens issued before it are refused from then on
 (``end_sessions_issued_before``), and the route hands the session that made the change fresh ones.
+The number moves everywhere it names the account: the synthetic ``phone-<number>@`` address of a
+phone sign-up, and the person linked to the account in company directories.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Optional
 from uuid import UUID
 
+from app.application.persons.ports import IPersonRepository
 from app.application.ports.login_otp_repository import LoginOtpRepositoryPort
 from app.application.ports.sms_sender import SmsSenderPort
 from app.application.ports.user_repository import UserRepositoryPort
@@ -27,6 +30,8 @@ from app.application.usecases.otp_login import (
     _issue_code,
     _reviewer_code_for,
     _utcnow,
+    claim_placeholder_email,
+    is_placeholder_email,
 )
 from app.domain.entities.login_otp import OtpPurpose
 from app.domain.entities.user import User
@@ -115,11 +120,17 @@ class ConfirmPhoneChangeUseCase:
         *,
         max_attempts: int = 5,
         clock: Callable[[], datetime] = _utcnow,
+        person_repo: Optional[IPersonRepository] = None,
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
         self._max_attempts = max_attempts
         self._clock = clock
+        self._persons = person_repo
+
+    def set_person_repo(self, person_repo: IPersonRepository) -> None:
+        """Inject the Person repository; wired after it exists."""
+        self._persons = person_repo
 
     def execute(self, user_id: UUID, raw_phone: str, code: str) -> User:
         user, phone = _check_new_phone(self._users, user_id, raw_phone)
@@ -135,7 +146,16 @@ class ConfirmPhoneChangeUseCase:
             # Another account's pending change to the same number: not this caller's code.
             raise OtpInvalidError("Invalid or expired code")
         user.phone = phone
+        if is_placeholder_email(user.email):
+            # The address names the old number: left as is, it blocked that number's next sign-up.
+            user.email = claim_placeholder_email(self._users, phone, user.id)
         self._users.save(user)
+        # The account's person in company directories carries the number too (profiles, workers):
+        # otherwise it kept the old one there, and that number still counted as taken.
+        if self._persons is not None:
+            person = self._persons.find_by_user_id(user.id)
+            if person is not None:
+                self._persons.change_phone(person.id, phone, commit=False)
         # Whoever else holds a session on this account (a lost or shared phone, the old number's
         # new owner) is signed out; the caller gets fresh tokens from the route.
         self._users.end_sessions_issued_before(user.id, self._clock())

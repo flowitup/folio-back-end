@@ -77,6 +77,8 @@ class CreateWarehouseUseCase:
     def execute(self, *, requester_id: UUID, company_id: UUID, name: str, address: str | None = None) -> Warehouse:
         _require_member(self._membership, requester_id, company_id)
         _require_manage(self._checker, requester_id, company_id)
+        # Serialise with concurrent creates/renames, or both would find the name free.
+        self._warehouses.lock_company(company_id)
         _require_free_name(self._warehouses, company_id, name)
         persisted = self._warehouses.add(Warehouse.create(company_id=company_id, name=name, address=address))
         self._db.commit()
@@ -108,6 +110,7 @@ class UpdateWarehouseUseCase:
         if updated is warehouse:
             return warehouse
         if updated.name != warehouse.name:
+            self._warehouses.lock_company(warehouse.company_id)
             _require_free_name(self._warehouses, warehouse.company_id, updated.name, except_id=warehouse.id)
         persisted = self._warehouses.save(updated)
         self._db.commit()

@@ -16,8 +16,10 @@ from app.domain.entities.login_otp import LoginOtp
 from app.domain.entities.user import User
 from app.domain.exceptions.auth_exceptions import OtpInvalidError, PhoneAlreadyRegisteredError
 from app.domain.exceptions.invitation_exceptions import (
+    InvitationAccountExistsError,
     InvitationAlreadyAcceptedError,
     InvitationExpiredError,
+    InvitationWrongAccountError,
     InvalidInvitationTokenError,
 )
 from app.domain.value_objects.invite_token import generate_token
@@ -89,15 +91,16 @@ class _FakeSession:
         self.commit_calls += 1
 
 
-def _make_otp_repo(phone: str = PHONE, code: str = CODE, *, attempts: int = 0) -> MagicMock:
+def _make_otp_repo(phone: str = PHONE, code: str = CODE, *, attempts: int = 0, user_id=None) -> MagicMock:
     """A LoginOtpRepositoryPort mock whose latest_for_phone(phone) returns a valid,
     unconsumed sign-up code matching `code` — the shape _consume_code() (otp_login.py)
     expects. user_id=None: a sign-up code proves a phone for a NOT-YET-existing
-    account, exactly like AcceptInvitationUseCase's own acceptor.
+    account, exactly like AcceptInvitationUseCase's own acceptor. Pass `user_id` for
+    a sign-in code issued to that account.
     """
     otp = LoginOtp(
         id=uuid4(),
-        user_id=None,
+        user_id=user_id,
         phone=phone,
         code_hash=_hash_code(phone, code),
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
@@ -240,6 +243,9 @@ class TestAcceptNewUser:
 
 
 class TestExistingUserRace:
+    """The invited address already has an account (e.g. a second invitation sent before the
+    first was accepted): only a sign-in code issued to THAT account accepts it."""
+
     def test_reuses_existing_user_without_creating_a_new_one(self):
         inv, raw = _make_pending_inv()
         existing_user = _make_user(inv.email)
@@ -251,7 +257,12 @@ class TestExistingUserRace:
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
 
-        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            otp_repo=_make_otp_repo(user_id=existing_user.id),
+        )
         result = uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
 
         # Must NOT call user_repo.save (no user creation) — the existing account's
@@ -269,7 +280,12 @@ class TestExistingUserRace:
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
 
-        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            otp_repo=_make_otp_repo(user_id=existing_user.id),
+        )
         uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
 
         membership_repo.add.assert_called_once()
@@ -284,12 +300,124 @@ class TestExistingUserRace:
         membership_repo = MagicMock()
         membership_repo.exists.return_value = False
 
-        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            otp_repo=_make_otp_repo(user_id=existing_user.id),
+        )
         uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
 
         inv_repo.save.assert_called_once()
         saved = inv_repo.save.call_args[0][0]
         assert saved.status == InvitationStatus.ACCEPTED
+
+    def test_a_code_for_another_phone_never_signs_the_existing_account_in(self):
+        """projects-members-02: a sign-up code proving a new phone must not mint tokens for the account."""
+        inv, raw = _make_pending_inv()
+        existing_user = _make_user(inv.email)
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = existing_user
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        issuer = MagicMock()
+
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            token_issuer=issuer,
+            otp_repo=_make_otp_repo(user_id=None),
+        )
+        with pytest.raises(InvitationAccountExistsError):
+            uc.execute(raw_token=raw, name="Someone Else", phone=PHONE, code=CODE)
+
+        issuer.create_access_token.assert_not_called()
+        issuer.create_refresh_token.assert_not_called()
+        membership_repo.add.assert_not_called()
+        inv_repo.save.assert_not_called()
+
+    def test_another_accounts_sign_in_code_is_refused(self):
+        inv, raw = _make_pending_inv()
+        existing_user = _make_user(inv.email)
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = existing_user
+        issuer = MagicMock()
+
+        uc = _make_uc(
+            inv_repo=inv_repo, user_repo=user_repo, token_issuer=issuer, otp_repo=_make_otp_repo(user_id=uuid4())
+        )
+        with pytest.raises(InvitationAccountExistsError):
+            uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
+        issuer.create_access_token.assert_not_called()
+
+    def test_a_sign_in_code_cannot_create_a_new_account(self):
+        inv, raw = _make_pending_inv()
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = None
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, otp_repo=_make_otp_repo(user_id=uuid4()))
+        with pytest.raises(OtpInvalidError):
+            uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
+        user_repo.save.assert_not_called()
+
+
+class TestAcceptAsSignedInUser:
+    """projects-members-03: the account an invitation was sent to accepts it from its session."""
+
+    def test_the_invited_account_joins_without_a_code(self):
+        inv, raw = _make_pending_inv()
+        me = _make_user("Invitee@Example.com")
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = me
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+        issuer = MagicMock()
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo, token_issuer=issuer)
+        accepted = uc.accept_as(raw_token=raw, user_id=me.id)
+
+        assert accepted.status == InvitationStatus.ACCEPTED
+        assert accepted.project_id == inv.project_id
+        membership_repo.add.assert_called_once()
+        assert membership_repo.add.call_args[0][0].user_id == me.id
+        inv_repo.save.assert_called_once()
+        # The session already proves the account: no new tokens.
+        issuer.create_access_token.assert_not_called()
+
+    def test_another_account_is_refused(self):
+        inv, raw = _make_pending_inv()
+        someone = _make_user("someone.else@example.com")
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = someone
+        membership_repo = MagicMock()
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
+        with pytest.raises(InvitationWrongAccountError):
+            uc.accept_as(raw_token=raw, user_id=someone.id)
+        membership_repo.add.assert_not_called()
+        inv_repo.save.assert_not_called()
+
+    def test_an_expired_invitation_is_refused(self):
+        inv, raw = _make_expired_inv()
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = _make_user(inv.email)
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo)
+        with pytest.raises(InvitationExpiredError):
+            uc.accept_as(raw_token=raw, user_id=uuid4())
 
 
 # ---------------------------------------------------------------------------

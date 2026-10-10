@@ -102,7 +102,7 @@ def _make_company(app, admin_id, *, name: str):
         return company.id
 
 
-def _attach_unassigned_member(app, user_id, company_id, *, attached_days_ago: int = 1):
+def _attach_unassigned_member(app, user_id, company_id, *, attached_days_ago: int = 1, role: str = "member"):
     """A member attached recently with a linked Person profile, and NO project assignment."""
     from app import db
 
@@ -110,7 +110,7 @@ def _attach_unassigned_member(app, user_id, company_id, *, attached_days_ago: in
     with app.app_context():
         db.session.add(
             UserCompanyAccessModel(
-                user_id=user_id, company_id=company_id, role="member", is_primary=True, attached_at=attached_at
+                user_id=user_id, company_id=company_id, role=role, is_primary=True, attached_at=attached_at
             )
         )
         person = PersonModel(
@@ -201,3 +201,44 @@ class TestCompanyEvents:
         body = resp.get_json()
         assert body["company_events"] == []
         assert body["count"] == len(body["items"]) + len(body["attendance_pending"])
+
+    def test_admins_the_caller_and_deactivated_accounts_do_not_appear(self, notif_client, notif_app):
+        """Only someone an admin can actually assign is suggested."""
+        admin_id = _make_user(notif_app, "ce_admin5@test.com")
+        coadmin_id = _make_user(notif_app, "ce_coadmin5@test.com")
+        inactive_id = _make_user(notif_app, "ce_inactive5@test.com")
+        member_id = _make_user(notif_app, "ce_member5@test.com")
+        company_id = _make_company(notif_app, admin_id, name="CE Co 5")
+        # The creator's own profile is as recent as the company.
+        from app import db
+
+        now = datetime.now(timezone.utc)
+        with notif_app.app_context():
+            person = PersonModel(
+                id=uuid4(),
+                name="Owner",
+                normalized_name="owner",
+                created_by_user_id=admin_id,
+                created_at=now,
+                user_id=admin_id,
+            )
+            db.session.add(person)
+            db.session.flush()
+            db.session.add(
+                CompanyPersonModel(
+                    id=uuid4(), company_id=company_id, person_id=person.id, is_active=True, created_at=now
+                )
+            )
+            db.session.commit()
+        _attach_unassigned_member(notif_app, coadmin_id, company_id, role="admin")
+        _attach_unassigned_member(notif_app, inactive_id, company_id)
+        _attach_unassigned_member(notif_app, member_id, company_id)
+        with notif_app.app_context():
+            db.session.get(UserModel, inactive_id).is_active = False
+            db.session.commit()
+        token = _login(notif_client, "ce_admin5@test.com")
+
+        resp = notif_client.get("/api/v1/notifications", headers=_auth(token))
+        assert resp.status_code == 200
+        listed = {e["user_id"] for e in resp.get_json()["company_events"]}
+        assert listed == {str(member_id)}

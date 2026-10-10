@@ -113,6 +113,7 @@ class NoteDismissalOrm(Base):
     """SQLAlchemy mapping for the notes_dismissed table (composite PK)."""
 
     __tablename__ = "notes_dismissed"
+    __table_args__ = (Index("ix_notes_dismissed_user_id", "user_id"),)
 
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),

@@ -20,6 +20,7 @@ from app.application.chiffrage.validation import (
     clean_name,
     clean_optional_text,
     owned_store,
+    store_name_snapshot,
 )
 from app.application.chiffrage.exceptions import (
     InvalidChiffrageInputError,
@@ -93,7 +94,9 @@ class UpdateStoreUseCase:
         store = owned_store(self._repo, store_id, project_id)
         U = ChiffrageStore._UNSET
         if name is not U:
-            cleaned_name = clean_name(str(name), field="Store name", max_length=MAX_STORE_NAME)
+            cleaned_name = clean_name(
+                None if name is None else str(name), field="Store name", max_length=MAX_STORE_NAME
+            )
             _reject_duplicate_name(self._repo, project_id, cleaned_name, store_id)
         updated = store.with_updates(
             name=(U if name is U else cleaned_name),
@@ -111,8 +114,8 @@ class DeleteStoreUseCase:
     """Remove a shop from the project.
 
     Quotes recorded at this shop keep their price and their ``supplier_name``
-    snapshot — the FK is ON DELETE SET NULL. Deleting a shop must never delete
-    the costing work done against it.
+    snapshot — the FK is ON DELETE SET NULL; one without a name takes the
+    shop's. Deleting a shop must never delete the costing work done against it.
     """
 
     def __init__(self, repo: ChiffrageRepositoryPort, db_session: TransactionalSessionPort) -> None:
@@ -120,7 +123,7 @@ class DeleteStoreUseCase:
         self._db = db_session
 
     def execute(self, *, project_id: UUID, store_id: UUID) -> None:
-        owned_store(self._repo, store_id, project_id)
-        self._repo.clear_store_from_quotes(store_id)
+        store = owned_store(self._repo, store_id, project_id)
+        self._repo.clear_store_from_quotes(store_id, store_name_snapshot(store))
         self._repo.delete_store(store_id)
         self._db.commit()

@@ -195,3 +195,20 @@ def test_special_chars_xml_escaped():
     content = build_pdf(ctx, bundle)
     assert content[:5] == b"%PDF-", "Expected valid PDF magic bytes after XSS recipient"
     assert len(content) > 1000
+
+
+def test_vat_split_rounds_each_line_like_the_total():
+    """Two 0.125 lines at 0 % are printed as 0.13 + 0.13 = 0.26: HT 0.26, no VAT."""
+    from app.domain.invoice.export.pdf_builder import _vat_split
+
+    inv = _make_invoice(invoice_type=InvoiceType.MATERIALS_SERVICES, amount=Decimal("0.125"))
+    inv.items.append(inv.items[0])
+    assert inv.total_amount == Decimal("0.26")
+    assert _vat_split(inv) == (Decimal("0.26"), Decimal("0.00"))
+
+    vat_line = InvoiceItem(
+        description="Plaster", quantity=Decimal("1"), unit_price=Decimal("5"), vat_rate=Decimal("5.5")
+    )
+    with_vat = _make_invoice(invoice_type=InvoiceType.MATERIALS_SERVICES)
+    with_vat.items[:] = [vat_line]
+    assert _vat_split(with_vat) == (Decimal("5.00"), Decimal("0.28"))

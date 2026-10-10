@@ -16,7 +16,8 @@ Authorization note (D9):
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, Optional
 from uuid import UUID
 
 from flask import Response, jsonify, request
@@ -48,6 +49,7 @@ from app.application.project_analyses.exceptions import (
     NotProjectMemberError,
     PermissionDeniedError,
 )
+from app.application.usecases.otp_login import is_placeholder_email
 from app.domain.entities.project_analysis import _UNSET, _Unset
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -55,17 +57,40 @@ from wiring import get_container
 logger = logging.getLogger(__name__)
 
 
-def _serialize(dto: AnalysisOutput) -> dict[str, Any]:
+def _uploader_names(dtos: Iterable[AnalysisOutput]) -> dict[UUID, Optional[str]]:
+    """Name to show for each analysis' uploader, read from the accounts.
+
+    The project's member list cannot name an author who was never assigned
+    (a company admin, platform ops) or has left the project, so the API does.
+    Name, else real e-mail, else phone; None for an erased account (a
+    phone-only account's synthetic address is an identifier, never shown).
+    """
+    ids = {dto.uploader_user_id for dto in dtos}
+    repo = get_container().project_analysis_repository
+    if not ids or repo is None:
+        return {}
+    return {
+        user_id: (
+            None
+            if deleted_at is not None
+            else display_name or (None if is_placeholder_email(email) else email) or phone or None
+        )
+        for user_id, display_name, email, phone, deleted_at in repo.find_uploaders(ids)
+    }
+
+
+def _serialize(dto: AnalysisOutput, uploader_names: dict[UUID, Optional[str]]) -> dict[str, Any]:
     """Serialize an AnalysisOutput to the API response shape.
 
     ``content_url`` is a **relative** path (no scheme/host) — clients must
     prefix it with the BE base URL, same convention as project_documents'
-    ``download_url``.
+    ``download_url``. ``uploader_name`` comes from ``_uploader_names``.
     """
     return {
         "id": str(dto.id),
         "project_id": str(dto.project_id),
         "uploader_id": str(dto.uploader_user_id),
+        "uploader_name": uploader_names.get(dto.uploader_user_id),
         "title": dto.title,
         "summary": dto.summary,
         "source_url": dto.source_url,
@@ -126,10 +151,11 @@ def list_analyses(project_id: UUID) -> Any:
         logger.exception("list_analyses unexpected error project_id=%s", project_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
+    uploader_names = _uploader_names(page.items)
     return (
         jsonify(
             {
-                "items": [_serialize(a) for a in page.items],
+                "items": [_serialize(a, uploader_names) for a in page.items],
                 "total": page.total,
                 "page": page.page,
                 "per_page": page.per_page,
@@ -239,7 +265,7 @@ def create_analysis(project_id: UUID) -> Any:
         logger.exception("create_analysis unexpected error project_id=%s", project_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
-    return jsonify(_serialize(out)), 201
+    return jsonify(_serialize(out, _uploader_names([out]))), 201
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +296,7 @@ def get_analysis(project_id: UUID, analysis_id: UUID) -> Any:
         logger.exception("get_analysis unexpected error analysis_id=%s", analysis_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
-    return jsonify(_serialize(out)), 200
+    return jsonify(_serialize(out, _uploader_names([out]))), 200
 
 
 # ---------------------------------------------------------------------------
@@ -296,11 +322,13 @@ def get_analysis_content(project_id: UUID, analysis_id: UUID) -> Any:
     ``allow-same-origin`` (see the FE analysis-viewer component). That
     combination gives the report document an opaque origin: inline scripts
     run, but they cannot read Folio's cookies, localStorage, or parent DOM.
-    The CSP here is defense-in-depth for the (should-never-happen) case of a
-    direct navigation; the FE sandbox attribute is the actual security
-    control. Do not relax either half without re-reviewing the other — they
-    are one security decision split across two phases (BE phase 04 / FE
-    phase 06).
+    The CSP here is defense-in-depth for the case of a direct navigation (a
+    shared link, "open frame in new tab"): its ``sandbox allow-scripts``
+    directive gives the report the same opaque origin as the viewer iframe, so
+    it never runs in the API origin. Never add ``allow-same-origin``. Do not
+    relax either half without re-reviewing the other — they are one security
+    decision split across two phases (BE phase 04 / FE phase 06), mirrored by
+    the FE proxy's REPORT_CSP (src/app/analysis-report/[id]/[analysisId]/route.ts).
     """
     actor_id = UUID(get_jwt_identity())
     container = get_container()
@@ -328,7 +356,8 @@ def get_analysis_content(project_id: UUID, analysis_id: UUID) -> Any:
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; img-src 'self' data: https:; "
         "style-src 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; frame-ancestors 'self'"
+        "font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; frame-ancestors 'self'; "
+        "sandbox allow-scripts"
     )
     return response
 
@@ -409,7 +438,7 @@ def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
         logger.exception("update_analysis unexpected error analysis_id=%s", analysis_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
 
-    return jsonify(_serialize(out)), 200
+    return jsonify(_serialize(out, _uploader_names([out]))), 200
 
 
 # ---------------------------------------------------------------------------

@@ -107,6 +107,12 @@ CUSTOMISABLE_PERMISSIONS: frozenset[str] = frozenset(
     }
 )
 
+# Customisable permissions that are only ever checked company-wide: the library and
+# the inventory belong to the company, not to a project, and `permissions_in_company`
+# reads only company-wide D8 rows. A project-scoped grant/deny of one would be saved
+# but never take effect, so the grants API refuses a project scope for them.
+COMPANY_WIDE_ONLY_PERMISSIONS: frozenset[str] = frozenset({"bibliotheque:manage", "inventory:manage"})
+
 # project:read can never be denied — every assigned/company-scoped user must
 # always retain at least read access.
 NON_DENIABLE: frozenset[str] = frozenset({"project:read"})

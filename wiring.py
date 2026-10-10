@@ -826,7 +826,19 @@ def configure_container(
         container.list_projects_usecase = ListProjectsUseCase(project_repository)
         container.get_project_usecase = GetProjectUseCase(project_repository)
         container.update_project_usecase = UpdateProjectUseCase(project_repository)
-        container.delete_project_usecase = DeleteProjectUseCase(project_repository)
+        # With storage, deleting a project also removes the files its cascaded rows pointed
+        # at (documents, photos, invoice attachments, analyses, chiffrage images).
+        _project_storage_keys = None
+        if attachment_storage is not None:
+            from app import db as _project_db
+            from app.infrastructure.database.repositories.sqlalchemy_project_storage_key_reader import (
+                SqlAlchemyProjectStorageKeyReader,
+            )
+
+            _project_storage_keys = SqlAlchemyProjectStorageKeyReader(_project_db.session)
+        container.delete_project_usecase = DeleteProjectUseCase(
+            project_repository, storage_keys=_project_storage_keys, storage=attachment_storage
+        )
 
     # Wire up labor use cases if repositories are available
     if worker_repository:
@@ -1160,6 +1172,8 @@ def configure_container(
         # Task create/update check the assignee can read the task's project.
         container.create_task_usecase,
         container.update_task_usecase,
+        # Bulk-add checks the target belongs to each project's company.
+        container.bulk_add_existing_user_usecase,
     ):
         if _reader_usecase is not None and hasattr(_reader_usecase, "set_authz_reader"):
             _reader_usecase.set_authz_reader(container.authz_reader)

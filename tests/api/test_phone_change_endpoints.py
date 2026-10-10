@@ -187,9 +187,54 @@ def test_bad_code_shape_is_a_validation_error(inv_client, member_token, member_i
     assert inv_client.post(CONFIRM, json={"phone": NEW, "code": "12"}, headers=_auth(member_token)).status_code == 400
 
 
+@pytest.mark.parametrize("body", ["x", 5, [1, 2]])
+def test_a_json_body_that_is_not_an_object_is_a_validation_error(inv_client, member_token, member_id, body):
+    for url in (REQUEST, CONFIRM):
+        resp = inv_client.post(url, json=body, headers=_auth(member_token))
+        assert resp.status_code == 400, (url, resp.get_data(as_text=True))
+        assert resp.get_json()["error"] == "ValidationError"
+
+
 def test_resend_is_throttled(inv_client, member_token, member_id):
     assert inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token)).status_code == 202
-    assert inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token)).status_code == 429
+    resp = inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token))
+    assert resp.status_code == 429 and resp.get_json()["error"] == "TooManyRequests"
+    assert 0 < int(resp.headers["Retry-After"]) <= 60
+
+
+def test_hourly_cap_says_how_long_to_wait(inv_client, invitation_app, member_token, member_id):
+    """Same answer as the sign-in code's hourly cap, not the one-minute resend text."""
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+
+    from app import db
+    from app.infrastructure.database.models import LoginOtpOrm
+
+    now = datetime.now(timezone.utc)
+    with invitation_app.app_context():
+        # Five codes this hour, the latest long past the one-minute resend gap.
+        for minutes in (50, 40, 30, 20, 10):
+            sent = now - timedelta(minutes=minutes)
+            db.session.add(
+                LoginOtpOrm(
+                    id=uuid4(),
+                    user_id=None,
+                    phone=NEW,
+                    code_hash="x",
+                    purpose="phone_change",
+                    created_at=sent,
+                    expires_at=sent + timedelta(minutes=5),
+                    attempts=0,
+                )
+            )
+        db.session.commit()
+
+    resp = inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token))
+    assert resp.status_code == 429
+    body = resp.get_json()
+    assert body["error"] == "OtpHourlyLimit"
+    assert body["message"] == "Too many codes were requested for this number. Try again in 10 minutes."
+    assert 9 * 60 < int(resp.headers["Retry-After"]) <= 10 * 60
 
 
 def test_wrong_code_locks_after_five_attempts(inv_client, invitation_app, member_token, member_id):
@@ -247,6 +292,8 @@ def test_confirmed_change_signs_every_other_device_out(inv_client, invitation_ap
     assert inv_client.get("/api/v1/auth/me", headers=_auth(ok.get_json()["access_token"])).status_code == 200
     cookies = " ".join(ok.headers.getlist("Set-Cookie"))
     assert "access_token_cookie=" in cookies or "access_token=" in cookies
+    # Not session cookies: closing the browser must not end the session.
+    assert all("Max-Age=" in c for c in ok.headers.getlist("Set-Cookie"))
     # A later sign-in is a new session and works as usual.
     from tests.auth_login_helper import mint_access_token
 

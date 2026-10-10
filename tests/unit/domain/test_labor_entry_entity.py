@@ -139,6 +139,33 @@ class TestEffectiveCost:
         assert entry.effective_cost(DAILY_RATE) == Decimal("75.00")
 
 
+class TestApplyChange:
+    """Approving a worker's change request on a day a manager priced by hand."""
+
+    def _propose(self, entry: LaborEntry, shift_type, supplement_hours=0, note=None) -> LaborEntry:
+        entry.propose_change(shift_type, supplement_hours, note, by_user_id=uuid4(), at=datetime.now(timezone.utc))
+        entry.apply_change(by_user_id=uuid4(), at=datetime.now(timezone.utc))
+        return entry
+
+    def test_new_shift_drops_the_override(self):
+        entry = self._propose(_make_entry(shift_type="full", amount_override=Decimal("130.00")), "half")
+        assert entry.shift_type == "half"
+        assert entry.amount_override is None
+        assert entry.effective_cost(DAILY_RATE) == Decimal("50.00")
+
+    def test_supplement_only_proposal_applies_and_costs_nothing(self):
+        entry = self._propose(_make_entry(shift_type="full", amount_override=Decimal("130.00")), None, 4, "hours")
+        assert entry.shift_type is None
+        assert entry.supplement_hours == 4
+        assert entry.amount_override is None
+        assert entry.effective_cost(DAILY_RATE) == Decimal("0")
+
+    def test_same_shift_keeps_the_override(self):
+        entry = self._propose(_make_entry(shift_type="full", amount_override=Decimal("130.00")), "full", 2)
+        assert entry.supplement_hours == 2
+        assert entry.effective_cost(DAILY_RATE) == Decimal("130.00")
+
+
 # ---------------------------------------------------------------------------
 # __eq__ and __hash__ — identity semantics
 # ---------------------------------------------------------------------------

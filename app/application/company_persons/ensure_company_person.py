@@ -110,7 +110,7 @@ def ensure_person_profile(
         if not existing.is_active:
             company_persons.save(dataclasses.replace(existing, is_active=True, pending_expires_at=None))
         return
-    company_persons.save(
+    company_persons.add_if_absent(
         CompanyPerson(
             id=uuid4(),
             company_id=company_id,

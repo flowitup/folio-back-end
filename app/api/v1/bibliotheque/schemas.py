@@ -13,6 +13,18 @@ from app.api.v1.numeric_bounds import MAX_LIBRARY_AMOUNT
 from app.domain.value_objects.library_category import is_valid_category_slug
 
 
+def _strip(v: object) -> object:
+    """Trim names before min_length runs, so a name of spaces only is a 422, not a blank product."""
+    return v.strip() if isinstance(v, str) else v
+
+
+def _strip_required(v: object) -> object:
+    """Same as _strip for an optional PATCH name: omitted keeps it, but an explicit null is refused."""
+    if v is None:
+        raise ValueError("name cannot be null")
+    return _strip(v)
+
+
 class ImportRecordSchema(BaseModel):
     """One purchase line plus optional product enrichment fields."""
 
@@ -32,6 +44,8 @@ class ImportRecordSchema(BaseModel):
     product_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None, max_length=1000)
 
+    _strip_name = field_validator("product_name", mode="before")(_strip)
+
 
 class ImportRequestSchema(BaseModel):
     """Request body for POST /api/v1/bibliotheque/import."""
@@ -44,6 +58,8 @@ class ImportRequestSchema(BaseModel):
     supplier_website_url: Optional[str] = Field(default=None, max_length=500)
     supplier_product_url_template: Optional[str] = Field(default=None, max_length=500)
     records: List[ImportRecordSchema] = Field(min_length=1, max_length=1000)
+
+    _strip_name = field_validator("supplier_name", mode="before")(_strip)
 
     @field_validator("records")
     @classmethod
@@ -73,6 +89,8 @@ class UpdateProductSchema(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     size: Optional[str] = Field(default=None, max_length=100)
     product_url: Optional[str] = Field(default=None, max_length=500)
+
+    _strip_name = field_validator("name", mode="before")(_strip_required)
 
     @field_validator("product_url", mode="before")
     @classmethod
@@ -115,6 +133,8 @@ class CreateProductSchema(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
     size: Optional[str] = Field(default=None, max_length=100)
     product_url: Optional[str] = Field(default=None, max_length=500)
+
+    _strip_names = field_validator("name", "supplier_name", mode="before")(_strip)
 
     @field_validator("product_url", "supplier_website_url", mode="before")
     @classmethod

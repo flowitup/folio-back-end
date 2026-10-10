@@ -123,6 +123,35 @@ class TestRenameAttachmentValidation:
             uc.execute(att.id, "   ")
         assert repo.update_calls == []
 
+    @pytest.mark.parametrize("name", ["a\r\nb.pdf", "a\nb.pdf", "a\rb.pdf", "a\tb.pdf", "a\x00b.pdf", "a\x7fb.pdf"])
+    def test_rejects_control_characters(self, name):
+        # The name goes into the download's Content-Disposition header: CR/LF made it 500
+        att = make_attachment("receipt.pdf")
+        repo = FakeAttachmentRepo(att)
+        uc = RenameAttachmentUseCase(repo)
+
+        with pytest.raises(ValueError, match="control characters"):
+            uc.execute(att.id, name)
+        assert repo.update_calls == []
+
+    def test_rejects_name_longer_than_the_column(self):
+        # The column is varchar(255): a longer name failed the UPDATE with a 500
+        att = make_attachment("receipt.pdf")
+        repo = FakeAttachmentRepo(att)
+        uc = RenameAttachmentUseCase(repo)
+
+        with pytest.raises(ValueError, match="too long"):
+            uc.execute(att.id, "a" * 252 + ".pdf")
+        assert repo.update_calls == []
+
+    def test_accepts_name_of_exactly_255_characters(self):
+        att = make_attachment("receipt.pdf")
+        repo = FakeAttachmentRepo(att)
+        uc = RenameAttachmentUseCase(repo)
+
+        name = "a" * 251 + ".pdf"
+        assert uc.execute(att.id, name).filename == name
+
 
 class TestRenameAttachmentNotFound:
     def test_raises_when_missing(self):

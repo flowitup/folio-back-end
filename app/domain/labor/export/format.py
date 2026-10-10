@@ -1,13 +1,18 @@
 """Pure formatting helpers for labor export output.
 
 format_eur_fr   — Decimal → fr-FR currency string matching FE Intl.NumberFormat
+format_unit_price_eur_fr — the same, keeping a unit price's own decimals (15,015 €)
 format_decimal_fr — quantity / rate → fr-FR number with a decimal comma
+format_generated_at — the export's UTC timestamp → "dd/mm/YYYY HH:MM" on the Paris clock
 slugify_project_name — project name → kebab-case filename-safe slug
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
+
+from app.domain.time import business_now
 
 
 def format_eur_fr(value: Decimal | None) -> str:
@@ -30,6 +35,25 @@ def format_eur_fr(value: Decimal | None) -> str:
     return f"{s} €"  # non-breaking space before €
 
 
+def format_unit_price_eur_fr(value: Decimal | None) -> str:
+    """Render a unit price like format_eur_fr, but with every decimal it carries (at least 2).
+
+    A line's amount is quantity × unit price. Rounded to the cent, 15.015 would print as
+    15,02 € and 3,333 × 15,02 € would not give the 50,04 € printed next to it.
+    Examples:
+        15.015    → "15,015 €"
+        1234.565  → "1 234,565 €"
+        200       → "200,00 €"
+    """
+    if value is None:
+        return "—"
+    d = Decimal(str(value)).normalize()
+    if d.as_tuple().exponent >= -2:
+        return format_eur_fr(d)
+    s = f"{d:,f}".replace(",", "X").replace(".", ",").replace("X", "\u00a0")  # same separators
+    return f"{s}\u00a0€"
+
+
 def format_decimal_fr(value: Decimal | float | int | None) -> str:
     """Render a quantity or rate the fr-FR way, without trailing zeros.
 
@@ -48,6 +72,14 @@ def format_decimal_fr(value: Decimal | float | int | None) -> str:
     if int_part.startswith("-") and not grouped.startswith("-"):
         grouped = "-" + grouped
     return f"{grouped},{frac}" if frac else grouped
+
+
+def format_generated_at(at: datetime, with_time: bool = True) -> str:
+    """When an export was made, as its reader's wall clock: "09/10/2026 20:16" (Europe/Paris).
+
+    The timestamp is recorded in UTC; printed as is it read two hours early with no zone.
+    """
+    return business_now(at).strftime("%d/%m/%Y %H:%M" if with_time else "%d/%m/%Y")
 
 
 def slugify_project_name(name: str, fallback_id: str) -> str:

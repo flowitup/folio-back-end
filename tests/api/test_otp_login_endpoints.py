@@ -183,6 +183,54 @@ class TestOtpLogin:
         assert inv_client.post("/api/v1/auth/refresh", headers=_auth(body["refresh_token"])).status_code == 401
 
 
+def _cookie_max_ages(response) -> dict:
+    """Max-Age of each cookie the response sets, by name (None for a session cookie)."""
+    ages = {}
+    for header in response.headers.getlist("Set-Cookie"):
+        match = re.search(r"Max-Age=(\d+)", header)
+        ages[header.split("=", 1)[0]] = int(match.group(1)) if match else None
+    return ages
+
+
+class TestSessionCookies:
+    """Browser cookies used to be session cookies: closing the browser signed the user out although the
+    refresh token had days left. Each cookie now lives as long as the token it carries."""
+
+    WEEK = 7 * 24 * 3600
+    HALF_HOUR = 30 * 60
+
+    def _sign_in(self, inv_client, invitation_app):
+        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
+        ok = inv_client.post(
+            "/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": _code_from_sms(invitation_app)}
+        )
+        assert ok.status_code == 200, ok.get_json()
+        return ok
+
+    def test_sign_in_and_refresh_cookies_last_as_long_as_their_tokens(
+        self, inv_client, invitation_app, member_with_phone
+    ):
+        ok = self._sign_in(inv_client, invitation_app)
+        ages = _cookie_max_ages(ok)
+        assert None not in ages.values(), ages
+        assert self.WEEK - 60 <= ages["refresh_token_cookie"] <= self.WEEK
+        assert self.HALF_HOUR - 60 <= ages["access_token_cookie"] <= self.HALF_HOUR
+
+        refreshed = inv_client.post("/api/v1/auth/refresh", headers=_auth(ok.get_json()["refresh_token"]))
+        assert refreshed.status_code == 200
+        assert self.HALF_HOUR - 60 <= _cookie_max_ages(refreshed)["access_token_cookie"] <= self.HALF_HOUR
+
+    def test_a_never_expiring_refresh_token_gets_a_year_long_cookie(
+        self, inv_client, invitation_app, member_with_phone
+    ):
+        invitation_app.config["REFRESH_TOKEN_POLICY"] = "persistent"
+        try:
+            ok = self._sign_in(inv_client, invitation_app)
+        finally:
+            invitation_app.config["REFRESH_TOKEN_POLICY"] = "expiring"
+        assert _cookie_max_ages(ok)["refresh_token_cookie"] == 31_540_000
+
+
 class TestOtpTestCodeBypassProduction:
     """Endpoint-level companion to tests/unit/application/test_otp_test_code_bypass.py:
     the non-production OTP_TEST_CODE bypass must be refused through the real HTTP
