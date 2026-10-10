@@ -152,3 +152,54 @@ def test_render_writes_each_device_in_its_own_language():
     by_token = {m.token: m.title for m in sender.sent}
     # A device that never registered a language gets the dispatcher's default ("en" here).
     assert by_token == {"tok-fr": "Bonjour", "tok-old": "Hello"}
+
+
+class RecordingEvents:
+    def __init__(self, explode=False) -> None:
+        self.rows: list = []
+        self._explode = explode
+
+    def record(self, user_ids, *, category, kind, texts, data):
+        if self._explode:
+            raise RuntimeError("db down")
+        self.rows.append((sorted(user_ids, key=str), category, kind, texts))
+
+
+def test_bell_copy_is_kept_for_muted_users_but_never_for_the_actor():
+    actor, muted, other = uuid4(), uuid4(), uuid4()
+    devices = StubDevices({muted: ["tok-m"], other: ["tok-o"]})
+    sender, events = RecordingSender(), RecordingEvents()
+    d = PushDispatcher(
+        devices=devices,
+        sender=sender,
+        preferences=StubPreferences(muted={muted}),
+        locale="en",
+        run_async=False,
+        events=events,
+    )
+    texts = {"vi": ("a", "b"), "fr": ("c", "d"), "en": ("e", "f")}
+    d.dispatch(
+        category=CATEGORY,
+        recipients=[actor, muted, other],
+        data={"kind": "chat_message"},
+        exclude=actor,
+        render=lambda loc: texts[loc],
+    )
+    assert [m.token for m in sender.sent] == ["tok-o"]  # muted: no push
+    users, category, kind, stored = events.rows[0]
+    assert users == sorted([muted, other], key=str) and (category, kind) == (CATEGORY, "chat_message")
+    assert stored["fr"] == ["c", "d"] and set(stored) == {"vi", "fr", "en"}
+
+
+def test_a_failing_bell_write_never_costs_the_push():
+    user = uuid4()
+    sender = RecordingSender()
+    d = PushDispatcher(
+        devices=StubDevices({user: ["tok"]}),
+        sender=sender,
+        locale="en",
+        run_async=False,
+        events=RecordingEvents(explode=True),
+    )
+    _dispatch(d, [user])
+    assert [m.token for m in sender.sent] == ["tok"]

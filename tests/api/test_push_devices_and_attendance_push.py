@@ -323,3 +323,49 @@ def test_register_stores_the_app_language(client, owner_h, push_app):
     assert client.post("/api/v1/push/devices", json=bad, headers=owner_h).status_code == 400
     with push_app.app_context():
         assert db.session.query(PushDeviceOrm).filter_by(token=OWNER_TOKEN).one().locale == "fr"
+
+
+class _NoDueNotes:
+    """The reminders query is Postgres-only SQL; this feed test only cares about the events."""
+
+    def execute(self, **_kwargs):
+        return []
+
+
+@pytest.fixture(autouse=True)
+def _no_due_notes(push_app):
+    from wiring import get_container
+
+    with push_app.app_context():
+        container = get_container()
+        original = container.list_due_notifications_usecase
+        container.list_due_notifications_usecase = _NoDueNotes()
+        yield
+        container.list_due_notifications_usecase = original
+
+
+def test_bell_feed_keeps_the_decisions_and_reads_in_the_viewers_language(client, linked_h, owner_h):
+    feed = client.get("/api/v1/notifications?locale=fr", headers=linked_h).get_json()
+    kinds = {e["kind"] for e in feed["events"]}
+    assert {"validated", "change_refused", "rejected"} <= kinds
+    assert feed["events_unread"] == len(feed["events"]) and feed["count"] >= feed["events_unread"]
+    refused = next(e for e in feed["events"] if e["kind"] == "change_refused")
+    assert refused["title"] == "Modification refusée" and not refused["read"] and refused["data"]["entry_id"]
+    # Newest first; another account's feed is its own.
+    assert [e["created_at"] for e in feed["events"]] == sorted((e["created_at"] for e in feed["events"]), reverse=True)
+    owner_kinds = {e["kind"] for e in client.get("/api/v1/notifications", headers=owner_h).get_json()["events"]}
+    assert "validated" not in owner_kinds
+
+
+def test_marking_events_read_is_scoped_to_the_caller(client, linked_h, owner_h):
+    feed = client.get("/api/v1/notifications", headers=linked_h).get_json()
+    first = feed["events"][0]["id"]
+    # Someone else's id is silently ignored.
+    assert client.post("/api/v1/notifications/events/read", json={"ids": [first]}, headers=owner_h).status_code == 204
+    assert client.get("/api/v1/notifications", headers=linked_h).get_json()["events_unread"] == len(feed["events"])
+    assert client.post("/api/v1/notifications/events/read", json={"ids": [first]}, headers=linked_h).status_code == 204
+    after = client.get("/api/v1/notifications", headers=linked_h).get_json()
+    assert after["events_unread"] == len(feed["events"]) - 1
+    assert client.post("/api/v1/notifications/events/read", json={"ids": ["nope"]}, headers=linked_h).status_code == 400
+    assert client.post("/api/v1/notifications/events/read", headers=linked_h).status_code == 204
+    assert client.get("/api/v1/notifications", headers=linked_h).get_json()["events_unread"] == 0

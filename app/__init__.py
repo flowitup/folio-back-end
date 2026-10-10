@@ -519,6 +519,7 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.sqlalchemy_notification_preference import (
         SQLAlchemyNotificationPreferenceRepository,
     )
+    from app.infrastructure.adapters.sqlalchemy_notification_event import SQLAlchemyNotificationEventRepository
     from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository
 
     from app.application.push.chat_push_notifier import ChatPushNotifier
@@ -530,6 +531,7 @@ def _configure_di_container() -> None:
 
     _c.push_device_repository = SQLAlchemyPushDeviceRepository(db.session)
     _c.notification_preference_repository = SQLAlchemyNotificationPreferenceRepository(db.session)
+    _c.notification_event_repository = SQLAlchemyNotificationEventRepository(db.session)
     _c.push_sender = (
         ExpoPushSender(_cfg.get("EXPO_ACCESS_TOKEN", ""))
         if _cfg.get("PUSH_PROVIDER") == "expo"
@@ -544,6 +546,7 @@ def _configure_di_container() -> None:
             locale=_cfg.get("PUSH_LOCALE", "vi"),
             run_async=not _cfg.get("TESTING", False),
             preferences=_c.notification_preference_repository,
+            events=_c.notification_event_repository,
         )
     # Chat pushes are coalesced per (user, channel); the notifier is attached to the
     # already-constructed send use case because the push stack is wired later than chat.
@@ -553,6 +556,7 @@ def _configure_di_container() -> None:
         preferences=_c.notification_preference_repository,
         locale=_cfg.get("PUSH_LOCALE", "vi"),
         run_async=not _cfg.get("TESTING", False),
+        events=_c.notification_event_repository,
     )
     _c.chat_push_marker_repository = SQLAlchemyChatPushMarkerRepository(db.session)
     if _c.send_chat_message_usecase is not None:
