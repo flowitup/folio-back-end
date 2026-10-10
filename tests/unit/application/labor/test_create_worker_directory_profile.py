@@ -37,8 +37,8 @@ def test_inline_person_gets_a_profile_in_the_project_company():
             project_id=project_id, name="Nguyen Van A", daily_rate=Decimal("120"), created_by_user_id=uuid4()
         )
     )
-    company_person_repo.save.assert_called_once()
-    profile = company_person_repo.save.call_args.args[0]
+    company_person_repo.add_if_absent.assert_called_once()
+    profile = company_person_repo.add_if_absent.call_args.args[0]
     assert profile.company_id == company_id
     assert str(profile.person_id) == result.person_id
     assert profile.is_active is True
@@ -56,6 +56,7 @@ def test_existing_person_is_not_attached_to_the_company_by_the_worker_create():
         )
     )
     company_person_repo.save.assert_not_called()
+    company_person_repo.add_if_absent.assert_not_called()
 
 
 def test_person_the_caller_just_created_in_the_picker_is_listed_in_the_company():
@@ -75,8 +76,8 @@ def test_person_the_caller_just_created_in_the_picker_is_listed_in_the_company()
             created_by_user_id=caller,
         )
     )
-    company_person_repo.save.assert_called_once()
-    profile = company_person_repo.save.call_args.args[0]
+    company_person_repo.add_if_absent.assert_called_once()
+    profile = company_person_repo.add_if_absent.call_args.args[0]
     assert (profile.company_id, profile.person_id) == (company_id, person_id)
 
 

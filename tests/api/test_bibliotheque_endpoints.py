@@ -1503,6 +1503,35 @@ class TestUpdateProductEndpoint:
         assert new_receipt["updated"] == 1 and new_receipt["purchases_added"] == 1
         assert self._product(bib_client, manager_token, cid, "RI-1")["name"] == "Vis inox A2 4x40 (curated)"
 
+    def test_import_counts_each_product_once(self, bib_client, manager_token, bibliotheque_app):
+        """Several records of one product count it once: created, or updated, never both."""
+        cid = bibliotheque_app._test_company_id
+
+        def _import(ref: str, docs: list[str]) -> dict:
+            records = [
+                {
+                    "supplier_reference": ref,
+                    "product_name": "Cheville 8mm",
+                    "quantity": "1.0",
+                    "unit_price": "0.50",
+                    "purchased_at": "2024-02-01T00:00:00Z",
+                    "source_document_ref": doc,
+                    "source_document_type": "ticket",
+                    "line_index": 0,
+                }
+                for doc in docs
+            ]
+            payload = {"company_id": cid, "supplier_name": "once", "supplier_slug": "once", "records": records}
+            resp = bib_client.post("/api/v1/bibliotheque/import", json=payload, headers=_auth(manager_token))
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            return resp.get_json()
+
+        first = _import("ONCE-1", ["DOC-O-1", "DOC-O-2", "DOC-O-3"])
+        assert (first["created"], first["updated"], first["purchases_added"]) == (1, 0, 3)
+
+        second = _import("ONCE-1", ["DOC-O-4", "DOC-O-5", "DOC-O-6"])
+        assert (second["created"], second["updated"], second["purchases_added"]) == (0, 1, 3)
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/bibliotheque/products — create product

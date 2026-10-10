@@ -23,6 +23,7 @@ from uuid import uuid4
 from app.application.billing._helpers import (
     _compute_default_payment_due_date,
     _compute_default_validity_until,
+    _effective_prefix_from_company,
     _items_from_inputs,
     _snapshot_issuer_from_company,
 )
@@ -41,6 +42,7 @@ from app.application.billing.ports import (
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind
+from app.domain.billing.numbering import next_document_number
 from app.domain.billing.exceptions import (
     BillingDocumentAlreadyExistsError,
     MissingCompanyProfileError,
@@ -142,9 +144,20 @@ class ImportBillingDocumentUseCase:
 
         # 5. Bump counter if doc number parses to year+seq
         parsed = _parse_year_seq(doc_number)
-        if parsed is not None and parsed[1] <= _MAX_COUNTER_SEQ:
+        if parsed is not None:
             year, seq = parsed
-            self._counter_repo.bump_to_at_least(inp.company_id, inp.kind, year, seq)
+            if seq <= _MAX_COUNTER_SEQ:
+                self._counter_repo.bump_to_at_least(inp.company_id, inp.kind, year, seq)
+            elif doc_number == next_document_number(
+                prefix_override=_effective_prefix_from_company(company) or "",
+                kind=inp.kind,
+                year=year,
+                sequence=seq,
+            ):
+                # A number in Folio's own format beyond the counter's range would be handed
+                # out again by the counter later on, and every new document of that year
+                # would then fail on the duplicate.
+                raise ValueError(f"document_number sequence must not exceed {_MAX_COUNTER_SEQ}")
 
         # 6. Resolve timestamps
         now = datetime.now(timezone.utc)

@@ -122,14 +122,20 @@ class TestImportBillingDocumentUseCase:
         next_val = setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2025)
         assert next_val == 1
 
-    @pytest.mark.parametrize(
-        "doc_number", ["FAC-2024-2147483646", "FAC-2024-2147483647", "FAC-2024-99999999999", "FAC202403151230459"]
-    )
+    @pytest.mark.parametrize("doc_number", ["FAC202403151230459", "F-2024-2147483646", "FAC-2024-99999999999-A"])
     def test_import_oversized_sequence_keeps_the_counter(self, setup, doc_number):
-        """A sequence the INTEGER counter cannot continue from is imported without moving it."""
+        """A foreign number the INTEGER counter cannot continue from is imported without moving it."""
         inp = _minimal_input(setup["user_id"], setup["company_id"], doc_number=doc_number)
         result = setup["uc"].execute(inp, setup["session"])
         assert result.document_number == doc_number
+        assert setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2024) == 1
+
+    @pytest.mark.parametrize("doc_number", ["FAC-2024-1000000", "FAC-2024-2147483646", "FAC-2024-99999999999"])
+    def test_import_refuses_own_format_number_beyond_the_counter(self, setup, doc_number):
+        """The counter would hand FAC-2024-1000000 out again once past 999 999: every later facture would 500."""
+        inp = _minimal_input(setup["user_id"], setup["company_id"], doc_number=doc_number)
+        with pytest.raises(ValueError, match="must not exceed"):
+            setup["uc"].execute(inp, setup["session"])
         assert setup["counter_repo"].next_value(setup["company_id"], BillingDocumentKind.FACTURE, 2024) == 1
 
     def test_import_largest_counted_sequence_still_bumps(self, setup):

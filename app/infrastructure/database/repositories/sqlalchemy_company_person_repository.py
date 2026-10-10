@@ -7,6 +7,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.company_persons.ports import CompanyPersonRepositoryPort
@@ -95,6 +96,22 @@ class SqlAlchemyCompanyPersonRepository(CompanyPersonRepositoryPort):
             self._session.add(row)
         self._write_fields(profile, row)
         self._session.flush()
+        return self._to_entity(row)
+
+    def add_if_absent(self, profile: CompanyPerson) -> CompanyPerson:
+        # Two requests can list the same new person in a company at once: the loser's
+        # insert hits uq_company_persons_company_person, so it keeps the winner's row.
+        try:
+            with self._session.begin_nested():
+                row = CompanyPersonModel(id=profile.id)
+                self._write_fields(profile, row)
+                self._session.add(row)
+                self._session.flush()
+        except IntegrityError:
+            existing = self.find(profile.company_id, profile.person_id)
+            if existing is None:
+                raise
+            return existing
         return self._to_entity(row)
 
     def deactivate(self, company_id: UUID, person_id: UUID) -> bool:

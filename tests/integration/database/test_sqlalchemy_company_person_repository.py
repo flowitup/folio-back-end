@@ -199,3 +199,18 @@ def test_list_for_person_across_companies(repo, session, world):
     )
     profiles = repo.list_for_person(world["person"].id)
     assert {p.company_id for p in profiles} == {world["company_a"].id, world["company_b"].id}
+
+
+def test_add_if_absent_keeps_the_row_a_concurrent_request_inserted(repo, world):
+    """Two "Add worker" calls listing the same new person: the second keeps the first's profile."""
+    company_id, person_id = world["company_a"].id, world["person"].id
+    first = repo.add_if_absent(
+        CompanyPerson(id=uuid4(), company_id=company_id, person_id=person_id, created_at=datetime.now(timezone.utc))
+    )
+
+    second = repo.add_if_absent(
+        CompanyPerson(id=uuid4(), company_id=company_id, person_id=person_id, created_at=datetime.now(timezone.utc))
+    )
+
+    assert second.id == first.id
+    assert [p.id for p in repo.list_for_person(person_id)] == [first.id]
