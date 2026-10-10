@@ -33,7 +33,7 @@ class ChatMessageOrm(Base):
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     channel_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     channel_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
-    # NULL = assistant-authored (see sender_type).
+    # NULL only on legacy rows written by a retired feature (see sender_type).
     sender_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
@@ -48,6 +48,7 @@ class ChatMessageOrm(Base):
     reply_to_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
     )
+    # Legacy columns, no longer read or written (data kept; schema unchanged).
     mentions_assistant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     ai_trace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -77,8 +78,6 @@ class ChatMessageOrm(Base):
             content_type=self.content_type,
             payload=self.payload,
             reply_to_id=self.reply_to_id,
-            mentions_assistant=self.mentions_assistant,
-            ai_trace_id=self.ai_trace_id,
         )
 
     @classmethod
@@ -98,8 +97,6 @@ class ChatMessageOrm(Base):
             content_type=message.content_type,
             payload=message.payload,
             reply_to_id=message.reply_to_id,
-            mentions_assistant=message.mentions_assistant,
-            ai_trace_id=message.ai_trace_id,
             created_at=message.created_at,
         )
 

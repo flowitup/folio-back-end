@@ -38,12 +38,6 @@ _MORE = {
 }
 _IMAGE_ONLY = {"vi": "Đã gửi một ảnh", "fr": "A envoyé une image", "en": "Sent an image"}
 
-#: An `admin:<company_id>` channel carries D17-classified finance/payroll answers — its
-#: push preview must never repeat any part of the assistant's reply (M2), so this
-#: category-only text replaces `preview` unconditionally for that channel kind, however
-#: harmless a given answer might individually be.
-_ADMIN_REPLY_GENERIC = {"vi": "Folio đã trả lời", "fr": "Folio a répondu", "en": "Folio replied"}
-
 
 class ChatPushMarkerPort(Protocol):
     def due_recipients(
@@ -120,53 +114,3 @@ class ChatPushNotifier:
             self._markers.mark_notified(due, channel.key, sent_at)
         except Exception:  # a chat push must never break sending the message
             logger.exception("chat push failed channel=%s", channel.key)
-
-    def message_sent_by_assistant(self, *, channel: ChannelRef, preview: str | None, sent_at: datetime) -> None:
-        """Notify the assistant channel's owner of an assistant-authored reply.
-
-        Unlike ``message_sent`` there is no human sender id to exclude from the
-        recipient list: the assistant's only "member" IS the person who must be
-        notified, so every member of the channel is pushed (there is exactly one).
-        """
-        try:
-            members = [m.id for m in self._directory.list_members(channel)]
-            if not members:
-                return
-            due = self._markers.due_recipients(members, channel.key, self._window, sent_at)
-            if not due:
-                return
-
-            locale = self._dispatcher.locale
-            channel_name = self._names.channel_name(channel)
-            # M2: an admin-channel reply may carry company finances or someone's pay —
-            # never let it leave the product's own (authenticated) transport through a
-            # push notification, which the OS shows on a lock screen. Every other
-            # channel kind keeps the real preview.
-            if channel.kind == "admin":
-                text = _ADMIN_REPLY_GENERIC[locale]
-            else:
-                text = (preview or "").strip().replace("\n", " ")[:_MAX_PREVIEW] or _IMAGE_ONLY[locale]
-            title = _TEXT[locale][0].format(sender="Folio", channel=channel_name)
-
-            last_reads = self._reads.last_reads_for_channel(channel)
-            for user_id in due:
-                unread = self._messages.count_since(channel, last_reads.get(user_id), user_id)
-                if channel.kind == "admin":
-                    # Never append a real preview to the "+N unread" line either.
-                    body = text
-                else:
-                    body = (
-                        _MORE[locale].format(preview=text, count=unread - 1)
-                        if unread > 1
-                        else _TEXT[locale][1].format(preview=text)
-                    )
-                self._dispatcher.dispatch(
-                    category=NotificationCategory.CHAT.value,
-                    recipients=[user_id],
-                    title=title,
-                    body=body,
-                    data={"kind": "chat_message", "channel_key": channel.key},
-                )
-            self._markers.mark_notified(due, channel.key, sent_at)
-        except Exception:  # a chat push must never break sending the message
-            logger.exception("assistant chat push failed channel=%s", channel.key)

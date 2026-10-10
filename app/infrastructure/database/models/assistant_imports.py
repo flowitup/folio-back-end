@@ -1,10 +1,9 @@
-"""ORM models for the assistant's two AI-import extension tables (phase 03).
+"""ORM models for ``invoice_ai_imports`` and ``assistant_material_imports``.
 
-``invoice_ai_imports`` and ``assistant_material_imports`` never carry the numbers or
-metadata a route/report reads directly — they only record what the assistant did to an
-``invoices`` / ``library_products`` row, so a human (or a later pass) can audit or
-re-triage it. See ``app.application.assistant.import_ports`` for the port contracts and
-``SqlAlchemyAssistantImportRepository`` for the repository implementing both.
+LEGACY / INERT: the feature that used these tables has been removed; nothing reads or writes
+them any more. The model is kept only so it keeps matching the existing migrations (the
+model-vs-migration drift check, and `flask db migrate`, must not propose dropping the tables
+or their data). Do not build on it.
 """
 
 from __future__ import annotations

@@ -19,11 +19,9 @@ class SendMessageBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     body: str = Field(min_length=1, max_length=4000)
-    # Kept when the assistant dispatches so it replies in the right language, whatever
-    # the channel kind.
+    # Accepted for backward compatibility with older clients; no longer used.
     lang: Literal["vi", "fr", "en"] | None = None
-    # Must name a message of this same channel (checked by the use case); a reply to an
-    # assistant-authored message dispatches even without an `@folio` mention (D18).
+    # Must name a message of this same channel (checked by the use case).
     reply_to_id: UUID | None = None
 
 
@@ -46,7 +44,7 @@ class AttachmentResponse(BaseModel):
 class MessageResponse(BaseModel):
     id: str
     channel_key: str
-    # None for an assistant-authored message.
+    # None only for legacy rows written by a retired feature.
     sender_id: str | None
     sender_name: str
     body: str | None
@@ -57,7 +55,6 @@ class MessageResponse(BaseModel):
     content_type: Literal["text", "photo", "card", "choice", "job_status"]
     payload: dict[str, Any] | None = None
     reply_to_id: str | None = None
-    mentions_assistant: bool = False
 
 
 class MemberResponse(BaseModel):
@@ -92,4 +89,3 @@ class FeaturesResponse(BaseModel):
     """Feature flags of this deployment, as seen by the apps."""
 
     chat: bool
-    assistant: bool

@@ -6,21 +6,15 @@ project) or ``"admin"`` (one per-company channel for that company's admins and p
 ops, keyed by the company's id). Membership is derived from company access rows and
 project memberships at read time — there is no channel table.
 
-There used to be a fourth kind, ``"assistant"`` (a private per-user conversation with the
-Folio Assistant): it is retired — ``ChannelRef.parse`` rejects it (every route then
-answers 404, same as any other unknown channel) and old ``chat_messages`` rows with
-``channel_kind = 'assistant'`` are left untouched in the database, simply unreachable.
-The assistant now lives inside the company/project/admin channels above, addressed with
-an ``@folio`` mention (see ``mentions_assistant_token``) or a reply to one of its
-messages (``sender_type == "assistant"``).
-
-A message authored by the assistant itself has ``sender_id`` ``None`` (``sender_type ==
-"assistant"``); every other message is authored by a user and carries the actor's id.
+Legacy rows written by a retired feature may still exist in the database (a channel kind
+``"assistant"``, ``sender_type == "assistant"`` with a NULL ``sender_id``, rich content types
+such as ``"card"``). They are never written any more but must stay readable: listing messages
+tolerates them, and ``ChannelRef.parse`` rejects the retired channel kind like any unknown one.
+Every message created today is authored by a user and carries the actor's id.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -28,29 +22,8 @@ from uuid import UUID, uuid4
 
 CHANNEL_KINDS: frozenset[str] = frozenset({"company", "project", "admin"})
 
-#: Detects an ``@folio`` mention (case-insensitive, word-bounded) anywhere in a text body
-#: or photo caption — the sole trigger (together with a reply to an assistant message)
-#: for dispatching a chat message to the assistant pipeline (D18).
-_MENTION_PATTERN = re.compile(r"(^|\s)@folio\b", re.IGNORECASE)
-
-
-def mentions_assistant_token(text: str) -> bool:
-    """True when ``text`` contains an ``@folio`` mention."""
-    return bool(_MENTION_PATTERN.search(text))
-
-
-def strip_assistant_mention(text: str) -> str:
-    """Remove every ``@folio`` token (and the extra whitespace it leaves behind).
-
-    Used by the assistant pipeline to build the text it actually routes/answers on — a
-    message that is only ``"@folio"`` strips down to an empty string, which the router
-    treats as a bare greeting.
-    """
-    return " ".join(_MENTION_PATTERN.sub(" ", text).split())
-
-
-# What a message renders as. "text"/"photo" are used by user- and assistant-authored
-# messages alike; "card"/"choice"/"job_status" are assistant-only rich replies.
+# What a message renders as. New messages are "text" or "photo"; the other values only
+# exist on legacy rows and are kept so those rows still load.
 CONTENT_TYPES: frozenset[str] = frozenset({"text", "photo", "card", "choice", "job_status"})
 
 SENDER_TYPES: frozenset[str] = frozenset({"user", "assistant", "system"})
@@ -95,9 +68,8 @@ class ChatAttachment:
 class ChatMessage:
     """Immutable chat message. A message carries text, an attachment, or both.
 
-    ``sender_id`` is ``None`` for an assistant-authored message (``sender_type ==
-    "assistant"``); every field after ``created_at`` defaults so every existing caller
-    that builds a plain user message keeps working unchanged.
+    ``sender_id`` is ``None`` only for legacy rows written by a retired feature
+    (``sender_type == "assistant"``).
     """
 
     id: UUID
@@ -110,12 +82,6 @@ class ChatMessage:
     content_type: str = "text"
     payload: dict[str, Any] | None = None
     reply_to_id: UUID | None = None
-    # True when the body/caption carries an ``@folio`` mention, or the message replies to
-    # an assistant-authored one — the only messages ever forwarded to the assistant
-    # pipeline (see ``app.application.chat.usecases.SendMessageUseCase``) and the only
-    # ones a channel's ``list_recent_addressed`` conversation history ever includes.
-    mentions_assistant: bool = False
-    ai_trace_id: str | None = None
 
     @classmethod
     def create(
@@ -127,7 +93,6 @@ class ChatMessage:
         attachment: ChatAttachment | None,
         payload: dict[str, Any] | None = None,
         reply_to_id: UUID | None = None,
-        mentions_assistant: bool = False,
     ) -> ChatMessage:
         """Validate and build a new user-authored message.
 
@@ -155,46 +120,4 @@ class ChatMessage:
             content_type=content_type,
             payload=payload,
             reply_to_id=reply_to_id,
-            mentions_assistant=mentions_assistant,
-        )
-
-    @classmethod
-    def assistant(
-        cls,
-        *,
-        channel: ChannelRef,
-        content_type: str,
-        payload: dict[str, Any] | None,
-        body: str | None,
-        reply_to_id: UUID | None = None,
-        trace_id: str | None = None,
-    ) -> ChatMessage:
-        """Build an assistant-authored reply (``sender_id`` is None).
-
-        ``body`` is the plain-text fallback shown by clients that do not render the
-        richer ``content_type`` (older app builds, the web widget): it is required even
-        for a card/choice/job_status message.
-
-        Raises:
-            ValueError: unknown content_type, or no body fallback / body too long.
-        """
-        if content_type not in CONTENT_TYPES:
-            raise ValueError(f"Invalid content_type '{content_type}'.")
-        text = body.strip() if body else None
-        if not text:
-            raise ValueError("An assistant message needs a text fallback body.")
-        if len(text) > MAX_BODY_LEN:
-            raise ValueError(f"Message body must not exceed {MAX_BODY_LEN} characters.")
-        return cls(
-            id=uuid4(),
-            channel=channel,
-            sender_id=None,
-            body=text,
-            attachment=None,
-            created_at=datetime.now(timezone.utc),
-            sender_type="assistant",
-            content_type=content_type,
-            payload=payload,
-            reply_to_id=reply_to_id,
-            ai_trace_id=trace_id,
         )

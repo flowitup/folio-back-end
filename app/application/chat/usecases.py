@@ -34,7 +34,7 @@ from app.application.chat.ports import (
     ChatReadRepositoryPort,
     TransactionalSessionPort,
 )
-from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage, mentions_assistant_token
+from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
 
 ALLOWED_IMAGE_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
 # Voice notes: an AAC/m4a recording reaches us under whichever spelling the recording device
@@ -141,18 +141,15 @@ class SendMessageUseCase:
         storage: ChatAttachmentStoragePort,
         db_session: TransactionalSessionPort,
         notifier: Any = None,
-        assistant_dispatcher: Any = None,
     ) -> None:
-        # Public: the push stack (and the assistant dispatcher) is constructed after the
-        # chat use cases in create_app(), so both are attached afterwards rather than
-        # passed in here.
+        # Public: the push stack is constructed after the chat use cases in create_app(),
+        # so it is attached afterwards rather than passed in here.
         self._directory = directory
         self._messages = message_repo
         self._reads = read_repo
         self._storage = storage
         self._db = db_session
         self.notifier = notifier
-        self.assistant_dispatcher = assistant_dispatcher
 
     def execute(
         self,
@@ -166,18 +163,10 @@ class SendMessageUseCase:
     ) -> MessageDto:
         """``attachment`` is ``(filename, content_type, data)``.
 
-        ``lang`` (vi|fr|en), when given, is stored on the message payload as
-        ``{"lang": lang}`` so a dispatched assistant reply answers in the right language,
-        whatever the channel kind.
+        ``lang`` is accepted for backward compatibility with older clients and ignored.
 
         ``reply_to_id``, when given, must name a message of this same channel (else
-        ``ReplyTargetNotInChannelError``); it is what lets a reply to an assistant
-        message dispatch even without an ``@folio`` mention (D18) — see
-        ``mentions_assistant`` below.
-
-        The message dispatches to the assistant pipeline only when its body/caption
-        mentions ``@folio`` or it replies to an assistant-authored message — never for
-        any other message, in any channel kind.
+        ``ReplyTargetNotInChannelError``).
 
         Raises:
             ChatChannelNotFoundError, NotChannelMemberError, EmptyMessageError,
@@ -186,7 +175,6 @@ class SendMessageUseCase:
         channel = _parse_channel(channel_key)
         _require_member(self._directory, actor_id, channel)
 
-        reply_target: ChatMessage | None = None
         if reply_to_id is not None:
             reply_target = self._messages.find_by_id(reply_to_id)
             if reply_target is None or reply_target.channel != channel:
@@ -206,20 +194,13 @@ class SendMessageUseCase:
                 size_bytes=len(data),
             )
 
-        mentions = bool(body and mentions_assistant_token(body))
-        if not mentions and reply_target is not None and reply_target.sender_type == "assistant":
-            mentions = True
-
-        payload = {"lang": lang} if lang else None
         try:
             message = ChatMessage.create(
                 channel=channel,
                 sender_id=actor_id,
                 body=body,
                 attachment=stored,
-                payload=payload,
                 reply_to_id=reply_to_id,
-                mentions_assistant=mentions,
             )
         except ValueError as exc:
             raise EmptyMessageError(str(exc)) from exc
@@ -243,16 +224,13 @@ class SendMessageUseCase:
                 content_type=message.content_type,
                 payload=message.payload,
                 reply_to_id=message.reply_to_id,
-                mentions_assistant=message.mentions_assistant,
-                ai_trace_id=message.ai_trace_id,
             )
 
         self._messages.add(message)
         # Sending implies having seen the channel up to now.
         self._reads.mark_read(actor_id, channel, message.created_at)
         self._db.commit()
-        # After the commit: a push (or the assistant hand-off) must never be able to
-        # roll back the message.
+        # After the commit: a push must never be able to roll back the message.
         if self.notifier is not None:
             self.notifier.message_sent(
                 channel=channel,
@@ -260,8 +238,6 @@ class SendMessageUseCase:
                 preview=message.body,
                 sent_at=message.created_at,
             )
-        if self.assistant_dispatcher is not None and message.mentions_assistant and message.sender_type == "user":
-            self.assistant_dispatcher.message_received(user_id=actor_id, message_id=message.id)
         names = self._directory.display_names([actor_id])
         return MessageDto.from_entity(message, names.get(actor_id, "?"))
 

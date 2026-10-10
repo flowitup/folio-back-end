@@ -1,9 +1,9 @@
-"""ORM model for ``assistant_jobs`` (feature B — invoice fetch via the browser worker).
+"""ORM model for ``assistant_jobs``.
 
-Polled directly with plain SQL by the ``ai-browser`` container (``app.infrastructure.
-browser_worker``), which never boots the Flask app — see that package's docstring for
-why. This module (and the migration) is the single source of truth for the table shape
-both that container and ``SqlAlchemyAssistantJobRepository`` agree on.
+LEGACY / INERT: the feature that used this table has been removed; nothing reads or writes
+it any more. The model is kept only so it keeps matching the existing migrations (the
+model-vs-migration drift check, and `flask db migrate`, must not propose dropping the table
+or its data). Do not build on it.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, BinaryIO, Optional, Protocol
+from typing import BinaryIO, Optional, Protocol
 from uuid import UUID
 
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
@@ -73,22 +73,12 @@ class ChatMessageRepositoryPort(Protocol):
     def count_since(self, channel: ChannelRef, since: Optional[datetime], exclude_sender: UUID) -> int:
         """Messages by other people after ``since`` (all of them when ``since`` is None).
 
-        An assistant-authored message (``sender_id`` NULL) always counts as "by someone
-        else", regardless of ``exclude_sender``.
+        A legacy message with a NULL ``sender_id`` always counts as "by someone else",
+        regardless of ``exclude_sender``.
         """
         ...
 
     def last_message_at(self, channel: ChannelRef) -> Optional[datetime]: ...
-
-    def update_payload(self, message_id: UUID, payload: dict[str, Any]) -> None:
-        """Replace a message's ``payload`` in place (e.g. marking a choice answered)."""
-        ...
-
-    def list_recent_addressed(self, channel: ChannelRef, limit: int = 10) -> list[ChatMessage]:
-        """The channel's last ``limit`` messages the assistant was addressed by/as
-        (``mentions_assistant`` true, or ``sender_type == "assistant"``), oldest first —
-        the assistant's conversation history never includes other chat (D18)."""
-        ...
 
 
 class ChatReadRepositoryPort(Protocol):

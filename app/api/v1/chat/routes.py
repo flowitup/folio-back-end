@@ -40,7 +40,6 @@ from app.application.chat.exceptions import (
 )
 from app.application.chat.usecases import MAX_ATTACHMENT_BYTES
 from app.infrastructure.rate_limiter import limiter
-from config import assistant_flags_enabled
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -54,19 +53,6 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 
 def chat_enabled() -> bool:
     return bool(current_app.config.get("FEATURE_CHAT"))
-
-
-def assistant_enabled() -> bool:
-    """True once FEATURE_ASSISTANT is on and both core API keys are configured.
-
-    Mirrors ``Config.assistant_enabled()``; this variant reads ``current_app.config``
-    because that dict holds plain values copied from the config class, not a live
-    Config instance.
-    """
-    cfg = current_app.config
-    return assistant_flags_enabled(
-        cfg.get("FEATURE_ASSISTANT"), cfg.get("DEEPSEEK_API_KEY"), cfg.get("TYPESAFE_API_KEY")
-    )
 
 
 def require_chat_feature(func: F) -> F:
@@ -122,7 +108,6 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
         "content_type": dto.content_type,
         "payload": dto.payload,
         "reply_to_id": str(dto.reply_to_id) if dto.reply_to_id is not None else None,
-        "mentions_assistant": dto.mentions_assistant,
     }
 
 
@@ -135,7 +120,7 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
 @openapi_doc(summary="Feature flags of this deployment", responses={200: FeaturesResponse}, tags=["features"])
 @jwt_required()  # type: ignore[untyped-decorator]
 def get_features() -> Any:
-    return jsonify({"chat": chat_enabled(), "assistant": assistant_enabled()}), 200
+    return jsonify({"chat": chat_enabled()}), 200
 
 
 # ---------------------------------------------------------------------------
