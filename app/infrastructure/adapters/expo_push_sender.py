@@ -20,12 +20,28 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 _BATCH = 100
 
 
+def _log_at_info() -> None:
+    """Show this module's INFO lines on stderr.
+
+    The app configures no root handler, so only warnings reach the container log and a
+    successful send would leave no trace. Attached once per process; other loggers are untouched.
+    """
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
 class ExpoPushSender:
     def __init__(self, access_token: str = "", timeout_seconds: float = 10.0) -> None:
         self._headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if access_token:
             self._headers["Authorization"] = f"Bearer {access_token}"
         self._timeout = timeout_seconds
+        _log_at_info()
 
     def send(self, messages: List[PushMessage], on_invalid_token: Optional[Callable[[str], None]] = None) -> None:
         for start in range(0, len(messages), _BATCH):
@@ -54,11 +70,13 @@ class ExpoPushSender:
                 if response.headers.get("content-type", "").startswith("application/json")
                 else []
             )
+            accepted = 0
             for message, ticket in zip(batch, tickets):
                 if ticket.get("status") == "ok":
+                    accepted += 1
                     continue
                 details = ticket.get("details") or {}
                 logger.warning("expo.push.ticket_error to=%s message=%s", message.token, ticket.get("message"))
                 if details.get("error") == "DeviceNotRegistered" and on_invalid_token is not None:
                     on_invalid_token(message.token)
-            logger.info("expo.push.sent count=%s", len(batch))
+            logger.info("expo.push.sent accepted=%s of=%s", accepted, len(batch))
