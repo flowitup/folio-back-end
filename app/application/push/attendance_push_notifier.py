@@ -76,6 +76,7 @@ class AttendancePushNotifier:
         locale: str = "vi",
         run_async: bool = True,
         preferences=None,
+        events=None,
     ) -> None:
         self._devices = devices
         self._workers = worker_repo
@@ -86,6 +87,7 @@ class AttendancePushNotifier:
             preferences=preferences,
             locale=locale,
             run_async=run_async,
+            events=events,
         )
 
     @property

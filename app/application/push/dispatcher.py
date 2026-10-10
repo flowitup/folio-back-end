@@ -37,6 +37,12 @@ class NotificationPreferenceReaderPort(Protocol):
         ...
 
 
+class NotificationEventWriterPort(Protocol):
+    def record(
+        self, user_ids: Iterable[UUID], *, category: str, kind: str, texts: Dict[str, List[str]], data: Dict[str, str]
+    ) -> None: ...
+
+
 class PushDispatcher:
     """Send one already-rendered message to a set of users.
 
@@ -50,7 +56,9 @@ class PushDispatcher:
         preferences: Optional[NotificationPreferenceReaderPort] = None,
         locale: str = "vi",
         run_async: bool = True,
+        events: Optional[NotificationEventWriterPort] = None,
     ) -> None:
+        self._events = events
         self._devices = devices
         self._sender = sender
         self._preferences = preferences
@@ -98,6 +106,7 @@ class PushDispatcher:
         targets = {u for u in recipients if u is not None and u != exclude}
         if not targets:
             return
+        self._record_events(category, targets, title, body, data, render)
         if self._preferences is not None:
             try:
                 targets -= self._preferences.muted_user_ids(list(targets), category)
@@ -127,6 +136,28 @@ class PushDispatcher:
             threading.Thread(target=self._send, args=(messages,), daemon=True).start()
         else:
             self._send(messages)
+
+    def _record_events(
+        self,
+        category: str,
+        targets: set,
+        title: str,
+        body: str,
+        data: Dict[str, str],
+        render: Optional[Callable[[str], Tuple[str, str]]],
+    ) -> None:
+        """Keep a copy in the bell for everyone targeted, whatever their push settings.
+
+        Muting is about interruptions; the bell is where a muted person can still catch up.
+        A failure here must never cost the push.
+        """
+        if self._events is None:
+            return
+        try:
+            texts = {locale: list(render(locale)) if render else [title, body] for locale in SUPPORTED_LOCALES}
+            self._events.record(targets, category=category, kind=data.get("kind", category), texts=texts, data=data)
+        except Exception:
+            logger.exception("notification.record failed category=%s", category)
 
     def _device_locales(self, tokens: List[str]) -> Dict[str, str]:
         reader = getattr(self._devices, "locales_for_tokens", None)

@@ -115,17 +115,82 @@ def list_notifications() -> Any:
         for event in company_events
     ]
 
+    locale = _feed_locale()
+    events_json, events_unread = _events_feed(user_id, locale)
+
     response = jsonify(
         {
             "items": items,
             "attendance_pending": attendance_pending,
             "company_events": company_events_json,
+            # In-app activity feed (chat, tasks, billing, membership, attendance decisions).
+            "events": events_json,
+            "events_unread": events_unread,
             # NOT company_events — see docstring above (finding 12).
-            "count": len(items) + len(attendance_pending),
+            "count": len(items) + len(attendance_pending) + events_unread,
         }
     )
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response, 200
+
+
+def _feed_locale() -> str:
+    value = request.args.get("locale", "vi")
+    return value if value in ("vi", "fr", "en") else "vi"
+
+
+def _events_feed(user_id: UUID, locale: str) -> tuple[list[dict[str, Any]], int]:
+    repo = get_container().notification_event_repository
+    if repo is None:
+        return [], 0
+    try:
+        rows = repo.list_for_user(user_id)
+        unread = repo.unread_count(user_id)
+    except Exception:
+        # The feed is additive: a failure here must not blank the reminders and attendance.
+        logger.exception("notification events failed user_id=%s", user_id)
+        return [], 0
+    events = []
+    for row in rows:
+        title, body = (row.texts.get(locale) or row.texts.get("vi") or ["", ""])[:2]
+        events.append(
+            {
+                "id": str(row.id),
+                "category": row.category,
+                "kind": row.kind,
+                "title": title,
+                "body": body,
+                "data": row.data,
+                "created_at": row.created_at.isoformat(),
+                "read": row.read_at is not None,
+            }
+        )
+    return events, unread
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/notifications/events/read
+# ---------------------------------------------------------------------------
+
+
+@notifications_bp.post("/notifications/events/read")
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def mark_events_read() -> Any:
+    """Mark the caller's activity entries read: the listed ``ids``, or all of them without a body."""
+    repo = get_container().notification_event_repository
+    if repo is None:
+        raise RuntimeError("notification_event_repository not wired in container")
+    body = request.get_json(silent=True) or {}
+    raw_ids = body.get("ids") if isinstance(body, dict) else None
+    ids: list[UUID] | None = None
+    if raw_ids is not None:
+        try:
+            ids = [UUID(str(i)) for i in raw_ids][:200]
+        except (ValueError, TypeError):
+            return _err(400, "ValidationError", "ids must be a list of UUIDs")
+    repo.mark_read(UUID(get_jwt_identity()), ids)
+    return "", 204
 
 
 # ---------------------------------------------------------------------------
