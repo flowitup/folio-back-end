@@ -5,6 +5,7 @@ dispatching a genuinely distinct second job for the same tap."""
 from __future__ import annotations
 
 from typing import Any
+import re
 from uuid import uuid4
 
 from app.infrastructure.adapters import rq_assistant_dispatcher as dispatcher_module
@@ -60,11 +61,9 @@ def test_a_retry_with_a_different_action_on_the_same_message_reuses_the_same_job
     assert job_ids == [f"action-{message_id}", f"action-{message_id}"]
 
 
-def test_action_job_id_is_accepted_by_rq(monkeypatch) -> None:
-    """RQ rejects job ids with anything but letters, digits, `_` and `-`; the fake
-    queue above would not notice, so validate the id with RQ's own check."""
-    from rq.job import validate_job_id
-
+def test_action_job_id_only_uses_characters_rq_accepts(monkeypatch) -> None:
+    """RQ rejects job ids containing anything but letters, digits, `_` and `-` (a `:`
+    made every menu tap fail with a 503); the fake queue above would not notice."""
     FakeQueue.calls = []
     monkeypatch.setattr(dispatcher_module, "Queue", FakeQueue)
     monkeypatch.setattr(dispatcher_module, "Redis", FakeRedis)
@@ -72,4 +71,4 @@ def test_action_job_id_is_accepted_by_rq(monkeypatch) -> None:
 
     dispatcher.action_received(user_id=uuid4(), message_id=uuid4(), action="confirm", payload={})
 
-    validate_job_id(FakeQueue.calls[0]["kwargs"]["job_id"])
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", FakeQueue.calls[0]["kwargs"]["job_id"])
