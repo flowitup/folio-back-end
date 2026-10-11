@@ -197,7 +197,6 @@ class TestSessionCookies:
     refresh token had days left. Each cookie now lives as long as the token it carries."""
 
     WEEK = 7 * 24 * 3600
-    HALF_HOUR = 30 * 60
 
     def _sign_in(self, inv_client, invitation_app):
         assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
@@ -214,11 +213,11 @@ class TestSessionCookies:
         ages = _cookie_max_ages(ok)
         assert None not in ages.values(), ages
         assert self.WEEK - 60 <= ages["refresh_token_cookie"] <= self.WEEK
-        assert self.HALF_HOUR - 60 <= ages["access_token_cookie"] <= self.HALF_HOUR
+        assert self.WEEK - 60 <= ages["access_token_cookie"] <= self.WEEK
 
         refreshed = inv_client.post("/api/v1/auth/refresh", headers=_auth(ok.get_json()["refresh_token"]))
         assert refreshed.status_code == 200
-        assert self.HALF_HOUR - 60 <= _cookie_max_ages(refreshed)["access_token_cookie"] <= self.HALF_HOUR
+        assert self.WEEK - 60 <= _cookie_max_ages(refreshed)["access_token_cookie"] <= self.WEEK
 
     def test_a_never_expiring_refresh_token_gets_a_year_long_cookie(
         self, inv_client, invitation_app, member_with_phone

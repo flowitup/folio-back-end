@@ -70,7 +70,7 @@ class Config:
 
     # JWT Configuration
     JWT_SECRET_KEY: str = get_env("JWT_SECRET_KEY", default="dev-jwt-secret-change-in-production")
-    JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(minutes=30)
+    JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(days=7)
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
     JWT_TOKEN_LOCATION: tuple = ("headers", "cookies")
     # JWT cookie security — secure-by-default everywhere.
