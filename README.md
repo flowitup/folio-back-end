@@ -170,7 +170,7 @@ Sign-in is JWT-based. Browsers use HTTP-only cookies (with CSRF protection); oth
 
 ## Security at a glance
 
-- Requesting or verifying a sign-in code is limited to 5 per minute per client address; each phone also gets a 60-second resend cooldown, at most 5 codes an hour and 5 wrong guesses per code (`OTP_*` settings). Access tokens are signed and expire after 30 minutes; refresh tokens expire after 7 days, or only at sign-out with `REFRESH_TOKEN_POLICY=persistent`.
+- Requesting or verifying a sign-in code is limited to 5 per minute per client address; each phone also gets a 60-second resend cooldown, at most 5 codes an hour and 5 wrong guesses per code (`OTP_*` settings). Access tokens are signed and expire after 7 days; refresh tokens expire after 7 days, or only at sign-out with `REFRESH_TOKEN_POLICY=persistent`.
 - Browser sessions are CSRF-protected.
 - Access to projects and company data is decided on the server from the caller's company role, project assignments and per-member grants — never by the app.
 - API keys never expire and carry their owner's full permissions (a company admin's key can still manage that company's members, roles, grants and projects). A key cannot change anything under `/auth` — so it cannot rewrite the sign-in phone — cannot mutate the platform-admin endpoints, and cannot list, create or revoke API keys.

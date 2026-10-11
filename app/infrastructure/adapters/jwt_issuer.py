@@ -22,7 +22,7 @@ class JWTTokenIssuer:
 
     def __init__(
         self,
-        access_expires_minutes: int = 30,
+        access_expires_minutes: int = 7 * 24 * 60,
         refresh_expires_days: int = 7,
         redis_url: Optional[str] = None,
     ):
@@ -87,10 +87,9 @@ class JWTTokenIssuer:
     def revoke_token(self, jti: str, token_type: str = "access", persistent: bool = False) -> None:
         """Add token to blacklist with a TTL matching the token's expiry.
 
-        Refresh tokens live ~7 days while access tokens live ~30 minutes;
-        using the access TTL for a revoked refresh JTI would let a stolen
-        refresh token become usable again after 30 minutes. Persistent refresh
-        tokens never expire, so their entry is stored without TTL.
+        The TTL follows the token type so a revoked refresh JTI is never forgotten before the
+        refresh token itself expires. Persistent refresh tokens never expire, so their entry is
+        stored without TTL.
         """
         if self._redis:
             if persistent:
