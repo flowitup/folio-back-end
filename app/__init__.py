@@ -183,6 +183,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.api.v1.chat import chat_bp
     from app.api.v1.notifications import notifications_bp
     from app.api.v1.push import push_bp
+    from app.api.v1.app_version import app_version_bp
     from app.api.v1.billing import billing_documents_bp, billing_templates_bp
     from app.api.v1.companies import companies_bp, users_me_bp
     from app.api.v1.persons import persons_bp
@@ -209,6 +210,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(chat_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1")
     app.register_blueprint(push_bp, url_prefix="/api/v1")
+    app.register_blueprint(app_version_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_documents_bp, url_prefix="/api/v1")
     app.register_blueprint(billing_templates_bp, url_prefix="/api/v1")
     # company_profile_bp retired — table dropped in migration 2d9c35848b9b (C2)
