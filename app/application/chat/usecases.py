@@ -7,6 +7,7 @@ Authorization is enforced here (not only at the route): every channel operation 
 from __future__ import annotations
 
 import io
+import logging
 from datetime import datetime, timezone
 from typing import Any, BinaryIO, Optional
 from uuid import UUID
@@ -19,6 +20,8 @@ from app.application.chat.dtos import (
     MessagePageDto,
 )
 from app.application.chat.exceptions import (
+    BlockTargetNotFoundError,
+    CannotBlockSelfError,
     AttachmentTooLargeError,
     ChatChannelNotFoundError,
     ChatMessageNotFoundError,
@@ -32,9 +35,12 @@ from app.application.chat.ports import (
     ChatDirectoryPort,
     ChatMessageRepositoryPort,
     ChatReadRepositoryPort,
+    ChatSafetyRepositoryPort,
     TransactionalSessionPort,
 )
 from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
 # Voice notes: an AAC/m4a recording reaches us under whichever spelling the recording device
@@ -70,12 +76,15 @@ class ListChannelsUseCase:
         directory: ChatDirectoryPort,
         message_repo: ChatMessageRepositoryPort,
         read_repo: ChatReadRepositoryPort,
+        safety_repo: Optional[ChatSafetyRepositoryPort] = None,
     ) -> None:
         self._directory = directory
         self._messages = message_repo
         self._reads = read_repo
+        self._safety = safety_repo
 
     def execute(self, *, actor_id: UUID) -> list[ChannelDto]:
+        blocked = self._safety.blocked_ids(actor_id) if self._safety is not None else set()
         result: list[ChannelDto] = []
         for info in self._directory.list_channels_for_user(actor_id):
             since = self._reads.last_read_at(actor_id, info.channel)
@@ -86,7 +95,13 @@ class ListChannelsUseCase:
                     id=info.channel.id,
                     name=info.name,
                     member_count=info.member_count,
-                    unread_count=self._messages.count_since(info.channel, since, exclude_sender=actor_id),
+                    unread_count=(
+                        self._messages.count_since(
+                            info.channel, since, exclude_sender=actor_id, exclude_senders=blocked
+                        )
+                        if blocked
+                        else self._messages.count_since(info.channel, since, exclude_sender=actor_id)
+                    ),
                     last_message_at=self._messages.last_message_at(info.channel),
                 )
             )
@@ -101,10 +116,12 @@ class ListMessagesUseCase:
         directory: ChatDirectoryPort,
         message_repo: ChatMessageRepositoryPort,
         read_repo: ChatReadRepositoryPort,
+        safety_repo: Optional[ChatSafetyRepositoryPort] = None,
     ) -> None:
         self._directory = directory
         self._messages = message_repo
         self._reads = read_repo
+        self._safety = safety_repo
 
     def execute(
         self,
@@ -118,6 +135,9 @@ class ListMessagesUseCase:
         _require_member(self._directory, actor_id, channel)
         page_size = max(1, min(limit, MAX_PAGE_SIZE))
         messages = self._messages.list_for_channel(channel, before, page_size)
+        blocked = self._safety.blocked_ids(actor_id) if self._safety is not None else set()
+        if blocked:
+            messages = [m for m in messages if m.sender_id not in blocked]
         names = self._directory.display_names([m.sender_id for m in messages if m.sender_id is not None])
         items = [
             MessageDto.from_entity(m, names.get(m.sender_id, "?") if m.sender_id is not None else "Folio")
@@ -289,7 +309,81 @@ class GetAttachmentUseCase:
         )
 
 
+class ReportMessageUseCase:
+    """A channel member reports a message to the company's moderators (and the Folio team)."""
+
+    def __init__(
+        self,
+        directory: ChatDirectoryPort,
+        message_repo: ChatMessageRepositoryPort,
+        safety_repo: ChatSafetyRepositoryPort,
+        db_session: TransactionalSessionPort,
+    ) -> None:
+        self._directory = directory
+        self._messages = message_repo
+        self._safety = safety_repo
+        self._db = db_session
+
+    def execute(self, *, actor_id: UUID, message_id: UUID, reason: Optional[str] = None) -> None:
+        message = self._messages.find_by_id(message_id)
+        if message is None:
+            raise ChatMessageNotFoundError(f"Message {message_id} not found.")
+        _require_member(self._directory, actor_id, message.channel)
+        cleaned = (reason or "").strip()[:500] or None
+        self._safety.add_report(message_id, actor_id, cleaned)
+        self._db.commit()
+        # Operators read these in the API log; the row is the durable record.
+        logger.warning("chat message reported message=%s reporter=%s reason=%r", message_id, actor_id, cleaned)
+
+
+class BlockUserUseCase:
+    """Hide a person's chat messages (and pushes) from the actor. Idempotent."""
+
+    def __init__(
+        self,
+        directory: ChatDirectoryPort,
+        safety_repo: ChatSafetyRepositoryPort,
+        db_session: TransactionalSessionPort,
+    ) -> None:
+        self._directory = directory
+        self._safety = safety_repo
+        self._db = db_session
+
+    def execute(self, *, actor_id: UUID, target_id: UUID) -> None:
+        if target_id == actor_id:
+            raise CannotBlockSelfError("You cannot block yourself.")
+        if not self._directory.shares_channel(actor_id, target_id):
+            raise BlockTargetNotFoundError("No such user in your channels.")
+        self._safety.block(actor_id, target_id)
+        self._db.commit()
+
+
+class UnblockUserUseCase:
+    def __init__(self, safety_repo: ChatSafetyRepositoryPort, db_session: TransactionalSessionPort) -> None:
+        self._safety = safety_repo
+        self._db = db_session
+
+    def execute(self, *, actor_id: UUID, target_id: UUID) -> None:
+        self._safety.unblock(actor_id, target_id)
+        self._db.commit()
+
+
+class ListBlockedUsersUseCase:
+    def __init__(self, directory: ChatDirectoryPort, safety_repo: ChatSafetyRepositoryPort) -> None:
+        self._directory = directory
+        self._safety = safety_repo
+
+    def execute(self, *, actor_id: UUID) -> list[MemberDto]:
+        ids = list(self._safety.blocked_ids(actor_id))
+        names = self._directory.display_names(ids)
+        return sorted((MemberDto(id=i, name=names.get(i, "?")) for i in ids), key=lambda m: m.name.lower())
+
+
 __all__ = [
+    "BlockUserUseCase",
+    "ListBlockedUsersUseCase",
+    "ReportMessageUseCase",
+    "UnblockUserUseCase",
     "ALLOWED_ATTACHMENT_TYPES",
     "ALLOWED_AUDIO_TYPES",
     "ALLOWED_IMAGE_TYPES",

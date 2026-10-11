@@ -18,7 +18,12 @@ from app.infrastructure.database.models.invoice_number_counter import InvoiceNum
 from app.infrastructure.database.models.task import TaskModel
 from app.infrastructure.database.models.invitation import InvitationModel
 from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOrm
-from app.infrastructure.database.models.chat_message import ChatChannelReadOrm, ChatMessageOrm
+from app.infrastructure.database.models.chat_message import (
+    ChatChannelReadOrm,
+    ChatMessageOrm,
+    ChatMessageReportOrm,
+    ChatUserBlockOrm,
+)
 from app.infrastructure.database.models.login_otp import LoginOtpOrm
 from app.infrastructure.database.models.push_device import PushDeviceOrm
 from app.infrastructure.database.models.notification_preference import NotificationPreferenceModel
@@ -78,6 +83,8 @@ __all__ = [
     "LoginOtpOrm",
     "PushDeviceOrm",
     "ChatChannelReadOrm",
+    "ChatMessageReportOrm",
+    "ChatUserBlockOrm",
     "NoteDismissalOrm",
     "BillingDocumentModel",
     "BillingDocumentTemplateModel",

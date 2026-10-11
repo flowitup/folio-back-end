@@ -509,3 +509,63 @@ class TestReplies:
         )
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "BadRequest"
+
+
+class TestReportAndBlock:
+    def _send(self, inv_client, token, key, text):
+        resp = inv_client.post(f"/api/v1/chat/channels/{key}/messages", json={"body": text}, headers=_auth(token))
+        assert resp.status_code == 201, resp.get_json()
+        return resp.get_json()
+
+    def test_report_message_is_idempotent_and_member_only(
+        self, inv_client, member_token, admin_token, outsider_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        msg = self._send(inv_client, member_token, key, "bad words")
+        url = f"/api/v1/chat/messages/{msg['id']}/report"
+        assert inv_client.post(url, json={"reason": "abuse"}, headers=_auth(admin_token)).status_code == 204
+        assert inv_client.post(url, json={"reason": "abuse"}, headers=_auth(admin_token)).status_code == 204
+        assert inv_client.post(url, json={}, headers=_auth(outsider_token)).status_code == 403
+        missing = inv_client.post(f"/api/v1/chat/messages/{uuid.uuid4()}/report", json={}, headers=_auth(admin_token))
+        assert missing.status_code == 404
+
+        from app import db
+        from app.infrastructure.database.models import ChatMessageReportOrm
+
+        with invitation_app.app_context():
+            rows = db.session.query(ChatMessageReportOrm).filter_by(message_id=uuid.UUID(msg["id"])).all()
+            assert len(rows) == 1 and rows[0].reason == "abuse"
+            db.session.query(ChatMessageReportOrm).delete()
+            db.session.commit()
+
+    def test_block_hides_messages_and_unread_then_unblock_restores(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        member_id = invitation_app._test_member_user_id
+        self._send(inv_client, member_token, key, "hello from the blocked one")
+
+        assert inv_client.put(f"/api/v1/chat/blocks/{member_id}", headers=_auth(admin_token)).status_code == 204
+        assert inv_client.put(f"/api/v1/chat/blocks/{member_id}", headers=_auth(admin_token)).status_code == 204
+
+        listed = inv_client.get("/api/v1/chat/blocks", headers=_auth(admin_token)).get_json()["items"]
+        assert [b["id"] for b in listed] == [member_id]
+
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
+        assert all(m["body"] != "hello from the blocked one" for m in page["items"])
+        channels = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
+        assert next(c for c in channels if c["key"] == key)["unread_count"] == 0
+        # The other direction is untouched: the member still sees the admin's messages.
+        self._send(inv_client, admin_token, key, "admin speaks")
+        member_page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
+        assert any(m["body"] == "admin speaks" for m in member_page["items"])
+
+        assert inv_client.delete(f"/api/v1/chat/blocks/{member_id}", headers=_auth(admin_token)).status_code == 204
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
+        assert any(m["body"] == "hello from the blocked one" for m in page["items"])
+
+    def test_cannot_block_self_or_stranger(self, inv_client, admin_token, outsider_token, invitation_app):
+        admin_id = invitation_app._test_admin_user_id
+        assert inv_client.put(f"/api/v1/chat/blocks/{admin_id}", headers=_auth(admin_token)).status_code == 400
+        stranger = uuid.uuid4()
+        assert inv_client.put(f"/api/v1/chat/blocks/{stranger}", headers=_auth(admin_token)).status_code == 404

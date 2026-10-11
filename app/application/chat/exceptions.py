@@ -33,3 +33,11 @@ class UnsupportedAttachmentTypeError(ChatError):
 
 class ReplyTargetNotInChannelError(ChatError):
     """``reply_to_id`` names a message that does not exist, or exists in a different channel."""
+
+
+class CannotBlockSelfError(ChatError):
+    """A user tried to block themselves."""
+
+
+class BlockTargetNotFoundError(ChatError):
+    """The user to block does not exist or shares no company or project with the actor."""

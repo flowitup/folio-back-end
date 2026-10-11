@@ -476,15 +476,23 @@ def _configure_di_container() -> None:
         ListMessagesUseCase as _ListChatMessagesUseCase,
         MarkChannelReadUseCase as _MarkChatChannelReadUseCase,
         SendMessageUseCase as _SendChatMessageUseCase,
+        BlockUserUseCase as _BlockChatUserUseCase,
+        ListBlockedUsersUseCase as _ListBlockedChatUsersUseCase,
+        ReportMessageUseCase as _ReportChatMessageUseCase,
+        UnblockUserUseCase as _UnblockChatUserUseCase,
     )
 
     _chat_repo = SqlAlchemyChatRepository(db.session)
     _c.chat_repo = _chat_repo
-    _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo)
-    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo)
+    _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo, _chat_repo)
+    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo, _chat_repo)
     _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
+    _c.report_chat_message_usecase = _ReportChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
+    _c.block_chat_user_usecase = _BlockChatUserUseCase(_chat_repo, _chat_repo, db.session)
+    _c.unblock_chat_user_usecase = _UnblockChatUserUseCase(_chat_repo, db.session)
+    _c.list_blocked_chat_users_usecase = _ListBlockedChatUsersUseCase(_chat_repo, _chat_repo)
 
     # Sign in with a phone number + SMS code. Provider picked by SMS_PROVIDER (log | twilio | gateway).
     from app.application.usecases.otp_login import (
@@ -567,6 +575,7 @@ def _configure_di_container() -> None:
             reads=_chat_repo,
             messages=_chat_repo,
             names=_chat_repo,
+            blocks=_chat_repo,
         )
         _c.send_chat_message_usecase.notifier = _chat_push_notifier
 
