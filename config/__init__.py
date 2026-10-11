@@ -147,6 +147,15 @@ class Config:
     OTP_REVIEWER_PHONE: str = get_env("OTP_REVIEWER_PHONE", default="")
     OTP_REVIEWER_CODE: str = get_env("OTP_REVIEWER_CODE", default="")
 
+    # Mobile update gate (GET /api/v1/app-version). A build older than the minimum shows a
+    # blocking "please update" screen. Empty = no gate. Versions are the app's x.y.z.
+    APP_MIN_VERSION_IOS: str = get_env("APP_MIN_VERSION_IOS", default="")
+    APP_MIN_VERSION_ANDROID: str = get_env("APP_MIN_VERSION_ANDROID", default="")
+    APP_UPDATE_URL_IOS: str = get_env("APP_UPDATE_URL_IOS", default="https://testflight.apple.com/join/2Ee4zSMq")
+    APP_UPDATE_URL_ANDROID: str = get_env(
+        "APP_UPDATE_URL_ANDROID", default="https://play.google.com/apps/testing/com.flowitup.folio"
+    )
+
     # Push notifications (attendance to validate / validated). "log" writes them to the API log;
     # "expo" relays through the Expo push service (APNs/FCM credentials live on the EAS project).
     PUSH_PROVIDER: str = get_env("PUSH_PROVIDER", default="log")
