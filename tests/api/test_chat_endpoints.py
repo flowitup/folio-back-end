@@ -364,65 +364,29 @@ class TestRetiredAssistantChannel:
         assert "assistant" not in [c["kind"] for c in items]
 
 
-class TestAdminChannel:
-    """`admin:<company_id>` — a company's admins + platform ops (D17)."""
+class TestRetiredAdminChannel:
+    """`admin:<company_id>` was retired: never listed, never readable or writable.
+    Existing rows stay in the table."""
 
     def _admin_key(self, company_id: str) -> str:
         return f"admin:{company_id}"
 
-    def test_listed_for_admin_not_for_member(self, inv_client, admin_token, member_token, invitation_app):
+    def test_not_listed_for_anyone(self, inv_client, admin_token, member_token, superadmin_token, invitation_app):
+        for token in (admin_token, member_token, superadmin_token):
+            items = inv_client.get("/api/v1/chat/channels", headers=_auth(token)).get_json()["items"]
+            assert "admin" not in [c["kind"] for c in items]
+
+    def test_admin_forbidden(self, inv_client, admin_token, superadmin_token, invitation_app):
         key = self._admin_key(invitation_app._test_company_id)
-        admin_items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
-        admin_channel = next(c for c in admin_items if c["key"] == key)
-        assert admin_channel["kind"] == "admin"
-        assert admin_channel["name"] == "Invite Test Company"
-
-        member_items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        assert key not in [c["key"] for c in member_items]
-
-    def test_admin_channel_right_after_its_company_channel(self, inv_client, admin_token, invitation_app):
-        items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
-        keys = [c["key"] for c in items]
-        company_index = keys.index(f"company:{invitation_app._test_company_id}")
-        assert keys[company_index + 1] == self._admin_key(invitation_app._test_company_id)
-
-    def test_member_forbidden(self, inv_client, member_token, invitation_app):
-        key = self._admin_key(invitation_app._test_company_id)
-        assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).status_code == 403
-        resp = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages", json={"body": "hi"}, headers=_auth(member_token)
-        )
-        assert resp.status_code == 403
-
-    def test_admin_can_read_and_send(self, inv_client, admin_token, invitation_app):
-        key = self._admin_key(invitation_app._test_company_id)
-        sent = inv_client.post(
-            f"/api/v1/chat/channels/{key}/messages", json={"body": "Bilan du mois"}, headers=_auth(admin_token)
-        )
-        assert sent.status_code == 201, sent.get_json()
-        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
-        assert page["items"][-1]["body"] == "Bilan du mois"
-
-    def test_platform_ops_can_access_without_a_company_role(self, inv_client, superadmin_token, invitation_app):
-        key = self._admin_key(invitation_app._test_company_id)
-        resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(superadmin_token))
-        assert resp.status_code == 200
+        for token in (admin_token, superadmin_token):
+            assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(token)).status_code == 403
+            resp = inv_client.post(f"/api/v1/chat/channels/{key}/messages", json={"body": "hi"}, headers=_auth(token))
+            assert resp.status_code == 403
 
     def test_unknown_company_404(self, inv_client, admin_token):
         key = self._admin_key(str(uuid.uuid4()))
         resp = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
         assert resp.status_code == 404
-
-    def test_platform_ops_sees_the_admin_channel_in_the_chip_row(self, inv_client, superadmin_token, invitation_app):
-        """Phase 03's answer to phase 01/02's open question 1: ops oversees every
-        company, not just the ones it happens to hold a `user_company_access` row for."""
-        key = self._admin_key(invitation_app._test_company_id)
-        items = inv_client.get("/api/v1/chat/channels", headers=_auth(superadmin_token)).get_json()["items"]
-        admin_channel = next(c for c in items if c["key"] == key)
-        assert admin_channel["kind"] == "admin"
-        # Ops is not itself a member of the company, so the company channel is absent —
-        # only its admin channel is listed.
-        assert f"company:{invitation_app._test_company_id}" not in [c["key"] for c in items]
 
 
 class TestLegacyAssistantMessages:

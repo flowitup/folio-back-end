@@ -257,43 +257,12 @@ class SqlAlchemyChatRepository:
             )
         projects = self._session.execute(project_stmt).all()
 
-        admin_channel_company_ids: set[UUID] = set()
-        for cid, name, role in companies:
+        for cid, name, _role in companies:
             result.append(
                 ChannelInfo(
                     channel=ChannelRef(kind="company", id=cid), name=name, member_count=self._company_member_count(cid)
                 )
             )
-            # The admin channel is listed right after its company channel, for that
-            # company's own admins AND for platform ops (phase 01/02's open question 1,
-            # answered: ops oversees every company, not just the ones it happens to hold
-            # a `user_company_access` row for).
-            if role == CompanyRole.ADMIN.value or is_ops:
-                result.append(
-                    ChannelInfo(
-                        channel=ChannelRef(kind="admin", id=cid),
-                        name=name,
-                        member_count=len(self._admin_channel_member_ids(cid)),
-                    )
-                )
-                admin_channel_company_ids.add(cid)
-        if is_ops:
-            # Ops may have no `user_company_access` row at all for a company (never
-            # having joined it) — still list that company's admin channel, without also
-            # listing its (member-only) company channel, which ops is not shown for.
-            other_companies = self._session.execute(
-                select(CompanyModel.id, CompanyModel.legal_name)
-                .where(CompanyModel.id.notin_(admin_channel_company_ids))
-                .order_by(CompanyModel.legal_name)
-            ).all()
-            for cid, name in other_companies:
-                result.append(
-                    ChannelInfo(
-                        channel=ChannelRef(kind="admin", id=cid),
-                        name=name,
-                        member_count=len(self._admin_channel_member_ids(cid)),
-                    )
-                )
         result.extend(
             ChannelInfo(
                 channel=ChannelRef(kind="project", id=pid),
@@ -322,14 +291,9 @@ class SqlAlchemyChatRepository:
 
     def is_member(self, user_id: UUID, channel: ChannelRef) -> bool:
         if channel.kind == "admin":
-            if self._is_superadmin(user_id):
-                return True
-            role = self._session.execute(
-                select(UserCompanyAccessModel.role).where(
-                    UserCompanyAccessModel.user_id == user_id, UserCompanyAccessModel.company_id == channel.id
-                )
-            ).scalar()
-            return role == CompanyRole.ADMIN.value
+            # The admin channel was retired: no one is a member, so it is neither
+            # listed, readable, writable nor pushed. Old messages stay in the table.
+            return False
         if channel.kind == "company":
             return (
                 self._session.execute(
