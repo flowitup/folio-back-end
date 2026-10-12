@@ -1173,7 +1173,9 @@ def invitation_app():
             SendMessageUseCase as _SendChatMessageUC,
             BlockUserUseCase as _BlockChatUserUC,
             ListBlockedUsersUseCase as _ListBlockedChatUsersUC,
+            RemoveMessageReactionUseCase as _RemoveChatReactionUC,
             ReportMessageUseCase as _ReportChatMessageUC,
+            SetMessageReactionUseCase as _SetChatReactionUC,
             UnblockUserUseCase as _UnblockChatUserUC,
         )
 
@@ -1181,11 +1183,13 @@ def invitation_app():
         _chat_storage = InMemoryDocumentStorage()
         _c.chat_repo = _chat_repo
         _c.list_chat_channels_usecase = _ListChatChannelsUC(_chat_repo, _chat_repo, _chat_repo, _chat_repo)
-        _c.list_chat_messages_usecase = _ListChatMessagesUC(_chat_repo, _chat_repo, _chat_repo, _chat_repo)
+        _c.list_chat_messages_usecase = _ListChatMessagesUC(_chat_repo, _chat_repo, _chat_repo, _chat_repo, _chat_repo)
         _c.send_chat_message_usecase = _SendChatMessageUC(_chat_repo, _chat_repo, _chat_repo, _chat_storage, db.session)
         _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
         _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)
         _c.report_chat_message_usecase = _ReportChatMessageUC(_chat_repo, _chat_repo, _chat_repo, db.session)
+        _c.set_chat_reaction_usecase = _SetChatReactionUC(_chat_repo, _chat_repo, _chat_repo, db.session)
+        _c.remove_chat_reaction_usecase = _RemoveChatReactionUC(_chat_repo, _chat_repo, _chat_repo, db.session)
         _c.block_chat_user_usecase = _BlockChatUserUC(_chat_repo, _chat_repo, db.session)
         _c.unblock_chat_user_usecase = _UnblockChatUserUC(_chat_repo, db.session)
         _c.list_blocked_chat_users_usecase = _ListBlockedChatUsersUC(_chat_repo, _chat_repo)

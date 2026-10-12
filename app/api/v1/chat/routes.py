@@ -27,10 +27,12 @@ from app.api.v1.chat.schemas import (
     MessagePageResponse,
     BlockedUsersResponse,
     MessageResponse,
+    ReactionsResponse,
     ReportMessageBody,
     SendMessageBody,
+    SetReactionBody,
 )
-from app.application.chat.dtos import ChannelDto, MessageDto
+from app.application.chat.dtos import ChannelDto, MessageDto, ReactionDto
 from app.application.chat.exceptions import (
     AttachmentTooLargeError,
     BlockTargetNotFoundError,
@@ -38,6 +40,7 @@ from app.application.chat.exceptions import (
     ChatChannelNotFoundError,
     ChatMessageNotFoundError,
     EmptyMessageError,
+    InvalidReactionError,
     NotChannelMemberError,
     ReplyTargetNotInChannelError,
     UnsupportedAttachmentTypeError,
@@ -89,6 +92,10 @@ def _serialize_channel(dto: ChannelDto) -> dict[str, Any]:
     }
 
 
+def _serialize_reactions(reactions: tuple[ReactionDto, ...]) -> list[dict[str, Any]]:
+    return [{"user_id": str(r.user_id), "emoji": r.emoji, "created_at": _iso(r.created_at)} for r in reactions]
+
+
 def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
     return {
         "id": str(dto.id),
@@ -112,6 +119,7 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
         "content_type": dto.content_type,
         "payload": dto.payload,
         "reply_to_id": str(dto.reply_to_id) if dto.reply_to_id is not None else None,
+        "reactions": _serialize_reactions(dto.reactions),
     }
 
 
@@ -379,6 +387,73 @@ def report_message(message_id: UUID) -> Any:
         logger.exception("report_message unexpected error message=%s", message_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# PUT|DELETE /api/v1/chat/messages/<id>/reaction
+# ---------------------------------------------------------------------------
+
+
+@chat_bp.put("/chat/messages/<uuid:message_id>/reaction")
+@openapi_doc(
+    summary="Leave (or change) the caller's emoji on a message",
+    request=SetReactionBody,
+    responses={200: ReactionsResponse},
+    tags=["chat"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("120 per minute", key_func=jwt_user_key)
+def set_reaction(message_id: UUID) -> Any:
+    try:
+        parsed = SetReactionBody.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        fields = safe_validation_fields(exc)
+        return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.set_chat_reaction_usecase is None:
+        raise RuntimeError("set_chat_reaction_usecase not wired in container")
+    try:
+        reactions = container.set_chat_reaction_usecase.execute(
+            actor_id=actor_id, message_id=message_id, emoji=parsed.emoji
+        )
+    except InvalidReactionError:
+        return _err(422, "ValidationError", "Invalid input: emoji")
+    except (ChatMessageNotFoundError, ChatChannelNotFoundError):
+        return _err(404, "NotFound", "Message not found")
+    except NotChannelMemberError:
+        return _err(403, "Forbidden", "Not a member of this channel")
+    except Exception:
+        logger.exception("set_reaction unexpected error message=%s", message_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return jsonify({"reactions": _serialize_reactions(reactions)}), 200
+
+
+@chat_bp.delete("/chat/messages/<uuid:message_id>/reaction")
+@openapi_doc(
+    summary="Take the caller's emoji off a message",
+    responses={200: ReactionsResponse},
+    tags=["chat"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("120 per minute", key_func=jwt_user_key)
+def remove_reaction(message_id: UUID) -> Any:
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.remove_chat_reaction_usecase is None:
+        raise RuntimeError("remove_chat_reaction_usecase not wired in container")
+    try:
+        reactions = container.remove_chat_reaction_usecase.execute(actor_id=actor_id, message_id=message_id)
+    except (ChatMessageNotFoundError, ChatChannelNotFoundError):
+        return _err(404, "NotFound", "Message not found")
+    except NotChannelMemberError:
+        return _err(403, "Forbidden", "Not a member of this channel")
+    except Exception:
+        logger.exception("remove_reaction unexpected error message=%s", message_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return jsonify({"reactions": _serialize_reactions(reactions)}), 200
 
 
 # ---------------------------------------------------------------------------

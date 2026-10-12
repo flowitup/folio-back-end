@@ -480,18 +480,22 @@ def _configure_di_container() -> None:
         SendMessageUseCase as _SendChatMessageUseCase,
         BlockUserUseCase as _BlockChatUserUseCase,
         ListBlockedUsersUseCase as _ListBlockedChatUsersUseCase,
+        RemoveMessageReactionUseCase as _RemoveChatReactionUseCase,
         ReportMessageUseCase as _ReportChatMessageUseCase,
+        SetMessageReactionUseCase as _SetChatReactionUseCase,
         UnblockUserUseCase as _UnblockChatUserUseCase,
     )
 
     _chat_repo = SqlAlchemyChatRepository(db.session)
     _c.chat_repo = _chat_repo
     _c.list_chat_channels_usecase = _ListChatChannelsUseCase(_chat_repo, _chat_repo, _chat_repo, _chat_repo)
-    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo, _chat_repo)
+    _c.list_chat_messages_usecase = _ListChatMessagesUseCase(_chat_repo, _chat_repo, _chat_repo, _chat_repo, _chat_repo)
     _c.send_chat_message_usecase = _SendChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
     _c.report_chat_message_usecase = _ReportChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
+    _c.set_chat_reaction_usecase = _SetChatReactionUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
+    _c.remove_chat_reaction_usecase = _RemoveChatReactionUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
     _c.block_chat_user_usecase = _BlockChatUserUseCase(_chat_repo, _chat_repo, db.session)
     _c.unblock_chat_user_usecase = _UnblockChatUserUseCase(_chat_repo, db.session)
     _c.list_blocked_chat_users_usecase = _ListBlockedChatUsersUseCase(_chat_repo, _chat_repo)

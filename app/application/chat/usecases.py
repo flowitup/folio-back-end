@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, BinaryIO, Optional
 from uuid import UUID
@@ -18,6 +19,7 @@ from app.application.chat.dtos import (
     MemberDto,
     MessageDto,
     MessagePageDto,
+    ReactionDto,
 )
 from app.application.chat.exceptions import (
     BlockTargetNotFoundError,
@@ -26,6 +28,7 @@ from app.application.chat.exceptions import (
     ChatChannelNotFoundError,
     ChatMessageNotFoundError,
     EmptyMessageError,
+    InvalidReactionError,
     NotChannelMemberError,
     ReplyTargetNotInChannelError,
     UnsupportedAttachmentTypeError,
@@ -34,11 +37,12 @@ from app.application.chat.ports import (
     ChatAttachmentStoragePort,
     ChatDirectoryPort,
     ChatMessageRepositoryPort,
+    ChatReactionRepositoryPort,
     ChatReadRepositoryPort,
     ChatSafetyRepositoryPort,
     TransactionalSessionPort,
 )
-from app.domain.entities.chat_message import ChannelRef, ChatAttachment, ChatMessage
+from app.domain.entities.chat_message import REACTION_EMOJIS, ChannelRef, ChatAttachment, ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,15 @@ def _require_member(directory: ChatDirectoryPort, actor_id: UUID, channel: Chann
         raise ChatChannelNotFoundError(f"Channel {channel.key} does not exist.")
     if not directory.is_member(actor_id, channel):
         raise NotChannelMemberError(f"User {actor_id} is not a member of channel {channel.key}.")
+
+
+def _reaction_dtos(reactions: list[Any], blocked: set[UUID]) -> tuple[ReactionDto, ...]:
+    """Reactions as shown to one reader: people they blocked leave no trace."""
+    return tuple(
+        ReactionDto(user_id=r.user_id, emoji=r.emoji, created_at=r.created_at)
+        for r in reactions
+        if r.user_id not in blocked
+    )
 
 
 class ListChannelsUseCase:
@@ -117,11 +130,13 @@ class ListMessagesUseCase:
         message_repo: ChatMessageRepositoryPort,
         read_repo: ChatReadRepositoryPort,
         safety_repo: Optional[ChatSafetyRepositoryPort] = None,
+        reaction_repo: Optional[ChatReactionRepositoryPort] = None,
     ) -> None:
         self._directory = directory
         self._messages = message_repo
         self._reads = read_repo
         self._safety = safety_repo
+        self._reactions = reaction_repo
 
     def execute(
         self,
@@ -139,8 +154,12 @@ class ListMessagesUseCase:
         if blocked:
             messages = [m for m in messages if m.sender_id not in blocked]
         names = self._directory.display_names([m.sender_id for m in messages if m.sender_id is not None])
+        reactions = self._reactions.reactions_for_messages([m.id for m in messages]) if self._reactions else {}
         items = [
-            MessageDto.from_entity(m, names.get(m.sender_id, "?") if m.sender_id is not None else "Folio")
+            replace(
+                MessageDto.from_entity(m, names.get(m.sender_id, "?") if m.sender_id is not None else "Folio"),
+                reactions=_reaction_dtos(reactions.get(m.id, []), blocked),
+            )
             for m in messages
         ]
         reads = self._reads.last_reads_for_channel(channel)
@@ -260,6 +279,63 @@ class SendMessageUseCase:
             )
         names = self._directory.display_names([actor_id])
         return MessageDto.from_entity(message, names.get(actor_id, "?"))
+
+
+class SetMessageReactionUseCase:
+    """Leave an emoji on a message, or change the one already left (one per person)."""
+
+    def __init__(
+        self,
+        directory: ChatDirectoryPort,
+        message_repo: ChatMessageRepositoryPort,
+        reaction_repo: ChatReactionRepositoryPort,
+        db_session: TransactionalSessionPort,
+    ) -> None:
+        self._directory = directory
+        self._messages = message_repo
+        self._reactions = reaction_repo
+        self._db = db_session
+
+    def execute(self, *, actor_id: UUID, message_id: UUID, emoji: str) -> tuple[ReactionDto, ...]:
+        """Returns every reaction of the message after the change.
+
+        Raises:
+            ChatMessageNotFoundError, ChatChannelNotFoundError, NotChannelMemberError, InvalidReactionError.
+        """
+        if emoji not in REACTION_EMOJIS:
+            raise InvalidReactionError(f"'{emoji}' is not an accepted reaction.")
+        message = self._messages.find_by_id(message_id)
+        if message is None:
+            raise ChatMessageNotFoundError(f"Message {message_id} not found.")
+        _require_member(self._directory, actor_id, message.channel)
+        self._reactions.set_reaction(message_id, actor_id, emoji)
+        self._db.commit()
+        return _reaction_dtos(self._reactions.reactions_for_messages([message_id]).get(message_id, []), set())
+
+
+class RemoveMessageReactionUseCase:
+    """Take the actor's emoji off a message. Idempotent."""
+
+    def __init__(
+        self,
+        directory: ChatDirectoryPort,
+        message_repo: ChatMessageRepositoryPort,
+        reaction_repo: ChatReactionRepositoryPort,
+        db_session: TransactionalSessionPort,
+    ) -> None:
+        self._directory = directory
+        self._messages = message_repo
+        self._reactions = reaction_repo
+        self._db = db_session
+
+    def execute(self, *, actor_id: UUID, message_id: UUID) -> tuple[ReactionDto, ...]:
+        message = self._messages.find_by_id(message_id)
+        if message is None:
+            raise ChatMessageNotFoundError(f"Message {message_id} not found.")
+        _require_member(self._directory, actor_id, message.channel)
+        self._reactions.remove_reaction(message_id, actor_id)
+        self._db.commit()
+        return _reaction_dtos(self._reactions.reactions_for_messages([message_id]).get(message_id, []), set())
 
 
 class MarkChannelReadUseCase:
@@ -382,7 +458,9 @@ class ListBlockedUsersUseCase:
 __all__ = [
     "BlockUserUseCase",
     "ListBlockedUsersUseCase",
+    "RemoveMessageReactionUseCase",
     "ReportMessageUseCase",
+    "SetMessageReactionUseCase",
     "UnblockUserUseCase",
     "ALLOWED_ATTACHMENT_TYPES",
     "ALLOWED_AUDIO_TYPES",

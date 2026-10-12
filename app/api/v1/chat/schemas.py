@@ -41,6 +41,24 @@ class AttachmentResponse(BaseModel):
     size_bytes: int
 
 
+class ReactionResponse(BaseModel):
+    user_id: str
+    emoji: str
+    created_at: str
+
+
+class SetReactionBody(BaseModel):
+    """Body of PUT /chat/messages/<id>/reaction: one of the six accepted emoji."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    emoji: str = Field(min_length=1, max_length=16)
+
+
+class ReactionsResponse(BaseModel):
+    reactions: list[ReactionResponse]
+
+
 class MessageResponse(BaseModel):
     id: str
     channel_key: str
@@ -55,6 +73,8 @@ class MessageResponse(BaseModel):
     content_type: Literal["text", "photo", "card", "choice", "job_status"]
     payload: dict[str, Any] | None = None
     reply_to_id: str | None = None
+    # One per person per message; the readers aggregate counts and look names up in `members`.
+    reactions: list[ReactionResponse] = Field(default_factory=list)
 
 
 class MemberResponse(BaseModel):

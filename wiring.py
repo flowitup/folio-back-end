@@ -437,6 +437,8 @@ class Container:
     mark_chat_channel_read_usecase: Optional[Any] = None
     get_chat_attachment_usecase: Optional[Any] = None
     report_chat_message_usecase: Optional[Any] = None
+    set_chat_reaction_usecase: Optional[Any] = None
+    remove_chat_reaction_usecase: Optional[Any] = None
     block_chat_user_usecase: Optional[Any] = None
     unblock_chat_user_usecase: Optional[Any] = None
     list_blocked_chat_users_usecase: Optional[Any] = None

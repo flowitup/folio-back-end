@@ -97,6 +97,29 @@ class ChatReadRepositoryPort(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ReactionInfo:
+    """One member's emoji on a message."""
+
+    user_id: UUID
+    emoji: str
+    created_at: datetime
+
+
+class ChatReactionRepositoryPort(Protocol):
+    """Emoji reactions on messages, at most one per person per message."""
+
+    def set_reaction(self, message_id: UUID, user_id: UUID, emoji: str) -> None:
+        """Add the person's reaction or replace the one they already left."""
+        ...
+
+    def remove_reaction(self, message_id: UUID, user_id: UUID) -> None: ...
+
+    def reactions_for_messages(self, message_ids: list[UUID]) -> dict[UUID, list[ReactionInfo]]:
+        """Reactions of the given messages, oldest first; messages without any are absent."""
+        ...
+
+
 class ChatAttachmentStoragePort(Protocol):
     """Binary storage for attachments (the S3 adapter used by invoices / documents satisfies it)."""
 

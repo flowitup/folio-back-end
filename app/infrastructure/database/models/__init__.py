@@ -21,6 +21,7 @@ from app.infrastructure.database.models.note_orm import NoteOrm, NoteDismissalOr
 from app.infrastructure.database.models.chat_message import (
     ChatChannelReadOrm,
     ChatMessageOrm,
+    ChatMessageReactionOrm,
     ChatMessageReportOrm,
     ChatUserBlockOrm,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "LoginOtpOrm",
     "PushDeviceOrm",
     "ChatChannelReadOrm",
+    "ChatMessageReactionOrm",
     "ChatMessageReportOrm",
     "ChatUserBlockOrm",
     "NoteDismissalOrm",
