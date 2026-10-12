@@ -475,6 +475,77 @@ class TestReplies:
         assert resp.get_json()["error"] == "BadRequest"
 
 
+class TestReactions:
+    THUMBS = "\U0001f44d"
+    HEART = "\u2764\ufe0f"
+
+    def _send(self, inv_client, token, key, text):
+        resp = inv_client.post(f"/api/v1/chat/channels/{key}/messages", json={"body": text}, headers=_auth(token))
+        assert resp.status_code == 201, resp.get_json()
+        return resp.get_json()
+
+    def _react(self, inv_client, token, message_id, emoji):
+        return inv_client.put(
+            f"/api/v1/chat/messages/{message_id}/reaction", json={"emoji": emoji}, headers=_auth(token)
+        )
+
+    def _messages(self, inv_client, token, key):
+        return inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(token)).get_json()["items"]
+
+    def test_react_change_and_remove_one_per_person(self, inv_client, member_token, admin_token, invitation_app):
+        key = _project_key(invitation_app)
+        msg = self._send(inv_client, member_token, key, "salut")
+        assert msg["reactions"] == []
+
+        first = self._react(inv_client, admin_token, msg["id"], self.THUMBS)
+        assert first.status_code == 200
+        assert [r["emoji"] for r in first.get_json()["reactions"]] == [self.THUMBS]
+        # Reacting again replaces the person's emoji instead of adding a second one.
+        changed = self._react(inv_client, admin_token, msg["id"], self.HEART).get_json()["reactions"]
+        assert [r["emoji"] for r in changed] == [self.HEART]
+        self._react(inv_client, member_token, msg["id"], self.HEART)
+
+        listed = next(m for m in self._messages(inv_client, member_token, key) if m["id"] == msg["id"])
+        assert sorted(r["user_id"] for r in listed["reactions"]) == sorted(
+            [invitation_app._test_admin_user_id, invitation_app._test_member_user_id]
+        )
+        assert {r["emoji"] for r in listed["reactions"]} == {self.HEART}
+
+        gone = inv_client.delete(f"/api/v1/chat/messages/{msg['id']}/reaction", headers=_auth(admin_token))
+        assert gone.status_code == 200
+        assert [r["user_id"] for r in gone.get_json()["reactions"]] == [invitation_app._test_member_user_id]
+        # Removing twice is fine.
+        again = inv_client.delete(f"/api/v1/chat/messages/{msg['id']}/reaction", headers=_auth(admin_token))
+        assert again.status_code == 200
+
+    def test_rejects_an_emoji_outside_the_set(self, inv_client, member_token, invitation_app):
+        key = _project_key(invitation_app)
+        msg = self._send(inv_client, member_token, key, "salut")
+        assert self._react(inv_client, member_token, msg["id"], "\U0001f525").status_code == 422
+        assert self._react(inv_client, member_token, msg["id"], "").status_code == 422
+
+    def test_member_only_and_unknown_message(self, inv_client, member_token, outsider_token, invitation_app):
+        key = _project_key(invitation_app)
+        msg = self._send(inv_client, member_token, key, "salut")
+        assert self._react(inv_client, outsider_token, msg["id"], self.THUMBS).status_code == 403
+        assert (
+            inv_client.delete(f"/api/v1/chat/messages/{msg['id']}/reaction", headers=_auth(outsider_token)).status_code
+            == 403
+        )
+        assert self._react(inv_client, member_token, str(uuid.uuid4()), self.THUMBS).status_code == 404
+
+    def test_a_blocked_persons_reaction_is_hidden_from_the_blocker(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        msg = self._send(inv_client, member_token, key, "salut")
+        self._react(inv_client, admin_token, msg["id"], self.THUMBS)
+        inv_client.put(f"/api/v1/chat/blocks/{invitation_app._test_admin_user_id}", headers=_auth(member_token))
+        listed = next(m for m in self._messages(inv_client, member_token, key) if m["id"] == msg["id"])
+        assert listed["reactions"] == []
+        inv_client.delete(f"/api/v1/chat/blocks/{invitation_app._test_admin_user_id}", headers=_auth(member_token))
+
+
 class TestReportAndBlock:
     def _send(self, inv_client, token, key, text):
         resp = inv_client.post(f"/api/v1/chat/channels/{key}/messages", json={"body": text}, headers=_auth(token))

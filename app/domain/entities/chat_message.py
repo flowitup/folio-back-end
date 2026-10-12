@@ -30,6 +30,16 @@ SENDER_TYPES: frozenset[str] = frozenset({"user", "assistant", "system"})
 
 MAX_BODY_LEN = 4000
 
+# The reactions a member can leave on a message: one per person per message.
+REACTION_EMOJIS: tuple[str, ...] = (
+    "\U0001f44d",
+    "\u2764\ufe0f",
+    "\U0001f602",
+    "\U0001f62e",
+    "\U0001f622",
+    "\U0001f64f",
+)
+
 
 @dataclass(frozen=True)
 class ChannelRef:

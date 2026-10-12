@@ -37,6 +37,13 @@ class AttachmentDto:
 
 
 @dataclass(frozen=True)
+class ReactionDto:
+    user_id: UUID
+    emoji: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class MessageDto:
     id: UUID
     channel_key: str
@@ -49,6 +56,7 @@ class MessageDto:
     content_type: str = "text"
     payload: dict[str, Any] | None = None
     reply_to_id: UUID | None = None
+    reactions: tuple[ReactionDto, ...] = ()
 
     @classmethod
     def from_entity(cls, message: ChatMessage, sender_name: str) -> MessageDto:

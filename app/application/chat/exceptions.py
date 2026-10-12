@@ -41,3 +41,7 @@ class CannotBlockSelfError(ChatError):
 
 class BlockTargetNotFoundError(ChatError):
     """The user to block does not exist or shares no company or project with the actor."""
+
+
+class InvalidReactionError(ChatError):
+    """The emoji is not one of the reactions a message accepts."""

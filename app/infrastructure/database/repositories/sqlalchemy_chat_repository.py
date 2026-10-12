@@ -9,12 +9,13 @@ from uuid import UUID
 from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.application.chat.ports import ChannelInfo, MemberInfo
+from app.application.chat.ports import ChannelInfo, MemberInfo, ReactionInfo
 from app.domain.companies.roles import CompanyRole
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.infrastructure.database.models.chat_message import (
     ChatChannelReadOrm,
     ChatMessageOrm,
+    ChatMessageReactionOrm,
     ChatMessageReportOrm,
     ChatUserBlockOrm,
 )
@@ -84,6 +85,40 @@ class SqlAlchemyChatRepository:
         if since is not None:
             stmt = stmt.where(ChatMessageOrm.created_at > since)
         return int(self._session.execute(stmt).scalar_one())
+
+    # ------------------------------------------------------------------
+    # Reactions
+    # ------------------------------------------------------------------
+
+    def set_reaction(self, message_id: UUID, user_id: UUID, emoji: str) -> None:
+        row = self._session.get(ChatMessageReactionOrm, (message_id, user_id))
+        if row is None:
+            self._session.add(ChatMessageReactionOrm(message_id=message_id, user_id=user_id, emoji=emoji))
+        else:
+            row.emoji = emoji
+        self._session.flush()
+
+    def remove_reaction(self, message_id: UUID, user_id: UUID) -> None:
+        row = self._session.get(ChatMessageReactionOrm, (message_id, user_id))
+        if row is not None:
+            self._session.delete(row)
+            self._session.flush()
+
+    def reactions_for_messages(self, message_ids: list[UUID]) -> dict[UUID, list[ReactionInfo]]:
+        if not message_ids:
+            return {}
+        rows = self._session.execute(
+            select(ChatMessageReactionOrm)
+            .where(ChatMessageReactionOrm.message_id.in_(message_ids))
+            .order_by(ChatMessageReactionOrm.created_at)
+        ).scalars()
+        result: dict[UUID, list[ReactionInfo]] = {}
+        for row in rows:
+            created = row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=timezone.utc)
+            result.setdefault(row.message_id, []).append(
+                ReactionInfo(user_id=row.user_id, emoji=row.emoji, created_at=created)
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Reports and blocks

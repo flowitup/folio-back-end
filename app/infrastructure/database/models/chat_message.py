@@ -112,6 +112,23 @@ class ChatChannelReadOrm(Base):
     last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ChatMessageReactionOrm(Base):
+    """One member's emoji on a message. A person has at most one reaction per message."""
+
+    __tablename__ = "chat_message_reactions"
+
+    message_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    emoji: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class ChatMessageReportOrm(Base):
     """A member's report of a message (App Store 1.2). One report per reporter and message."""
 
