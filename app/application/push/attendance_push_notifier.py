@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Dict, List, Protocol
+from typing import Dict, List, Optional, Protocol
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository
@@ -42,6 +42,18 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
         "vi": ("Yêu cầu sửa chấm công", "{worker} xin sửa ngày {date} · {project}"),
         "fr": ("Demande de modification", "{worker} demande à modifier le {date} · {project}"),
         "en": ("Attendance change request", "{worker} asks to change {date} · {project}"),
+    },
+    # A manager entered days for the site: nothing to validate, but the other validators
+    # (company admins, assigned managers) still want to see the site logged attendance.
+    "logged_one": {
+        "vi": ("Công trường vừa chấm công", "{worker} · ngày {date} · {project}"),
+        "fr": ("Pointage saisi sur le chantier", "{worker} · le {date} · {project}"),
+        "en": ("Attendance logged on site", "{worker} · {date} · {project}"),
+    },
+    "logged_many": {
+        "vi": ("Công trường vừa chấm công", "{count} công nhân · ngày {date} · {project}"),
+        "fr": ("Pointage saisi sur le chantier", "{count} ouvriers · le {date} · {project}"),
+        "en": ("Attendance logged on site", "{count} workers · {date} · {project}"),
     },
     "validated": {
         "vi": ("Chấm công đã duyệt", "Ngày {date} của bạn đã được duyệt · {project}"),
@@ -120,6 +132,25 @@ class AttendancePushNotifier:
             entry_id=entry_id,
         )
 
+    def logged(self, project_id: UUID, day: date, worker_ids: List[UUID], actor_id: Optional[UUID]) -> None:
+        """Days were entered directly for a project (already validated): tell the other validators."""
+        if not worker_ids:
+            return
+        recipients = [u for u in self._devices.validator_user_ids(project_id) if u != actor_id]
+        if not recipients:
+            return
+        first = self._workers.find_by_id(worker_ids[0]) if len(worker_ids) == 1 else None
+        event = "logged_one" if len(worker_ids) == 1 and first is not None else "logged_many"
+        self._dispatch(
+            event,
+            recipients,
+            worker_name=(first.person_name or first.name) if first is not None else "",
+            day=day,
+            project_id=project_id,
+            data={"kind": "logged", "project_id": str(project_id), "date": day.isoformat()},
+            count=len(worker_ids),
+        )
+
     def decision(self, worker_id: UUID, day: date, entry_id: UUID, event: str) -> None:
         """A manager settled a day: tell the worker (validated / rejected / change_applied / change_refused)."""
         worker = self._workers.find_by_id(worker_id)
@@ -137,7 +168,16 @@ class AttendancePushNotifier:
     # -- internals ----------------------------------------------------------------
 
     def _dispatch(
-        self, event: str, recipients: List[UUID], *, worker_name: str, day: date, project_id: UUID, entry_id: UUID
+        self,
+        event: str,
+        recipients: List[UUID],
+        *,
+        worker_name: str,
+        day: date,
+        project_id: UUID,
+        entry_id: Optional[UUID] = None,
+        data: Optional[Dict[str, str]] = None,
+        count: int = 0,
     ) -> None:
         if not recipients:
             return
@@ -146,11 +186,11 @@ class AttendancePushNotifier:
 
         def render(locale: str) -> tuple[str, str]:
             title, body = _TEXT[event][locale]
-            return title, body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name)
+            return title, body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name, count=count)
 
         self._dispatcher.dispatch(
             category=NotificationCategory.ATTENDANCE.value,
             recipients=recipients,
             render=render,
-            data={"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)},
+            data=data or {"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)},
         )

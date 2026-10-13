@@ -369,3 +369,45 @@ def test_marking_events_read_is_scoped_to_the_caller(client, linked_h, owner_h):
     assert client.post("/api/v1/notifications/events/read", json={"ids": ["nope"]}, headers=linked_h).status_code == 400
     assert client.post("/api/v1/notifications/events/read", headers=linked_h).status_code == 204
     assert client.get("/api/v1/notifications", headers=linked_h).get_json()["events_unread"] == 0
+
+
+def test_validators_hear_about_days_a_manager_logs_but_not_the_one_who_logged(
+    client, ids, recorder, owner_h, chef_h, linked_h
+):
+    owner_tok = "ExponentPushToken[owner-device-000000]"
+    chef_tok = "ExponentPushToken[chef-device-0000000]"
+    assert _register(client, owner_h, owner_tok).status_code == 204
+    assert _register(client, chef_h, chef_tok).status_code == 204
+    day = (datetime.now(timezone.utc).date() - timedelta(days=9)).isoformat()
+    recorder.sent.clear()
+    r = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries",
+        json={"worker_id": ids["own"], "date": day, "shift_type": "full"},
+        headers=chef_h,
+    )
+    assert r.status_code == 201, r.get_json()
+    # The owner (an admin) is told; the manager who typed it in is not.
+    assert [m.token for m in recorder.sent] == [owner_tok]
+    msg = recorder.sent[0]
+    assert msg.data["kind"] == "logged" and msg.data["project_id"] == ids["project"]
+    assert "Linked" in msg.body and "Chantier Push" in msg.body
+
+
+def test_bulk_logging_sends_one_summary_not_one_per_worker(client, ids, recorder, owner_h, chef_h):
+    day = (datetime.now(timezone.utc).date() - timedelta(days=8)).isoformat()
+    recorder.sent.clear()
+    r = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries/bulk",
+        json={"date": day, "entries": [{"worker_id": ids["own"], "shift_type": "full"}]},
+        headers=chef_h,
+    )
+    assert r.status_code == 201, r.get_json()
+    assert len(recorder.sent) == 1 and recorder.sent[0].data["kind"] == "logged"
+    # Logging the same day again skips the worker: nothing new to announce.
+    recorder.sent.clear()
+    again = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries/bulk",
+        json={"date": day, "entries": [{"worker_id": ids["own"], "shift_type": "full"}]},
+        headers=chef_h,
+    )
+    assert again.status_code == 201 and recorder.sent == []
