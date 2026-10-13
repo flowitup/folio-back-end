@@ -1,11 +1,12 @@
 """Labor entry API routes."""
 
+import logging
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
 from flask import jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api.openapi import openapi_doc
@@ -54,6 +55,19 @@ from app.domain.exceptions.labor_exceptions import (
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+
+def _notify_logged(project_id: str, day: str, worker_ids: list) -> None:
+    """Tell the project's other validators that days were entered. Never fails the request."""
+    notifier = get_container().attendance_push_notifier
+    if notifier is None or not worker_ids:
+        return
+    try:
+        notifier.logged(
+            UUID(project_id), _parse_date(day), [UUID(str(w)) for w in worker_ids], UUID(str(get_jwt_identity()))
+        )
+    except Exception:  # pragma: no cover - defensive
+        logging.getLogger(__name__).exception("attendance logged notification failed")
 
 
 # Default cap on the unbounded list endpoint. Anything larger should use the
@@ -189,6 +203,7 @@ def log_attendance(project_id: str):
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
 
+    _notify_logged(project_id, result.date, [result.worker_id])
     return (
         jsonify(
             {
@@ -348,6 +363,11 @@ def bulk_log_attendance(project_id: str):
             409,
         )
 
+    _notify_logged(
+        project_id,
+        data.date,
+        [e.worker_id for e in data.entries if e.worker_id not in set(result.skipped_worker_ids)],
+    )
     return (
         jsonify(
             BulkLogAttendanceResponse(
