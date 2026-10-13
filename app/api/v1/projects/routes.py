@@ -9,6 +9,8 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import validation_message
 
+from app.api.v1._company_activity import notify_admins
+from app.application.push.project_label import project_label
 from app.api.openapi import openapi_doc
 from app.api.v1.projects import projects_bp
 from app.api.v1.projects.schemas import (
@@ -340,6 +342,7 @@ def create_project():
     if roster is not None:
         roster.after_project_created(UUID(result.id))
 
+    notify_admins("project_created", "", project_id=result.id)
     new_perms = sorted(_effective_perms_for(UUID(result.id), user_id))
     return (
         jsonify(
@@ -544,6 +547,8 @@ def delete_project(project_id: str):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.delete_project_usecase.execute(UUID(project_id))
+    # The project row is gone, so name it and its company here rather than letting the notifier look it up.
+    notify_admins("project_deleted", project_label(project), company_id=getattr(project, "company_id", None))
     return "", 204
 
 

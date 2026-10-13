@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.validation_error import validation_error_response
+from app.api.v1._company_activity import notify_admins
 from app.api.openapi import openapi_doc
 from app.api.v1.invoices import invoice_bp
 from app.api.v1.invoices.schemas import (
@@ -530,6 +531,15 @@ def get_labor_payments_summary(project_id: str):
     return jsonify(schema.model_dump())
 
 
+def _invoice_subject(invoice) -> str:
+    """ "Number · recipient · amount" for the admins' bell; best effort, never raises."""
+    try:
+        amount = f"{float(invoice.total_amount):,.2f} €".replace(",", " ")
+        return " · ".join(p for p in (invoice.invoice_number, invoice.recipient_name, amount) if p)
+    except Exception:
+        return ""
+
+
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])
 @openapi_doc(
     summary="Create a new invoice for a project",
@@ -619,6 +629,7 @@ def create_invoice(project_id: str):
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
+    notify_admins("invoice_created", _invoice_subject(result), project_id=project_id)
     return jsonify(d), 201
 
 
@@ -790,6 +801,7 @@ def update_invoice(project_id: str, invoice_id: str):
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
+    notify_admins("invoice_updated", _invoice_subject(result), project_id=project_id)
     return jsonify(d)
 
 
@@ -822,4 +834,5 @@ def delete_invoice(project_id: str, invoice_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
+    notify_admins("invoice_deleted", _invoice_subject(existing), project_id=project_id)
     return "", 204

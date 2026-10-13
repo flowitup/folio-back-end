@@ -10,6 +10,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
 from app.api.openapi import openapi_doc
+from app.api.v1._company_activity import notify_admins
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
@@ -55,6 +56,25 @@ from app.domain.exceptions.labor_exceptions import (
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+
+def _entry_subject(worker_id: str, day: str) -> str:
+    """ "Worker · dd/mm" for the admins' bell; best effort, never raises."""
+    try:
+        worker = get_container().worker_repository.find_by_id(UUID(str(worker_id)))
+        name = (worker.person_name or worker.name) if worker is not None else ""
+        return " · ".join(part for part in (name, _parse_date(day).strftime("%d/%m")) if part)
+    except Exception:
+        return ""
+
+
+def _existing_entry_subject(entry_id: str) -> str:
+    """Same label for an entry about to be deleted; empty if it cannot be resolved."""
+    try:
+        entry = get_container().labor_entry_repository.find_by_id(UUID(entry_id))
+        return _entry_subject(str(entry.worker_id), entry.date.isoformat()) if entry is not None else ""
+    except Exception:
+        return ""
 
 
 def _notify_logged(project_id: str, day: str, worker_ids: list) -> None:
@@ -427,6 +447,7 @@ def update_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
+    notify_admins("attendance_edited", _entry_subject(result.worker_id, result.date), project_id=project_id)
     return jsonify(
         {
             "id": result.id,
@@ -449,6 +470,7 @@ def update_attendance(project_id: str, entry_id: str):
 @require_project_access(write=False)
 def delete_attendance(project_id: str, entry_id: str):
     """Delete a labor entry."""
+    subject = _existing_entry_subject(entry_id)
     try:
         get_container().delete_attendance_usecase.execute(
             DeleteAttendanceRequest(entry_id=UUID(entry_id), project_id=UUID(project_id))
@@ -458,6 +480,7 @@ def delete_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
+    notify_admins("attendance_deleted", subject, project_id=project_id)
     return "", 204
 
 
