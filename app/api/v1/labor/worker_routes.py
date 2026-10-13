@@ -7,6 +7,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api.v1._company_activity import notify_admins
 from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
 from app.api.v1.labor._labor_validation_error_helper import (
@@ -121,6 +122,15 @@ def list_workers(project_id: str):
     return jsonify(WorkerListResponse(workers=[_worker_response(w) for w in workers], total=len(workers)).model_dump())
 
 
+def _worker_name(worker_id: str) -> str:
+    """The worker's display name for the admins' bell; best effort, never raises."""
+    try:
+        worker = get_container().worker_repository.find_by_id(UUID(worker_id))
+        return (worker.person_name or worker.name) if worker is not None else ""
+    except Exception:
+        return ""
+
+
 @labor_bp.route("/projects/<project_id>/workers", methods=["POST"])
 @openapi_doc(
     summary="Create a new worker for a project",
@@ -189,6 +199,7 @@ def create_worker(project_id: str):
     if roster is not None:
         roster.after_worker_created(UUID(project_id), UUID(result.person_id) if result.person_id else None)
 
+    notify_admins("worker_added", result.name, project_id=project_id)
     return jsonify(_worker_response(result).model_dump()), 201
 
 
@@ -252,6 +263,7 @@ def update_worker(project_id: str, worker_id: str):
 @require_project_access(write=False)
 def delete_worker(project_id: str, worker_id: str):
     """Soft delete a worker (deactivate)."""
+    subject = _worker_name(worker_id)
     try:
         person_id = get_container().delete_worker_usecase.execute(
             DeleteWorkerDTO(worker_id=UUID(worker_id), project_id=UUID(project_id))
@@ -265,4 +277,5 @@ def delete_worker(project_id: str, worker_id: str):
     if roster is not None:
         roster.after_worker_stopped(UUID(project_id), person_id)
 
+    notify_admins("worker_removed", subject, project_id=project_id)
     return "", 204

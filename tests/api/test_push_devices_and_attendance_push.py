@@ -47,6 +47,7 @@ def push_app():
         c = get_container()
         c.push_sender = recorder
         c.attendance_push_notifier.sender = recorder  # notifier was built with the log sender
+        c.push_dispatcher.sender = recorder  # shared by the company-activity notifier
 
         def user(email):
             return UserModel(email=email, is_active=True)
@@ -54,7 +55,8 @@ def push_app():
         owner = user("owner@push-test.com")
         chef = user("chef@push-test.com")  # company manager (set by the tenancy helper)
         linked = user("linked@push-test.com")
-        db.session.add_all([owner, chef, linked])
+        boss = user("boss@push-test.com")  # a second company admin
+        db.session.add_all([owner, chef, linked, boss])
         db.session.flush()
         project = ProjectModel(
             name="Chantier Push", owner_id=owner.id, company_id=company_for_projects(db.session, owner.id)
@@ -71,11 +73,12 @@ def push_app():
             "own": str(own.id),
             "owner": str(owner.id),
             "chef": str(chef.id),
+            "boss": str(boss.id),
         }
         test_app.config["_push"] = recorder
         # Permissions come from the company role + project assignment (see the helper).
         # `chef` validates attendance: that is the company `manager` role now.
-        seed_company_tenancy(test_app, roles={chef.id: "manager"})
+        seed_company_tenancy(test_app, roles={chef.id: "manager", boss.id: "admin"})
 
         yield test_app
         db.session.remove()
@@ -411,3 +414,40 @@ def test_bulk_logging_sends_one_summary_not_one_per_worker(client, ids, recorder
         headers=chef_h,
     )
     assert again.status_code == 201 and recorder.sent == []
+
+
+def test_other_admins_hear_about_an_edit_or_delete_but_not_the_one_who_did_it(client, ids, recorder, chef_h):
+    boss_tok = "ExponentPushToken[boss-device-0000000]"
+    chef_tok = "ExponentPushToken[chef-device-0000000]"
+    boss_h = _login(client, "boss@push-test.com")
+    assert _register(client, boss_h, boss_tok).status_code == 204
+    assert _register(client, chef_h, chef_tok).status_code == 204
+    day = (datetime.now(timezone.utc).date() - timedelta(days=12)).isoformat()
+    entry = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries",
+        json={"worker_id": ids["own"], "date": day, "shift_type": "full"},
+        headers=chef_h,
+    )
+    assert entry.status_code == 201, entry.get_json()
+    entry = entry.get_json()["id"]
+    recorder.sent.clear()
+    r = client.put(
+        f"/api/v1/projects/{ids['project']}/labor-entries/{entry}", json={"shift_type": "half"}, headers=chef_h
+    )
+    assert r.status_code == 200, r.get_json()
+    assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(boss_tok, "attendance_edited")]
+    assert "Linked" in recorder.sent[0].body
+    recorder.sent.clear()
+    assert client.delete(f"/api/v1/projects/{ids['project']}/labor-entries/{entry}", headers=chef_h).status_code == 204
+    assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(boss_tok, "attendance_deleted")]
+    # An admin acting alone is not told about their own action.
+    recorder.sent.clear()
+    boss_day = (datetime.now(timezone.utc).date() - timedelta(days=11)).isoformat()
+    created = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries",
+        json={"worker_id": ids["own"], "date": boss_day, "shift_type": "full"},
+        headers=boss_h,
+    ).get_json()["id"]
+    recorder.sent.clear()
+    client.delete(f"/api/v1/projects/{ids['project']}/labor-entries/{created}", headers=boss_h)
+    assert boss_tok not in [m.token for m in recorder.sent]

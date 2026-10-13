@@ -735,6 +735,14 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             access_repo=_access_repo,
         )
+        from app.application.push.company_activity_notifier import CompanyActivityNotifier
+
+        _c.company_activity_notifier = CompanyActivityNotifier(
+            dispatcher=_c.push_dispatcher,
+            project_repo=_c.project_repository,
+            access_repo=_access_repo,
+            names=_chat_repo,
+        )
 
     # Company-aware authz resolver read port (app/domain/authz/resolver.py).
     # Wired here, alongside the other company repos, so every route that goes

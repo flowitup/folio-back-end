@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.v1._company_activity import notify_admins
 from app.api.openapi import openapi_doc
 from app.api.v1.companies import companies_bp
 from app.api.v1.companies.decorators import require_company_role, require_company_role_any
@@ -164,6 +165,7 @@ def add_member_by_phone(company_id: str):
             409,
         )
 
+    notify_admins("member_added", result.name or "", company_id=company_id)
     return (
         jsonify(
             {
@@ -390,4 +392,5 @@ def cancel_pending_member(company_id: str, person_id: str):
     except LinkedMemberNotCancellableError:
         return _err("Conflict", "This person has an account; remove the member instead", 409)
 
+    notify_admins("member_removed", "", company_id=company_id)
     return "", 204

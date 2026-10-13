@@ -341,6 +341,7 @@ class Container:
     task_push_notifier: Optional[Any] = None
     membership_push_notifier: Optional[Any] = None
     billing_push_notifier: Optional[Any] = None
+    company_activity_notifier: Optional[Any] = None
     push_sender: Optional[Any] = None
     attendance_push_notifier: Optional[Any] = None
     login_otp_repository: Optional[Any] = None

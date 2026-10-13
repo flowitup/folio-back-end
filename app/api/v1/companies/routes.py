@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api._helpers.pagination import parse_limit_offset
 from app.api._helpers.pydantic_errors import format_validation_error
 from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api.v1._company_activity import notify_admins
 from app.api.openapi import openapi_doc
 from app.api.v1.ops_context import is_platform_ops
 from app.api.v1.companies import companies_bp, users_me_bp
@@ -432,6 +433,7 @@ def boot_attached_user(company_id: str, target_user_id: str):
     _notify_company_membership(
         "company_member_removed", user_id=target_uuid, actor_id=caller_id, company_id=company_uuid
     )
+    notify_admins("member_removed", "", company_id=company_id, about_user_id=target_uuid)
     return "", 204
 
 
@@ -545,6 +547,12 @@ def set_member_role(company_id: str, target_user_id: str):
         actor_id=caller_id,
         company_id=company_uuid,
         role=getattr(result, "role", None),
+    )
+    notify_admins(
+        "member_role_changed",
+        f"→ {getattr(result, 'role', '')}",
+        company_id=company_id,
+        about_user_id=target_uuid,
     )
     return jsonify(dataclasses.asdict(result))
 
