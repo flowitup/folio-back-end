@@ -59,7 +59,7 @@ from wiring import get_container
 
 
 def _entry_subject(worker_id: str, day: str) -> str:
-    """"Worker · dd/mm" for the admins' bell; best effort, never raises."""
+    """ "Worker · dd/mm" for the admins' bell; best effort, never raises."""
     try:
         worker = get_container().worker_repository.find_by_id(UUID(str(worker_id)))
         name = (worker.person_name or worker.name) if worker is not None else ""

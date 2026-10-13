@@ -532,7 +532,7 @@ def get_labor_payments_summary(project_id: str):
 
 
 def _invoice_subject(invoice) -> str:
-    """"Number · recipient · amount" for the admins' bell; best effort, never raises."""
+    """ "Number · recipient · amount" for the admins' bell; best effort, never raises."""
     try:
         amount = f"{float(invoice.total_amount):,.2f} €".replace(",", " ")
         return " · ".join(p for p in (invoice.invoice_number, invoice.recipient_name, amount) if p)
