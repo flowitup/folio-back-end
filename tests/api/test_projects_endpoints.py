@@ -531,3 +531,35 @@ def test_project_members_carry_the_phone(inv_client, admin_token, invitation_app
     assert resp.status_code == 200, resp.get_data(as_text=True)
     member = next(m for m in resp.get_json()["members"] if m["user_id"].replace("-", "") == user_id.replace("-", ""))
     assert member["phone"] == "+33611119999"
+
+
+def test_create_project_adds_other_company_admins(inv_client, admin_token, invitation_app):
+    """Other active company admins join a new project; managers and inactive admins do not."""
+    from app import db
+    from app.infrastructure.database.models import UserModel
+    from app.infrastructure.database.models.company import CompanyModel
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+    with invitation_app.app_context():
+        company_id = db.session.query(CompanyModel).first().id
+        ids = {}
+        for key, role, active in (("admin2", "admin", True), ("gone", "admin", False), ("mgr", "manager", True)):
+            user = UserModel(email=f"{key}-{uuid4().hex[:6]}@example.com", is_active=active)
+            db.session.add(user)
+            db.session.flush()
+            db.session.add(UserCompanyAccessModel(user_id=user.id, company_id=company_id, role=role))
+            ids[key] = str(user.id).replace("-", "")
+        db.session.commit()
+
+    status, body = _create_project(inv_client, admin_token, name="Auto Admins")
+    assert status == 201, body
+    from sqlalchemy import text
+
+    with invitation_app.app_context():
+        rows = db.session.execute(text("SELECT user_id FROM user_projects")).fetchall()
+        # Raw SQL stores dashed ids on SQLite, the ORM dashless: compare normalised.
+        members = {str(r[0]).replace("-", "") for r in rows}
+    assert ids["admin2"] in members
+    assert ids["gone"] not in members
+    assert ids["mgr"] not in members
+    assert body["user_count"] == 2
