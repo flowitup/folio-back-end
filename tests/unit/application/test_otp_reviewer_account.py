@@ -109,6 +109,18 @@ class TestReviewerCodeFor:
         assert _reviewer_code_for(REVIEWER) == CODE
         assert _reviewer_code_for(OTHER) is None
 
+    def test_comma_separated_list_covers_each_number_only(self, monkeypatch):
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", f"{REVIEWER}, 06 00 00 00 01")
+        monkeypatch.setenv("OTP_REVIEWER_CODE", CODE)
+        assert _reviewer_code_for(REVIEWER) == CODE
+        assert _reviewer_code_for("+33600000001") == CODE
+        assert _reviewer_code_for(OTHER) is None
+
+    def test_list_with_a_malformed_entry_disables_the_bypass(self, monkeypatch):
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", f"{REVIEWER},+84912345678")
+        monkeypatch.setenv("OTP_REVIEWER_CODE", CODE)
+        assert _reviewer_code_for(REVIEWER) is None
+
 
 class TestConsumeCode:
     def _seed(self, otps, phone):
