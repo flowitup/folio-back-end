@@ -246,7 +246,8 @@ class SqlAlchemyChatRepository:
         return [UUID(str(row[0])) for row in rows]
 
     def _project_member_ids(self, project_id: UUID) -> list[UUID]:
-        """Users assigned to the project, plus its creator — kept only while they hold
+        """Users assigned to the project, its creator and the company's admins (who see every
+        project of their company) — kept only while they hold
         a role in the project's company. A user who left or was removed from the
         company keeps neither the assignment nor the creator shortcut (as everywhere
         the resolver decides: no company role, no access)."""
@@ -256,16 +257,18 @@ class SqlAlchemyChatRepository:
         if project is None:
             return []
         owner, company_id = project
-        company_member_ids = set(
-            self._session.execute(
-                select(UserCompanyAccessModel.user_id).where(UserCompanyAccessModel.company_id == company_id)
-            ).scalars()
-        )
+        company_rows = self._session.execute(
+            select(UserCompanyAccessModel.user_id, UserCompanyAccessModel.role).where(
+                UserCompanyAccessModel.company_id == company_id
+            )
+        ).all()
+        company_member_ids = {uid for uid, _role in company_rows}
+        admin_ids = [uid for uid, role in company_rows if role == CompanyRole.ADMIN.value]
         rows = self._session.execute(
             text("SELECT user_id FROM user_projects WHERE project_id = :pid"), {"pid": str(project_id)}
         ).fetchall()
         ids: list[UUID] = []
-        for raw in [*(row[0] for row in rows), owner]:
+        for raw in [*(row[0] for row in rows), owner, *admin_ids]:
             if raw is None:
                 continue
             uid = UUID(str(raw))
@@ -286,7 +289,9 @@ class SqlAlchemyChatRepository:
         if not is_ops:
             visible = self._membership_project_ids(user_id)
             project_stmt = project_stmt.where(
-                (ProjectModel.id.in_(visible)) | (ProjectModel.owner_id == user_id),
+                (ProjectModel.id.in_(visible))
+                | (ProjectModel.owner_id == user_id)
+                | ProjectModel.company_id.in_([cid for cid, _name, role in companies if role == CompanyRole.ADMIN.value]),
                 # Only projects of a company the user still belongs to (see _project_member_ids).
                 ProjectModel.company_id.in_([cid for cid, _name, _role in companies]),
             )

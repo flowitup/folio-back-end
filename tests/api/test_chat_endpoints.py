@@ -243,12 +243,21 @@ class TestProjectChannelNeedsACompanyRole:
         assert resp.status_code == 403
 
     def test_former_member_is_not_listed_among_the_members(self, inv_client, member_token, project_of_a_former_member):
+        # The company's admin sees every project of the company, so is always listed; the former member is not.
         key = project_of_a_former_member
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
-        assert next(c for c in items if c["key"] == key)["member_count"] == 1
+        assert next(c for c in items if c["key"] == key)["member_count"] == 2
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
         assert page.status_code == 200
-        assert [m["name"] for m in page.get_json()["members"]] == ["member@invite-test.com"]
+        assert [m["name"] for m in page.get_json()["members"]] == ["admin@invite-test.com", "member@invite-test.com"]
+
+    def test_company_admin_is_in_project_channels_they_are_not_assigned_to(
+        self, inv_client, admin_token, project_of_a_former_member
+    ):
+        key = project_of_a_former_member
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
+        assert key in [c["key"] for c in items]
+        assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).status_code == 200
 
 
 class TestAttachments:
