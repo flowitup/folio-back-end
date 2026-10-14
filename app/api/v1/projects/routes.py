@@ -678,7 +678,8 @@ def get_project_members(project_id: UUID):
     company_id = reader.project_company_id(project_id) if reader is not None else None
 
     rows = db.session.execute(
-        text("""
+        text(
+            """
             SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at, u.phone
             FROM user_projects up
             JOIN users u ON u.id = up.user_id
@@ -686,7 +687,8 @@ def get_project_members(project_id: UUID):
                    ON uca.user_id = up.user_id AND uca.company_id = :cid
             WHERE up.project_id = :pid
             ORDER BY up.assigned_at
-            """).bindparams(
+            """
+        ).bindparams(
             # Typed binds, so the ids match however the dialect stores a UUID.
             bindparam("pid", type_=ProjectModel.id.type),
             bindparam("cid", type_=ProjectModel.company_id.type),
