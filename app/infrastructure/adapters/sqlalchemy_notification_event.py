@@ -55,9 +55,10 @@ class SQLAlchemyNotificationEventRepository:
             raise
 
     def list_for_user(self, user_id: UUID, limit: int = FEED_LIMIT) -> List[NotificationEventModel]:
+        """Unread entries only: once read (opened or "mark all read") an entry leaves the bell."""
         return (
             self._session.query(NotificationEventModel)
-            .filter(NotificationEventModel.user_id == user_id)
+            .filter(NotificationEventModel.user_id == user_id, NotificationEventModel.read_at.is_(None))
             .order_by(NotificationEventModel.created_at.desc())
             .limit(limit)
             .all()
