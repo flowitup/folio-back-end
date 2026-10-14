@@ -338,6 +338,36 @@ def create_project():
 
         _db.session.commit()
 
+    # Every other active admin of the company joins the new project too, so the
+    # team list and member count match what they can already open.
+    admins_added = 0
+    if creator_assigned and container.project_membership_repo is not None and target_company_id is not None:
+        from sqlalchemy import select as _select
+
+        from app.domain.companies.roles import CompanyRole
+        from app.infrastructure.database.models import UserCompanyAccessModel, UserModel
+
+        other_admin_ids = (
+            _db.session.execute(
+                _select(UserCompanyAccessModel.user_id)
+                .join(UserModel, UserModel.id == UserCompanyAccessModel.user_id)
+                .where(
+                    UserCompanyAccessModel.company_id == target_company_id,
+                    UserCompanyAccessModel.role == CompanyRole.ADMIN.value,
+                    UserCompanyAccessModel.user_id != user_id,
+                    UserModel.is_active.is_(True),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for admin_id in other_admin_ids:
+            if container.project_membership_repo.add(
+                ProjectMembership.create(user_id=admin_id, project_id=UUID(result.id), invited_by=user_id)
+            ):
+                admins_added += 1
+        _db.session.commit()
+
     roster = container.enroll_company_workers_usecase
     if roster is not None:
         roster.after_project_created(UUID(result.id))
@@ -351,7 +381,7 @@ def create_project():
                 name=result.name,
                 address=result.address,
                 owner_id=result.owner_id,
-                user_count=1 if creator_assigned else 0,
+                user_count=(1 + admins_added) if creator_assigned else 0,
                 created_at=result.created_at,
                 company_id=result.company_id,
                 invoice_prefix=result.invoice_prefix,
@@ -648,8 +678,7 @@ def get_project_members(project_id: UUID):
     company_id = reader.project_company_id(project_id) if reader is not None else None
 
     rows = db.session.execute(
-        text(
-            """
+        text("""
             SELECT u.id, u.email, u.display_name, uca.role AS role_name, up.assigned_at, u.phone
             FROM user_projects up
             JOIN users u ON u.id = up.user_id
@@ -657,8 +686,7 @@ def get_project_members(project_id: UUID):
                    ON uca.user_id = up.user_id AND uca.company_id = :cid
             WHERE up.project_id = :pid
             ORDER BY up.assigned_at
-            """
-        ).bindparams(
+            """).bindparams(
             # Typed binds, so the ids match however the dialect stores a UUID.
             bindparam("pid", type_=ProjectModel.id.type),
             bindparam("cid", type_=ProjectModel.company_id.type),
