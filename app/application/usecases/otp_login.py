@@ -134,7 +134,7 @@ def _test_code_accepted(submitted: str) -> bool:
 def _reviewer_code_for(phone: str) -> Optional[str]:
     """Fixed sign-in code for the store-review account, or ``None`` for every other phone.
 
-    Configured by OTP_REVIEWER_PHONE + OTP_REVIEWER_CODE (both required). This one runs in
+    Configured by OTP_REVIEWER_PHONE (one number or a comma-separated list) + OTP_REVIEWER_CODE (both required). This one runs in
     production on purpose — App Store / Play reviewers must be able to sign in without an
     SMS — so it is scoped as tightly as possible: only the normalised reviewer number gets a
     fixed code; the code is never accepted for any other phone; a malformed configuration
@@ -142,15 +142,17 @@ def _reviewer_code_for(phone: str) -> Optional[str]:
     all funnel through ``_consume_code``, so this is honoured (and only honoured) there,
     while ``_issue_code`` skips the SMS and the per-phone throttle for that number.
     """
-    reviewer_phone = os.environ.get("OTP_REVIEWER_PHONE", "").strip()
+    reviewer_phones = os.environ.get("OTP_REVIEWER_PHONE", "").strip()
     code = os.environ.get("OTP_REVIEWER_CODE", "").strip()
-    if not reviewer_phone or not code:
+    if not reviewer_phones or not code:
         return None
+    # Comma-separated list: a second account lets reviewers see sign-up and account deletion
+    # without deleting the main demo account. A malformed entry disables the whole bypass.
     try:
-        normalized = normalize_french_phone(reviewer_phone)
+        normalized = {normalize_french_phone(p.strip()) for p in reviewer_phones.split(",")}
     except ValueError:
         return None
-    return code if phone == normalized else None
+    return code if phone in normalized else None
 
 
 def _issue_code(
