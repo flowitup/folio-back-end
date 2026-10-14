@@ -291,7 +291,9 @@ class SqlAlchemyChatRepository:
             project_stmt = project_stmt.where(
                 (ProjectModel.id.in_(visible))
                 | (ProjectModel.owner_id == user_id)
-                | ProjectModel.company_id.in_([cid for cid, _name, role in companies if role == CompanyRole.ADMIN.value]),
+                | ProjectModel.company_id.in_(
+                    [cid for cid, _name, role in companies if role == CompanyRole.ADMIN.value]
+                ),
                 # Only projects of a company the user still belongs to (see _project_member_ids).
                 ProjectModel.company_id.in_([cid for cid, _name, _role in companies]),
             )
