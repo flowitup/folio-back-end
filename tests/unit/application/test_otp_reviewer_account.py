@@ -58,6 +58,9 @@ class FakeOtps:
         created = [r.created_at for r in self.rows if r.phone == phone and r.created_at >= since]
         return min(created) if created else None
 
+    def purge_stale(self, phone: str, before: datetime, batch_size: int) -> int:
+        return 0
+
     def void_active(self, phone: str, now: datetime, purpose=OtpPurpose.SIGN_IN) -> None:
         for r in self.rows:
             if r.phone == phone and r.purpose == purpose and r.is_active(now):

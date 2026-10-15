@@ -62,6 +62,10 @@ FAILED_GUESS_BUDGET_PER_HOUR = 20
 # The store-review number sends no SMS, so it gets a short gap and a large (but finite) hourly cap.
 REVIEWER_RESEND_AFTER_SECONDS = 5
 REVIEWER_HOURLY_MAX = 30
+# Codes are kept this long (the throttles look back one hour, a code lives minutes): every request for a
+# code deletes the number's older rows and a bounded batch of other numbers' older rows.
+OTP_RETENTION = timedelta(hours=24)
+OTP_PURGE_BATCH = 100
 
 
 def _hash_code(phone: str, code: str) -> str:
@@ -211,6 +215,7 @@ def _issue_code(
             hourly_limit=True,
         )
     code = f"{secrets.randbelow(10**6):06d}"
+    otps.purge_stale(phone, now - OTP_RETENTION, OTP_PURGE_BATCH)
     otps.void_active(phone, now, purpose)
     otps.save(
         LoginOtp(

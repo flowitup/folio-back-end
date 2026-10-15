@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.domain.entities.login_otp import LoginOtp, OtpPurpose
@@ -87,6 +87,23 @@ class SQLAlchemyLoginOtpRepository:
             select(func.min(LoginOtpOrm.created_at)).where(LoginOtpOrm.phone == phone, LoginOtpOrm.created_at >= since)
         ).scalar_one()
         return _aware(oldest) if oldest is not None else None
+
+    def purge_stale(self, phone: str, before: datetime, batch_size: int) -> int:
+        removed = self._session.execute(
+            delete(LoginOtpOrm).where(LoginOtpOrm.phone == phone, LoginOtpOrm.created_at < before)
+        ).rowcount
+        # Other numbers' old rows go in a bounded batch, so the table drains a little on every request
+        # without one request paying for the whole backlog. SKIP LOCKED (a no-op on SQLite): two
+        # requests purging at once take different rows instead of waiting on, or deadlocking with, each other.
+        stale = (
+            select(LoginOtpOrm.id)
+            .where(LoginOtpOrm.created_at < before)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        removed += self._session.execute(delete(LoginOtpOrm).where(LoginOtpOrm.id.in_(stale))).rowcount
+        self._session.flush()
+        return removed
 
     def void_active(self, phone: str, now: datetime, purpose: OtpPurpose = OtpPurpose.SIGN_IN) -> None:
         self._session.execute(
