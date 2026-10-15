@@ -69,3 +69,30 @@ def test_locked_read_sees_the_counter_another_request_committed(session):
     fresh.attempts += 1
     repo.save(fresh)
     assert cached.attempts == 4
+
+
+def test_sum_attempts_since_adds_the_wrong_guesses_of_every_code_in_the_window(session):
+    """A re-issued code starts at zero attempts; the phone's total must still add up."""
+    repo = SQLAlchemyLoginOtpRepository(session)
+
+    def code(phone, minutes_ago, attempts, purpose=OtpPurpose.SIGN_IN):
+        repo.save(
+            LoginOtp(
+                id=uuid4(),
+                user_id=None,
+                phone=phone,
+                code_hash="x",
+                expires_at=NOW + timedelta(minutes=5),
+                created_at=NOW - timedelta(minutes=minutes_ago),
+                attempts=attempts,
+                purpose=purpose,
+            )
+        )
+
+    code(PHONE, 5, 5)
+    code(PHONE, 30, 3, OtpPurpose.PHONE_CHANGE)
+    code(PHONE, 90, 5)  # older than the hour
+    code("+33620100998", 5, 4)  # another phone
+    assert repo.sum_attempts_since(PHONE, NOW - timedelta(hours=1)) == 8
+    assert repo.sum_attempts_since(PHONE, NOW - timedelta(hours=2)) == 13
+    assert repo.sum_attempts_since("+33620100997", NOW - timedelta(hours=1)) == 0

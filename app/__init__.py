@@ -14,7 +14,7 @@ from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 
-from config import Config
+from config import Config, validate_boot_settings
 from app.infrastructure.database.models import Base
 from app.infrastructure.rate_limiter import limiter
 from app.infrastructure.trusted_proxy import apply_trusted_proxy
@@ -85,6 +85,8 @@ def create_app(config_class: type = Config) -> Flask:
             "CRITICAL: FLASK_DEV_INSECURE=1 is only permitted when FLASK_ENV=development. "
             "Use proper TLS + Secure cookies for staging/UAT."
         )
+
+    validate_boot_settings(app.config)
 
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
@@ -523,6 +525,18 @@ def _configure_di_container() -> None:
         )
     else:
         _sms = LoggingSmsSender()
+    # Every message that leaves spends the global SMS budget first (the SIM / gateway quota is finite).
+    # Tests keep it in memory; production counts in Redis and fails open when Redis is down.
+    from app.infrastructure.adapters.budgeted_sms_sender import BudgetedSmsSender
+    from app.infrastructure.adapters.sms_budget import InMemorySmsBudget, RedisSmsBudget
+
+    _sms_max_10min = int(_cfg.get("SMS_GLOBAL_MAX_PER_10MIN", 60))
+    _sms_max_day = int(_cfg.get("SMS_GLOBAL_MAX_PER_DAY", 400))
+    if _cfg.get("TESTING"):
+        _c.sms_budget = InMemorySmsBudget(_sms_max_10min, _sms_max_day)
+    else:
+        _c.sms_budget = RedisSmsBudget(_cfg.get("REDIS_URL") or Config.REDIS_URL, _sms_max_10min, _sms_max_day)
+    _sms = BudgetedSmsSender(_sms, _c.sms_budget)
     _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
     _c.sms_sender = _sms
 

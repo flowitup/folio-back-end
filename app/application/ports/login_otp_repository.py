@@ -27,6 +27,13 @@ class LoginOtpRepositoryPort(Protocol):
         """Codes created for the phone since ``since``, all purposes together."""
         ...
 
+    def sum_attempts_since(self, phone: str, since: datetime) -> int:
+        """Wrong guesses made at the phone's codes created since ``since``, all purposes together.
+
+        Every re-issued code starts again at zero attempts; this total does not.
+        """
+        ...
+
     def void_active(self, phone: str, now: datetime, purpose: OtpPurpose = OtpPurpose.SIGN_IN) -> None:
         """Mark every still-active code of the phone for ``purpose`` as consumed (a new one replaces them)."""
         ...

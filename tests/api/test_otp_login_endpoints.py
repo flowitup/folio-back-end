@@ -131,6 +131,53 @@ class TestOtpLogin:
         assert inv_client.post("/api/v1/auth/otp/request", json={"phone": "abc"}).status_code == 400
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": "0900000123", "code": "12"}).status_code == 400
 
+    def test_non_ascii_digits_are_refused(self, inv_client):
+        """Unicode digits are not a second spelling of a number or of a code."""
+        spelled = "+336\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18"
+        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": spelled}).status_code == 400
+        assert inv_client.post("/api/v1/auth/signup/request", json={"phone": spelled}).status_code == 400
+        for code in ("\uff11\uff12\uff13\uff14\uff15\uff16", "\u0661\u0662\u0663\u0664\u0665\u0666"):
+            resp = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": code})
+            assert resp.status_code == 400, resp.get_json()
+
+    def test_wrong_guesses_are_budgeted_across_re_issued_codes(
+        self, inv_client, invitation_app, member_with_phone, monkeypatch
+    ):
+        """Five guesses per code is not the bound: a phone absorbs 20 wrong guesses an hour over all its codes."""
+        from datetime import datetime, timedelta, timezone
+        from uuid import UUID, uuid4
+
+        from app import db
+        from app.infrastructure.database.models import LoginOtpOrm
+
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", MEMBER_PHONE)
+        monkeypatch.setenv("OTP_REVIEWER_CODE", "246810")
+        now = datetime.now(timezone.utc)
+        with invitation_app.app_context():
+            for i in range(4):  # four earlier codes, every guess spent on a wrong one
+                db.session.add(
+                    LoginOtpOrm(
+                        id=uuid4(),
+                        user_id=UUID(member_with_phone),
+                        phone=MEMBER_PHONE,
+                        code_hash="x",
+                        expires_at=now - timedelta(minutes=10 + i),
+                        created_at=now - timedelta(minutes=15 + i),
+                        attempts=5,
+                        consumed_at=now - timedelta(minutes=14 + i),
+                    )
+                )
+            db.session.commit()
+        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": MEMBER_PHONE}).status_code == 202
+        refused = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": "246810"})
+        assert refused.status_code == 401, refused.get_json()
+
+        with invitation_app.app_context():  # the same sign-in once the budget has room again
+            db.session.query(LoginOtpOrm).filter(LoginOtpOrm.attempts == 5).delete()
+            db.session.commit()
+        ok = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": "246810"})
+        assert ok.status_code == 200, ok.get_json()
+
     def test_sign_in_refuses_numbers_outside_france(self, inv_client, invitation_app):
         """Codes leave through a French gateway, so a foreign number is turned away with no SMS."""
         sent_before = len(invitation_app._sms.sent)
