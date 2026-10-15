@@ -280,8 +280,8 @@ class TestInvoiceInputCaps:
             inv_hc_client,
             inv_hc_app,
             admin_token,
-            notes="n" * 5000,
-            recipient_address="a" * 1000,
+            notes="n" * 20000,
+            recipient_address="a" * 2000,
             items=[item] * 500,
         )
         assert resp.status_code == 201, resp.get_data(as_text=True)
@@ -289,8 +289,8 @@ class TestInvoiceInputCaps:
     @pytest.mark.parametrize(
         "overrides",
         [
-            {"notes": "n" * 5001},
-            {"recipient_address": "a" * 1001},
+            {"notes": "n" * 20001},
+            {"recipient_address": "a" * 2001},
             {"items": [{"description": "Line", "quantity": 1, "unit_price": 1}] * 501},
         ],
         ids=["notes", "recipient_address", "items"],
@@ -301,8 +301,8 @@ class TestInvoiceInputCaps:
     @pytest.mark.parametrize(
         "patch_body",
         [
-            {"notes": "n" * 5001},
-            {"recipient_address": "a" * 1001},
+            {"notes": "n" * 20001},
+            {"recipient_address": "a" * 2001},
             {"items": [{"description": "Line", "quantity": 1, "unit_price": 1}] * 501},
         ],
         ids=["notes", "recipient_address", "items"],
