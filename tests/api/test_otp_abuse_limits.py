@@ -130,6 +130,35 @@ class TestSmsSendCapsPerAddress:
         assert limited_app.config["SMS_SEND_IP_LIMITS"] == DEFAULT_SMS_SEND_IP_LIMITS
 
 
+class TestOnePhonePerSource:
+    """A stranger cannot use up a number's whole hourly allowance from one place."""
+
+    def test_a_source_asks_for_one_number_four_times_an_hour(self, limited_app):
+        ip = "203.0.113.60"
+        for _ in range(4):
+            assert _post(limited_app, SIGN_IN, ip, PHONE_A).status_code == 202
+        assert _post(limited_app, SIGN_IN, ip, PHONE_A).status_code == 429
+        assert _post(limited_app, SIGN_IN, "203.0.113.61", PHONE_A).status_code == 202  # another source is not
+
+    def test_another_number_is_its_own_count(self, limited_app):
+        ip = "203.0.113.64"
+        for _ in range(4):
+            assert _post(limited_app, SIGN_IN, ip, PHONE_A).status_code == 202
+        assert _post(limited_app, SIGN_IN, ip, PHONE_B).status_code == 202
+
+    def test_a_number_spelled_another_way_is_the_same_count(self, limited_app):
+        ip = "203.0.113.63"
+        for spelling in (PHONE_A, "06 11 00 00 01", "0033611000001", "+33 6 11 00 00 01"):
+            assert _post(limited_app, SIGN_IN, ip, spelling).status_code == 202
+        assert _post(limited_app, SIGN_IN, ip, "0611000001").status_code == 429
+
+    def test_store_review_numbers_are_exempt(self, limited_app, monkeypatch):
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", PHONE_A)
+        monkeypatch.setenv("OTP_REVIEWER_CODE", "246810")
+        for _ in range(5):
+            assert _post(limited_app, SIGN_IN, "203.0.113.62", PHONE_A).status_code == 202
+
+
 @pytest.fixture(scope="module")
 def _budget_app():
     """An app whose whole SMS budget is 2 per 10 minutes, to watch what happens past it."""

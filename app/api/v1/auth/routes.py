@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.profile_fields import apply_profile_fields
-from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.api._helpers.rate_limit_keys import body_phone, jwt_user_key, phone_and_caller_key
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
 from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
 from app.api.openapi import openapi_doc
@@ -46,7 +46,7 @@ from app.application.usecases.delete_account import (
     AccountNotFoundError,
     DeletionBlockedByLastAdminError,
 )
-from app.application.usecases.otp_login import LoginResult
+from app.application.usecases.otp_login import LoginResult, is_reviewer_phone
 from app.domain.exceptions.auth_exceptions import (
     OtpInvalidError,
     OtpThrottledError,
@@ -136,6 +136,9 @@ def _login_response(container, result: LoginResult):
 )
 @limiter.limit("5 per minute")
 @limiter.shared_limit(sms_send_ip_limits, scope="sms-send")
+# One source asks for a given number 4 times an hour at most: the per-number cap (5) is shared with
+# strangers, and this keeps one of them from using it all up. The store-review numbers are exempt.
+@limiter.limit("4 per hour", key_func=phone_and_caller_key, exempt_when=lambda: is_reviewer_phone(body_phone()))
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
