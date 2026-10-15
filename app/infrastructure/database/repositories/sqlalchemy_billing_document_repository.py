@@ -218,12 +218,25 @@ class SqlAlchemyBillingDocumentRepository:
     # Activity suggestions aggregation (phase 04)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _still_attached(owner_company_ids: Optional[list[UUID]]) -> list:
+        """Where-clauses keeping a company document only while its author is still in that company."""
+        if owner_company_ids is None:
+            return []
+        return [
+            or_(
+                BillingDocumentModel.company_id.is_(None),
+                BillingDocumentModel.company_id.in_(owner_company_ids),
+            )
+        ]
+
     def aggregate_item_suggestions(
         self,
         user_id: UUID,
         category: Optional[str],
         q: Optional[str],
         limit: int,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> ActivitySuggestionsResponse:
         """Aggregate line-item suggestions for a user.
 
@@ -237,8 +250,8 @@ class SqlAlchemyBillingDocumentRepository:
             dialect = "sqlite"
 
         if dialect == "postgresql":
-            return self._aggregate_suggestions_postgres(user_id, category, q, limit)
-        return self._aggregate_suggestions_sqlite(user_id, category, q, limit)
+            return self._aggregate_suggestions_postgres(user_id, category, q, limit, owner_company_ids)
+        return self._aggregate_suggestions_sqlite(user_id, category, q, limit, owner_company_ids)
 
     def _aggregate_suggestions_postgres(
         self,
@@ -246,6 +259,7 @@ class SqlAlchemyBillingDocumentRepository:
         category: Optional[str],
         q: Optional[str],
         limit: int,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> ActivitySuggestionsResponse:
         """Postgres path: jsonb_array_elements lateral join + GROUP BY."""
         from sqlalchemy import literal_column
@@ -259,7 +273,7 @@ class SqlAlchemyBillingDocumentRepository:
                 BillingDocumentModel.created_at.label("doc_created_at"),
                 func.jsonb_array_elements(BillingDocumentModel.items).label("item"),
             )
-            .where(BillingDocumentModel.user_id == user_id)
+            .where(BillingDocumentModel.user_id == user_id, *self._still_attached(owner_company_ids))
             .subquery("user_items")
         )
 
@@ -348,6 +362,7 @@ class SqlAlchemyBillingDocumentRepository:
         category: Optional[str],
         q: Optional[str],
         limit: int,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> ActivitySuggestionsResponse:
         """SQLite (and test) path: load all user docs → in-Python aggregation.
 
@@ -356,7 +371,9 @@ class SqlAlchemyBillingDocumentRepository:
         from collections import defaultdict
 
         # Load all user docs
-        stmt = select(BillingDocumentModel).where(BillingDocumentModel.user_id == user_id)
+        stmt = select(BillingDocumentModel).where(
+            BillingDocumentModel.user_id == user_id, *self._still_attached(owner_company_ids)
+        )
         rows = self._session.execute(stmt).scalars().all()
 
         # Collect (category, description) → [(created_at, unit, unit_price, vat_rate)]

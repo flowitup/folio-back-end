@@ -229,6 +229,81 @@ class TestApiKeyCannotMutateIdentity:
         assert resp.status_code == 200
 
 
+class TestApiKeyHonoursTheSessionCutoff:
+    """A phone change ends every earlier session (users.tokens_valid_after); a key made before it is dead too."""
+
+    def _set_cutoff_and_key_age(self, invitation_app, user_id: str, key_id: str, *, cutoff_ago_h: int, key_age_h: int):
+        from datetime import datetime, timedelta, timezone
+
+        from app import db
+        from app.infrastructure.database.models import UserModel
+        from app.infrastructure.database.models.api_key import ApiKeyOrm
+
+        now = datetime.now(timezone.utc)
+        with invitation_app.app_context():
+            db.session.get(UserModel, uuid.UUID(user_id)).tokens_valid_after = now - timedelta(hours=cutoff_ago_h)
+            db.session.get(ApiKeyOrm, uuid.UUID(key_id)).created_at = now - timedelta(hours=key_age_h)
+            db.session.commit()
+
+    def _clear_cutoff(self, invitation_app, user_id: str):
+        from app import db
+        from app.infrastructure.database.models import UserModel
+
+        with invitation_app.app_context():
+            db.session.get(UserModel, uuid.UUID(user_id)).tokens_valid_after = None
+            db.session.commit()
+
+    def test_key_created_before_the_cutoff_stops_authenticating(self, inv_client, member_token, invitation_app):
+        created = _create_key(inv_client, member_token, name="predates the cut-off")
+        user_id = invitation_app._test_member_user_id
+        try:
+            assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 200
+            self._set_cutoff_and_key_age(invitation_app, user_id, created["id"], cutoff_ago_h=1, key_age_h=2)
+            assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 401
+        finally:
+            self._clear_cutoff(invitation_app, user_id)
+
+    def test_key_created_after_the_cutoff_keeps_working(self, inv_client, member_token, invitation_app):
+        created = _create_key(inv_client, member_token, name="made after the cut-off")
+        user_id = invitation_app._test_member_user_id
+        try:
+            self._set_cutoff_and_key_age(invitation_app, user_id, created["id"], cutoff_ago_h=2, key_age_h=1)
+            assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 200
+        finally:
+            self._clear_cutoff(invitation_app, user_id)
+
+
+class TestApiKeyCannotPlantPersistence:
+    """Push devices and notification settings outlive a revoked key, so a key may not write them."""
+
+    def test_push_device_registration_and_removal_are_forbidden(self, inv_client, member_token):
+        created = _create_key(inv_client, member_token, name="push probe")
+        body = {"token": "ExponentPushToken[attacker-device-0000]", "platform": "ios"}
+        assert (
+            inv_client.post("/api/v1/push/devices", json=body, headers=_api_key_header(created["token"])).status_code
+            == 403
+        )
+        assert (
+            inv_client.delete("/api/v1/push/devices", json=body, headers=_api_key_header(created["token"])).status_code
+            == 403
+        )
+
+    def test_notification_settings_and_feed_writes_are_forbidden_but_reads_and_dismiss_stay(
+        self, inv_client, member_token
+    ):
+        created = _create_key(inv_client, member_token, name="notification probe")
+        headers = _api_key_header(created["token"])
+        assert (
+            inv_client.put("/api/v1/notifications/preferences", json={"chat": False}, headers=headers).status_code
+            == 403
+        )
+        assert inv_client.post("/api/v1/notifications/events/read", headers=headers).status_code == 403
+        assert inv_client.get("/api/v1/notifications", headers=headers).status_code != 403
+        # The MCP plugin dismisses reminders with a key: that write is not blocked.
+        dismissed = inv_client.post(f"/api/v1/notifications/{uuid.uuid4()}/dismiss", headers=headers)
+        assert dismissed.status_code != 403
+
+
 class TestCredentialExtraction:
     def test_lowercase_bearer_scheme_is_accepted(self, inv_client, member_token):
         """RFC 7235 makes the auth-scheme token case-insensitive; clients do send "bearer"."""

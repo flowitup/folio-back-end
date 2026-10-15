@@ -35,7 +35,10 @@ this flag from one request into the next.
 
 from __future__ import annotations
 
+import functools
 import logging
+from datetime import timezone
+from typing import Any, Callable
 
 from flask import g, jsonify, request
 
@@ -100,6 +103,12 @@ def authenticate_api_key_request() -> None:
         if row is None:
             return
 
+        # A key made before the owner's sessions cut-off (a verified phone change signs every
+        # other device out) is as dead as a JWT of that time: the token minted below always
+        # carries a fresh iat, so the cut-off has to be applied to the key itself.
+        if not _key_may_sign_in(container, row):
+            return
+
         minted = token_issuer.create_access_token(row.user_id)
         # EnvironHeaders reads straight through to environ, so this is visible
         # to flask-jwt-extended's own header lookup later in this request.
@@ -109,6 +118,17 @@ def authenticate_api_key_request() -> None:
         repo.touch_last_used(row.id)
     except Exception:
         logger.exception("API key authentication failed unexpectedly; request stays unauthenticated.")
+
+
+def _key_may_sign_in(container: Any, row: Any) -> bool:
+    """True when the key's owner may sign in and the key was not made before their cut-off."""
+    check = getattr(getattr(container, "user_repository", None), "is_sign_in_allowed", None)
+    if check is None:
+        return True
+    created_at = row.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return bool(check(row.user_id, issued_at=int(created_at.timestamp())))
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +183,20 @@ def reject_api_key_mutations():
     if g.get("authenticated_via_api_key"):
         return _forbidden("API keys cannot modify account or administration settings")
     return None
+
+
+def deny_api_key_callers(view: Callable[..., Any]) -> Callable[..., Any]:
+    """Route decorator: refuse a key-authenticated caller on this one route.
+
+    For a write on an otherwise readable blueprint whose sibling writes a key legitimately needs
+    (the notifications blueprint: a key lists and dismisses reminders, but must not mute categories
+    or clear the activity feed to hide a compromise).
+    """
+
+    @functools.wraps(view)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if g.get("authenticated_via_api_key"):
+            return _forbidden("API keys cannot change notification settings")
+        return view(*args, **kwargs)
+
+    return wrapper

@@ -207,6 +207,39 @@ def test_rejecting_a_pending_day_still_pushes_the_worker(client, ids, recorder, 
     assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(WORKER_TOKEN, "rejected")]
 
 
+def test_a_worker_removed_from_the_company_gets_no_decision_push(client, ids, recorder, owner_h, linked_h, push_app):
+    """A removed member whose worker row still carries their account hears nothing about their days."""
+    from app import db
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+    assert _register(client, linked_h, WORKER_TOKEN).status_code == 204
+    day = (datetime.now(timezone.utc).date() - timedelta(days=4)).isoformat()
+    entry = client.post(
+        f"/api/v1/projects/{ids['project']}/labor-entries/self",
+        json={"date": day, "shift_type": "full"},
+        headers=linked_h,
+    ).get_json()["id"]
+    with push_app.app_context():
+        user_id = db.session.query(UserModel).filter_by(email="linked@push-test.com").one().id
+        rows = db.session.query(UserCompanyAccessModel).filter_by(user_id=user_id).all()
+        saved = [(r.company_id, r.role, r.is_primary) for r in rows]
+        for r in rows:
+            db.session.delete(r)
+        db.session.commit()
+    try:
+        recorder.sent.clear()
+        resp = client.post(f"/api/v1/projects/{ids['project']}/labor-entries/{entry}/reject", headers=owner_h)
+        assert resp.status_code == 204
+        assert recorder.sent == []
+    finally:
+        with push_app.app_context():
+            for company_id, role, is_primary in saved:
+                db.session.add(
+                    UserCompanyAccessModel(user_id=user_id, company_id=company_id, role=role, is_primary=is_primary)
+                )
+            db.session.commit()
+
+
 def test_unregister_never_removes_another_users_device(client, owner_h, push_app):
     from app import db
     from app.infrastructure.database.models.push_device import PushDeviceOrm

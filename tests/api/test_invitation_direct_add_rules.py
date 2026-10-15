@@ -160,3 +160,29 @@ def test_inviting_someone_already_on_the_project_says_so(inv_client, admin_token
     again = _invite(inv_client, admin_token, people["project_id"], people["plain_member"][1])
     assert again.status_code == 201
     assert again.get_json()["kind"] == "already_member"
+
+
+def test_the_answer_never_carries_the_accounts_id(inv_client, admin_token, people):
+    """`kind` is what clients read; the id of someone else's account is not the inviter's to learn."""
+    added = _invite(inv_client, admin_token, people["project_id"], people["other_manager"][1])
+    assert added.status_code == 201
+    assert added.get_json()["kind"] in ("direct_added", "already_member")
+    assert added.get_json()["user_id"] is None
+    assert people["other_manager"][0] not in added.get_data(as_text=True)
+
+
+def test_a_phone_placeholder_address_is_not_an_invitable_email(inv_client, admin_token, invitation_app, people):
+    """The synthetic address of a phone sign-up is derivable from the number: it never finds the account."""
+    from app import db
+    from app.infrastructure.database.models import UserModel
+
+    email = "phone-33699887766@no-email.folio.flowitup.com"
+    with invitation_app.app_context():
+        user = UserModel(email=email, phone="+33699887766", is_active=True)
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.id
+    resp = _invite(inv_client, admin_token, people["project_id"], email)
+    assert resp.status_code == 422, resp.get_data(as_text=True)
+    assert resp.get_json()["reason"] == "invalid_email" or "invalid_email" in resp.get_data(as_text=True)
+    assert str(user_id).replace("-", "") not in _members(invitation_app, people["project_id"])

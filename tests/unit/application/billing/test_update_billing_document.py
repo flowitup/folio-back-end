@@ -10,7 +10,7 @@ from app.application.billing.update_billing_document_usecase import UpdateBillin
 from app.application.billing.dtos import ItemInput, UpdateBillingDocumentInput
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, ForbiddenBillingDocumentError
-from tests.unit.application.billing.conftest import make_doc
+from tests.unit.application.billing.conftest import ProjectsByCompany, make_doc
 
 
 @pytest.fixture
@@ -251,7 +251,9 @@ class TestPaidFactureFundsReleaseSync:
             ],
         )
 
-        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds).execute(inp, fake_session)
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds, project_repo=ProjectsByCompany()).execute(
+            inp, fake_session
+        )
 
         assert len(funds.synced) == 1
         call = funds.synced[0]
@@ -259,6 +261,24 @@ class TestPaidFactureFundsReleaseSync:
         assert call["project_id"] == doc.project_id
         assert call["recipient_name"] == "changed after paid"
         assert call["amount_items"] == [{"description": "x", "quantity": "10", "unit_price": "100", "vat_rate": "20"}]
+
+    def test_editing_paid_facture_linked_to_another_companys_project_syncs_no_release(
+        self, doc_repo, fake_session, user_id
+    ):
+        """A project of another company gets no release: the sync is told the facture has no project."""
+        funds = _RecordingFundsRelease()
+        doc = self._paid_facture(doc_repo, user_id)
+        doc_repo.save(doc.with_updates(company_id=uuid4()))
+
+        class _OtherCompanyProjects:
+            def find_by_id(self, project_id):
+                return type("P", (), {"company_id": uuid4()})()
+
+        UpdateBillingDocumentUseCase(
+            doc_repo=doc_repo, funds_release=funds, project_repo=_OtherCompanyProjects()
+        ).execute(UpdateBillingDocumentInput(id=doc.id, user_id=user_id, recipient_name="R"), fake_session)
+
+        assert [call["project_id"] for call in funds.synced] == [None]
 
     def test_notes_only_edit_does_not_touch_release(self, doc_repo, fake_session, user_id):
         funds = _RecordingFundsRelease()

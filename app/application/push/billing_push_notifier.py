@@ -79,6 +79,15 @@ class BillingPushNotifier:
         self._projects = project_repo
         self._access = access_repo
 
+    def _still_in_company(self, user_id: UUID, company_id: Optional[UUID]) -> bool:
+        """False for someone removed from the company: its money news is no longer theirs.
+
+        True whenever membership cannot be asked (no access repo wired, no company known).
+        """
+        if self._access is None or company_id is None:
+            return True
+        return any(a.user_id == user_id for a in self._access.list_for_company(company_id))
+
     def refund_status_changed(
         self, *, status: str, payer_id: UUID, actor_id: UUID, project_id: UUID, invoice_id: UUID
     ) -> None:
@@ -87,6 +96,8 @@ class BillingPushNotifier:
             if status not in _REFUND_TEXT:
                 return
             project = self._projects.find_by_id(project_id)
+            if not self._still_in_company(payer_id, getattr(project, "company_id", None)):
+                return
             label = project_label(project)
 
             def render(locale: str) -> tuple[str, str]:
@@ -121,7 +132,7 @@ class BillingPushNotifier:
         try:
             if status not in _STATUS_TEXT:
                 return
-            recipients: List[UUID] = [author_id]
+            recipients: List[UUID] = [author_id] if self._still_in_company(author_id, company_id) else []
             if status in _TEAM_WIDE and company_id is not None and self._access is not None:
                 recipients += [
                     a.user_id for a in self._access.list_for_company(company_id) if getattr(a, "role", "") == "admin"

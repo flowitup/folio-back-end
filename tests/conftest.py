@@ -657,21 +657,21 @@ def invitation_app():
         _c.create_billing_document_usecase = CreateBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            project_repo=None,
+            project_repo=project_repo,  # project link authorization, as in production
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
         _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            project_repo=None,
+            project_repo=project_repo,  # project link authorization, as in production
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
         _c.convert_devis_to_facture_usecase = ConvertDevisToFactureUseCase(
             doc_repo=_billing_doc_repo,
             counter_repo=_billing_counter_repo,
-            project_repo=None,
+            project_repo=project_repo,  # project link authorization, as in production
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
@@ -731,7 +731,7 @@ def invitation_app():
             doc_repo=_billing_doc_repo,
             template_repo=_billing_tpl_repo,
             counter_repo=_billing_counter_repo,
-            project_repo=None,
+            project_repo=project_repo,  # project link authorization, as in production
             company_repo=_company_repo,
             access_repo=_access_repo,
         )
@@ -746,6 +746,7 @@ def invitation_app():
         )
         _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
             doc_repo=_billing_doc_repo,
+            access_repo=_access_repo,
         )
 
         # Wire project-scoped billing document list use-case
@@ -776,6 +777,18 @@ def invitation_app():
         # Mirrors app/__init__.py: the same adapter instance backs both the
         # billing facture-status use-case and the materials-expenses one.
         _funds_release_adapter_for_expenses = _FundsReleaseAdapterForExp(invoice_repo=_inv_repo_for_expenses)
+        _c.update_billing_document_usecase = UpdateBillingDocumentUseCase(
+            doc_repo=_billing_doc_repo,
+            project_repo=project_repo,
+            access_repo=_access_repo,
+            funds_release=_funds_release_adapter_for_expenses,  # keep a paid facture's release in sync
+        )
+        _c.update_billing_document_status_usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=_billing_doc_repo,
+            funds_release=_funds_release_adapter_for_expenses,
+            access_repo=_access_repo,
+            project_repo=project_repo,
+        )
 
         _c.list_materials_expenses_usecase = _ListMatExpUseCase(
             invoice_repo=_inv_repo_for_expenses,
@@ -1223,7 +1236,12 @@ def invitation_app():
         from app.application.usecases.change_phone import RequestPhoneChangeCodeUseCase as _RequestPhoneChangeUC
 
         _c.request_phone_change_code_usecase = _RequestPhoneChangeUC(user_repo, _otp_repo, _sms)
-        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(user_repo, _otp_repo, person_repo=_c.person_repo)
+        from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository as _PushDeviceRepo
+
+        _c.push_device_repository = _PushDeviceRepo(db.session)
+        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(
+            user_repo, _otp_repo, person_repo=_c.person_repo, push_device_repo=_c.push_device_repository
+        )
 
         # Invitation acceptance proves a phone by the same sign-up code flow (phase 02) —
         # mirrors app/__init__.py's wiring, which this fixture had drifted from (the

@@ -158,7 +158,8 @@ def create_invitation():
         kind=result.kind,
         invitation_id=result.invitation_id,
         expires_at=result.expires_at,
-        user_id=result.user_id,
+        # The account's id is not the caller's to learn; clients only read `kind`.
+        user_id=None,
     )
     return jsonify(response_data.model_dump()), 201
 

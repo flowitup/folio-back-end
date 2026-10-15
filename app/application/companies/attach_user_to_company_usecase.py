@@ -89,7 +89,7 @@ class AttachUserToCompanyUseCase:
         access = UserCompanyAccess(
             user_id=inp.target_user_id,
             company_id=inp.company_id,
-            is_primary=len(self._access_repo.list_for_user(inp.target_user_id)) == 0,
+            is_primary=False,  # the account did not choose this company
             attached_at=now,
             role=CompanyRole.MEMBER.value,
         )

@@ -133,7 +133,8 @@ class LinkPersonOnSignupUseCase:
                     UserCompanyAccess(
                         user_id=user_id,
                         company_id=profile.company_id,
-                        is_primary=len(self._access.list_for_user(user_id)) == 0,
+                        # Never primary: the account did not choose this company.
+                        is_primary=False,
                         attached_at=now,
                         # The role the admin chose when adding them by phone.
                         role=_signup_role(profile.pending_company_role),

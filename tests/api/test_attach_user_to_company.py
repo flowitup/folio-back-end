@@ -168,7 +168,8 @@ class TestAttachUserToCompany:
         assert body["company_id"] == atc_app._test_company_a_id
         assert body["role"] == "member"
 
-    def test_attach_is_primary_true_on_first_attachment(self, atc_client, atc_app, company_a_admin_token):
+    def test_attach_is_not_primary_even_on_first_attachment(self, atc_client, atc_app, company_a_admin_token):
+        """The account did not choose this company, so it never becomes their primary one."""
         target_id = _make_user(atc_app)
 
         resp = atc_client.post(
@@ -177,7 +178,7 @@ class TestAttachUserToCompany:
         )
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
-        assert resp.get_json()["is_primary"] is True
+        assert resp.get_json()["is_primary"] is False
 
     def test_attach_is_primary_false_when_user_already_has_a_company(self, atc_client, atc_app, company_a_admin_token):
         # company_b_admin already carries company B as their primary company.

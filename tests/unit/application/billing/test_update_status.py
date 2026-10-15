@@ -14,7 +14,7 @@ from app.domain.billing.exceptions import (
     InvalidStatusTransitionError,
 )
 from app.domain.value_objects.invoice_item import InvoiceItem
-from tests.unit.application.billing.conftest import make_doc, make_item
+from tests.unit.application.billing.conftest import ProjectsByCompany, make_doc, make_item
 
 
 class FakeFundsRelease:
@@ -52,7 +52,9 @@ def funds_release():
 
 @pytest.fixture
 def usecase_with_funds(doc_repo, funds_release):
-    return UpdateBillingDocumentStatusUseCase(doc_repo=doc_repo, funds_release=funds_release)
+    return UpdateBillingDocumentStatusUseCase(
+        doc_repo=doc_repo, funds_release=funds_release, project_repo=ProjectsByCompany()
+    )
 
 
 class TestUpdateStatusHappyPath:
@@ -270,6 +272,34 @@ class TestFundsReleaseBridge:
     def test_no_project_id_skips_release(self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id):
         self._paid_facture(doc_repo, fake_session, usecase_with_funds, user_id, project_id=None)
         assert funds_release.created == []
+
+    def test_paid_facture_of_another_companys_project_gets_no_release(
+        self, doc_repo, funds_release, fake_session, user_id
+    ):
+        """A facture linked to a project of another company must not inject a release into it."""
+        usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=doc_repo, funds_release=funds_release, project_repo=ProjectsByCompany(uuid4())
+        )
+        self._paid_facture(doc_repo, fake_session, usecase, user_id, company_id=uuid4())
+        assert funds_release.created == []
+
+    def test_paid_facture_without_a_project_reader_gets_no_release(
+        self, doc_repo, funds_release, fake_session, user_id
+    ):
+        """Without the project repository the company cannot be checked: nothing is released."""
+        usecase = UpdateBillingDocumentStatusUseCase(doc_repo=doc_repo, funds_release=funds_release)
+        self._paid_facture(doc_repo, fake_session, usecase, user_id)
+        assert funds_release.created == []
+
+    def test_paid_facture_of_its_own_companys_project_gets_a_release(
+        self, doc_repo, funds_release, fake_session, user_id
+    ):
+        company_id = uuid4()
+        usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=doc_repo, funds_release=funds_release, project_repo=ProjectsByCompany(company_id)
+        )
+        self._paid_facture(doc_repo, fake_session, usecase, user_id, company_id=company_id)
+        assert len(funds_release.created) == 1
 
     def test_paid_to_cancelled_deletes_release(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id

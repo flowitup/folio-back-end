@@ -246,9 +246,18 @@ class TestH1ProjectAuthorizationCreate:
         with pytest.raises(ForbiddenProjectAccessError):
             usecase.execute(inp, _FakeSession())
 
-    def test_owner_can_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
-        """H1: project owner can create a doc linked to their project."""
+    def test_unassigned_owner_cannot_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
+        """Linking needs a real membership: the bare owner_id shortcut no longer counts."""
         project = _Project(owner_id=user_id)
+        project_repo.save(project)
+
+        inp = self._base_inp(user_id, company_id, project_id=project.id)
+        with pytest.raises(ForbiddenProjectAccessError):
+            usecase.execute(inp, _FakeSession())
+
+    def test_assigned_owner_can_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
+        """H1: a project owner who is still assigned can create a doc linked to their project."""
+        project = _Project(owner_id=user_id, user_ids=[user_id])
         project_repo.save(project)
 
         inp = self._base_inp(user_id, company_id, project_id=project.id)

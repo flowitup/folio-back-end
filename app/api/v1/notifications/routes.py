@@ -10,6 +10,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
+from app.api._helpers.api_key_request_auth import deny_api_key_callers
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.openapi import openapi_doc
 from app.api.v1.notifications import notifications_bp
@@ -175,6 +176,7 @@ def _events_feed(user_id: UUID, locale: str) -> tuple[list[dict[str, Any]], int]
 
 @notifications_bp.post("/notifications/events/read")
 @jwt_required()  # type: ignore[untyped-decorator]
+@deny_api_key_callers
 @limiter.limit("60 per minute", key_func=jwt_user_key)
 def mark_events_read() -> Any:
     """Mark the caller's activity entries read: the listed ``ids``, or all of them without a body."""
@@ -256,6 +258,7 @@ def get_notification_preferences() -> Any:
     tags=["notifications"],
 )
 @jwt_required()  # type: ignore[untyped-decorator]
+@deny_api_key_callers
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_notification_preferences() -> Any:
     """Partial update: omitted fields keep their value, unknown fields are a 422."""

@@ -36,7 +36,7 @@ from app.application.billing.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
-    assert_project_read_access,
+    assert_project_link_access,
     assert_user_company_access,
 )
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
@@ -110,7 +110,7 @@ class ImportBillingDocumentUseCase:
     ) -> BillingDocumentResponse:
         # 1. An imported document may only link a project the caller can read
         # (company admins read every project of their company, as on create).
-        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
+        assert_project_link_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         # 2. company_id required — validate attachment and snapshot issuer
         if inp.company_id is None:

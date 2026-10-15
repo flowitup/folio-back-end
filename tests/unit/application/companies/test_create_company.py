@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import pytest
 
 from app.application.companies.create_company_usecase import CreateCompanyUseCase
 from app.application.companies.dtos import CreateCompanyInput
+from app.domain.companies.user_company_access import UserCompanyAccess
 
 
 @pytest.fixture
@@ -55,6 +59,17 @@ class TestCreateCompanyHappyPath:
         result = usecase.execute(_inp(admin_id), fake_session)
         stored = company_repo.find_by_id(result.id)
         assert stored.created_by == admin_id
+
+    def test_own_company_is_primary_after_being_attached_to_another(self, usecase, access_repo, user_id, fake_session):
+        """An account attached by someone else (never primary) still gets its own first company as primary."""
+        access_repo.save(
+            UserCompanyAccess(
+                user_id=user_id, company_id=uuid4(), is_primary=False, attached_at=datetime.now(timezone.utc)
+            )
+        )
+        result = usecase.execute(_inp(user_id), fake_session)
+        own = access_repo.find(user_id, result.id)
+        assert own.is_primary is True
 
 
 class TestCreateCompanyGuards:

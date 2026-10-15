@@ -93,12 +93,49 @@ def test_a_status_that_is_not_news_sends_nothing():
     assert sender.sent == []
 
 
+def test_a_payer_removed_from_the_company_gets_no_refund_push():
+    payer, company = uuid4(), uuid4()
+    sender = RecordingSender()
+    d = PushDispatcher(devices=StubDevices(), sender=sender, locale="en", run_async=False)
+
+    class Projects:
+        def find_by_id(self, entity_id):
+            return type("P", (), {"name": "Chantier Arcueil", "company_id": company})()
+
+    kept = BillingPushNotifier(d, Projects(), StubAccess([Access(payer, "member")]))
+    kept.refund_status_changed(
+        status="refunded", payer_id=payer, actor_id=uuid4(), project_id=uuid4(), invoice_id=uuid4()
+    )
+    assert [m.token for m in sender.sent] == [f"tok-{payer}"]
+
+    sender.sent.clear()
+    removed = BillingPushNotifier(d, Projects(), StubAccess([Access(uuid4(), "admin")]))
+    removed.refund_status_changed(
+        status="refunded", payer_id=payer, actor_id=uuid4(), project_id=uuid4(), invoice_id=uuid4()
+    )
+    assert sender.sent == []
+
+
 # -- document status --------------------------------------------------------
+
+
+def test_an_author_removed_from_the_company_is_not_notified_but_the_admins_still_are():
+    author, admin = uuid4(), uuid4()
+    notifier, sender = _build(StubAccess([Access(admin, "admin")]))
+    notifier.document_status_changed(
+        status="paid", author_id=author, actor_id=uuid4(), document_id=uuid4(), company_id=uuid4(), number="F-2"
+    )
+    assert [m.token for m in sender.sent] == [f"tok-{admin}"]
+    sender.sent.clear()
+    notifier.document_status_changed(
+        status="overdue", author_id=author, actor_id=uuid4(), document_id=uuid4(), company_id=uuid4(), number="F-3"
+    )
+    assert sender.sent == []
 
 
 def test_accepted_goes_to_the_author_and_the_company_admins():
     author, admin, member = uuid4(), uuid4(), uuid4()
-    notifier, sender = _build(StubAccess([Access(admin, "admin"), Access(member, "member")]))
+    notifier, sender = _build(StubAccess([Access(author, "member"), Access(admin, "admin"), Access(member, "member")]))
     notifier.document_status_changed(
         status="accepted",
         author_id=author,
@@ -114,7 +151,7 @@ def test_accepted_goes_to_the_author_and_the_company_admins():
 
 def test_overdue_stays_with_the_author():
     author, admin = uuid4(), uuid4()
-    notifier, sender = _build(StubAccess([Access(admin, "admin")]))
+    notifier, sender = _build(StubAccess([Access(author, "member"), Access(admin, "admin")]))
     notifier.document_status_changed(
         status="overdue",
         author_id=author,
@@ -128,7 +165,7 @@ def test_overdue_stays_with_the_author():
 
 def test_rejected_stays_with_the_author():
     author, admin = uuid4(), uuid4()
-    notifier, sender = _build(StubAccess([Access(admin, "admin")]))
+    notifier, sender = _build(StubAccess([Access(author, "member"), Access(admin, "admin")]))
     notifier.document_status_changed(
         status="rejected", author_id=author, actor_id=uuid4(), document_id=uuid4(), company_id=uuid4(), number="D-1"
     )
@@ -137,7 +174,7 @@ def test_rejected_stays_with_the_author():
 
 def test_the_actor_is_excluded_even_when_they_are_an_admin_recipient():
     author, admin = uuid4(), uuid4()
-    notifier, sender = _build(StubAccess([Access(admin, "admin")]))
+    notifier, sender = _build(StubAccess([Access(author, "member"), Access(admin, "admin")]))
     notifier.document_status_changed(
         status="paid", author_id=author, actor_id=admin, document_id=uuid4(), company_id=uuid4(), number="F-1"
     )

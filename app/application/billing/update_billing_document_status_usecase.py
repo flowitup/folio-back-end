@@ -11,11 +11,13 @@ from app.application.billing._helpers import (
     _assert_devis_not_locked,
     _conversion_link,
     _funds_release_items,
+    _release_allowed,
 )
 from app.application.billing.dtos import BillingDocumentResponse, UpdateStatusInput
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     FundsReleasePort,
+    ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
 )
@@ -46,10 +48,12 @@ class UpdateBillingDocumentStatusUseCase:
         doc_repo: BillingDocumentRepositoryPort,
         funds_release: Optional[FundsReleasePort] = None,
         access_repo: UserCompanyAccessRepositoryPort = None,  # type: ignore[assignment]
+        project_repo: Optional[ProjectReadPort] = None,
     ) -> None:
         self._doc_repo = doc_repo
         self._funds_release = funds_release
         self._access_repo = access_repo
+        self._project_repo = project_repo
 
     def execute(
         self,
@@ -91,6 +95,9 @@ class UpdateBillingDocumentStatusUseCase:
             return
 
         if new_status == BillingDocumentStatus.PAID:
+            if not _release_allowed(self._project_repo, doc):
+                log.warning("No funds release for facture %s: project %s is not its company's", doc.id, doc.project_id)
+                return
             self._funds_release.create_funds_release(
                 project_id=doc.project_id,
                 source_doc_id=doc.id,

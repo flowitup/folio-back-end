@@ -60,25 +60,6 @@ _PENDING_WINDOW_DAYS = 30
 _ASSIGNABLE_ROLES = (CompanyRole.MEMBER.value, CompanyRole.MANAGER.value)
 
 
-def _display_name_for(explicit_name, user, phone: str) -> str:
-    """Best human-readable name for a profile created from an existing account.
-
-    Order: the name typed by the admin → the account's display name → the
-    e-mail local part (skipped for the synthetic phone-sign-up mailbox) → the
-    phone number as a last resort.
-    """
-    if explicit_name and explicit_name.strip():
-        return explicit_name.strip()
-    display = getattr(user, "display_name", None)
-    if display and display.strip():
-        return display.strip()
-    email = getattr(user, "email", "") or ""
-    local = email.split("@", 1)[0]
-    if local and not local.startswith("phone-"):
-        return local
-    return phone
-
-
 def _echoed_name(explicit_name, phone: str) -> str:
     """The name returned to the caller: theirs, or the phone they typed."""
     return (explicit_name or phone).strip()
@@ -138,8 +119,8 @@ class AddMemberByPhoneUseCase:
                 person = self._persons.create(
                     Person(
                         id=uuid4(),
-                        name=_display_name_for(inp.name, user, phone),
-                        normalized_name=Person.normalize(_display_name_for(inp.name, user, phone)),
+                        name=_echoed_name(inp.name, phone),
+                        normalized_name=Person.normalize(_echoed_name(inp.name, phone)),
                         created_by_user_id=inp.caller_id,
                         created_at=now,
                         phone=phone,
@@ -155,7 +136,8 @@ class AddMemberByPhoneUseCase:
                 UserCompanyAccess(
                     user_id=user.id,
                     company_id=inp.company_id,
-                    is_primary=len(self._access.list_for_user(user.id)) == 0,
+                    # Never primary: the account did not choose this company.
+                    is_primary=False,
                     attached_at=now,
                     role=inp.role,
                 )

@@ -650,6 +650,7 @@ def _configure_di_container() -> None:
             _c.user_repository,
             _otp_repo,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+            push_device_repo=_c.push_device_repository,  # sign-out everywhere also drops the push devices
         )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
         # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
@@ -665,6 +666,7 @@ def _configure_di_container() -> None:
                 _c.request_signup_otp_usecase,
                 user_repo=_c.user_repository,
                 request_signin_otp=_c.request_otp_usecase,
+                authz_reader=_c.authz_reader,  # no code for an invitation whose inviter lost the right to invite
             )
 
     # -----------------------------------------------------------------------
@@ -744,6 +746,8 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             company_repo=_company_repo,
         )
+        if _c.attendance_push_notifier is not None:
+            _c.attendance_push_notifier.set_access_repo(_access_repo)  # no decision pushes to a removed member
         _c.billing_push_notifier = BillingPushNotifier(
             dispatcher=_c.push_dispatcher,
             project_repo=_c.project_repository,
@@ -877,7 +881,7 @@ def _configure_di_container() -> None:
 
     _person_repo = SqlAlchemyPersonRepository(db.session)
     _c.person_repo = _person_repo
-    # Renaming a worker renames the shared Person it is linked to.
+    # Renaming a worker renames the Person it is linked to (when only its own company lists them).
     if _c.update_worker_usecase is not None:
         _c.update_worker_usecase.set_person_repo(_person_repo)
     # A verified phone change moves the account's Person to the new number too.
@@ -896,6 +900,9 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+    # A worker edit renames the shared Person only when no other company lists them.
+    if _c.update_worker_usecase is not None:
+        _c.update_worker_usecase.set_company_person_repo(_c.company_person_repo)
     if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_directory_repos"):
         _c.create_invitation_usecase.set_directory_repos(_person_repo, _c.company_person_repo)
 
@@ -1032,6 +1039,7 @@ def _configure_di_container() -> None:
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
             task_repo=_c.task_repository,
+            grant_repo=_member_grant_repo,  # project-scoped grants end with the assignment
         )
 
     # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
@@ -1217,6 +1225,7 @@ def _configure_di_container() -> None:
     )
     _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
         doc_repo=_billing_doc_repo,
+        access_repo=_access_repo,  # documents of a company the author left stop feeding the suggestions
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
@@ -1245,6 +1254,7 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
         access_repo=_access_repo,  # company-admin may manage company billing
+        project_repo=_project_repo,  # a release only goes into a project of the facture's company
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,
