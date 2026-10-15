@@ -4,7 +4,7 @@ import pytest
 
 from app.api.v1.bibliotheque.schemas import ImportRecordSchema, ImportRequestSchema
 from app.api.v1.chiffrage.schemas import QuoteCreateBody, QuoteUpdateBody, StoreCreateBody, StoreUpdateBody
-from app.api.v1.url_scheme import normalize_http_url, require_http_url
+from app.api.v1.url_scheme import lenient_http_url, normalize_http_url
 
 BAD = [
     "javascript:alert(1)",
@@ -13,6 +13,17 @@ BAD = [
     "tel:+33102030405",
     "myapp://open?x=1",
     "ftp://x.fr/a",
+    "file:///etc/passwd",
+    "vbscript:msgbox(1)",
+    # A browser ignores tabs, newlines and other control characters inside or before the scheme.
+    "java\tscript:alert(1)",
+    "java\nscript:alert(1)",
+    "\x01javascript:alert(1)",
+    " \x00 data:text/html,x",
+    "jav\r\nascript:alert(1)",
+    "da\x00ta:text/html,x",
+    "vb\tscript:msgbox(1)",
+    "fi\nle:///etc/passwd",
 ]
 
 
@@ -34,28 +45,42 @@ def test_normalize_keeps_http_and_prefixes_www():
 
 
 @pytest.mark.parametrize("value", BAD)
-def test_require_raises_on_other_schemes(value):
-    with pytest.raises(ValueError):
-        require_http_url(value)
+def test_lenient_turns_other_schemes_into_none(value):
+    assert lenient_http_url(500)(value) is None
 
 
-def test_require_passes_none_and_blank_through():
-    assert require_http_url(None) is None
-    assert require_http_url("") == ""
-    assert require_http_url("example.com") == "https://example.com"
-    assert require_http_url("https://example.com") == "https://example.com"
+@pytest.mark.parametrize("value", ["Leroy Merlin", "leroy merlin.fr", "magasin du coin", "12345", "http", "://x"])
+def test_lenient_turns_free_text_into_none(value):
+    assert lenient_http_url(500)(value) is None
 
 
-@pytest.mark.parametrize("value", BAD)
-def test_chiffrage_bodies_refuse_other_schemes(value):
-    with pytest.raises(ValueError):
-        StoreCreateBody(name="S", website_url=value)
-    with pytest.raises(ValueError):
-        StoreUpdateBody(website_url=value)
-    with pytest.raises(ValueError):
-        QuoteCreateBody(unit_price_ht="1", supplier_name="S", product_url=value)
-    with pytest.raises(ValueError):
-        QuoteUpdateBody(product_url=value)
+def test_lenient_keeps_links_prefixes_domains_and_clears_blank():
+    check = lenient_http_url(500)
+    assert check(None) is None
+    assert check("") is None
+    assert check("   ") is None
+    assert check("example.com") == "https://example.com"
+    assert check("leroymerlin.fr/p/1") == "https://leroymerlin.fr/p/1"
+    assert check("www.example.com") == "https://www.example.com"
+    assert check("https://example.com") == "https://example.com"
+    assert check("localhost:8080/p") is None  # no dot: not a domain we would link to
+    assert check(12) == 12  # not a string: the field refuses it
+
+
+def test_lenient_drops_a_value_only_the_https_prefix_made_too_long():
+    domain = "a.fr/" + "p" * 490  # 495 characters, 503 with the scheme
+    assert lenient_http_url(500)(domain) is None
+    assert lenient_http_url(500)("https://a.fr/" + "p" * 487) == "https://a.fr/" + "p" * 487  # exactly 500
+    too_long = "https://a.fr/" + "p" * 600
+    assert lenient_http_url(500)(too_long) == too_long  # still the field's own max_length 422
+
+
+@pytest.mark.parametrize("value", BAD + ["Leroy Merlin"])
+def test_chiffrage_bodies_store_no_link_for_other_schemes_or_free_text(value):
+    assert StoreCreateBody(name="S", website_url=value).website_url is None
+    assert StoreUpdateBody(website_url=value).website_url is None
+    assert QuoteCreateBody(unit_price_ht="1", supplier_name="S", product_url=value).product_url is None
+    assert QuoteUpdateBody(product_url=value).product_url is None
 
 
 def test_chiffrage_bodies_accept_http_and_null():
@@ -88,6 +113,7 @@ def test_import_record_drops_unusable_product_url(value):
 def test_import_record_keeps_http_url():
     assert ImportRecordSchema(**_record(product_url="https://a.fr/p/1")).product_url == "https://a.fr/p/1"
     assert ImportRecordSchema(**_record(product_url="www.a.fr/p/1")).product_url == "https://www.a.fr/p/1"
+    assert ImportRecordSchema(**_record(product_url="leroymerlin.fr/p/1")).product_url == "https://leroymerlin.fr/p/1"
 
 
 def test_import_request_urls():
@@ -108,3 +134,8 @@ def test_import_request_urls():
     req = build(supplier_website_url="https://a.fr", supplier_product_url_template="https://a.fr/p/{reference}")
     assert req.supplier_website_url == "https://a.fr"
     assert req.supplier_product_url_template == "https://a.fr/p/{reference}"
+    req = build(supplier_website_url="leroymerlin.fr", supplier_product_url_template="leroymerlin.fr/p/{reference}")
+    assert req.supplier_website_url == "https://leroymerlin.fr"
+    assert req.supplier_product_url_template == "https://leroymerlin.fr/p/{reference}"
+    req = build(supplier_website_url="Leroy Merlin", supplier_product_url_template="java\tscript:{reference}")
+    assert req.supplier_website_url is None and req.supplier_product_url_template is None

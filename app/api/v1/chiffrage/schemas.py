@@ -15,7 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.api.v1.numeric_bounds import MAX_ARTICLE_QUANTITY, MAX_QUOTE_UNIT_PRICE
-from app.api.v1.url_scheme import require_http_url
+from app.api.v1.url_scheme import lenient_http_url
 
 
 def _reject_null(value: object, info: ValidationInfo) -> object:
@@ -70,7 +70,7 @@ class StoreCreateBody(BaseModel):
     address: Optional[str] = Field(default=None, max_length=500)
     website_url: Optional[str] = Field(default=None, max_length=500)
 
-    _http_only = field_validator("website_url", mode="before")(require_http_url)
+    _http_only = field_validator("website_url", mode="before")(lenient_http_url(500))
 
 
 class StoreUpdateBody(BaseModel):
@@ -81,7 +81,7 @@ class StoreUpdateBody(BaseModel):
     website_url: Optional[str] = Field(default=None, max_length=500)
 
     _no_null = field_validator("name", mode="before")(_reject_null)
-    _http_only = field_validator("website_url", mode="before")(require_http_url)
+    _http_only = field_validator("website_url", mode="before")(lenient_http_url(500))
 
 
 class ArticleCreateBody(BaseModel):
@@ -119,7 +119,7 @@ class QuoteCreateBody(BaseModel):
     product_url: Optional[str] = Field(default=None, max_length=500)
     note: Optional[str] = Field(default=None, max_length=2000)
 
-    _http_only = field_validator("product_url", mode="before")(require_http_url)
+    _http_only = field_validator("product_url", mode="before")(lenient_http_url(500))
 
     @model_validator(mode="after")
     def _supplier_present(self) -> "QuoteCreateBody":
@@ -147,7 +147,7 @@ class QuoteUpdateBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
     _no_null = field_validator("unit_price_ht", "tva_rate", mode="before")(_reject_null)
-    _http_only = field_validator("product_url", mode="before")(require_http_url)
+    _http_only = field_validator("product_url", mode="before")(lenient_http_url(500))
 
 
 class ReorderBody(BaseModel):

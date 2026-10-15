@@ -27,7 +27,7 @@ def _http_url_or_none(max_length: int):
     """
 
     def validate(v: object) -> object:
-        url = normalize_http_url(v)
+        url = normalize_http_url(v, any_bare_domain=True)
         return url if url is not None and len(url) <= max_length else None
 
     return validate

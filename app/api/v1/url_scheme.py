@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 
 _SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+# What a browser ignores inside or before a URL's scheme: ``java\tscript:`` is still ``javascript:``.
+_IGNORED = re.compile(r"[\x00-\x20\x7f-\x9f]")
 _HOST_PORT = re.compile(r"^[a-z0-9.-]+:\d+(?:[/?#]|$)", re.IGNORECASE)
 _BARE_DOMAIN = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?(?:[/?#]|$)", re.IGNORECASE)
 
@@ -20,7 +22,8 @@ def normalize_http_url(value: object, *, any_bare_domain: bool = False) -> str |
 
     ``https://`` / ``http://`` values are kept as they are. A value without a scheme gets
     ``https://`` when it starts with ``www.`` (or, with ``any_bare_domain``, looks like a
-    domain such as ``leroymerlin.fr/p/1``). Any other scheme, and anything else, is None.
+    domain such as ``leroymerlin.fr/p/1``). Any other scheme (control characters and whitespace are
+    ignored when looking for it), and anything else, is None.
     """
     if not isinstance(value, str):
         return None
@@ -29,20 +32,30 @@ def normalize_http_url(value: object, *, any_bare_domain: bool = False) -> str |
         return None
     if text.lower().startswith(("http://", "https://")):
         return text
-    if _SCHEME.match(text) and not _HOST_PORT.match(text):
+    probe = _IGNORED.sub("", text)
+    if _SCHEME.match(probe) and not _HOST_PORT.match(probe):
         return None
     if text.lower().startswith("www.") or (any_bare_domain and _BARE_DOMAIN.match(text)):
         return f"https://{text}"
     return None
 
 
-def require_http_url(value: object) -> object:
-    """Validator for a field a client types or pastes: None and blank pass through (blank clears the
-    field), a bare domain gets ``https://`` (the web app has always displayed those as links),
-    any other scheme is refused."""
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return value
-    normalized = normalize_http_url(value, any_bare_domain=True)
-    if normalized is None:
-        raise ValueError("URL must start with http:// or https://")
-    return normalized
+def lenient_http_url(max_length: int):
+    """Before-validator for a field a client types or pastes: a usable http(s) address, else None.
+
+    Like the library import, it never refuses a value: a bare domain or ``www.`` address gets
+    ``https://`` and anything else (free text such as a stored "Leroy Merlin", a ``javascript:``
+    or ``data:`` link) becomes None, so a form that re-sends an old stored value can still save.
+    Blank and None clear the field. A value that is not a string is left for the field to refuse.
+    """
+
+    def validate(v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        url = normalize_http_url(v, any_bare_domain=True)
+        # The "https://" prefix alone pushed a value that fitted over the limit.
+        if url is not None and len(url) > max_length >= len(v.strip()):
+            return None
+        return url
+
+    return validate
