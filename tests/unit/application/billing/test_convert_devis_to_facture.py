@@ -13,7 +13,7 @@ from app.domain.billing.exceptions import (
     ForbiddenBillingDocumentError,
     MissingCompanyProfileError,
 )
-from tests.unit.application.billing.conftest import make_doc
+from tests.unit.application.billing.conftest import make_access, make_company, make_doc
 
 
 @pytest.fixture
@@ -130,3 +130,37 @@ class TestConvertDevisToFactureErrors:
         inp = ConvertDevisToFactureInput(source_devis_id=devis.id, user_id=user_id)
         with pytest.raises(MissingCompanyProfileError):
             usecase.execute(inp, fake_session)
+
+
+class TestConvertDevisToFactureCompanyOverride:
+    def test_company_override_of_another_company_is_refused(
+        self, usecase, fake_session, user_id, seeded_company, accepted_devis, company_repo, access_repo, doc_repo
+    ):
+        """An admin of both companies cannot turn company A's devis into company B's facture."""
+        other_company_id = uuid4()
+        company_repo.save(make_company(owner_id=user_id, company_id=other_company_id))
+        access_repo.save(make_access(user_id=user_id, company_id=other_company_id, role="admin"))
+
+        inp = ConvertDevisToFactureInput(
+            source_devis_id=accepted_devis.id, user_id=user_id, company_id=other_company_id
+        )
+        with pytest.raises(ValueError, match="company"):
+            usecase.execute(inp, fake_session)
+        assert doc_repo.find_by_source_devis_id(accepted_devis.id) is None
+
+    def test_the_devis_own_company_is_accepted(self, usecase, fake_session, user_id, company_id, accepted_devis):
+        inp = ConvertDevisToFactureInput(source_devis_id=accepted_devis.id, user_id=user_id, company_id=company_id)
+        assert usecase.execute(inp, fake_session).company_id == company_id
+
+    def test_a_devis_without_company_takes_the_explicit_one(
+        self, usecase, fake_session, user_id, company_id, seeded_company, doc_repo
+    ):
+        devis = make_doc(
+            user_id=user_id,
+            kind=BillingDocumentKind.DEVIS,
+            status=BillingDocumentStatus.ACCEPTED,
+            company_id=None,
+        )
+        doc_repo.save(devis)
+        inp = ConvertDevisToFactureInput(source_devis_id=devis.id, user_id=user_id, company_id=company_id)
+        assert usecase.execute(inp, fake_session).company_id == company_id
