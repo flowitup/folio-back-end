@@ -74,9 +74,9 @@ class CreateInvoiceSchema(BaseModel):
 
     issue_date: BusinessDate  # ISO date string (YYYY-MM-DD), 2000–2100
     recipient_name: str = Field(..., min_length=1, max_length=255)
-    recipient_address: Optional[str] = None
-    notes: Optional[str] = None
-    items: List[InvoiceItemSchema] = Field(..., min_length=1)
+    recipient_address: Optional[str] = Field(None, max_length=1000)
+    notes: Optional[str] = Field(None, max_length=5000)
+    items: List[InvoiceItemSchema] = Field(..., min_length=1, max_length=500)
     payment_method_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
     service_month: Optional[BusinessDate] = None
@@ -108,9 +108,9 @@ class UpdateInvoiceSchema(BaseModel):
         return normalize_invoice_type_value(v)
 
     recipient_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    recipient_address: Optional[str] = None
-    notes: Optional[str] = None
-    items: Optional[List[InvoiceItemSchema]] = None
+    recipient_address: Optional[str] = Field(None, max_length=1000)
+    notes: Optional[str] = Field(None, max_length=5000)
+    items: Optional[List[InvoiceItemSchema]] = Field(None, max_length=500)
     payment_method_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
     service_month: Optional[BusinessDate] = None
