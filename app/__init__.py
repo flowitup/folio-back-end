@@ -95,10 +95,6 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # MAX_CONTENT_LENGTH is set per request by app/api/_helpers/request_limits.py: a small
-    # default, and each multipart upload route's own file limit plus envelope headroom.
-    # Multipart POST through CF is capped at 100 MB; presigned uploads bypass CF.
-
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
     # expose_headers is critical for binary download endpoints (e.g. labor-export):
@@ -877,10 +873,6 @@ def _configure_di_container() -> None:
     )
     _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
         access_repo=_access_repo,
-    )
-    _c.set_member_role_usecase = _SetMemberRoleUseCase(
-        access_repo=_access_repo,
-        role_checker=_role_checker,
     )
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
