@@ -72,7 +72,7 @@ class TestChannels:
         project = next(c for c in items if c["key"] == _project_key(invitation_app))
         assert project["kind"] == "project"
         assert project["name"] == "Invite Test Project"
-        # admin (owner) + member + target user
+        # admin (a company admin, so in every project of the company) + member + target user
         assert project["member_count"] == 3
         assert project["unread_count"] == 0
 
@@ -230,7 +230,7 @@ def project_of_a_former_member(invitation_app):
 
 
 class TestProjectChannelNeedsACompanyRole:
-    """Creator or assignee, a user without a role in the project's company is not in its channel."""
+    """Assignee or company admin: a user without a role in the project's company is not in its channel."""
 
     def test_former_member_loses_list_read_and_send(self, inv_client, outsider_token, project_of_a_former_member):
         key = project_of_a_former_member
@@ -258,6 +258,64 @@ class TestProjectChannelNeedsACompanyRole:
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
         assert key in [c["key"] for c in items]
         assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).status_code == 200
+
+
+@pytest.fixture
+def project_of_an_unassigned_creator(invitation_app):
+    """A project of the test company created by the member, who is no longer assigned to it
+    (and is no company admin). The target user is assigned. Yields the channel key."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    from app import db
+    from app.infrastructure.database.models import ProjectModel
+
+    with invitation_app.app_context():
+        company_id = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id)).company_id
+        project = ProjectModel(
+            name="Unassigned Creator Project",
+            owner_id=uuid.UUID(invitation_app._test_member_user_id),
+            company_id=company_id,
+        )
+        db.session.add(project)
+        db.session.flush()
+        db.session.execute(
+            text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:u, :p, :at)"),
+            {"u": invitation_app._test_target_user_id, "p": str(project.id), "at": datetime.now(timezone.utc)},
+        )
+        db.session.commit()
+        project_id = project.id
+    yield f"project:{project_id}"
+    with invitation_app.app_context():
+        db.session.execute(text("DELETE FROM user_projects WHERE project_id = :p"), {"p": str(project_id)})
+        db.session.query(ProjectModel).filter_by(id=project_id).delete()
+        db.session.commit()
+
+
+class TestProjectCreatorNeedsAnAssignment:
+    """The owner_id column grants nothing: a creator unassigned from the project is out of its chat."""
+
+    def test_unassigned_creator_loses_list_read_send_and_react(
+        self, inv_client, member_token, project_of_an_unassigned_creator
+    ):
+        key = project_of_an_unassigned_creator
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        assert key not in [c["key"] for c in items]
+        assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).status_code == 403
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "still mine?"}, headers=_auth(member_token)
+        )
+        assert resp.status_code == 403
+
+    def test_unassigned_creator_is_not_listed_among_the_members(
+        self, inv_client, admin_token, project_of_an_unassigned_creator
+    ):
+        key = project_of_an_unassigned_creator
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
+        assert next(c for c in items if c["key"] == key)["member_count"] == 2
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
+        assert [m["name"] for m in page.get_json()["members"]] == ["admin@invite-test.com", "Target User"]
 
 
 class TestAttachments:

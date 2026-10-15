@@ -246,17 +246,16 @@ class SqlAlchemyChatRepository:
         return [UUID(str(row[0])) for row in rows]
 
     def _project_member_ids(self, project_id: UUID) -> list[UUID]:
-        """Users assigned to the project, its creator and the company's admins (who see every
+        """Users assigned to the project and the company's admins (who see every
         project of their company) — kept only while they hold
         a role in the project's company. A user who left or was removed from the
-        company keeps neither the assignment nor the creator shortcut (as everywhere
-        the resolver decides: no company role, no access)."""
-        project = self._session.execute(
-            select(ProjectModel.owner_id, ProjectModel.company_id).where(ProjectModel.id == project_id)
-        ).first()
+        company keeps the assignment no longer, and the creator is a member only while
+        assigned (as everywhere the resolver decides: no company role, no assignment,
+        no access; the creator is assigned when the project is created)."""
+        project = self._session.execute(select(ProjectModel.company_id).where(ProjectModel.id == project_id)).first()
         if project is None:
             return []
-        owner, company_id = project
+        company_id = project[0]
         company_rows = self._session.execute(
             select(UserCompanyAccessModel.user_id, UserCompanyAccessModel.role).where(
                 UserCompanyAccessModel.company_id == company_id
@@ -268,7 +267,7 @@ class SqlAlchemyChatRepository:
             text("SELECT user_id FROM user_projects WHERE project_id = :pid"), {"pid": str(project_id)}
         ).fetchall()
         ids: list[UUID] = []
-        for raw in [*(row[0] for row in rows), owner, *admin_ids]:
+        for raw in [*(row[0] for row in rows), *admin_ids]:
             if raw is None:
                 continue
             uid = UUID(str(raw))
@@ -290,7 +289,6 @@ class SqlAlchemyChatRepository:
             visible = self._membership_project_ids(user_id)
             project_stmt = project_stmt.where(
                 (ProjectModel.id.in_(visible))
-                | (ProjectModel.owner_id == user_id)
                 | ProjectModel.company_id.in_(
                     [cid for cid, _name, role in companies if role == CompanyRole.ADMIN.value]
                 ),
