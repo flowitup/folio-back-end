@@ -50,7 +50,7 @@ from app.domain.exceptions.invitation_exceptions import (
 from app.domain.entities.invitation import InvalidInvitationEmailError
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.infrastructure.rate_limiter import limiter, sms_send_ip_limits
+from app.infrastructure.rate_limiter import code_request_answered, limiter, sms_send_ip_limits
 from wiring import get_container
 
 
@@ -306,7 +306,7 @@ def verify_invitation(token: str):
     auth=False,
 )
 @limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send")
+@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
 def request_invite_code():
     """Text a sign-up code to the phone being claimed. Public: the invitation token is the authorisation."""
     try:

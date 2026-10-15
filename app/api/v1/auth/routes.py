@@ -55,7 +55,7 @@ from app.domain.exceptions.auth_exceptions import (
     UserInactiveError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
-from app.infrastructure.rate_limiter import limiter, sms_send_ip_limits
+from app.infrastructure.rate_limiter import code_request_answered, limiter, sms_send_ip_limits
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -135,10 +135,15 @@ def _login_response(container, result: LoginResult):
     auth=False,
 )
 @limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send")
+@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
 # One source asks for a given number 4 times an hour at most: the per-number cap (5) is shared with
 # strangers, and this keeps one of them from using it all up. The store-review numbers are exempt.
-@limiter.limit("4 per hour", key_func=phone_and_caller_key, exempt_when=lambda: is_reviewer_phone(body_phone()))
+@limiter.limit(
+    "4 per hour",
+    key_func=phone_and_caller_key,
+    exempt_when=lambda: is_reviewer_phone(body_phone()),
+    deduct_when=code_request_answered,
+)
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
@@ -556,7 +561,7 @@ def delete_current_user():
     auth=False,
 )
 @limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send")
+@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
 def request_signup_otp():
     try:
         data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})

@@ -104,11 +104,21 @@ class TestSmsSendCapsPerAddress:
         ip = "203.0.113.50"
         assert _post(limited_app, SIGNUP, ip, "+33611000011").status_code == 202
         assert _post(limited_app, SIGN_IN, ip, "+33611000012").status_code == 202
-        assert _invite(limited_app, ip, "+33611000013").status_code != 429
+        assert _post(limited_app, SIGNUP, ip, "+33611000013").status_code == 202
         for route in (SIGNUP, SIGN_IN):
             blocked = _post(limited_app, route, ip, "+33611000014")
             assert blocked.status_code == 429
         assert _invite(limited_app, ip, "+33611000015").status_code == 429
+
+    def test_requests_that_send_no_code_do_not_spend_the_cap(self, limited_app, monkeypatch):
+        """A bad number, or an invitation that does not exist, used to eat the hour's allowance."""
+        monkeypatch.setitem(limited_app.config, "SMS_SEND_IP_LIMITS", "2 per hour")
+        ip = "203.0.113.55"
+        assert _post(limited_app, SIGNUP, ip, "not-a-number").status_code == 400
+        assert _invite(limited_app, ip, "+33611000041").status_code == 404
+        assert _post(limited_app, SIGNUP, ip, "+33611000042").status_code == 202
+        assert _post(limited_app, SIGNUP, ip, "+33611000043").status_code == 202
+        assert _post(limited_app, SIGNUP, ip, "+33611000044").status_code == 429
 
     def test_another_address_is_not_affected(self, limited_app):
         for i in range(3):
@@ -128,6 +138,62 @@ class TestSmsSendCapsPerAddress:
 
         assert DEFAULT_SMS_SEND_IP_LIMITS == "20 per hour;60 per day"
         assert limited_app.config["SMS_SEND_IP_LIMITS"] == DEFAULT_SMS_SEND_IP_LIMITS
+
+
+class TestLimiterAnswersTellTheClientHowLongToWait:
+    """The hourly caps answer like the use cases' own hourly cap: ``OtpHourlyLimit`` + Retry-After."""
+
+    def test_the_per_phone_hourly_cap(self, limited_app):
+        ip = "203.0.113.70"
+        for _ in range(4):
+            _post(limited_app, SIGN_IN, ip, PHONE_A)
+        blocked = _post(limited_app, SIGN_IN, ip, PHONE_A)
+        assert blocked.status_code == 429
+        assert blocked.get_json()["error"] == "OtpHourlyLimit"
+        assert 3500 < int(blocked.headers["Retry-After"]) <= 3600
+
+    def test_the_shared_address_cap(self, limited_app, monkeypatch):
+        monkeypatch.setitem(limited_app.config, "SMS_SEND_IP_LIMITS", "1 per hour")
+        ip = "203.0.113.71"
+        assert _post(limited_app, SIGNUP, ip, "+33611000051").status_code == 202
+        blocked = _post(limited_app, SIGNUP, ip, "+33611000052")
+        assert blocked.status_code == 429
+        assert blocked.get_json()["error"] == "OtpHourlyLimit"
+        assert 3500 < int(blocked.headers["Retry-After"]) <= 3600
+
+    def test_the_per_minute_limit_keeps_the_short_wait(self, limited_app):
+        ip = "203.0.113.72"
+        for i in range(5):
+            _post(limited_app, SIGN_IN, ip, _phone(i))
+        blocked = _post(limited_app, SIGN_IN, ip, _phone(5))
+        assert blocked.status_code == 429
+        assert blocked.get_json()["error"] == "TooManyRequests"
+        assert 0 < int(blocked.headers["Retry-After"]) <= 60
+
+    def test_other_routes_keep_the_default_answer(self, limited_app):
+        for _ in range(5):
+            limited_app.test_client().post(
+                "/api/v1/auth/otp/verify", json={}, environ_base={"REMOTE_ADDR": "10.1.0.77"}
+            )
+        blocked = limited_app.test_client().post(
+            "/api/v1/auth/otp/verify", json={}, environ_base={"REMOTE_ADDR": "10.1.0.77"}
+        )
+        assert blocked.status_code == 429
+        assert blocked.get_json()["error"] == "TooManyRequests"
+
+
+def test_the_phone_is_not_in_the_limiter_key(limited_app):
+    from app.api._helpers.rate_limit_keys import phone_and_caller_key
+
+    with limited_app.test_request_context(
+        SIGN_IN, method="POST", json={"phone": "06 11 00 00 01"}, environ_base={"REMOTE_ADDR": "203.0.113.9"}
+    ):
+        key = phone_and_caller_key()
+    with limited_app.test_request_context(
+        SIGN_IN, method="POST", json={"phone": PHONE_A}, environ_base={"REMOTE_ADDR": "203.0.113.9"}
+    ):
+        assert phone_and_caller_key() == key  # spelling-independent and stable
+    assert "611000001" not in key and key.endswith(":203.0.113.9")
 
 
 class TestOnePhonePerSource:
