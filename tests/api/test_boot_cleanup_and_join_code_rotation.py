@@ -411,6 +411,68 @@ class TestDemotedAdminLosesProjectAssignments:
         assert _is_assigned(boot_app, owner_id, project_id)
 
 
+def _worker_linked_to(app, user_id, project_id):
+    from decimal import Decimal
+
+    from app import db
+    from app.infrastructure.database.models import WorkerModel
+
+    with app.app_context():
+        worker = WorkerModel(
+            id=uuid4(), project_id=project_id, name="Linked Worker", daily_rate=Decimal("100.00"), user_id=user_id
+        )
+        db.session.add(worker)
+        db.session.commit()
+        return worker.id
+
+
+def _worker_account(app, worker_id):
+    from app import db
+    from app.infrastructure.database.models import WorkerModel
+
+    with app.app_context():
+        db.session.expire_all()
+        return db.session.get(WorkerModel, worker_id).user_id
+
+
+class TestWorkersUnlinkedOnLeave:
+    """Whoever leaves a company no longer has a worker row of its projects tied to their account."""
+
+    def _setup(self, app, tag):
+        admin_id = _make_user(app, f"boot_admin_{tag}@test.com")
+        target_id = _make_user(app, f"boot_target_{tag}@test.com")
+        company_id = _make_company(app, admin_id, name=f"Unlink Co {tag}")
+        _person_id, project_id = _attach_with_person_and_project(app, target_id, company_id)
+        other_company_id = _make_company(app, admin_id, name=f"Unlink Other {tag}")
+        _attach(app, target_id, other_company_id, "member")
+        other_project_id = _project(app, admin_id, other_company_id)
+        return (
+            admin_id,
+            target_id,
+            company_id,
+            _worker_linked_to(app, target_id, project_id),
+            _worker_linked_to(app, target_id, other_project_id),
+        )
+
+    def test_boot_unlinks_the_targets_workers_in_that_company_only(self, boot_client, boot_app):
+        _admin, target_id, company_id, worker_id, other_worker_id = self._setup(boot_app, "wk1")
+        token = _login(boot_client, "boot_admin_wk1@test.com")
+
+        resp = boot_client.delete(f"/api/v1/companies/{company_id}/access/{target_id}", headers=_auth(token))
+        assert resp.status_code == 204
+        assert _worker_account(boot_app, worker_id) is None
+        assert _worker_account(boot_app, other_worker_id) == target_id
+
+    def test_self_detach_unlinks_their_workers_in_that_company_only(self, boot_client, boot_app):
+        _admin, target_id, company_id, worker_id, other_worker_id = self._setup(boot_app, "wk2")
+        token = _login(boot_client, "boot_target_wk2@test.com")
+
+        resp = boot_client.delete(f"/api/v1/companies/{company_id}/access", headers=_auth(token))
+        assert resp.status_code == 204
+        assert _worker_account(boot_app, worker_id) is None
+        assert _worker_account(boot_app, other_worker_id) == target_id
+
+
 class TestJoinCodeCreatesCompanyPerson:
     def test_join_by_code_creates_active_company_person(self, boot_client, boot_app):
         admin_id = _make_user(boot_app, "boot_admin3@test.com")

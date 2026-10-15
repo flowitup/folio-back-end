@@ -1004,6 +1004,7 @@ def _configure_di_container() -> None:
         clock=_clock,
         grant_repo=_member_grant_repo,
         task_repo=_c.task_repository,
+        worker_repo=_c.worker_repository,
     )
     _c.detach_company_usecase = _DetachCompanyUseCaseV2(
         access_repo=_access_repo,
@@ -1013,6 +1014,7 @@ def _configure_di_container() -> None:
         company_person_repo=_c.company_person_repo,
         grant_repo=_member_grant_repo,
         task_repo=_c.task_repository,
+        worker_repo=_c.worker_repository,
     )
     # Demoting an admin drops their project assignments on this company's projects.
     _c.set_member_role_usecase = _SetMemberRoleUseCase(
