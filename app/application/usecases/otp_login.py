@@ -10,6 +10,8 @@ or sent, on sign-in and on sign-up alike.
 ``RequestOtpUseCase`` never reveals whether a phone belongs to an account: unknown or inactive
 numbers are silently ignored. Codes are hashed at rest, expire after ``ttl_seconds``, allow
 ``max_attempts`` guesses and are throttled per phone (``resend_after_seconds``, ``hourly_max``).
+Wrong guesses are also budgeted per phone across codes (``FAILED_GUESS_BUDGET_PER_HOUR``), so asking
+for a fresh code never buys fresh guesses.
 """
 
 from __future__ import annotations
@@ -52,6 +54,14 @@ SIGNUP_MESSAGE = "Folio: ma dang ky tai khoan cua ban la {code}. Ma het han sau 
 # happy. It must pass strict email validation (admin responses use EmailStr), so no reserved TLD
 # (.local/.invalid/.test are rejected); the host has no mailbox, nothing is ever sent to it.
 SIGNUP_EMAIL_DOMAIN = "no-email.folio.flowitup.com"
+
+# Wrong guesses a phone absorbs per hour over all its codes (any purpose). Each code only allows
+# ``max_attempts`` of them, but a new code starts again at zero: this total is what bounds a search
+# of the 10^6 codes, whoever asks and from wherever. Reaching it refuses even the right code.
+FAILED_GUESS_BUDGET_PER_HOUR = 20
+# The store-review number sends no SMS, so it gets a short gap and a large (but finite) hourly cap.
+REVIEWER_RESEND_AFTER_SECONDS = 5
+REVIEWER_HOURLY_MAX = 30
 
 
 def _hash_code(phone: str, code: str) -> str:
@@ -140,7 +150,7 @@ def _reviewer_code_for(phone: str) -> Optional[str]:
     fixed code; the code is never accepted for any other phone; a malformed configuration
     disables the bypass rather than widening it. Sign-in, sign-up and invitation acceptance
     all funnel through ``_consume_code``, so this is honoured (and only honoured) there,
-    while ``_issue_code`` skips the SMS and the per-phone throttle for that number.
+    while ``_issue_code`` skips the SMS for that number (and keeps a short throttle on it).
     """
     reviewer_phones = os.environ.get("OTP_REVIEWER_PHONE", "").strip()
     code = os.environ.get("OTP_REVIEWER_CODE", "").strip()
@@ -153,6 +163,11 @@ def _reviewer_code_for(phone: str) -> Optional[str]:
     except ValueError:
         return None
     return code if phone in normalized else None
+
+
+def is_reviewer_phone(phone: str) -> bool:
+    """Whether ``phone`` (normalised) is a store-review number."""
+    return _reviewer_code_for(phone) is not None
 
 
 def _issue_code(
@@ -174,24 +189,27 @@ def _issue_code(
     never buys an extra SMS.
     """
     is_reviewer = _reviewer_code_for(phone) is not None
+    if is_reviewer:
+        # No SMS goes out for this number, but re-issuing is not free: it resets the per-code guesses.
+        resend_after = min(resend_after, REVIEWER_RESEND_AFTER_SECONDS)
+        hourly_max = max(hourly_max, REVIEWER_HOURLY_MAX)
     latest = otps.latest_for_phone(phone)
-    if not is_reviewer:
-        if latest is not None and (now - latest.created_at) < timedelta(seconds=resend_after):
-            wait = timedelta(seconds=resend_after) - (now - latest.created_at)
-            raise OtpThrottledError(
-                "A code was sent recently; wait before asking again",
-                retry_after_seconds=math.ceil(wait.total_seconds()),
-            )
-        window_start = now - timedelta(hours=1)
-        if otps.count_created_since(phone, window_start) >= hourly_max:
-            # The cap lifts when the oldest code of the window leaves it.
-            oldest = otps.oldest_created_since(phone, window_start) or now
-            wait = oldest + timedelta(hours=1) - now
-            raise OtpThrottledError(
-                "Too many codes requested; try again later",
-                retry_after_seconds=math.ceil(wait.total_seconds()),
-                hourly_limit=True,
-            )
+    if latest is not None and (now - latest.created_at) < timedelta(seconds=resend_after):
+        wait = timedelta(seconds=resend_after) - (now - latest.created_at)
+        raise OtpThrottledError(
+            "A code was sent recently; wait before asking again",
+            retry_after_seconds=math.ceil(wait.total_seconds()),
+        )
+    window_start = now - timedelta(hours=1)
+    if otps.count_created_since(phone, window_start) >= hourly_max:
+        # The cap lifts when the oldest code of the window leaves it.
+        oldest = otps.oldest_created_since(phone, window_start) or now
+        wait = oldest + timedelta(hours=1) - now
+        raise OtpThrottledError(
+            "Too many codes requested; try again later",
+            retry_after_seconds=math.ceil(wait.total_seconds()),
+            hourly_limit=True,
+        )
     code = f"{secrets.randbelow(10**6):06d}"
     otps.void_active(phone, now, purpose)
     otps.save(
@@ -233,9 +251,13 @@ def _consume_code(
 
     The code's row stays locked until the caller's transaction ends: concurrent guesses at one code
     are checked one after another, so ``max_attempts`` really bounds them and a code is used once.
+    The phone's wrong guesses of the last hour are counted over all its codes, after that lock is
+    taken so a guess that waited sees the ones committed meanwhile.
     """
     otp = otps.latest_for_phone(phone, purpose, for_update=True)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
+        raise OtpInvalidError("Invalid or expired code")
+    if otps.sum_attempts_since(phone, now - timedelta(hours=1)) >= FAILED_GUESS_BUDGET_PER_HOUR:
         raise OtpInvalidError("Invalid or expired code")
     submitted = code.strip()
     reviewer_code = _reviewer_code_for(phone)

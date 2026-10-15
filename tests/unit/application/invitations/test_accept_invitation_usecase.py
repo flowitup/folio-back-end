@@ -109,6 +109,7 @@ def _make_otp_repo(phone: str = PHONE, code: str = CODE, *, attempts: int = 0, u
     )
     repo = MagicMock()
     repo.latest_for_phone.return_value = otp
+    repo.sum_attempts_since.return_value = attempts
     return repo
 
 

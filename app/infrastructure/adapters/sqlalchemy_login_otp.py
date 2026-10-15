@@ -74,6 +74,14 @@ class SQLAlchemyLoginOtpRepository:
         ).scalar_one()
         return int(count)
 
+    def sum_attempts_since(self, phone: str, since: datetime) -> int:
+        total = self._session.execute(
+            select(func.coalesce(func.sum(LoginOtpOrm.attempts), 0)).where(
+                LoginOtpOrm.phone == phone, LoginOtpOrm.created_at >= since
+            )
+        ).scalar_one()
+        return int(total)
+
     def oldest_created_since(self, phone: str, since: datetime) -> Optional[datetime]:
         oldest = self._session.execute(
             select(func.min(LoginOtpOrm.created_at)).where(LoginOtpOrm.phone == phone, LoginOtpOrm.created_at >= since)
