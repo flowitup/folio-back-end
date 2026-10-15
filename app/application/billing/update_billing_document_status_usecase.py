@@ -60,7 +60,9 @@ class UpdateBillingDocumentStatusUseCase:
         inp: UpdateStatusInput,
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
-        doc = self._doc_repo.find_by_id(inp.id)
+        # Lock the row so a concurrent change (PAID against CANCELLED) queues and then
+        # validates against the status the winner saved, instead of both reading the same one.
+        doc = self._doc_repo.find_by_id_for_update(inp.id)
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
         _assert_billing_doc_write_access(doc, inp.user_id, self._access_repo)
@@ -75,39 +77,37 @@ class UpdateBillingDocumentStatusUseCase:
             updated_at=datetime.now(timezone.utc),
         )
         saved = self._doc_repo.save(updated)
+        # Still under the row lock: the release follows the status just saved, and the
+        # release adapter's commit makes both durable together.
+        self._sync_funds_release(saved, old_status)
         db_session.commit()
-
-        self._handle_funds_release(saved, old_status, inp.new_status)
 
         return BillingDocumentResponse.from_entity(saved, *_conversion_link(self._doc_repo, saved))
 
-    def _handle_funds_release(
+    def _sync_funds_release(
         self,
         doc: BillingDocument,
         old_status: BillingDocumentStatus,
-        new_status: BillingDocumentStatus,
     ) -> None:
         if self._funds_release is None:
             return
         if doc.kind != BillingDocumentKind.FACTURE:
             return
-        if doc.project_id is None:
-            return
 
-        if new_status == BillingDocumentStatus.PAID:
-            if not _release_allowed(self._project_repo, doc):
+        if doc.status == BillingDocumentStatus.PAID:
+            allowed = doc.project_id is not None and _release_allowed(self._project_repo, doc)
+            if doc.project_id is not None and not allowed:
                 log.warning("No funds release for facture %s: project %s is not its company's", doc.id, doc.project_id)
-                return
-            self._funds_release.create_funds_release(
-                project_id=doc.project_id,
+            self._funds_release.sync_funds_release(
+                project_id=doc.project_id if allowed else None,
                 source_doc_id=doc.id,
                 amount_items=_funds_release_items(doc),
                 recipient_name=doc.recipient_name,
                 issue_date=doc.issue_date,
                 created_by=doc.user_id,
             )
-            log.info("Funds release created for facture %s in project %s", doc.id, doc.project_id)
+            log.info("Funds release synced for paid facture %s", doc.id)
 
-        elif old_status == BillingDocumentStatus.PAID and new_status == BillingDocumentStatus.CANCELLED:
+        elif old_status == BillingDocumentStatus.PAID:
             self._funds_release.delete_funds_release(doc.id)
-            log.info("Funds release deleted for cancelled facture %s", doc.id)
+            log.info("Funds release deleted for facture %s, no longer paid", doc.id)

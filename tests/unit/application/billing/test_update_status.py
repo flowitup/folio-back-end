@@ -39,6 +39,12 @@ class FakeFundsRelease:
     def delete_funds_release(self, source_doc_id):
         self.deleted.append(source_doc_id)
 
+    def sync_funds_release(self, project_id, source_doc_id, amount_items, recipient_name, issue_date, created_by):
+        if project_id is None:
+            self.delete_funds_release(source_doc_id)
+        else:
+            self.create_funds_release(project_id, source_doc_id, amount_items, recipient_name, issue_date, created_by)
+
 
 @pytest.fixture
 def usecase(doc_repo):
@@ -308,3 +314,66 @@ class TestFundsReleaseBridge:
         inp = UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.CANCELLED)
         usecase_with_funds.execute(inp, fake_session)
         assert funds_release.deleted == [doc.id]
+
+
+class TestConcurrentTransitions:
+    """PAID and CANCELLED sent together from SENT: the loser must act on the winner's status."""
+
+    def test_the_row_is_read_under_its_lock(self, doc_repo, fake_session, user_id):
+        locked: list = []
+        original = doc_repo.find_by_id_for_update
+        doc_repo.find_by_id_for_update = lambda doc_id: locked.append(doc_id) or original(doc_id)
+        doc = make_doc(user_id=user_id, status=BillingDocumentStatus.DRAFT)
+        doc_repo.save(doc)
+        UpdateBillingDocumentStatusUseCase(doc_repo=doc_repo).execute(
+            UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.SENT), fake_session
+        )
+        assert locked == [doc.id]
+
+    def test_a_cancel_queued_behind_a_pay_removes_the_release_the_pay_made(
+        self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
+    ):
+        doc = make_doc(
+            user_id=user_id, kind=BillingDocumentKind.FACTURE, status=BillingDocumentStatus.SENT, project_id=uuid4()
+        )
+        doc_repo.save(doc)
+        pay = UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.PAID)
+        cancel = UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.CANCELLED)
+        # Both were validated against SENT by the old code; the locked read now gives the cancel PAID.
+        usecase_with_funds.execute(pay, fake_session)
+        result = usecase_with_funds.execute(cancel, fake_session)
+        assert result.status == "cancelled"
+        assert len(funds_release.created) == 1
+        assert funds_release.deleted == [doc.id]
+
+    def test_a_second_pay_loses_instead_of_overwriting(
+        self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
+    ):
+        doc = make_doc(
+            user_id=user_id, kind=BillingDocumentKind.FACTURE, status=BillingDocumentStatus.SENT, project_id=uuid4()
+        )
+        doc_repo.save(doc)
+        pay = UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.PAID)
+        usecase_with_funds.execute(pay, fake_session)
+        with pytest.raises(InvalidStatusTransitionError):
+            usecase_with_funds.execute(pay, fake_session)
+        assert len(funds_release.created) == 1
+
+    def test_the_release_is_made_before_the_status_commit(self, doc_repo, funds_release, user_id):
+        """The release adapter commits the session; the status must still be under the lock then."""
+        events: list[str] = []
+
+        class Session:
+            def commit(self):
+                events.append("commit")
+
+        funds_release.sync_funds_release = lambda **kwargs: events.append("release")
+        usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=doc_repo, funds_release=funds_release, project_repo=ProjectsByCompany()
+        )
+        doc = make_doc(
+            user_id=user_id, kind=BillingDocumentKind.FACTURE, status=BillingDocumentStatus.SENT, project_id=uuid4()
+        )
+        doc_repo.save(doc)
+        usecase.execute(UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.PAID), Session())
+        assert events == ["release", "commit"]
