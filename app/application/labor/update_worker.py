@@ -11,6 +11,7 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
     InvalidWorkerPhoneError,
+    SharedPersonEditError,
 )
 from app.domain.value_objects.phone_number import is_phone_number
 
@@ -86,9 +87,9 @@ class UpdateWorkerUseCase:
         """Whether the worker's Person may be renamed or re-phoned for everyone using it.
 
         True only for an unlinked profile that no other company lists. A Person linked to an
-        account belongs to the account holder, and one listed by several companies is shared,
-        so for those a worker edit changes this worker's own copy only. Fails closed when
-        the directory is not wired.
+        account belongs to the account holder, and one listed by several companies is shared:
+        every screen shows the Person's identity, so a new name or phone for those cannot be
+        kept for this company alone and is refused. Fails closed when the directory is not wired.
         """
         if self._person_repo is None or self._company_person_repo is None or self._authz_reader is None:
             return False
@@ -114,12 +115,16 @@ class UpdateWorkerUseCase:
                 raise InvalidWorkerDataError("Worker name cannot be empty")
             if len(request.name) > 255:
                 raise InvalidWorkerDataError("Worker name exceeds 255 characters")
-            worker.name = request.name.strip()
+            name = request.name.strip()
             # The name belongs to the Person: for a person only this company lists, renaming
-            # it here renames them on every project of the company; otherwise just this worker.
-            if worker.person_id is not None and self._person_is_company_private(worker):
-                self._person_repo.rename(worker.person_id, worker.name, commit=False)
-                worker.person_name = worker.name
+            # it here renames them on every project of the company; for any other it is refused.
+            if worker.person_id is not None:
+                if self._person_is_company_private(worker):
+                    self._person_repo.rename(worker.person_id, name, commit=False)
+                    worker.person_name = name
+                elif name not in (worker.name, worker.person_name):
+                    raise SharedPersonEditError()
+            worker.name = name
 
         if request.phone is not None:
             phone = request.phone.strip() or None
@@ -127,11 +132,15 @@ class UpdateWorkerUseCase:
             # passes, so the rest of the worker stays editable; a new value must be a phone number.
             if phone and phone not in (worker.phone, worker.person_phone) and not is_phone_number(phone):
                 raise InvalidWorkerPhoneError()
+            # Like the name, the phone moves on the Person only for a person only this company
+            # lists; a different number for any other is refused.
+            if worker.person_id is not None:
+                if self._person_is_company_private(worker):
+                    self._person_repo.change_phone(worker.person_id, phone, commit=False)
+                    worker.person_phone = phone
+                elif phone not in (worker.phone, worker.person_phone):
+                    raise SharedPersonEditError()
             worker.phone = phone
-            # Like the name, the phone moves on the Person only for a person only this company lists.
-            if worker.person_id is not None and self._person_is_company_private(worker):
-                self._person_repo.change_phone(worker.person_id, worker.phone, commit=False)
-                worker.person_phone = worker.phone
 
         if request.role_id is not _ROLE_SENTINEL:
             if request.role_id != worker.role_id:
