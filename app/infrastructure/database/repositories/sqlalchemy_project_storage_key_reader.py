@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.application.projects.ports import ProjectStorageKeyReaderPort
 from app.infrastructure.database.models import (
+    ChatMessageOrm,
     ChiffrageArticleModel,
     ChiffragePosteModel,
     InvoiceAttachmentModel,
@@ -50,5 +51,12 @@ class SqlAlchemyProjectStorageKeyReader(ProjectStorageKeyReaderPort):
             .join(ChiffragePosteModel, ChiffragePosteModel.id == ChiffrageArticleModel.poste_id)
             .filter(ChiffragePosteModel.project_id == project_id)
         ]
-        # Keep order; drop blanks (an article without an image) and duplicates.
+        # Chat photos and voice notes of the project's channel (chat_messages has no FK to projects).
+        keys += [
+            k
+            for (k,) in s.query(ChatMessageOrm.attachment_key).filter(
+                ChatMessageOrm.channel_kind == "project", ChatMessageOrm.channel_id == project_id
+            )
+        ]
+        # Keep order; drop blanks (a message or article without a file) and duplicates.
         return list(dict.fromkeys(k for k in keys if k))
