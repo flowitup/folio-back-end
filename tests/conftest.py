@@ -746,6 +746,7 @@ def invitation_app():
         )
         _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
             doc_repo=_billing_doc_repo,
+            access_repo=_access_repo,
         )
 
         # Wire project-scoped billing document list use-case

@@ -1208,6 +1208,7 @@ def _configure_di_container() -> None:
     )
     _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
         doc_repo=_billing_doc_repo,
+        access_repo=_access_repo,  # documents of a company the author left stop feeding the suggestions
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,

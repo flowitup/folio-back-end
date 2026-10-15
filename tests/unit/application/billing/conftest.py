@@ -125,7 +125,7 @@ class InMemoryBillingDocumentRepository:
         wanted = set(devis_ids)
         return {d.source_devis_id: (d.id, d.status.value) for d in self._store.values() if d.source_devis_id in wanted}
 
-    def aggregate_item_suggestions(self, user_id, category, q, limit):
+    def aggregate_item_suggestions(self, user_id, category, q, limit, owner_company_ids=None):
         """In-memory aggregation — delegates to the SQLite path of the real repo."""
         from collections import defaultdict
         from app.application.billing.dtos import (
@@ -134,7 +134,12 @@ class InMemoryBillingDocumentRepository:
             ActivitySuggestionsResponse,
         )
 
-        docs = [d for d in self._store.values() if d.user_id == user_id]
+        docs = [
+            d
+            for d in self._store.values()
+            if d.user_id == user_id
+            and (owner_company_ids is None or d.company_id is None or d.company_id in owner_company_ids)
+        ]
         groups: dict[tuple, list] = defaultdict(list)
         all_cat_counts: dict[str, int] = defaultdict(int)
 

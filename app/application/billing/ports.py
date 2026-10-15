@@ -128,6 +128,7 @@ class BillingDocumentRepositoryPort(Protocol):
         category: Optional[str],
         q: Optional[str],
         limit: int,
+        owner_company_ids: Optional[list[UUID]] = None,
     ) -> "ActivitySuggestionsResponse":
         """Aggregate line-item suggestions across the user's billing documents.
 
@@ -139,6 +140,8 @@ class BillingDocumentRepositoryPort(Protocol):
         category filter: exact match (case-sensitive) when provided.
         q filter: case-insensitive prefix match on description when provided.
         limit: max number of suggestions to return (1..100).
+        owner_company_ids: when given, a company document counts only while the caller is still
+            attached to its company (personal documents, company_id NULL, always count).
         """
         ...
 

@@ -12,7 +12,11 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.application.billing.dtos import ActivitySuggestionsResponse
-from app.application.billing.ports import BillingDocumentRepositoryPort
+from app.application.billing.ports import (
+    BillingDocumentRepositoryPort,
+    UserCompanyAccessRepositoryPort,
+    attached_company_ids,
+)
 
 
 # Hard limits to prevent abuse / excessive DB scan
@@ -29,8 +33,13 @@ class ListActivitySuggestionsUseCase:
     repository aggregate method that dispatches by DB dialect.
     """
 
-    def __init__(self, doc_repo: BillingDocumentRepositoryPort) -> None:
+    def __init__(
+        self,
+        doc_repo: BillingDocumentRepositoryPort,
+        access_repo: UserCompanyAccessRepositoryPort | None = None,
+    ) -> None:
         self._doc_repo = doc_repo
+        self._access_repo = access_repo
 
     def execute(
         self,
@@ -60,4 +69,6 @@ class ListActivitySuggestionsUseCase:
             category=category,
             q=q,
             limit=limit,
+            # A company document feeds the suggestions only while its author is still in the company.
+            owner_company_ids=attached_company_ids(self._access_repo, user_id),
         )
