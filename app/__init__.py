@@ -652,6 +652,7 @@ def _configure_di_container() -> None:
                 _c.request_signup_otp_usecase,
                 user_repo=_c.user_repository,
                 request_signin_otp=_c.request_otp_usecase,
+                authz_reader=_c.authz_reader,  # no code for an invitation whose inviter lost the right to invite
             )
 
     # -----------------------------------------------------------------------

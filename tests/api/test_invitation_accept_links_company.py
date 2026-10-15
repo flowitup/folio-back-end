@@ -180,3 +180,67 @@ class TestAcceptInvitationLinksCompany:
             profile = db.session.query(CompanyPersonModel).filter_by(company_id=company_id, person_id=person.id).first()
             assert profile is not None, "acceptor must appear in the company directory"
             assert profile.is_active is True
+
+
+def _invite(client, app, admin_token, project_id) -> str:
+    """Create an invitation and return its raw token (read off the captured e-mail)."""
+    create_resp = client.post(
+        "/api/v1/invitations",
+        json={"project_id": str(project_id), "email": f"ial-late-{uuid.uuid4().hex[:8]}@example.com"},
+        headers=_auth(admin_token),
+    )
+    assert create_resp.status_code == 201, create_resp.get_data(as_text=True)
+    email_resp = client.get("/api/v1/__test__/last-email")
+    if email_resp.status_code == 204:
+        pytest.skip("Test-only email capture endpoint unavailable")
+    match = re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", email_resp.get_json().get("body", ""))
+    if not match:
+        pytest.skip("Token extraction failed")
+    return match.group(1)
+
+
+class TestInviterRightIsRecheckedAtAccept:
+    """An invitation is only as good as its inviter: one removed from the company or demoted
+    after sending it can no longer bring anyone in through it."""
+
+    def _assert_dead(self, client, app, token):
+        sent_before = len(app._sms_sent)
+        phone = f"+336{uuid.uuid4().int % 10**8:08d}"
+        resp = client.post("/api/v1/invitations/accept/request-code", json={"token": token, "phone": phone})
+        assert resp.status_code == 410, resp.get_data(as_text=True)
+        assert len(app._sms_sent) == sent_before, "no SMS may go out for a dead invitation"
+        resp = client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "Late Comer", "phone": phone, "code": "123456"},
+        )
+        assert resp.status_code == 410, resp.get_data(as_text=True)
+
+    def test_removed_inviter_invitation_is_refused(self, accept_client, accept_app):
+        from app import db
+
+        admin_email, company_id, project_id = _make_admin_with_company_project(accept_app)
+        token = _invite(accept_client, accept_app, _login(accept_client, admin_email), project_id)
+        with accept_app.app_context():
+            admin = db.session.query(UserModel).filter_by(email=admin_email).one()
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=admin.id, company_id=company_id).delete()
+            db.session.commit()
+
+        self._assert_dead(accept_client, accept_app, token)
+
+    def test_demoted_inviter_invitation_is_refused(self, accept_client, accept_app):
+        from app import db
+
+        admin_email, company_id, project_id = _make_admin_with_company_project(accept_app)
+        token = _invite(accept_client, accept_app, _login(accept_client, admin_email), project_id)
+        with accept_app.app_context():
+            admin = db.session.query(UserModel).filter_by(email=admin_email).one()
+            access = db.session.get(UserCompanyAccessModel, (admin.id, company_id))
+            access.role = "member"
+            db.session.commit()
+
+        self._assert_dead(accept_client, accept_app, token)
+
+    def test_admin_inviter_invitation_is_still_accepted(self, accept_client, accept_app):
+        admin_email, _company_id, project_id = _make_admin_with_company_project(accept_app)
+        invitee_email = _invite_and_accept(accept_client, accept_app, _login(accept_client, admin_email), project_id)
+        assert invitee_email
