@@ -1,7 +1,7 @@
 """Project repository port."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import List, Optional, Protocol, Tuple
 from uuid import UUID
@@ -29,11 +29,16 @@ class ProjectSpent:
 
     Invariant, asserted by test::
 
-        by_credits + personal + labor_unpaid == total
+        by_credits + personal + unassigned + labor_unpaid == total
+
+    ``personal`` is the personal purse only: expenses paid with a method flagged
+    ``is_personal_payment`` and not reimbursed by the company — the Expense page's rule.
+    ``unassigned`` is spend in no purse (no method, or a method flagged neither company
+    nor personal); it used to be folded into ``personal``.
 
     ``personal_by_type`` breaks the personal share down by invoice type
     (``materials_services`` | ``others`` | ``refund`` | ``labor``); its values sum to
-    ``personal``.
+    ``personal``. ``unassigned_by_type`` does the same for ``unassigned``.
     """
 
     total: Decimal
@@ -44,6 +49,8 @@ class ProjectSpent:
     labor_paid: Decimal
     labor_unpaid: Decimal
     personal_by_type: dict[str, Decimal]
+    unassigned: Decimal = Decimal("0")
+    unassigned_by_type: dict[str, Decimal] = field(default_factory=dict)
 
 
 class ProjectSpentReaderPort(ABC):
