@@ -262,6 +262,35 @@ def assert_project_read_access(
     raise ForbiddenProjectAccessError(project_id)
 
 
+def assert_project_link_access(
+    project_repo: Optional[ProjectReadPort],
+    project_id: Optional[UUID],
+    user_id: UUID,
+    access_repo: Optional["UserCompanyAccessRepositoryPort"] = None,
+) -> None:
+    """Verify the user may link a billing document to *project_id*.
+
+    Like assert_project_read_access, but only a real membership counts: a project member or an
+    admin of the project's company. The bare ``owner_id`` shortcut does not, so a creator who was
+    unassigned from the project cannot attach new documents to it.
+    """
+    if project_id is None or project_repo is None:
+        return
+
+    project = project_repo.find_by_id(project_id)
+    if project is None:
+        raise ValueError(f"Project {project_id} not found")
+
+    if user_id in (project.user_ids or []):
+        return
+    company_id = getattr(project, "company_id", None)
+    if access_repo is not None and company_id is not None:
+        access = access_repo.find(user_id, company_id)
+        if access is not None and access.role == CompanyRole.ADMIN.value:
+            return
+    raise ForbiddenProjectAccessError(project_id)
+
+
 class CompanyRepositoryPort(Protocol):
     """Minimal company read port for billing use-cases.
 

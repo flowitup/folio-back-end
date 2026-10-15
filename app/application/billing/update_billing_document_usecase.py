@@ -10,6 +10,7 @@ from app.application.billing._helpers import (
     _assert_devis_not_locked,
     _conversion_link,
     _funds_release_items,
+    _release_allowed,
     _items_from_inputs,
 )
 from app.application.billing.dtos import (
@@ -23,7 +24,7 @@ from app.application.billing.ports import (
     ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
-    assert_project_read_access,
+    assert_project_link_access,
 )
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
@@ -88,7 +89,7 @@ class UpdateBillingDocumentUseCase:
         # update_project_id=True means the caller included the field; project_id may be
         # None to unlink, or a UUID to link. Only check access when linking (not None).
         if inp.update_project_id and inp.project_id is not None:
-            assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
+            assert_project_link_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
 
@@ -152,7 +153,8 @@ class UpdateBillingDocumentUseCase:
             and _RELEASE_FIELDS.intersection(updates)
         ):
             self._funds_release.sync_funds_release(
-                project_id=saved.project_id,
+                # A project of another company gets no release (an existing one is removed).
+                project_id=saved.project_id if _release_allowed(self._project_repo, saved) else None,
                 source_doc_id=saved.id,
                 amount_items=_funds_release_items(saved),
                 recipient_name=saved.recipient_name,

@@ -1234,6 +1234,7 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
         access_repo=_access_repo,  # company-admin may manage company billing
+        project_repo=_project_repo,  # a release only goes into a project of the facture's company
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,

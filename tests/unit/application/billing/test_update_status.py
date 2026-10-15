@@ -40,6 +40,16 @@ class FakeFundsRelease:
         self.deleted.append(source_doc_id)
 
 
+class _ProjectsByCompany:
+    """Project repo stub: every project belongs to *company_id*."""
+
+    def __init__(self, company_id):
+        self._company_id = company_id
+
+    def find_by_id(self, project_id):
+        return type("P", (), {"id": project_id, "company_id": self._company_id})()
+
+
 @pytest.fixture
 def usecase(doc_repo):
     return UpdateBillingDocumentStatusUseCase(doc_repo=doc_repo)
@@ -270,6 +280,26 @@ class TestFundsReleaseBridge:
     def test_no_project_id_skips_release(self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id):
         self._paid_facture(doc_repo, fake_session, usecase_with_funds, user_id, project_id=None)
         assert funds_release.created == []
+
+    def test_paid_facture_of_another_companys_project_gets_no_release(
+        self, doc_repo, funds_release, fake_session, user_id
+    ):
+        """A facture linked to a project of another company must not inject a release into it."""
+        usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=doc_repo, funds_release=funds_release, project_repo=_ProjectsByCompany(uuid4())
+        )
+        self._paid_facture(doc_repo, fake_session, usecase, user_id, company_id=uuid4())
+        assert funds_release.created == []
+
+    def test_paid_facture_of_its_own_companys_project_gets_a_release(
+        self, doc_repo, funds_release, fake_session, user_id
+    ):
+        company_id = uuid4()
+        usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=doc_repo, funds_release=funds_release, project_repo=_ProjectsByCompany(company_id)
+        )
+        self._paid_facture(doc_repo, fake_session, usecase, user_id, company_id=company_id)
+        assert len(funds_release.created) == 1
 
     def test_paid_to_cancelled_deletes_release(
         self, usecase_with_funds, funds_release, doc_repo, fake_session, user_id
