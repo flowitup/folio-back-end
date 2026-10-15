@@ -233,3 +233,16 @@ def test_a_body_within_the_cap_still_reaches_the_nul_guard(real_app):
     resp = real_app.test_client().post("/api/v1/auth/otp/request", json={"phone": "a\u0000b"})
     assert resp.status_code == 400
     assert "NUL" in resp.get_json()["message"]
+
+
+def test_nul_guard_does_not_parse_multipart_on_an_upload_route(real_app):
+    from app.api._helpers.nul_guard import reject_nul_characters
+
+    url = "/api/v1/projects/00000000-0000-0000-0000-000000000000/documents"
+    data = {"file": (io.BytesIO(b"x" * 64), "f.bin")}
+    with real_app.test_request_context(url, method="POST", data=data, content_type="multipart/form-data") as ctx:
+        ctx.request.max_content_length = max_body_bytes(ctx.request.endpoint, "multipart/form-data")
+        assert ctx.request.max_content_length > DEFAULT_MAX_BODY_BYTES
+        with patch("werkzeug.formparser.FormDataParser.parse") as parse:
+            assert reject_nul_characters() is None
+        parse.assert_not_called()
