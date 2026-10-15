@@ -239,19 +239,25 @@ class SqlAlchemyAuthzReader:
         return [(self._as_uuid_or_none(r[0]), self._as_uuid_or_none(r[1]), r[2], r[3]) for r in rows]
 
     def primary_company_id(self, user_id: UUID) -> "UUID | None":
-        """Return the company_id of the user's `is_primary=True` access row, or None."""
+        """Return the company_id of the user's `is_primary=True` access row, or None.
+
+        An account attached by someone else is never primary, so when it has no primary row and
+        belongs to exactly one company, that company is its default.
+        """
         cache = self._cache()
         key = ("primary_company_id", user_id)
         if cache is not None and key in cache:
             return cache[key]
-        row = self._session.execute(
+        rows = self._session.execute(
             text(
-                f"SELECT company_id FROM user_company_access "
-                f"WHERE {self._eq('user_id', 'uid')} AND is_primary = TRUE LIMIT 1"
+                f"SELECT company_id, is_primary FROM user_company_access "
+                f"WHERE {self._eq('user_id', 'uid')} ORDER BY is_primary DESC LIMIT 2"
             ),
             {"uid": self._bind_uuid(user_id)},
-        ).fetchone()
-        result = self._as_uuid_or_none(row[0]) if row is not None else None
+        ).fetchall()
+        result = None
+        if rows and (rows[0][1] or len(rows) == 1):
+            result = self._as_uuid_or_none(rows[0][0])
         if cache is not None:
             cache[key] = result
         return result
