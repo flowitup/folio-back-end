@@ -225,9 +225,81 @@ class TestOnePhonePerSource:
             assert _post(limited_app, SIGN_IN, "203.0.113.62", PHONE_A).status_code == 202
 
 
+PHONE_CHANGE = "/api/v1/auth/me/phone/request-code"
+
+
+def _signed_in_user(phone: str):
+    """(user, Authorization headers) of an active account that signs in with ``phone``."""
+    from uuid import uuid4
+
+    from app.infrastructure.database.models import UserModel
+
+    user = UserModel(email=f"{uuid4().hex}@example.com", is_active=True, phone=phone)
+    db.session.add(user)
+    db.session.commit()
+    token = _wiring.get_container().token_issuer.create_access_token(user.id)
+    return user, {"Authorization": f"Bearer {token}"}
+
+
+def _change(app, headers, client_ip: str, phone: str):
+    return app.test_client().post(
+        PHONE_CHANGE,
+        json={"phone": phone},
+        headers={**headers, "X-Forwarded-For": client_ip},
+        environ_base={"REMOTE_ADDR": "10.1.0.9"},
+    )
+
+
+class TestPhoneChangeCodeCaps:
+    """The caller picks the destination number: per-address cap shared with the other code routes, 5 a day per account."""
+
+    def test_the_per_address_cap_is_shared_with_the_other_code_routes(self, limited_app, monkeypatch):
+        monkeypatch.setitem(limited_app.config, "SMS_SEND_IP_LIMITS", "2 per hour")
+        _, headers = _signed_in_user("+33611000301")
+        ip = "203.0.113.80"
+        assert _post(limited_app, SIGNUP, ip, "+33611000302").status_code == 202
+        assert _change(limited_app, headers, ip, "+33611000303").status_code == 202
+        blocked = _change(limited_app, headers, ip, "+33611000304")
+        assert blocked.status_code == 429
+        assert _post(limited_app, SIGNUP, ip, "+33611000305").status_code == 429  # spent by the phone change too
+        assert _change(limited_app, headers, "203.0.113.81", "+33611000304").status_code == 202  # another address
+
+    def test_requests_that_send_no_code_do_not_spend_the_caps(self, limited_app, monkeypatch):
+        monkeypatch.setitem(limited_app.config, "SMS_SEND_IP_LIMITS", "1 per hour")
+        user, headers = _signed_in_user("+33611000310")
+        ip = "203.0.113.82"
+        assert _change(limited_app, headers, ip, "not-a-number").status_code == 400
+        assert _change(limited_app, headers, ip, "+33611000310").status_code == 400  # already the caller's number
+        assert _change(limited_app, headers, ip, "+33611000311").status_code == 202
+        assert _change(limited_app, headers, ip, "+33611000312").status_code == 429
+
+    def test_one_account_gets_five_codes_a_day_from_wherever_it_asks(self, limited_app, monkeypatch):
+        import limits.storage.memory as limits_memory
+
+        class Clock:
+            offset = 0.0
+
+            def time(self) -> float:
+                return real_time() + self.offset
+
+        real_time = limits_memory.time.time
+        clock = Clock()
+        monkeypatch.setattr(limits_memory, "time", clock)  # only the limiter's storage sees the shifted time
+        _, headers = _signed_in_user("+33611000320")
+        for n in range(5):
+            assert _change(limited_app, headers, f"203.0.113.{100 + n}", f"+3361100033{n}").status_code == 202
+        clock.offset = 120  # past the per-minute window, well inside the day
+        refused = _change(limited_app, headers, "203.0.113.120", "+33611000339")
+        assert refused.status_code == 429  # the minute window is over, so this is the daily cap
+        other, other_headers = _signed_in_user("+33611000321")
+        assert _change(limited_app, other_headers, "203.0.113.121", "+33611000339").status_code == 202  # keyed by user
+        clock.offset = 86400 + 120
+        assert _change(limited_app, headers, "203.0.113.122", "+33611000338").status_code == 202  # the day moved on
+
+
 @pytest.fixture(scope="module")
 def _budget_app():
-    """An app whose whole SMS budget is 2 per 10 minutes, to watch what happens past it."""
+    """An app whose two SMS pools hold 2 sends per 10 minutes each, to watch what happens past them."""
     saved_container = _wiring.container
 
     class BudgetConfig(TestingConfig):
@@ -235,6 +307,7 @@ def _budget_app():
         RATELIMIT_ENABLED = False
         RATELIMIT_STORAGE_URI = "memory://"
         SMS_GLOBAL_MAX_PER_10MIN = 2
+        SMS_OPEN_MAX_PER_10MIN = 2
 
     app = create_app(BudgetConfig)
     app.wired_container = _wiring.container
@@ -253,14 +326,35 @@ def budget_app(_budget_app):
 
 @pytest.fixture
 def budget(budget_app):
+    """The sign-in/invitation pool (emptied); ``open_budget`` is the sign-up/phone-change one."""
     container = _wiring.get_container()
     assert container.sms_budget is not None and container.sms_sender is not None
     container.sms_budget._sent.clear()
+    container.sms_open_budget._sent.clear()
     return container.sms_budget
 
 
-class TestGlobalSmsBudget:
-    def test_texts_past_the_budget_get_the_throttling_429(self, budget_app, budget):
+@pytest.fixture
+def open_budget(budget):
+    return _wiring.get_container().sms_open_budget
+
+
+def _add_user(phone: str):
+    """An active account that signs in with ``phone``; returns it."""
+    from uuid import uuid4
+
+    from app.infrastructure.database.models import UserModel
+
+    user = UserModel(email=f"{uuid4().hex}@example.com", is_active=True, phone=phone)
+    db.session.add(user)
+    db.session.commit()
+    return user
+
+
+class TestSmsBudgetPools:
+    """Sign-in/invitation codes and sign-up/phone-change codes draw from two independent pools."""
+
+    def test_texts_past_the_open_pool_get_the_throttling_429(self, budget_app, budget, open_budget):
         client = budget_app.test_client()
         for n in (1, 2):
             assert client.post(SIGNUP, json={"phone": f"+3361100020{n}"}).status_code == 202
@@ -272,32 +366,72 @@ class TestGlobalSmsBudget:
         # Nothing was committed for the refused request (the test's open app context keeps the session
         # alive, so end it by hand as the request teardown does): it can be repeated once there is room.
         db.session.rollback()
-        budget._sent.clear()
+        open_budget._sent.clear()
         assert client.post(SIGNUP, json={"phone": "+33611000203"}).status_code == 202
+        assert len(budget._sent) == 0  # sign-up codes never touched the sign-in pool
 
-    def test_the_budget_is_shared_by_every_flow(self, budget_app, budget):
+    def test_an_exhausted_open_pool_does_not_block_a_sign_in_code(self, budget_app, budget, open_budget):
+        """Anonymous sign-up requests to arbitrary numbers used to stop every sign-in."""
+        _add_user("+33611000240")
         client = budget_app.test_client()
-        assert client.post(SIGNUP, json={"phone": "+33611000211"}).status_code == 202
-        assert client.post(SIGNUP, json={"phone": "+33611000212"}).status_code == 202
-        invite = client.post(INVITE_CODE, json={"token": "x" * 40, "phone": "+33611000213"})
-        assert invite.status_code != 202  # unknown invitation, and no SMS for it either way
-        assert client.post(SIGNUP, json={"phone": "+33611000214"}).status_code == 429
+        for n in (1, 2):
+            assert client.post(SIGNUP, json={"phone": f"+3361100024{n}"}).status_code == 202
+        assert client.post(SIGNUP, json={"phone": "+33611000243"}).status_code == 429
+        db.session.rollback()
+        assert len(open_budget._sent) == 2
+        assert client.post(SIGN_IN, json={"phone": "+33611000240"}).status_code == 202
+        assert len(budget._sent) == 1
 
-    def test_store_review_numbers_send_nothing_so_neither_spend_nor_wait(self, budget_app, budget, monkeypatch):
-        from uuid import uuid4
+    def test_an_exhausted_sign_in_pool_still_answers_429_and_leaves_sign_up_alone(
+        self, budget_app, budget, open_budget
+    ):
+        for n in (0, 1, 2):
+            _add_user(f"+3361100025{n}")
+        client = budget_app.test_client()
+        for n in (0, 1):
+            assert client.post(SIGN_IN, json={"phone": f"+3361100025{n}"}).status_code == 202
+        refused = client.post(SIGN_IN, json={"phone": "+33611000252"})
+        assert refused.status_code == 429
+        assert 1 <= int(refused.headers["Retry-After"]) <= 600
+        db.session.rollback()
+        assert client.post(SIGNUP, json={"phone": "+33611000253"}).status_code == 202
+        assert len(open_budget._sent) == 1
 
-        from app.infrastructure.database.models import UserModel
+    def test_phone_change_codes_draw_from_the_open_pool(self, budget_app, budget, open_budget):
+        user = _add_user("+33611000260")
+        _add_user("+33611000261")
+        token = _wiring.get_container().token_issuer.create_access_token(user.id)
+        headers = {"Authorization": f"Bearer {token}"}
+        client = budget_app.test_client()
+        change = "/api/v1/auth/me/phone/request-code"
+        for n in (2, 3):
+            assert client.post(change, json={"phone": f"+3361100026{n}"}, headers=headers).status_code == 202
+        assert client.post(change, json={"phone": "+33611000264"}, headers=headers).status_code == 429
+        db.session.rollback()
+        assert len(open_budget._sent) == 2 and len(budget._sent) == 0
+        assert client.post(SIGN_IN, json={"phone": "+33611000261"}).status_code == 202  # sign-in is unaffected
 
+    def test_invitation_codes_draw_from_the_sign_in_pool(self, budget_app, budget, open_budget):
+        container = _wiring.get_container()
+        invite_signup = container.request_invite_otp_usecase._request_signup_otp
+        assert invite_signup is not container.request_signup_otp_usecase
+        assert invite_signup._sms is container.sms_sender
+        assert container.request_signup_otp_usecase._sms is container.sms_open_sender
+        assert container.request_phone_change_code_usecase._sms is container.sms_open_sender
+
+    def test_store_review_numbers_send_nothing_so_neither_spend_nor_wait(
+        self, budget_app, budget, open_budget, monkeypatch
+    ):
         reviewer = "+33611000220"
         monkeypatch.setenv("OTP_REVIEWER_PHONE", reviewer)
         monkeypatch.setenv("OTP_REVIEWER_CODE", "246810")
-        db.session.add(UserModel(email=f"{uuid4().hex}@example.com", is_active=True, phone=reviewer))
-        db.session.commit()
+        _add_user(reviewer)
         client = budget_app.test_client()
         for n in (1, 2):
             assert client.post(SIGNUP, json={"phone": f"+3361100023{n}"}).status_code == 202
-        assert client.post(SIGNUP, json={"phone": "+33611000233"}).status_code == 429  # the budget is spent
-        spent = len(budget._sent)
+        assert client.post(SIGNUP, json={"phone": "+33611000233"}).status_code == 429  # the open pool is spent
+        db.session.rollback()
+        spent = len(open_budget._sent)
 
         assert client.post(SIGN_IN, json={"phone": reviewer}).status_code == 202
-        assert len(budget._sent) == spent
+        assert len(open_budget._sent) == spent and len(budget._sent) == 0

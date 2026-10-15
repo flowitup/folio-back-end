@@ -3,6 +3,9 @@
 Both windows (``max_per_10min`` and ``max_per_day``) must have room for a send to be admitted; a
 limit of 0 switches that window off. The Redis budget FAILS OPEN: a Redis outage must not stop every
 sign-in, so it logs and lets the send through (the per-number and per-address limits still apply).
+
+Two independent pools exist (see ``OPEN_KEY``): the sign-in/invitation one, and a smaller one for the
+flows where the requester picks the destination number, so those cannot empty the first.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ logger = logging.getLogger(__name__)
 SHORT_WINDOW_SECONDS = 600
 DAY_WINDOW_SECONDS = 86400
 _KEY = "sms_budget:global"
+OPEN_KEY = "sms_budget:open"
 
 
 class InMemorySmsBudget:
@@ -56,7 +60,7 @@ class InMemorySmsBudget:
 
 
 class RedisSmsBudget:
-    """Budget shared by every API worker: a sorted set of send times, trimmed to the last day."""
+    """Budget shared by every API worker: a sorted set of send times (under ``key``), trimmed to the last day."""
 
     def __init__(
         self,
@@ -65,7 +69,9 @@ class RedisSmsBudget:
         max_per_day: int,
         clock: Callable[[], float] = time.time,
         client: Optional["redis.Redis"] = None,
+        key: str = _KEY,
     ) -> None:
+        self._key = key
         self._max_short = max_per_10min
         self._max_day = max_per_day
         self._clock = clock
@@ -82,17 +88,17 @@ class RedisSmsBudget:
     def _acquire(self) -> int:
         now_ms = int(self._clock() * 1000)
         pipe = self._redis.pipeline()
-        pipe.zremrangebyscore(_KEY, 0, now_ms - DAY_WINDOW_SECONDS * 1000)
-        pipe.zcount(_KEY, f"({now_ms - SHORT_WINDOW_SECONDS * 1000}", "+inf")
-        pipe.zcard(_KEY)
+        pipe.zremrangebyscore(self._key, 0, now_ms - DAY_WINDOW_SECONDS * 1000)
+        pipe.zcount(self._key, f"({now_ms - SHORT_WINDOW_SECONDS * 1000}", "+inf")
+        pipe.zcard(self._key)
         _, in_short, in_day = pipe.execute()
         wait = max(
             self._wait(now_ms, in_short, SHORT_WINDOW_SECONDS, self._max_short),
             self._wait(now_ms, in_day, DAY_WINDOW_SECONDS, self._max_day),
         )
         if wait == 0:
-            self._redis.zadd(_KEY, {f"{now_ms}-{uuid4().hex[:8]}": now_ms})
-            self._redis.pexpire(_KEY, DAY_WINDOW_SECONDS * 1000)
+            self._redis.zadd(self._key, {f"{now_ms}-{uuid4().hex[:8]}": now_ms})
+            self._redis.pexpire(self._key, DAY_WINDOW_SECONDS * 1000)
         return wait
 
     def _wait(self, now_ms: int, inside: int, window: int, limit: int) -> int:
@@ -100,7 +106,7 @@ class RedisSmsBudget:
             return 0
         # Room appears when the send that is `limit` places from the newest one leaves the window.
         leaving: Any = self._redis.zrangebyscore(
-            _KEY, f"({now_ms - window * 1000}", "+inf", start=inside - limit, num=1, withscores=True
+            self._key, f"({now_ms - window * 1000}", "+inf", start=inside - limit, num=1, withscores=True
         )
         if not leaving:
             return 1

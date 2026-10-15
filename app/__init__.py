@@ -532,20 +532,30 @@ def _configure_di_container() -> None:
         )
     else:
         _sms = LoggingSmsSender()
-    # Every message that leaves spends the global SMS budget first (the SIM / gateway quota is finite).
-    # Tests keep it in memory; production counts in Redis and fails open when Redis is down.
+    # Every message that leaves spends an SMS budget first (the SIM / gateway quota is finite). Two
+    # independent pools: sign-in and invitation codes go to an existing account or to an invitee holding
+    # the invitation token; sign-up and phone-change codes go to a number the requester picks, so they
+    # draw from a smaller "open" pool and cannot empty the first one. Tests keep both in memory;
+    # production counts in Redis and fails open when Redis is down.
     from app.infrastructure.adapters.budgeted_sms_sender import BudgetedSmsSender
-    from app.infrastructure.adapters.sms_budget import InMemorySmsBudget, RedisSmsBudget
+    from app.infrastructure.adapters.sms_budget import OPEN_KEY, InMemorySmsBudget, RedisSmsBudget
 
     _sms_max_10min = int(_cfg.get("SMS_GLOBAL_MAX_PER_10MIN", 60))
     _sms_max_day = int(_cfg.get("SMS_GLOBAL_MAX_PER_DAY", 400))
+    _sms_open_max_10min = int(_cfg.get("SMS_OPEN_MAX_PER_10MIN", 30))
+    _sms_open_max_day = int(_cfg.get("SMS_OPEN_MAX_PER_DAY", 150))
     if _cfg.get("TESTING"):
         _c.sms_budget = InMemorySmsBudget(_sms_max_10min, _sms_max_day)
+        _c.sms_open_budget = InMemorySmsBudget(_sms_open_max_10min, _sms_open_max_day)
     else:
-        _c.sms_budget = RedisSmsBudget(_cfg.get("REDIS_URL") or Config.REDIS_URL, _sms_max_10min, _sms_max_day)
+        _redis_url = _cfg.get("REDIS_URL") or Config.REDIS_URL
+        _c.sms_budget = RedisSmsBudget(_redis_url, _sms_max_10min, _sms_max_day)
+        _c.sms_open_budget = RedisSmsBudget(_redis_url, _sms_open_max_10min, _sms_open_max_day, key=OPEN_KEY)
+    _sms_open = BudgetedSmsSender(_sms, _c.sms_open_budget, pool="open")
     _sms = BudgetedSmsSender(_sms, _c.sms_budget)
     _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
     _c.sms_sender = _sms
+    _c.sms_open_sender = _sms_open
 
     # Push notifications around attendance (PUSH_PROVIDER log | expo).
     from app.application.push.attendance_push_notifier import AttendancePushNotifier
@@ -630,7 +640,7 @@ def _configure_di_container() -> None:
         _c.request_signup_otp_usecase = RequestSignupOtpUseCase(
             _c.user_repository,
             _otp_repo,
-            _sms,
+            _sms_open,
             ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
             resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
             hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
@@ -648,7 +658,7 @@ def _configure_di_container() -> None:
         _c.request_phone_change_code_usecase = RequestPhoneChangeCodeUseCase(
             _c.user_repository,
             _otp_repo,
-            _sms,
+            _sms_open,
             ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
             resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
             hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
@@ -660,17 +670,26 @@ def _configure_di_container() -> None:
             push_device_repo=_c.push_device_repository,  # sign-out everywhere also drops the push devices
         )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
-        # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
-        # use case instance, gated by the invitation token instead of being open to
-        # anyone. invitation_repo is wired earlier, in configure_container().
+        # AcceptInvitationUseCase); its "request a code" endpoint uses a twin of that
+        # use case, gated by the invitation token instead of being open to anyone, so
+        # its codes draw from the sign-in SMS pool (the invitee holds a 256-bit token).
+        # invitation_repo is wired earlier, in configure_container().
         if _c.invitation_repo is not None:
             from app.application.invitations.accept_invitation_usecase import RequestInviteOtpUseCase
 
+            _invite_signup_otp = RequestSignupOtpUseCase(
+                _c.user_repository,
+                _otp_repo,
+                _sms,
+                ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
+                resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
+                hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
+            )
             # An invitation to an address that already has an account is taken up with a
             # sign-in code sent to that account's own phone.
             _c.request_invite_otp_usecase = RequestInviteOtpUseCase(
                 _c.invitation_repo,
-                _c.request_signup_otp_usecase,
+                _invite_signup_otp,
                 user_repo=_c.user_repository,
                 request_signin_otp=_c.request_otp_usecase,
                 authz_reader=_c.authz_reader,  # no code for an invitation whose inviter lost the right to invite

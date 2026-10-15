@@ -1,4 +1,4 @@
-"""Global SMS budget: sliding windows, a Redis adapter that fails open, and the sender that spends it."""
+"""SMS budgets (one per pool): sliding windows, a Redis adapter that fails open, and the sender that spends it."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import redis
 
 from app.domain.exceptions.auth_exceptions import OtpThrottledError
 from app.infrastructure.adapters.budgeted_sms_sender import BudgetedSmsSender
-from app.infrastructure.adapters.sms_budget import InMemorySmsBudget, RedisSmsBudget
+from app.infrastructure.adapters.sms_budget import OPEN_KEY, InMemorySmsBudget, RedisSmsBudget
 
 
 class Clock:
@@ -157,3 +157,37 @@ def test_sender_stops_at_the_budget_with_the_throttling_error(caplog):
     assert exc.value.retry_after_seconds == 600 and exc.value.hourly_limit is True
     assert [to for to, _ in inner.sent] == ["+33611000001", "+33611000002"]
     assert "sms_budget.exceeded" in caplog.text
+
+
+def test_each_pool_counts_under_its_own_redis_key():
+    class KeyedRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.keys: list[str] = []
+
+        def zadd(self, key, mapping):
+            self.keys.append(key)
+            super().zadd(key, mapping)
+
+    clock = Clock()
+    default_client, open_client = KeyedRedis(), KeyedRedis()
+    RedisSmsBudget("redis://unused", 5, 5, clock=clock, client=default_client).acquire()
+    RedisSmsBudget("redis://unused", 5, 5, clock=clock, client=open_client, key=OPEN_KEY).acquire()
+    assert default_client.keys == ["sms_budget:global"]
+    assert open_client.keys == [OPEN_KEY] == ["sms_budget:open"]
+
+
+def test_the_open_pool_fails_open_and_logs_too(caplog):
+    budget = RedisSmsBudget("redis://unused", 1, 1, client=DownRedis(), key=OPEN_KEY)
+    with caplog.at_level(logging.WARNING):
+        assert budget.acquire() == 0
+        assert budget.acquire() == 0
+    assert "sms_budget.unavailable_fail_open" in caplog.text
+
+
+def test_the_throttling_log_names_the_pool(caplog):
+    sender = BudgetedSmsSender(RecordingSender(), InMemorySmsBudget(1, 100, clock=Clock()), pool="open")
+    sender.send("+33611000001", "a")
+    with caplog.at_level(logging.WARNING), pytest.raises(OtpThrottledError):
+        sender.send("+33611000002", "b")
+    assert "sms_budget.exceeded pool=open" in caplog.text

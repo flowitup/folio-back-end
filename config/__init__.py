@@ -127,13 +127,18 @@ class Config:
     SMS_GATEWAY_URL: str = get_env("SMS_GATEWAY_URL", default="")
     SMS_GATEWAY_USERNAME: str = get_env("SMS_GATEWAY_USERNAME", default="")
     SMS_GATEWAY_PASSWORD: str = get_env("SMS_GATEWAY_PASSWORD", default="")
-    # Most SMS the whole API sends in any 10 minutes / any 24 hours (sliding windows, counted in Redis),
-    # whatever the flow; past it the code routes answer 429 with a Retry-After. Size them under what the
+    # Most SMS the sign-in and invitation codes send in any 10 minutes / any 24 hours (sliding windows,
+    # counted in Redis); past it the code routes answer 429 with a Retry-After. Size them under what the
     # SIM / gateway can really send: a team onboarding in one morning must fit. 0 switches a window off.
     SMS_GLOBAL_MAX_PER_10MIN: int = int(get_env("SMS_GLOBAL_MAX_PER_10MIN").strip() or "60")
     SMS_GLOBAL_MAX_PER_DAY: int = int(get_env("SMS_GLOBAL_MAX_PER_DAY").strip() or "400")
-    # Per client address (IPv6: per /64), shared by the three routes that text an unauthenticated
-    # caller (sign-up code, sign-in code, invitation code), on top of each route's "5 per minute".
+    # The same windows for the "open" pool: codes whose destination number the requester picks (sign-up and
+    # phone-change codes). Smaller, and independent of the pool above, so abuse of those flows cannot stop
+    # sign-in codes. 0 switches a window off.
+    SMS_OPEN_MAX_PER_10MIN: int = int(get_env("SMS_OPEN_MAX_PER_10MIN").strip() or "30")
+    SMS_OPEN_MAX_PER_DAY: int = int(get_env("SMS_OPEN_MAX_PER_DAY").strip() or "150")
+    # Per client address (IPv6: per /64), shared by the routes that text a number the caller picked
+    # (sign-up, sign-in, invitation and phone-change codes), on top of each route's "5 per minute".
     SMS_SEND_IP_LIMITS: str = get_env("SMS_SEND_IP_LIMITS").strip() or "20 per hour;60 per day"
     OTP_TTL_SECONDS: int = int(get_env("OTP_TTL_SECONDS", default="300"))
     OTP_RESEND_SECONDS: int = int(get_env("OTP_RESEND_SECONDS", default="60"))
@@ -215,7 +220,12 @@ def validate_boot_settings(settings: Mapping[str, Any], environ: Mapping[str, st
         )
     # The SMS abuse limits: flask-limiter parses its string on every request and the budget does int(),
     # so a typo would otherwise show up as a 500 on the sign-in routes instead of a stopped boot.
-    for name in ("SMS_GLOBAL_MAX_PER_10MIN", "SMS_GLOBAL_MAX_PER_DAY"):
+    for name in (
+        "SMS_GLOBAL_MAX_PER_10MIN",
+        "SMS_GLOBAL_MAX_PER_DAY",
+        "SMS_OPEN_MAX_PER_10MIN",
+        "SMS_OPEN_MAX_PER_DAY",
+    ):
         try:
             if int(settings.get(name, 0)) < 0:
                 raise ValueError

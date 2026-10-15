@@ -387,12 +387,16 @@ _PHONE_TAKEN = "This phone number is already used by another account."
 )
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+# The caller chooses the destination number, so one account may ask for 5 codes a day at most.
+@limiter.limit("5 per day", key_func=jwt_user_key, deduct_when=code_request_answered)
 def request_phone_change_code():
     """Step 1 of a verified number change: the code goes to the NEW number, never the current one.
 
-    Same rules as sign-in codes (French numbers only, TTL, resend throttle, hourly cap). 409 when
-    another account already signs in with that number (whose is never revealed), 400
-    ``PhoneUnchanged`` when it is already the caller's number.
+    Same rules as sign-in codes (French numbers only, TTL, resend throttle, hourly cap, the shared
+    per-address cap) plus 5 requests a day per account. 409 when another account already signs in
+    with that number (whose is never revealed), 400 ``PhoneUnchanged`` when it is already the
+    caller's number.
     """
     try:
         data = PhoneChangeRequestBody.model_validate(request.get_json(silent=True) or {})
