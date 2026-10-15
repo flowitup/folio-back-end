@@ -30,6 +30,8 @@ from app.application.labor import (
 )
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
+    WorkerPersonNotFoundError,
+    SharedPersonEditError,
     InvalidWorkerDataError,
     InvalidWorkerPhoneError,
     WorkerAlreadyLinkedError,
@@ -178,6 +180,8 @@ def create_worker(project_id: str):
         return _error_response("InvalidPhone", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
+    except WorkerPersonNotFoundError:
+        return _error_response("NotFound", "Person not found", 404)
     except WorkerAlreadyLinkedError as e:
         return _error_response("Conflict", str(e), 409)
     except WorkerAlreadyOnProjectError as e:
@@ -249,6 +253,8 @@ def update_worker(project_id: str, worker_id: str):
         return _error_response("InvalidPhone", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
+    except SharedPersonEditError as e:
+        return _error_response("Conflict", str(e), 409)
     except WorkerNotFoundError:
         return _error_response("NotFound", f"Worker {worker_id} not found", 404)
 

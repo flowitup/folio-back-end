@@ -10,6 +10,7 @@ from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo, ReactionInfo
+from app.application.usecases.otp_login import is_placeholder_email
 from app.domain.companies.roles import CompanyRole
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.infrastructure.database.models.chat_message import (
@@ -28,6 +29,9 @@ from app.infrastructure.database.models.user_company_access import UserCompanyAc
 # translated one: this is an API value read by three locales, so the clients map it
 # if they want it localized.
 DELETED_ACCOUNT_NAME = "Deleted account"
+# Shown for a phone sign-up without a display name: their only e-mail is a placeholder that embeds
+# their number, which no colleague should read.
+UNNAMED_ACCOUNT_NAME = "Unnamed member"
 
 
 def _naive_utc(value: datetime) -> datetime:
@@ -246,17 +250,16 @@ class SqlAlchemyChatRepository:
         return [UUID(str(row[0])) for row in rows]
 
     def _project_member_ids(self, project_id: UUID) -> list[UUID]:
-        """Users assigned to the project, its creator and the company's admins (who see every
+        """Users assigned to the project and the company's admins (who see every
         project of their company) — kept only while they hold
         a role in the project's company. A user who left or was removed from the
-        company keeps neither the assignment nor the creator shortcut (as everywhere
-        the resolver decides: no company role, no access)."""
-        project = self._session.execute(
-            select(ProjectModel.owner_id, ProjectModel.company_id).where(ProjectModel.id == project_id)
-        ).first()
+        company keeps the assignment no longer, and the creator is a member only while
+        assigned (as everywhere the resolver decides: no company role, no assignment,
+        no access; the creator is assigned when the project is created)."""
+        project = self._session.execute(select(ProjectModel.company_id).where(ProjectModel.id == project_id)).first()
         if project is None:
             return []
-        owner, company_id = project
+        company_id = project[0]
         company_rows = self._session.execute(
             select(UserCompanyAccessModel.user_id, UserCompanyAccessModel.role).where(
                 UserCompanyAccessModel.company_id == company_id
@@ -268,7 +271,7 @@ class SqlAlchemyChatRepository:
             text("SELECT user_id FROM user_projects WHERE project_id = :pid"), {"pid": str(project_id)}
         ).fetchall()
         ids: list[UUID] = []
-        for raw in [*(row[0] for row in rows), owner, *admin_ids]:
+        for raw in [*(row[0] for row in rows), *admin_ids]:
             if raw is None:
                 continue
             uid = UUID(str(raw))
@@ -290,7 +293,6 @@ class SqlAlchemyChatRepository:
             visible = self._membership_project_ids(user_id)
             project_stmt = project_stmt.where(
                 (ProjectModel.id.in_(visible))
-                | (ProjectModel.owner_id == user_id)
                 | ProjectModel.company_id.in_(
                     [cid for cid, _name, role in companies if role == CompanyRole.ADMIN.value]
                 ),
@@ -377,7 +379,8 @@ class SqlAlchemyChatRepository:
         its own id, so falling through to `email` would print that user's internal
         UUID to everyone else in the channel. Messages are deliberately kept when
         an account is deleted, so the sender needs a name that is neither the
-        person nor their id.
+        person nor their id. The same goes for a phone sign-up's placeholder address,
+        which spells the phone number.
         """
         if not user_ids:
             return {}
@@ -387,6 +390,10 @@ class SqlAlchemyChatRepository:
             )
         ).all()
         return {
-            uid: (DELETED_ACCOUNT_NAME if deleted_at is not None else (display_name or email))
+            uid: (
+                DELETED_ACCOUNT_NAME
+                if deleted_at is not None
+                else (display_name or "").strip() or (UNNAMED_ACCOUNT_NAME if is_placeholder_email(email) else email)
+            )
             for uid, display_name, email, deleted_at in rows
         }

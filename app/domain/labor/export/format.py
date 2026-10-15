@@ -10,9 +10,25 @@ slugify_project_name — project name → kebab-case filename-safe slug
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Context, Decimal
 
 from app.domain.time import business_now
+
+# A stored row can hold more digits than a line may be saved with (rows from before the entry
+# validation): written out in full, 1E-100000 makes the PDF layout take half a minute. Past these
+# bounds a number is rounded to _MAX_PLACES, or (above _MAX_ADJUSTED) printed as a dash.
+_MAX_PLACES = Decimal("0.000001")
+_MAX_ADJUSTED = 30
+_WIDE = Context(prec=80)
+
+
+def _bounded(d: Decimal) -> Decimal | None:
+    """The number as the renderers may print it, or None when it cannot be printed at all."""
+    if not d.is_finite() or d.adjusted() > _MAX_ADJUSTED:
+        return None
+    if int(d.as_tuple().exponent) < -6:
+        d = d.quantize(_MAX_PLACES, rounding=ROUND_HALF_UP, context=_WIDE)
+    return Decimal(0) if d.is_zero() else d
 
 
 def format_eur_fr(value: Decimal | None) -> str:
@@ -26,9 +42,12 @@ def format_eur_fr(value: Decimal | None) -> str:
     """
     if value is None:
         return "—"  # em dash
+    d = Decimal(str(value))
+    if not d.is_finite() or d.adjusted() > _MAX_ADJUSTED:
+        return "—"
     # Round half-up in Decimal (a float cast loses digits on large amounts and
     # rounds 0.125 down), then format with thousands comma and 2 dp: "1,234.56"
-    cents = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    cents = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP, context=_WIDE)
     s = f"{cents:,.2f}"
     # Convert to fr-FR notation: comma → thousand-sep space, period → decimal comma
     s = s.replace(",", "X").replace(".", ",").replace("X", " ")  # narrow no-break space
@@ -47,8 +66,11 @@ def format_unit_price_eur_fr(value: Decimal | None) -> str:
     """
     if value is None:
         return "—"
-    d = Decimal(str(value)).normalize()
-    if d.as_tuple().exponent >= -2:
+    d = _bounded(Decimal(str(value)))
+    if d is None:
+        return "—"
+    d = d.normalize()
+    if int(d.as_tuple().exponent) >= -2:
         return format_eur_fr(d)
     s = f"{d:,f}".replace(",", "X").replace(".", ",").replace("X", "\u00a0")  # same separators
     return f"{s}\u00a0€"
@@ -62,9 +84,11 @@ def format_decimal_fr(value: Decimal | float | int | None) -> str:
     """
     if value is None:
         return "—"
-    d = Decimal(str(value))
+    d = _bounded(Decimal(str(value)))
+    if d is None:
+        return "—"
     if d == d.to_integral_value():
-        d = d.quantize(Decimal(1))
+        d = d.quantize(Decimal(1), context=_WIDE)
     else:
         d = d.normalize()
     int_part, _, frac = format(d, "f").partition(".")

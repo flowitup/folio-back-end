@@ -91,7 +91,7 @@ class TestLinkPersonOnSignupHappyPath:
         assert saved_access.user_id == user_id
         assert saved_access.company_id == company_id
         assert saved_access.role == "member"
-        assert saved_access.is_primary is True  # first company for this user
+        assert saved_access.is_primary is False  # never the company the admin chose for them
         # Pending window cleared regardless of outcome.
         company_person_repo.save.assert_called_once()
         cleared = company_person_repo.save.call_args.args[0]

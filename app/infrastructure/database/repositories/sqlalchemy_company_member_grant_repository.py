@@ -96,6 +96,20 @@ class SqlAlchemyCompanyMemberGrantRepository:
         self._session.flush()
         return deleted
 
+    def delete_project_grants(self, company_id: UUID, user_id: UUID, project_id: UUID) -> int:
+        deleted = (
+            self._session.query(CompanyMemberGrantModel)
+            .filter(
+                CompanyMemberGrantModel.company_id == company_id,
+                CompanyMemberGrantModel.user_id == user_id,
+                CompanyMemberGrantModel.project_id == project_id,
+                CompanyMemberGrantModel.effect == "grant",
+            )
+            .delete(synchronize_session=False)
+        )
+        self._session.flush()
+        return deleted
+
     def _find_row(
         self, company_id: UUID, user_id: UUID, permission: str, project_id: Optional[UUID]
     ) -> Optional[CompanyMemberGrantModel]:

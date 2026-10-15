@@ -2,20 +2,57 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository
 from app.application.labor.role_scope import assert_role_in_project_company
+from app.domain.entities.worker import Worker
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
     InvalidWorkerPhoneError,
+    SharedPersonEditError,
 )
-from app.domain.value_objects.phone_number import is_phone_number
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 
 
 _ROLE_SENTINEL = object()
+
+
+def _same_name(sent: str, *stored: Optional[str]) -> bool:
+    """Whether a name sent back is a stored one, ignoring case and spacing (clients re-format it)."""
+
+    def fold(value: str) -> str:
+        return " ".join(value.split()).casefold()
+
+    return any(value is not None and fold(value) == fold(sent) for value in stored)
+
+
+def _same_phone(sent: Optional[str], *stored: Optional[str]) -> bool:
+    """Whether a phone sent back is a stored one: equal as typed, or the same number once normalised.
+
+    The mobile form re-sends the E.164 form of the number it shows ("+33612345678"), while the
+    stored text is whatever was typed ("06 12 34 56 78"); free-text legacy values only match as typed.
+    """
+    if sent is None:
+        return None in stored
+    try:
+        sent_normalized: Optional[str] = normalize_phone(sent)
+    except InvalidPhoneNumberError:
+        sent_normalized = None
+    for value in stored:
+        if value is None:
+            continue
+        if value == sent:
+            return True
+        if sent_normalized is not None:
+            try:
+                if normalize_phone(value) == sent_normalized:
+                    return True
+            except InvalidPhoneNumberError:
+                pass
+    return False
 
 
 @dataclass
@@ -60,15 +97,44 @@ class UpdateWorkerResponse:
 class UpdateWorkerUseCase:
     """Update an existing worker."""
 
-    def __init__(self, worker_repo: IWorkerRepository, labor_role_repo=None, authz_reader=None, person_repo=None):
+    def __init__(
+        self,
+        worker_repo: IWorkerRepository,
+        labor_role_repo=None,
+        authz_reader=None,
+        person_repo=None,
+        company_person_repo=None,
+    ):
         self._repo = worker_repo
         self._labor_role_repo = labor_role_repo
         self._authz_reader = authz_reader
         self._person_repo = person_repo
+        self._company_person_repo = company_person_repo
 
     def set_person_repo(self, person_repo) -> None:
         """Inject the Person repository; wired after it exists."""
         self._person_repo = person_repo
+
+    def set_company_person_repo(self, company_person_repo: Any) -> None:
+        """Inject the company directory; wired after it exists."""
+        self._company_person_repo = company_person_repo
+
+    def _person_is_company_private(self, worker: Worker) -> bool:
+        """Whether the worker's Person may be renamed or re-phoned for everyone using it.
+
+        True only for an unlinked profile that no other company lists. A Person linked to an
+        account belongs to the account holder, and one listed by several companies is shared:
+        every screen shows the Person's identity, so a new name or phone for those cannot be
+        kept for this company alone and is refused. Fails closed when the directory is not wired.
+        """
+        if self._person_repo is None or self._company_person_repo is None or self._authz_reader is None:
+            return False
+        company_id = self._authz_reader.project_company_id(worker.project_id)
+        person = self._person_repo.find_by_id(worker.person_id)
+        if company_id is None or person is None or person.user_id is not None:
+            return False
+        profiles = self._company_person_repo.list_for_person(worker.person_id)
+        return bool(profiles) and all(profile.company_id == company_id for profile in profiles)
 
     def set_role_scope(self, labor_role_repo, authz_reader) -> None:
         """Inject what the role check needs; wired after the labor-role repository exists."""
@@ -85,25 +151,32 @@ class UpdateWorkerUseCase:
                 raise InvalidWorkerDataError("Worker name cannot be empty")
             if len(request.name) > 255:
                 raise InvalidWorkerDataError("Worker name exceeds 255 characters")
-            worker.name = request.name.strip()
-            # The name belongs to the shared Person: renaming it here renames the
-            # person in every company and project that uses them.
-            if worker.person_id is not None and self._person_repo is not None:
-                self._person_repo.rename(worker.person_id, worker.name, commit=False)
-                worker.person_name = worker.name
+            name = request.name.strip()
+            # The name belongs to the Person: for a person only this company lists, renaming
+            # it here renames them on every project of the company; for any other it is refused.
+            if worker.person_id is not None:
+                if self._person_is_company_private(worker):
+                    self._person_repo.rename(worker.person_id, name, commit=False)
+                    worker.person_name = name
+                elif not _same_name(name, worker.name, worker.person_name):
+                    raise SharedPersonEditError()
+            worker.name = name
 
         if request.phone is not None:
             phone = request.phone.strip() or None
             # A number saved before phones were checked may be free text: sent back unchanged it
             # passes, so the rest of the worker stays editable; a new value must be a phone number.
-            if phone and phone not in (worker.phone, worker.person_phone) and not is_phone_number(phone):
+            if phone and not _same_phone(phone, worker.phone, worker.person_phone) and not is_phone_number(phone):
                 raise InvalidWorkerPhoneError()
+            # Like the name, the phone moves on the Person only for a person only this company
+            # lists; a different number for any other is refused.
+            if worker.person_id is not None:
+                if self._person_is_company_private(worker):
+                    self._person_repo.change_phone(worker.person_id, phone, commit=False)
+                    worker.person_phone = phone
+                elif not _same_phone(phone, worker.phone, worker.person_phone):
+                    raise SharedPersonEditError()
             worker.phone = phone
-            # Like the name, the phone belongs to the shared Person: changing it here changes
-            # it in every company and project that uses them.
-            if worker.person_id is not None and self._person_repo is not None:
-                self._person_repo.change_phone(worker.person_id, worker.phone, commit=False)
-                worker.person_phone = worker.phone
 
         if request.role_id is not _ROLE_SENTINEL:
             if request.role_id != worker.role_id:

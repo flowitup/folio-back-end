@@ -49,6 +49,11 @@ class SQLAlchemyPushDeviceRepository:
         self._session.query(PushDeviceOrm).filter_by(token=token, user_id=user_id).delete()
         self._session.commit()
 
+    def delete_all_for_user(self, user_id: UUID) -> None:
+        """Forget every device of the account (sessions ended everywhere); the caller commits."""
+        self._session.query(PushDeviceOrm).filter_by(user_id=user_id).delete()
+        self._session.flush()
+
     def tokens_for_users(self, user_ids: List[UUID]) -> Dict[UUID, List[str]]:
         if not user_ids:
             return {}

@@ -188,11 +188,13 @@ class UnassignProjectMemberUseCase:
         access_repo: "UserCompanyAccessRepositoryPort",
         membership_repo: "ProjectMembershipRepositoryPort",
         task_repo: Any = None,  # anything with clear_assignee(project_id, user_id)
+        grant_repo: Any = None,  # anything with delete_project_grants(company_id, user_id, project_id)
     ) -> None:
         self._authz = authz_reader
         self._access = access_repo
         self._membership = membership_repo
         self._tasks = task_repo
+        self._grants = grant_repo
 
     def execute(self, caller_id: UUID, project_id: UUID, target_user_id: UUID) -> None:
         company_id, caller_role = _resolve_caller_scope(self._authz, caller_id, project_id)
@@ -206,6 +208,10 @@ class UnassignProjectMemberUseCase:
         _forbid_manager_on_a_non_member(self._authz, caller_role, target_user_id, company_id)
 
         self._membership.remove(target_user_id, project_id)
+
+        # A grant on this project would keep writes open to someone who can no longer read it.
+        if self._grants is not None:
+            self._grants.delete_project_grants(company_id, target_user_id, project_id)
 
         # Their tasks on this project go back to "unassigned" once they can no
         # longer open it (a company admin still can, without an assignment).

@@ -268,7 +268,8 @@ class TestRateLimiting:
         minute")` can produce the 429 this test is actually about.
         """
         for i in range(6):
-            response = rate_limited_client.post("/api/v1/auth/otp/request", json={"phone": "+33698765432"})
+            # A different number each time: asking for the same one is capped per source on its own.
+            response = rate_limited_client.post("/api/v1/auth/otp/request", json={"phone": f"+3369876543{i}"})
 
             if i < 5:
                 assert response.status_code == 202

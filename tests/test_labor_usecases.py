@@ -13,6 +13,7 @@ from app.domain.exceptions.labor_exceptions import (
     LaborEntryNotFoundError,
     InvalidWorkerDataError,
     InvalidWorkerPhoneError,
+    SharedPersonEditError,
 )
 from app.application.labor import (
     CreateWorkerUseCase,
@@ -140,13 +141,20 @@ class TestCreateWorkerUseCase:
 
     def test_create_worker_keeps_the_picked_persons_legacy_phone(self, mock_worker_repo, sample_worker):
         # A person saved before phones were checked: picking them still works.
-        person = Mock(phone="ask the foreman")
+        person = Mock(phone="ask the foreman", user_id=None)
         person_repo = Mock()
         person_repo.find_by_id.return_value = person
         mock_worker_repo.list_by_project.return_value = []
         mock_worker_repo.create.side_effect = lambda w: w
 
-        result = CreateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+        result = CreateWorkerUseCase(
+            mock_worker_repo,
+            person_repo=person_repo,
+            company_person_repo=Mock(
+                find=Mock(return_value=Mock(is_active=True, default_daily_rate=None, labor_role_id=None))
+            ),
+            authz_reader=Mock(project_company_id=Mock(return_value=uuid4())),
+        ).execute(
             CreateWorkerRequest(
                 project_id=uuid4(),
                 name="Worker",
@@ -157,6 +165,18 @@ class TestCreateWorkerUseCase:
         )
 
         assert result.phone == "ask the foreman"
+
+
+def _directory_for(project_id, *, profile_companies=None, person_user_id=None):
+    """(person_repo, company_person_repo, authz_reader) where the project company is listed
+    alongside `profile_companies` (company ids other than the project's)."""
+    company_id = uuid4()
+    person_repo = Mock()
+    person_repo.find_by_id.return_value = Mock(user_id=person_user_id)
+    profiles = [Mock(company_id=company_id)] + [Mock(company_id=other) for other in (profile_companies or [])]
+    company_person_repo = Mock(list_for_person=Mock(return_value=profiles))
+    authz_reader = Mock(project_company_id=Mock(return_value=company_id))
+    return person_repo, company_person_repo, authz_reader
 
 
 class TestUpdateWorkerUseCase:
@@ -205,9 +225,14 @@ class TestUpdateWorkerUseCase:
         sample_worker.person_name = "Old Name"
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_worker_repo.update.side_effect = lambda w: w
-        person_repo = Mock()
+        person_repo, company_person_repo, authz_reader = _directory_for(sample_worker.project_id)
 
-        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+        result = UpdateWorkerUseCase(
+            mock_worker_repo,
+            person_repo=person_repo,
+            company_person_repo=company_person_repo,
+            authz_reader=authz_reader,
+        ).execute(
             UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="  New Name ")
         )
 
@@ -215,13 +240,69 @@ class TestUpdateWorkerUseCase:
         assert result.name == "New Name"
         assert result.person_name == "New Name"
 
+    @pytest.mark.parametrize(
+        "directory",
+        [
+            {"profile_companies": [uuid4()]},  # also listed by another company
+            {"person_user_id": uuid4()},  # linked to an account
+            None,  # directory not wired: fail closed
+        ],
+        ids=["shared-with-another-company", "linked-to-an-account", "directory-not-wired"],
+    )
+    def test_rename_and_phone_are_refused_unless_only_this_company_lists_the_person(
+        self, mock_worker_repo, sample_worker, directory
+    ):
+        sample_worker.person_id = uuid4()
+        sample_worker.name = sample_worker.person_name = "Old Name"
+        sample_worker.phone = sample_worker.person_phone = "+33600000000"
+        mock_worker_repo.find_by_id.return_value = sample_worker
+        mock_worker_repo.update.side_effect = lambda w: w
+        if directory is None:
+            person_repo = Mock()
+            usecase = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo)
+        else:
+            person_repo, company_person_repo, authz_reader = _directory_for(sample_worker.project_id, **directory)
+            usecase = UpdateWorkerUseCase(
+                mock_worker_repo,
+                person_repo=person_repo,
+                company_person_repo=company_person_repo,
+                authz_reader=authz_reader,
+            )
+
+        for changed in ({"name": "New Name"}, {"phone": "0611223344"}, {"phone": ""}):
+            with pytest.raises(SharedPersonEditError):
+                usecase.execute(
+                    UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, **changed)
+                )
+
+        person_repo.rename.assert_not_called()
+        person_repo.change_phone.assert_not_called()
+        mock_worker_repo.update.assert_not_called()
+
+        # Sending the current identity back (the edit form always does) is a normal save.
+        result = usecase.execute(
+            UpdateWorkerRequest(
+                worker_id=sample_worker.id,
+                project_id=sample_worker.project_id,
+                name="Old Name",
+                phone="+33600000000",
+            )
+        )
+        assert (result.name, result.phone) == ("Old Name", "+33600000000")
+        person_repo.rename.assert_not_called()
+
     def test_update_without_name_leaves_the_person_alone(self, mock_worker_repo, sample_worker):
         sample_worker.person_id = uuid4()
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_worker_repo.update.side_effect = lambda w: w
-        person_repo = Mock()
+        person_repo, company_person_repo, authz_reader = _directory_for(sample_worker.project_id)
 
-        UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+        UpdateWorkerUseCase(
+            mock_worker_repo,
+            person_repo=person_repo,
+            company_person_repo=company_person_repo,
+            authz_reader=authz_reader,
+        ).execute(
             UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, phone="0600000000")
         )
 
@@ -232,9 +313,14 @@ class TestUpdateWorkerUseCase:
         sample_worker.person_phone = "+33600000000"
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_worker_repo.update.side_effect = lambda w: w
-        person_repo = Mock()
+        person_repo, company_person_repo, authz_reader = _directory_for(sample_worker.project_id)
 
-        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
+        result = UpdateWorkerUseCase(
+            mock_worker_repo,
+            person_repo=person_repo,
+            company_person_repo=company_person_repo,
+            authz_reader=authz_reader,
+        ).execute(
             UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, phone=" 0611223344 ")
         )
 
@@ -263,7 +349,14 @@ class TestUpdateWorkerUseCase:
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_worker_repo.update.side_effect = lambda w: w
 
-        result = UpdateWorkerUseCase(mock_worker_repo, person_repo=Mock()).execute(
+        person_repo, company_person_repo, authz_reader = _directory_for(sample_worker.project_id)
+
+        result = UpdateWorkerUseCase(
+            mock_worker_repo,
+            person_repo=person_repo,
+            company_person_repo=company_person_repo,
+            authz_reader=authz_reader,
+        ).execute(
             UpdateWorkerRequest(
                 worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed", phone="ask the foreman"
             )
@@ -275,11 +368,14 @@ class TestUpdateWorkerUseCase:
         sample_worker.person_id = uuid4()
         mock_worker_repo.find_by_id.return_value = sample_worker
         mock_worker_repo.update.side_effect = lambda w: w
-        person_repo = Mock()
+        person_repo, company_person_repo, authz_reader = _directory_for(sample_worker.project_id)
 
-        UpdateWorkerUseCase(mock_worker_repo, person_repo=person_repo).execute(
-            UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed")
-        )
+        UpdateWorkerUseCase(
+            mock_worker_repo,
+            person_repo=person_repo,
+            company_person_repo=company_person_repo,
+            authz_reader=authz_reader,
+        ).execute(UpdateWorkerRequest(worker_id=sample_worker.id, project_id=sample_worker.project_id, name="Renamed"))
 
         person_repo.change_phone.assert_not_called()
 

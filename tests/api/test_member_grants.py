@@ -397,6 +397,38 @@ class TestValidation:
 
 
 # ---------------------------------------------------------------------------
+# Unassigning a member ends their project-scoped grants
+# ---------------------------------------------------------------------------
+
+
+class TestUnassignDropsProjectGrants:
+    def test_project_grants_do_not_outlive_the_assignment(self, client, mg_app, admin_a_h, member_a_h):
+        pid, uid = mg_app._project_p_id, mg_app._member_a_id
+        _set_grant(client, admin_a_h, mg_app, uid, "project:manage_invoices", "grant", pid)
+        _set_grant(client, admin_a_h, mg_app, uid, "project:update", "grant", pid)
+        _set_grant(client, admin_a_h, mg_app, uid, "project:manage_invoices", "grant", mg_app._project_q_id)
+        _set_grant(client, admin_a_h, mg_app, uid, "project:view_pay", "deny", pid)
+        assert _create_invoice(client, member_a_h, pid, recipient="Assigned").status_code == 201
+
+        removed = client.delete(f"/api/v1/projects/{pid}/assignments/{uid}", headers=admin_a_h)
+        assert removed.status_code == 204, removed.get_data(as_text=True)
+
+        rows = client.get(_grants_url(mg_app, uid), headers=admin_a_h).get_json()["grants"]
+        on_p = {(g["permission"], g["effect"]) for g in rows if g["project_id"] == pid}
+        # The grants on P are gone, the deny stays, the grant on Q is untouched.
+        assert on_p == {("project:view_pay", "deny")}
+        assert any(g["project_id"] == mg_app._project_q_id and g["effect"] == "grant" for g in rows)
+        assert _create_invoice(client, member_a_h, pid, recipient="After removal").status_code == 403
+
+        # Assigned again later: the grants are not silently restored.
+        assert client.put(f"/api/v1/projects/{pid}/assignments/{uid}", headers=admin_a_h).status_code in (200, 201, 204)
+        assert _create_invoice(client, member_a_h, pid, recipient="Reassigned").status_code == 403
+
+        _remove_grant(client, admin_a_h, mg_app, uid, "project:view_pay", pid)
+        _remove_grant(client, admin_a_h, mg_app, uid, "project:manage_invoices", mg_app._project_q_id)
+
+
+# ---------------------------------------------------------------------------
 # Cross-company access
 # ---------------------------------------------------------------------------
 

@@ -106,6 +106,19 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             return True
         return False
 
+    def unlink_user(self, project_ids: List[UUID], user_id: UUID) -> int:
+        if not project_ids:
+            return 0
+        models = (
+            self._session.query(WorkerModel)
+            .filter(WorkerModel.project_id.in_(project_ids), WorkerModel.user_id == user_id)
+            .all()
+        )
+        for model in models:
+            model.user_id = None
+        self._session.flush()
+        return len(models)
+
     def _to_entity(self, model: WorkerModel) -> Worker:
         # Person FK is nullable during the Phase 1c backfill rollout — guard
         # against unlinked rows. Accessing model.person triggers the lazy

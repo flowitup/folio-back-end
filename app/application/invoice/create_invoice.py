@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.application.invoice.dtos import InvoiceResponse
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import IInvoiceRepository, lock_invoices_in_id_order
 from app.domain.entities.invoice import HIGHLIGHT_COLORS, Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
     AppliedAmountExceedsTargetError,
@@ -129,12 +129,21 @@ class CreateInvoiceUseCase:
             payment_method_id = method.id
             payment_method_label = method.label
 
+        # A return may lock both its refund source and its avoir target: lock them together, in id order,
+        # so two returns that cross cannot deadlock. Concurrent returns queue here instead of passing the
+        # cap together.
+        locked: dict = {}
+        if request.type == InvoiceType.RETURN:
+            locked = lock_invoices_in_id_order(
+                self._repo, [i for i in (request.refunds_invoice_id, request.applied_to_invoice_id) if i is not None]
+            )
+
         # Refund link validation + cap (only when refunds_invoice_id is provided).
         refunds_invoice_id: Optional[UUID] = None
         if request.refunds_invoice_id is not None:
             if request.type != InvoiceType.RETURN:
                 raise InvalidInvoiceDataError("refunds_invoice_id may only be set on invoices of type 'refund'")
-            source = self._repo.find_by_id(request.refunds_invoice_id)
+            source = locked[request.refunds_invoice_id]
             if source is None:
                 raise InvalidInvoiceDataError(f"Source invoice {request.refunds_invoice_id} not found")
             if source.project_id != request.project_id:
@@ -171,7 +180,7 @@ class CreateInvoiceUseCase:
             # the return is settled as store credit, not a straight cash refund.
             if settled_via != SettledVia.AVOIR.value:
                 raise InvalidInvoiceDataError("applied_to_invoice_id may only be set when settled_via is 'avoir'")
-            target = self._repo.find_by_id(request.applied_to_invoice_id)
+            target = locked[request.applied_to_invoice_id]
             if target is None:
                 raise InvalidInvoiceDataError(f"Target invoice {request.applied_to_invoice_id} not found")
             if target.project_id != request.project_id:
@@ -181,10 +190,8 @@ class CreateInvoiceUseCase:
                     "applied_to_invoice_id must reference an invoice that is not a return or released_funds"
                 )
             # Cap: abs(Σ applied returns incl. this one) must stay <= target total.
-            # Race (accepted, not locked): this is a read-then-write check with no
-            # row/advisory lock, so two concurrent creates against the same target
-            # could both pass and jointly exceed the cap — identical, accepted class
-            # of drift as the pre-existing refunds_invoice_id cap check above.
+            # The target row is locked above, so concurrent creates against it queue and
+            # each sums the credits the previous one committed.
             this_total = sum((item.total for item in invoice_items), Decimal("0"))
             existing_applied = self._repo.sum_applied_for_target(target.id)
             total_applied = existing_applied + this_total

@@ -26,6 +26,11 @@ _MAX_EDGE = 480
 _MAX_PIXELS = 80_000_000
 Image.MAX_IMAGE_PIXELS = _MAX_PIXELS
 
+# The only decoders Pillow may use: the photo upload accepts .jpg / .png / .webp and
+# nothing else. Left to sniff, Pillow also parses EPS, TIFF, JPEG 2000, SPIDER... from an
+# upload named a.jpg, and several of those parsers have hung or exhausted memory.
+_ALLOWED_FORMATS = ("JPEG", "PNG", "WEBP")
+
 
 class PillowImageThumbnailer:
     """Implements IImageThumbnailer using Pillow.
@@ -43,7 +48,8 @@ class PillowImageThumbnailer:
         Args:
             data: Raw image bytes (JPEG, PNG, or WebP).
             content_type: MIME type of the input (unused — Pillow sniffs the
-                          header itself, which is safer than trusting the client).
+                          header itself, restricted to _ALLOWED_FORMATS, which is
+                          safer than trusting the client).
 
         Returns:
             JPEG-encoded thumbnail bytes.
@@ -59,7 +65,7 @@ class PillowImageThumbnailer:
             # process.
             with warnings.catch_warnings():
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
-                img = Image.open(BytesIO(data))
+                img = Image.open(BytesIO(data), formats=_ALLOWED_FORMATS)
 
             # img.size is populated lazily from the file header — reading it is
             # cheap and does not decode the full bitmap.  Reject gigapixel

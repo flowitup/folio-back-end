@@ -9,7 +9,12 @@ from uuid import uuid4
 import pytest
 
 from app.application.labor.create_worker import CreateWorkerRequest, CreateWorkerUseCase
-from app.domain.exceptions.labor_exceptions import WorkerAlreadyOnProjectError
+from app.domain.exceptions.labor_exceptions import WorkerAlreadyOnProjectError, WorkerPersonNotFoundError
+
+
+def _listed_profile():
+    """An active directory profile with no defaults of its own."""
+    return MagicMock(is_active=True, default_daily_rate=None, labor_role_id=None)
 
 
 def _usecase(company_person_find=None):
@@ -45,7 +50,7 @@ def test_inline_person_gets_a_profile_in_the_project_company():
 
 
 def test_existing_person_is_not_attached_to_the_company_by_the_worker_create():
-    uc, company_person_repo, _, project_id = _usecase()
+    uc, company_person_repo, _, project_id = _usecase(_listed_profile())
     uc.execute(
         CreateWorkerRequest(
             project_id=project_id,
@@ -66,6 +71,7 @@ def test_person_the_caller_just_created_in_the_picker_is_listed_in_the_company()
     uc._person_repo.find_by_id.side_effect = lambda pid: MagicMock(
         id=pid, phone_normalized=None, created_by_user_id=caller
     )
+    company_person_repo.list_for_person.return_value = []
     person_id = uuid4()
     uc.execute(
         CreateWorkerRequest(
@@ -129,7 +135,7 @@ def test_inline_add_with_the_phone_of_a_worker_already_on_the_project_is_refused
 
 
 def test_a_person_already_on_the_project_is_refused():
-    uc, _, _, project_id = _usecase()
+    uc, _, _, project_id = _usecase(_listed_profile())
     person_id = uuid4()
     existing = MagicMock(id=uuid4(), person_id=person_id, is_active=False)
     uc._repo.list_by_project.return_value = [existing]
@@ -146,3 +152,48 @@ def test_a_person_already_on_the_project_is_refused():
     assert err.value.worker_id == str(existing.id)
     assert err.value.is_active is False
     uc._repo.create.assert_not_called()
+
+
+def _foreign_person_request(project_id, caller):
+    return CreateWorkerRequest(
+        project_id=project_id, name="Stranger", daily_rate=Decimal("100"), person_id=uuid4(), created_by_user_id=caller
+    )
+
+
+def test_a_person_the_project_company_does_not_list_is_refused():
+    """Another company's person (not the caller's own fresh one) cannot be linked by id."""
+    uc, company_person_repo, _, project_id = _usecase()
+    company_person_repo.list_for_person.return_value = [MagicMock()]
+    with pytest.raises(WorkerPersonNotFoundError):
+        uc.execute(_foreign_person_request(project_id, uuid4()))
+    uc._repo.create.assert_not_called()
+
+
+def test_an_inactive_directory_profile_does_not_admit_the_person():
+    uc, company_person_repo, _, project_id = _usecase(MagicMock(is_active=False))
+    company_person_repo.list_for_person.return_value = [MagicMock()]
+    with pytest.raises(WorkerPersonNotFoundError):
+        uc.execute(_foreign_person_request(project_id, uuid4()))
+
+
+def test_a_person_the_caller_created_but_another_directory_lists_is_refused():
+    uc, company_person_repo, _, project_id = _usecase()
+    caller = uuid4()
+    uc._person_repo.find_by_id.side_effect = lambda pid: MagicMock(id=pid, created_by_user_id=caller)
+    company_person_repo.list_for_person.return_value = [MagicMock()]
+    with pytest.raises(WorkerPersonNotFoundError):
+        uc.execute(_foreign_person_request(project_id, caller))
+
+
+def test_an_unknown_person_id_gets_the_same_refusal():
+    uc, _, _, project_id = _usecase()
+    uc._person_repo.find_by_id.side_effect = lambda pid: None
+    with pytest.raises(WorkerPersonNotFoundError):
+        uc.execute(_foreign_person_request(project_id, uuid4()))
+
+
+def test_a_person_id_is_refused_when_the_directory_is_not_wired():
+    worker_repo = MagicMock()
+    with pytest.raises(WorkerPersonNotFoundError):
+        CreateWorkerUseCase(worker_repo).execute(_foreign_person_request(uuid4(), uuid4()))
+    worker_repo.create.assert_not_called()

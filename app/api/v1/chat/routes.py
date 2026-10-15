@@ -46,6 +46,7 @@ from app.application.chat.exceptions import (
     UnsupportedAttachmentTypeError,
 )
 from app.application.chat.usecases import MAX_ATTACHMENT_BYTES
+from app.domain.value_objects.display_filename import strip_control_chars
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -351,7 +352,9 @@ def get_attachment(message_id: UUID) -> Any:
     except Exception:
         logger.exception("get_attachment unexpected error message=%s", message_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
-    response = send_file(dto.stream, mimetype=dto.content_type, download_name=dto.filename, as_attachment=False)
+    # A name stored with a line break (before uploads were sanitised) must not make send_file raise.
+    download_name = strip_control_chars(dto.filename) or "attachment"
+    response = send_file(dto.stream, mimetype=dto.content_type, download_name=download_name, as_attachment=False)
     response.headers["Content-Length"] = str(dto.content_length)
     response.headers["Cache-Control"] = "private, max-age=3600"
     return response

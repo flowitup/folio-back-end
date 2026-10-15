@@ -22,7 +22,7 @@ class OtpVerifyBody(BaseModel):
     """POST /auth/otp/verify — exchange phone + code for tokens."""
 
     phone: str = Field(..., min_length=6, max_length=32)
-    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+    code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
 
 
 class AuthConfigResponse(BaseModel):
@@ -45,7 +45,7 @@ class SignupVerifyBody(BaseModel):
     """POST /auth/signup/verify — create the account and sign in."""
 
     phone: str = Field(..., min_length=6, max_length=32)
-    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+    code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
     # Trimmed before the length check: a name of spaces only is refused here (400), not deep in the use case.
     display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
 
@@ -60,7 +60,7 @@ class PhoneChangeConfirmBody(BaseModel):
     """POST /auth/me/phone/confirm — the new number and the code texted to it."""
 
     phone: str = Field(..., min_length=6, max_length=32)
-    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+    code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
 
 
 class LogoutBody(BaseModel):

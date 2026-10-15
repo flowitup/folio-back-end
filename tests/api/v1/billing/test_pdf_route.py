@@ -88,6 +88,33 @@ def _pdf_text(data: bytes) -> str:
     return text.replace(" ", " ")
 
 
+class TestDownloadFilenameQuotes:
+    """An imported document number may hold a double quote or backslash: it must not end filename="..." early."""
+
+    @pytest.mark.parametrize("route", ["pdf", "xlsx"])
+    def test_quote_and_backslash_in_the_number_stay_inside_the_quoted_filename(
+        self, inv_client, billing_token, billing_profile, route
+    ):
+        body = {
+            "kind": "devis",
+            "recipient_name": "Acme Corp",
+            "company_id": billing_profile["company_id"],
+            "document_number": f'DEV"{route}; x=y\\z',
+            "status": "draft",
+            "items": [{"description": "Consulting", "quantity": "1", "unit_price": "1000", "vat_rate": "20"}],
+        }
+        created = inv_client.post("/api/v1/billing-documents/import", json=body, headers=_auth(billing_token))
+        assert created.status_code == 201, created.get_data(as_text=True)
+        resp = inv_client.get(
+            f"/api/v1/billing-documents/{created.get_json()['id']}/{route}", headers=_auth(billing_token)
+        )
+        assert resp.status_code == 200
+        header = resp.headers["Content-Disposition"]
+        quoted = header.split('filename="', 1)[1].split('"', 1)
+        assert quoted[0].startswith(f"DEV_{route}; x=y") and quoted[1].startswith("; filename*=UTF-8''")
+        assert "\\" not in quoted[0]
+
+
 class TestPdfContent:
     def test_pdf_renders_a_line_description_of_the_maximum_length(self, inv_client, billing_token, billing_profile):
         """A 5,000-character description (the schema maximum) used to fail with a 500 LayoutError."""

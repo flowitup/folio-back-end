@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from flask import Flask, Response, jsonify, request
 from sqlalchemy.exc import DataError
+from werkzeug.exceptions import RequestEntityTooLarge
+
+from app.api._helpers.request_limits import DEFAULT_MAX_BODY_BYTES
 
 NUL_MESSAGE = "Text contains an invalid character (NUL)."
 
@@ -27,6 +30,17 @@ def _has_nul(value: object) -> bool:
     return False
 
 
+def _is_large_upload() -> bool:
+    """A multipart body on an upload route (cap above the default).
+
+    Parsing it here would spool up to the file limit to temp disk for an anonymous caller,
+    before JWT or the rate limiter. Those routes read their form fields and validate the
+    file name in the use case; a NUL that reaches the database is still a 400 (http_errors).
+    """
+    limit = request.max_content_length
+    return request.mimetype == "multipart/form-data" and limit is not None and limit > DEFAULT_MAX_BODY_BYTES
+
+
 def _request_has_nul() -> bool:
     if any(_has_nul(key) or _has_nul(value) for key, value in request.args.items(multi=True)):
         return True
@@ -34,7 +48,7 @@ def _request_has_nul() -> bool:
         return True
     if request.is_json and _has_nul(request.get_json(silent=True)):
         return True
-    if request.mimetype in _FORM_MIMETYPES:
+    if request.mimetype in _FORM_MIMETYPES and not _is_large_upload():
         if any(_has_nul(key) or _has_nul(value) for key, value in request.form.items(multi=True)):
             return True
         if any(_has_nul(upload.filename or "") for _, upload in request.files.items(multi=True)):
@@ -48,7 +62,13 @@ def nul_error_response() -> tuple[Response, int]:
 
 def reject_nul_characters() -> tuple[Response, int] | None:
     """``before_request`` hook: a 400 when an /api/ request carries a NUL character."""
-    if request.path.startswith("/api/") and _request_has_nul():
+    if not request.path.startswith("/api/"):
+        return None
+    # Never parse more than the request is allowed to carry (the cap is set by request_limits).
+    limit = request.max_content_length
+    if limit is not None and request.content_length is not None and request.content_length > limit:
+        raise RequestEntityTooLarge()
+    if _request_has_nul():
         return nul_error_response()
     return None
 

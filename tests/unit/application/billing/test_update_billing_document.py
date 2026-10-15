@@ -10,7 +10,7 @@ from app.application.billing.update_billing_document_usecase import UpdateBillin
 from app.application.billing.dtos import ItemInput, UpdateBillingDocumentInput
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, ForbiddenBillingDocumentError
-from tests.unit.application.billing.conftest import make_doc
+from tests.unit.application.billing.conftest import ProjectsByCompany, make_doc
 
 
 @pytest.fixture
@@ -251,7 +251,9 @@ class TestPaidFactureFundsReleaseSync:
             ],
         )
 
-        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds).execute(inp, fake_session)
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds, project_repo=ProjectsByCompany()).execute(
+            inp, fake_session
+        )
 
         assert len(funds.synced) == 1
         call = funds.synced[0]
@@ -259,6 +261,24 @@ class TestPaidFactureFundsReleaseSync:
         assert call["project_id"] == doc.project_id
         assert call["recipient_name"] == "changed after paid"
         assert call["amount_items"] == [{"description": "x", "quantity": "10", "unit_price": "100", "vat_rate": "20"}]
+
+    def test_editing_paid_facture_linked_to_another_companys_project_syncs_no_release(
+        self, doc_repo, fake_session, user_id
+    ):
+        """A project of another company gets no release: the sync is told the facture has no project."""
+        funds = _RecordingFundsRelease()
+        doc = self._paid_facture(doc_repo, user_id)
+        doc_repo.save(doc.with_updates(company_id=uuid4()))
+
+        class _OtherCompanyProjects:
+            def find_by_id(self, project_id):
+                return type("P", (), {"company_id": uuid4()})()
+
+        UpdateBillingDocumentUseCase(
+            doc_repo=doc_repo, funds_release=funds, project_repo=_OtherCompanyProjects()
+        ).execute(UpdateBillingDocumentInput(id=doc.id, user_id=user_id, recipient_name="R"), fake_session)
+
+        assert [call["project_id"] for call in funds.synced] == [None]
 
     def test_notes_only_edit_does_not_touch_release(self, doc_repo, fake_session, user_id):
         funds = _RecordingFundsRelease()
@@ -279,3 +299,75 @@ class TestPaidFactureFundsReleaseSync:
         )
 
         assert funds.synced == []
+
+
+class TestConcurrentCancelDuringEdit:
+    """A PATCH /status cancelling the facture commits while the PUT waits for the row lock."""
+
+    def test_the_row_is_read_under_its_lock(self, doc_repo, fake_session, user_id):
+        locked: list = []
+        original = doc_repo.find_by_id_for_update
+        doc_repo.find_by_id_for_update = lambda doc_id: locked.append(doc_id) or original(doc_id)
+        doc = make_doc(user_id=user_id)
+        doc_repo.save(doc)
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo).execute(
+            UpdateBillingDocumentInput(id=doc.id, user_id=user_id, notes="x"), fake_session
+        )
+        assert locked == [doc.id]
+
+    def test_an_edit_that_waited_for_a_cancel_creates_no_release(self, doc_repo, fake_session, user_id):
+        funds = _RecordingFundsRelease()
+        doc = make_doc(
+            user_id=user_id,
+            kind=BillingDocumentKind.FACTURE,
+            status=BillingDocumentStatus.PAID,
+            doc_number="FAC-2026-009",
+            project_id=uuid4(),
+        )
+        doc_repo.save(doc)
+        original = doc_repo.find_by_id_for_update
+
+        def after_the_cancel_committed(doc_id):
+            # The cancel took the lock first and committed; the lock wait ends on its row.
+            doc_repo.save(doc_repo.find_by_id(doc_id).with_updates(status=BillingDocumentStatus.CANCELLED))
+            return original(doc_id)
+
+        doc_repo.find_by_id_for_update = after_the_cancel_committed
+        result = UpdateBillingDocumentUseCase(
+            doc_repo=doc_repo, funds_release=funds, project_repo=ProjectsByCompany()
+        ).execute(
+            UpdateBillingDocumentInput(
+                id=doc.id,
+                user_id=user_id,
+                items=[
+                    ItemInput(description="x", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("20"))
+                ],
+            ),
+            fake_session,
+        )
+        assert result.status == "cancelled"
+        assert funds.synced == []
+
+    def test_the_release_is_synced_before_the_commit(self, doc_repo, user_id):
+        events: list[str] = []
+
+        class Session:
+            def commit(self):
+                events.append("commit")
+
+        class Funds:
+            def sync_funds_release(self, **kwargs):
+                events.append("release")
+
+        doc = make_doc(
+            user_id=user_id,
+            kind=BillingDocumentKind.FACTURE,
+            status=BillingDocumentStatus.PAID,
+            doc_number="FAC-2026-010",
+            project_id=uuid4(),
+        )
+        doc_repo.save(doc)
+        UpdateBillingDocumentUseCase(
+            doc_repo=doc_repo, funds_release=Funds(), project_repo=ProjectsByCompany()
+        ).execute(UpdateBillingDocumentInput(id=doc.id, user_id=user_id, recipient_name="other"), Session())
+        assert events == ["release", "commit"]

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING, Optional
 from uuid import UUID
 
+from app.application.invitations.authz import can_manage_project_invites
 from app.application.invitations.dtos import AcceptInvitationResultDto
 from app.application.invitations.ports import (
     InvitationRepositoryPort,
@@ -31,6 +32,7 @@ from app.domain.exceptions.auth_exceptions import OtpInvalidError, PhoneAlreadyR
 from app.domain.exceptions.invitation_exceptions import (
     InvalidInvitationTokenError,
     InvitationAccountExistsError,
+    InvitationRevokedError,
     InvitationWrongAccountError,
 )
 from app.domain.value_objects.invite_token import hash_token
@@ -42,6 +44,16 @@ if TYPE_CHECKING:
     from app.application.company_persons.link_person_on_signup_usecase import LinkPersonOnSignupUseCase
 
 _MAX_NAME_LEN = 100
+
+
+def _assert_inviter_still_authorised(authz_reader: "Optional[AuthzReaderPort]", inv: Invitation) -> None:
+    """An invitation is only as good as its inviter: one whose right to invite ended (removed from
+    the company or the project, demoted, platform-ops excepted) is no longer honoured.
+
+    Skipped when no reader is wired (a use case built without the companies BC).
+    """
+    if authz_reader is not None and not can_manage_project_invites(authz_reader, inv.invited_by, inv.project_id):
+        raise InvitationRevokedError("The invitation is no longer valid.")
 
 
 class RequestInviteOtpUseCase:
@@ -64,11 +76,13 @@ class RequestInviteOtpUseCase:
         request_signup_otp: RequestSignupOtpUseCase,
         user_repo: Optional[UserRepositoryPort] = None,
         request_signin_otp: Optional[RequestOtpUseCase] = None,
+        authz_reader: "Optional[AuthzReaderPort]" = None,
     ) -> None:
         self._inv_repo = invitation_repo
         self._request_signup_otp = request_signup_otp
         self._users = user_repo
         self._request_signin_otp = request_signin_otp
+        self._authz_reader = authz_reader
 
     def execute(self, raw_token: str, raw_phone: str) -> RequestOtpResult:
         """Send a code to ``raw_phone`` once ``raw_token`` proves a live invitation.
@@ -87,6 +101,7 @@ class RequestInviteOtpUseCase:
         if inv is None:
             raise InvalidInvitationTokenError("No invitation found for the supplied token.")
         inv.accept()  # validate-only: raises on expired/revoked/accepted; result discarded
+        _assert_inviter_still_authorised(self._authz_reader, inv)  # no SMS for a dead invitation
 
         account = self._users.find_by_email(inv.email) if self._users is not None else None
         if account is None:
@@ -190,6 +205,7 @@ class AcceptInvitationUseCase:
         if early_inv is None:
             raise InvalidInvitationTokenError("No invitation found for the supplied token.")
         early_inv.accept()
+        _assert_inviter_still_authorised(self._authz_reader, early_inv)
 
         # Reuses the exact same comparison, hashing, expiry and attempt-counting as sign-in and
         # phone sign-up (_consume_code in otp_login.py) — including the non-production
@@ -217,6 +233,7 @@ class AcceptInvitationUseCase:
             if inv is None:
                 raise InvalidInvitationTokenError("No invitation found for the supplied token.")
             accepted_inv = inv.accept()  # raises if expired/revoked/accepted
+            _assert_inviter_still_authorised(self._authz_reader, inv)
 
             user = self._user_repo.find_by_email(inv.email)
             is_new_user = user is None
@@ -275,6 +292,7 @@ class AcceptInvitationUseCase:
             if inv is None:
                 raise InvalidInvitationTokenError("No invitation found for the supplied token.")
             accepted_inv = inv.accept()  # raises if expired/revoked/accepted
+            _assert_inviter_still_authorised(self._authz_reader, inv)
 
             user = self._user_repo.find_by_id(user_id)
             if user is None or (user.email or "").strip().lower() != inv.email.strip().lower():
@@ -306,7 +324,7 @@ class AcceptInvitationUseCase:
                     UserCompanyAccess(
                         user_id=user.id,
                         company_id=company_id,
-                        is_primary=len(self._access_repo.list_for_user(user.id)) == 0,
+                        is_primary=not any(a.is_primary for a in self._access_repo.list_for_user(user.id)),
                         attached_at=datetime.now(timezone.utc),
                         role=CompanyRole.MEMBER.value,
                     )

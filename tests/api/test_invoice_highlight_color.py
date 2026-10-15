@@ -266,3 +266,50 @@ class TestUpdateInvoiceHighlightColor:
         resp = inv_hc_client.post(_create_url(inv_hc_app._test_project_id), json=body, headers=_auth(admin_token))
         assert resp.status_code == 201, resp.get_data(as_text=True)
         assert resp.get_json()["highlight_color"] == "orange"
+
+
+class TestInvoiceInputCaps:
+    """notes, recipient_address and the number of lines are capped (generously) on create and update."""
+
+    def _post(self, client, app, token, **overrides):
+        return client.post(_create_url(app._test_project_id), json=_ms_invoice_body(**overrides), headers=_auth(token))
+
+    def test_values_at_the_cap_are_accepted(self, inv_hc_client, inv_hc_app, admin_token):
+        item = {"description": "Line", "quantity": 1, "unit_price": 1}
+        resp = self._post(
+            inv_hc_client,
+            inv_hc_app,
+            admin_token,
+            notes="n" * 20000,
+            recipient_address="a" * 2000,
+            items=[item] * 500,
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"notes": "n" * 20001},
+            {"recipient_address": "a" * 2001},
+            {"items": [{"description": "Line", "quantity": 1, "unit_price": 1}] * 501},
+        ],
+        ids=["notes", "recipient_address", "items"],
+    )
+    def test_create_over_the_cap_is_rejected(self, inv_hc_client, inv_hc_app, admin_token, overrides):
+        assert self._post(inv_hc_client, inv_hc_app, admin_token, **overrides).status_code == 400
+
+    @pytest.mark.parametrize(
+        "patch_body",
+        [
+            {"notes": "n" * 20001},
+            {"recipient_address": "a" * 2001},
+            {"items": [{"description": "Line", "quantity": 1, "unit_price": 1}] * 501},
+        ],
+        ids=["notes", "recipient_address", "items"],
+    )
+    def test_update_over_the_cap_is_rejected(self, inv_hc_client, inv_hc_app, admin_token, patch_body):
+        created = self._post(inv_hc_client, inv_hc_app, admin_token).get_json()
+        resp = inv_hc_client.put(
+            _invoice_url(inv_hc_app._test_project_id, created["id"]), json=patch_body, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 400, resp.get_data(as_text=True)

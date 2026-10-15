@@ -25,7 +25,7 @@ from app.application.billing.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
-    assert_project_read_access,
+    assert_project_link_access,
     assert_user_company_access,
 )
 from app.domain.billing.enums import BillingDocumentKind
@@ -96,7 +96,7 @@ class CloneBillingDocumentUseCase:
         target_kind = inp.override_kind if inp.override_kind is not None else source.kind
 
         # H1: Verify project:read access if source doc has a project_id
-        assert_project_read_access(self._project_repo, source.project_id, inp.user_id, self._access_repo)
+        assert_project_link_access(self._project_repo, source.project_id, inp.user_id, self._access_repo)
 
         # 6. Atomically generate new document number
         today = business_today()  # the Paris day, not UTC's: it dates and numbers the copy

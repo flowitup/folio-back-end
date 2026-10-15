@@ -52,6 +52,7 @@ from app.domain.billing.document_wording import intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.entities.project import Project
 from app.domain.labor.export.format import format_decimal_fr
+from app.domain.services.xlsx_safe_cell import safe_cell
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +119,7 @@ def _fit_row_height(ws, row: int, text: str, width: float) -> None:
 
 def _text_cell(ws, row: int, column: int, value: str):
     """Write user text as text: openpyxl stores a string starting with '=' as a formula."""
-    c = ws.cell(row=row, column=column, value=value)
-    if isinstance(value, str) and value.startswith("="):
-        c.data_type = "s"
-    return c
+    return safe_cell(ws, row, column, value)
 
 
 def _write_text_block(ws, row: int, title: str, text: str) -> int:
@@ -180,7 +178,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
 
         # ---- 1. Issuer header band (rows 1-5) ------------------------------
         # A1: legal name — full-width merged, bold sz14 cyan, centered.
-        ws.cell(row=1, column=1, value=doc.issuer_legal_name)
+        _text_cell(ws, 1, 1, doc.issuer_legal_name)
         ws.cell(row=1, column=1).font = _font(14, bold=True, color=COLOR_TITLE_CYAN)
         ws.cell(row=1, column=1).alignment = _align("center", "center")
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
@@ -188,19 +186,19 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         # Rows 2-3: address, one line per row — merged C..L for room.
         address_lines = [ln.strip() for ln in (doc.issuer_address or "").splitlines() if ln.strip()] or [""]
         for r, line in enumerate(address_lines, start=2):
-            ws.cell(row=r, column=3, value=f"Siège : {line}" if r == 2 else line)
+            _text_cell(ws, r, 3, f"Siège : {line}" if r == 2 else line)
             ws.cell(row=r, column=3).font = _font(11)
             ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=12)
 
         # Row 4: SIRET on left (C..H), row 5: TVA on right (J..L) — lower when the address is longer.
         siret_row = max(4, 2 + len(address_lines))
         if doc.issuer_siret:
-            ws.cell(row=siret_row, column=3, value=f"SIRET {doc.issuer_siret}")
+            _text_cell(ws, siret_row, 3, f"SIRET {doc.issuer_siret}")
             ws.cell(row=siret_row, column=3).font = _font(11)
             ws.merge_cells(start_row=siret_row, start_column=3, end_row=siret_row, end_column=8)
 
         if doc.issuer_tva_number:
-            ws.cell(row=siret_row + 1, column=10, value=f"TVA  {doc.issuer_tva_number}")
+            _text_cell(ws, siret_row + 1, 10, f"TVA  {doc.issuer_tva_number}")
             ws.cell(row=siret_row + 1, column=10).font = _font(11)
             ws.merge_cells(start_row=siret_row + 1, start_column=10, end_row=siret_row + 1, end_column=12)
         # Rows the header grew by: every row below moves down with it.
@@ -209,7 +207,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         # ---- 2. Doc number row (row 8) -------------------------------------
         ref_row = 8 + top
         ws.cell(row=ref_row, column=2, value=f"Réf {kind_fr}").font = _font(11, bold=True)
-        ws.cell(row=ref_row, column=4, value=doc.document_number).font = _font(11)
+        _text_cell(ws, ref_row, 4, doc.document_number).font = _font(11)
         ws.cell(row=ref_row, column=8, value="À l'attention de :").alignment = _align("left")
         ws.cell(row=ref_row, column=8).font = _font(11)
 
@@ -247,7 +245,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         city = place_of_issue(doc.issuer_address)
         date_str = doc.issue_date.strftime("%d/%m/%Y")
         line = f"{city}, {date_str}" if city else date_str
-        ws.cell(row=date_row, column=2, value=line).font = _font(11)
+        _text_cell(ws, date_row, 2, line).font = _font(11)
         ws.merge_cells(start_row=date_row, start_column=2, end_row=date_row, end_column=8)
         meta_lines = []
         if doc.kind == BillingDocumentKind.DEVIS and doc.validity_until:
@@ -319,7 +317,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         for item, heading in zip(doc.items, headings):
             # Insert section header row when the section changes
             if heading is not None:
-                sh = ws.cell(row=row, column=3, value=heading)
+                sh = _text_cell(ws, row, 3, heading)
                 sh.font = _font(11, bold=True)
                 sh.alignment = _align("center", "center", wrap=True)
                 sh.border = _thin_box()
@@ -450,14 +448,14 @@ class OpenpyxlBillingDocumentXlsxRenderer:
                 r = bank_title_row + offset
                 ws.cell(row=r, column=2, value="IBAN").font = _font(11)
                 ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
-                ws.cell(row=r, column=4, value=doc.issuer_iban).font = _font(11)
+                _text_cell(ws, r, 4, doc.issuer_iban).font = _font(11)
                 ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=12)
                 offset += 1
             if doc.issuer_bic:
                 r = bank_title_row + offset
                 ws.cell(row=r, column=2, value="BIC").font = _font(11)
                 ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
-                ws.cell(row=r, column=4, value=doc.issuer_bic).font = _font(11)
+                _text_cell(ws, r, 4, doc.issuer_bic).font = _font(11)
                 ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=12)
                 offset += 1
             footer_anchor = bank_title_row + offset + 1

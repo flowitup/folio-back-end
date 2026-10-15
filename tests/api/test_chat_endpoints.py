@@ -72,7 +72,7 @@ class TestChannels:
         project = next(c for c in items if c["key"] == _project_key(invitation_app))
         assert project["kind"] == "project"
         assert project["name"] == "Invite Test Project"
-        # admin (owner) + member + target user
+        # admin (a company admin, so in every project of the company) + member + target user
         assert project["member_count"] == 3
         assert project["unread_count"] == 0
 
@@ -230,7 +230,7 @@ def project_of_a_former_member(invitation_app):
 
 
 class TestProjectChannelNeedsACompanyRole:
-    """Creator or assignee, a user without a role in the project's company is not in its channel."""
+    """Assignee or company admin: a user without a role in the project's company is not in its channel."""
 
     def test_former_member_loses_list_read_and_send(self, inv_client, outsider_token, project_of_a_former_member):
         key = project_of_a_former_member
@@ -260,6 +260,64 @@ class TestProjectChannelNeedsACompanyRole:
         assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).status_code == 200
 
 
+@pytest.fixture
+def project_of_an_unassigned_creator(invitation_app):
+    """A project of the test company created by the member, who is no longer assigned to it
+    (and is no company admin). The target user is assigned. Yields the channel key."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    from app import db
+    from app.infrastructure.database.models import ProjectModel
+
+    with invitation_app.app_context():
+        company_id = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id)).company_id
+        project = ProjectModel(
+            name="Unassigned Creator Project",
+            owner_id=uuid.UUID(invitation_app._test_member_user_id),
+            company_id=company_id,
+        )
+        db.session.add(project)
+        db.session.flush()
+        db.session.execute(
+            text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:u, :p, :at)"),
+            {"u": invitation_app._test_target_user_id, "p": str(project.id), "at": datetime.now(timezone.utc)},
+        )
+        db.session.commit()
+        project_id = project.id
+    yield f"project:{project_id}"
+    with invitation_app.app_context():
+        db.session.execute(text("DELETE FROM user_projects WHERE project_id = :p"), {"p": str(project_id)})
+        db.session.query(ProjectModel).filter_by(id=project_id).delete()
+        db.session.commit()
+
+
+class TestProjectCreatorNeedsAnAssignment:
+    """The owner_id column grants nothing: a creator unassigned from the project is out of its chat."""
+
+    def test_unassigned_creator_loses_list_read_send_and_react(
+        self, inv_client, member_token, project_of_an_unassigned_creator
+    ):
+        key = project_of_an_unassigned_creator
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(member_token)).get_json()["items"]
+        assert key not in [c["key"] for c in items]
+        assert inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).status_code == 403
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "still mine?"}, headers=_auth(member_token)
+        )
+        assert resp.status_code == 403
+
+    def test_unassigned_creator_is_not_listed_among_the_members(
+        self, inv_client, admin_token, project_of_an_unassigned_creator
+    ):
+        key = project_of_an_unassigned_creator
+        items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
+        assert next(c for c in items if c["key"] == key)["member_count"] == 2
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
+        assert [m["name"] for m in page.get_json()["members"]] == ["admin@invite-test.com", "Target User"]
+
+
 class TestAttachments:
     def test_image_attachment_roundtrip(self, inv_client, member_token, admin_token, outsider_token, invitation_app):
         key = _project_key(invitation_app)
@@ -281,6 +339,82 @@ class TestAttachments:
         assert download.data == png
         assert download.mimetype == "image/png"
         assert inv_client.get(url, headers=_auth(outsider_token)).status_code == 403
+
+    def test_filename_with_a_line_break_is_sanitised_and_downloadable(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        boundary = "folio-boundary"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="a.png"; '
+                "filename*=UTF-8''a%0D%0AX-Evil%3A%201.png\r\n"
+                "Content-Type: image/png\r\n\r\n"
+            ).encode()
+            + png
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data=body,
+            content_type=f"multipart/form-data; boundary={boundary}",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        attachment = resp.get_json()["attachment"]
+        assert "\r" not in attachment["filename"] and "\n" not in attachment["filename"]
+
+        download = inv_client.get(attachment["url"], headers=_auth(admin_token))
+        assert download.status_code == 200
+        assert all("\r" not in v and "\n" not in v for _, v in download.headers)
+
+    def test_an_already_stored_line_break_filename_is_still_served(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        from app import db
+        from app.infrastructure.database.models.chat_message import ChatMessageOrm
+
+        key = _project_key(invitation_app)
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data={"file": (io.BytesIO(png), "ok.png", "image/png")},
+            content_type="multipart/form-data",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        message_id = resp.get_json()["id"]
+        with invitation_app.app_context():
+            row = db.session.get(ChatMessageOrm, uuid.UUID(message_id))
+            row.attachment_filename = "legacy\r\nX-Evil: 1.png"
+            db.session.commit()
+
+        download = inv_client.get(f"/api/v1/chat/messages/{message_id}/attachment", headers=_auth(admin_token))
+        assert download.status_code == 200
+        assert all("\r" not in v and "\n" not in v for _, v in download.headers)
+
+    def test_a_filename_made_only_of_control_characters_falls_back(self, inv_client, member_token, invitation_app):
+        key = _project_key(invitation_app)
+        boundary = "folio-boundary"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="a.png"; filename*=UTF-8\'\'%0D%0A%09\r\n'
+                "Content-Type: image/png\r\n\r\n"
+            ).encode()
+            + b"\x89PNG\r\n\x1a\n0000"
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data=body,
+            content_type=f"multipart/form-data; boundary={boundary}",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        assert resp.get_json()["attachment"]["filename"] == "attachment"
 
     def test_image_only_message_allowed(self, inv_client, member_token, invitation_app):
         key = _project_key(invitation_app)
@@ -613,3 +747,52 @@ class TestReportAndBlock:
         assert inv_client.put(f"/api/v1/chat/blocks/{admin_id}", headers=_auth(admin_token)).status_code == 400
         stranger = uuid.uuid4()
         assert inv_client.put(f"/api/v1/chat/blocks/{stranger}", headers=_auth(admin_token)).status_code == 404
+
+
+class TestPhoneOnlyColleagueName:
+    """A phone sign-up without a display name is shown by a neutral label, never by their placeholder e-mail."""
+
+    @pytest.fixture
+    def phone_only_token(self, invitation_app, inv_client):
+        from datetime import datetime, timezone
+
+        from sqlalchemy import text
+
+        from app import db
+        from app.infrastructure.database.models import ProjectModel, UserCompanyAccessModel, UserModel
+        from tests.auth_login_helper import mint_access_token
+
+        email = "phone-33600000042@no-email.folio.flowitup.com"
+        with invitation_app.app_context():
+            company_id = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id)).company_id
+            user = UserModel(email=email, phone="+33600000042", display_name=None, is_active=True)
+            db.session.add(user)
+            db.session.flush()
+            db.session.add(UserCompanyAccessModel(user_id=user.id, company_id=company_id, role="member"))
+            db.session.execute(
+                text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:u, :p, :at)"),
+                {"u": str(user.id), "p": invitation_app._test_project_id, "at": datetime.now(timezone.utc)},
+            )
+            db.session.commit()
+            user_id = user.id
+        yield mint_access_token(inv_client, email)
+        with invitation_app.app_context():
+            db.session.execute(text("DELETE FROM user_projects WHERE user_id = :u"), {"u": str(user_id)})
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=user_id).delete()
+            db.session.query(UserModel).filter_by(id=user_id).delete()
+            db.session.commit()
+
+    def test_sender_and_members_never_show_the_placeholder_email(
+        self, inv_client, admin_token, phone_only_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "hello"}, headers=_auth(phone_only_token)
+        )
+        assert sent.status_code == 201, sent.get_json()
+        assert sent.get_json()["sender_name"] == "Unnamed member"
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
+        raw = page.get_data(as_text=True)
+        assert "no-email.folio" not in raw
+        assert "33600000042" not in raw
+        assert "Unnamed member" in [m["name"] for m in page.get_json()["members"]]

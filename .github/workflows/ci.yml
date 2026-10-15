@@ -12,8 +12,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only by default: this repository is public and lint-test runs the code of
+# every pull request. Only the release job widens it (see its own permissions).
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
   statuses: write
 
@@ -27,7 +29,7 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     # ruff + black + mypy + ~3100 pytest cases; 10 minutes started timing out in 2026-09.
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,10 +38,7 @@ jobs:
           # (default).
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
           fetch-depth: 1
-
-      - name: Pull latest changes
-        if: github.event_name == 'pull_request'
-        run: git pull origin ${{ github.head_ref }} || true
+          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -52,6 +51,11 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.9.26"
+
+      # The production image installs from uv.lock, so it must match pyproject.toml.
+      - name: Check uv.lock is up to date
+        timeout-minutes: 1
+        run: uv lock --check
 
       - name: Install dependencies
         timeout-minutes: 3
@@ -85,7 +89,7 @@ jobs:
 
       - name: Run pytest
         id: pytest
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: uv run pytest --tb=short -q --color=yes
 
       - name: Write job summary
@@ -125,6 +129,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Holds PARENT_DISPATCH_TOKEN once the secret is moved into the `release`
+    # environment (restricted to master): pull request runs can then never read it.
+    environment: release
     needs: [lint-test]
     if: >-
       always()

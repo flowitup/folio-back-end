@@ -13,7 +13,7 @@ PDF = b"%PDF-1.4\n%fake\n"
 
 class _Invoices:
     def find_by_id(self, invoice_id):
-        return SimpleNamespace(id=invoice_id)
+        return SimpleNamespace(id=invoice_id, refundable_status=None)
 
 
 class _Attachments:

@@ -1838,3 +1838,68 @@ class TestExplicitNullIsRefused:
             headers=_auth(writer_token),
         )
         assert resp.status_code == 200
+
+
+class TestStoredUrlsAreHttpOnly:
+    """A javascript:/data: link stored on a store or quote is opened by viewers' clients.
+
+    A value that is not an http(s) address is stored as no link (never a 422: the edit forms re-send
+    the stored value, which may be old free text such as "Leroy Merlin").
+    """
+
+    BAD = ["javascript:alert(1)", "data:text/html,x", "java\tscript:alert(1)", "file:///etc/passwd", "Leroy Merlin"]
+
+    @pytest.mark.parametrize("url", BAD)
+    def test_store_and_quote_store_no_link_for_other_schemes(self, inv_client, writer_token, project_id, article, url):
+        resp = inv_client.post(
+            f"{_base(project_id)}/stores",
+            json={"name": f"Leroy {len(url)}", "website_url": url},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["website_url"] is None
+        resp = inv_client.post(
+            f"{_base(project_id)}/articles/{article['id']}/quotes",
+            json={"supplier_name": "S", "unit_price_ht": "1", "product_url": url},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert resp.get_json()["product_url"] is None
+        store = inv_client.post(
+            f"{_base(project_id)}/stores",
+            json={"name": f"Castorama {len(url)}", "website_url": "https://castorama.fr"},
+            headers=_auth(writer_token),
+        ).get_json()
+        quote = _add_quote(inv_client, writer_token, project_id, article["id"], "S2", "5")
+        for target, body, field in (
+            (f"{_base(project_id)}/stores/{store['id']}", {"website_url": url}, "website_url"),
+            (f"{_base(project_id)}/quotes/{quote['id']}", {"product_url": url}, "product_url"),
+        ):
+            patched = inv_client.patch(target, json=body, headers=_auth(writer_token))
+            assert patched.status_code == 200, patched.get_data(as_text=True)
+            assert patched.get_json()[field] is None
+
+    def test_a_form_that_re_sends_old_free_text_can_still_save(self, inv_client, writer_token, project_id):
+        created = inv_client.post(
+            f"{_base(project_id)}/stores", json={"name": "Brico du coin"}, headers=_auth(writer_token)
+        ).get_json()
+        url = f"{_base(project_id)}/stores/{created['id']}"
+        saved = inv_client.patch(
+            url, json={"name": "Brico du coin 2", "website_url": "Leroy Merlin"}, headers=_auth(writer_token)
+        )
+        assert saved.status_code == 200, saved.get_data(as_text=True)
+        assert saved.get_json()["name"] == "Brico du coin 2" and saved.get_json()["website_url"] is None
+
+    def test_https_bare_domain_and_clearing_still_work(self, inv_client, writer_token, project_id):
+        created = inv_client.post(
+            f"{_base(project_id)}/stores",
+            json={"name": "Weldom", "website_url": "weldom.fr"},
+            headers=_auth(writer_token),
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        store = created.get_json()
+        url = f"{_base(project_id)}/stores/{store['id']}"
+        ok = inv_client.patch(url, json={"website_url": "https://weldom.fr/x"}, headers=_auth(writer_token))
+        assert ok.status_code == 200
+        cleared = inv_client.patch(url, json={"website_url": None}, headers=_auth(writer_token))
+        assert cleared.status_code == 200

@@ -118,6 +118,15 @@ class IInvoiceRepository(ABC):
     @abstractmethod
     def find_by_id(self, invoice_id: UUID) -> Optional[Invoice]: ...
 
+    def find_by_id_for_update(self, invoice_id: UUID) -> Optional[Invoice]:
+        """find_by_id holding a row lock until the transaction ends.
+
+        Taken on a refund source or avoir target before summing the credits against it,
+        so concurrent credit notes queue instead of each passing the cap on the same sum.
+        The default reads without a lock; the SQL adapter overrides it.
+        """
+        return self.find_by_id(invoice_id)
+
     @abstractmethod
     def list_by_project(
         self,
@@ -407,3 +416,14 @@ class IInvoiceAttachmentRepository(ABC):
 
     @abstractmethod
     def delete(self, attachment_id: UUID) -> bool: ...
+
+
+def lock_invoices_in_id_order(repo: IInvoiceRepository, invoice_ids) -> dict:
+    """Lock the given invoice rows (``find_by_id_for_update``), always in the order of their ids.
+
+    Every place that locks several invoice rows in one transaction (a return's refund source and its
+    avoir target) goes through here, so two requests that cross - R1 refunds S and is applied to T, R2
+    refunds T and is applied to S - queue on the same row first instead of deadlocking on PostgreSQL.
+    Returns ``{invoice_id: Invoice | None}``.
+    """
+    return {i: repo.find_by_id_for_update(i) for i in sorted(set(invoice_ids), key=str)}

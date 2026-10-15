@@ -14,6 +14,7 @@ column; and the ``persons``/``workers`` rows stay as employment records, with
 only their link to the account cleared.
 """
 
+from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import delete, update
@@ -21,11 +22,17 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.database.models.api_key import ApiKeyOrm
 from app.infrastructure.database.models.associations import user_projects
-from app.infrastructure.database.models.chat_message import ChatChannelReadOrm
+from app.infrastructure.database.models.chat_message import (
+    ChatChannelReadOrm,
+    ChatMessageReactionOrm,
+    ChatMessageReportOrm,
+    ChatUserBlockOrm,
+)
 from app.infrastructure.database.models.chat_push_marker import ChatPushMarkerModel
 from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
 from app.infrastructure.database.models.login_otp import LoginOtpOrm
 from app.infrastructure.database.models.note_orm import NoteDismissalOrm
+from app.infrastructure.database.models.notification_event import NotificationEventModel
 from app.infrastructure.database.models.notification_preference import (
     NotificationPreferenceModel,
 )
@@ -42,14 +49,17 @@ class SQLAlchemyPersonalDataEraser:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def erase_for_user(self, user_id: UUID) -> None:
+    def erase_for_user(self, user_id: UUID, phone: Optional[str] = None) -> None:
         """Delete every personal row owned by ``user_id``.
+
+        ``phone`` is the number the account had before it was anonymised: sign-up and invitation codes
+        are stored by number only (``user_id`` NULL), so they are matched on it.
 
         Ordered credentials-first so that a failure part-way through has already
         removed the ways back into the account. Idempotent: re-running deletes
         nothing and raises nothing.
         """
-        statements = (
+        statements = [
             # Credentials and sign-in material.
             delete(ApiKeyOrm).where(ApiKeyOrm.user_id == user_id),
             delete(LoginOtpOrm).where(LoginOtpOrm.user_id == user_id),
@@ -59,6 +69,13 @@ class SQLAlchemyPersonalDataEraser:
             delete(NotificationPreferenceModel).where(NotificationPreferenceModel.user_id == user_id),
             delete(ChatPushMarkerModel).where(ChatPushMarkerModel.user_id == user_id),
             delete(ChatChannelReadOrm).where(ChatChannelReadOrm.user_id == user_id),
+            # Their bell history (chat previews, names, amounts) and their own chat reactions, reports
+            # and block list. The messages themselves stay (see the module docstring); other members'
+            # reactions, reports and blocks are theirs and are not touched.
+            delete(NotificationEventModel).where(NotificationEventModel.user_id == user_id),
+            delete(ChatMessageReactionOrm).where(ChatMessageReactionOrm.user_id == user_id),
+            delete(ChatMessageReportOrm).where(ChatMessageReportOrm.reporter_id == user_id),
+            delete(ChatUserBlockOrm).where(ChatUserBlockOrm.blocker_id == user_id),
             # Which notes this individual dismissed is their own reading state.
             delete(NoteDismissalOrm).where(NoteDismissalOrm.user_id == user_id),
             # Access grants — company and project membership.
@@ -76,7 +93,9 @@ class SQLAlchemyPersonalDataEraser:
             # row cannot be re-identified with a single join.
             update(PersonModel).where(PersonModel.user_id == user_id).values(user_id=None),
             update(WorkerModel).where(WorkerModel.user_id == user_id).values(user_id=None),
-        )
+        ]
+        if phone:
+            statements.append(delete(LoginOtpOrm).where(LoginOtpOrm.phone == phone))
         for statement in statements:
             self._session.execute(statement, execution_options={"synchronize_session": False})
         self._session.flush()

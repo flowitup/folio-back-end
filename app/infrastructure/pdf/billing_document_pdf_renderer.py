@@ -18,7 +18,8 @@ Fonts: DejaVu Sans + DejaVu Sans Bold from app/domain/labor/export/fonts/.
        Chinese/Japanese/Korean characters (absent from DejaVu) fall back to
        Adobe's standard CJK fonts, which PDF viewers supply (nothing embedded).
 Currency: format_eur_fr() from app/domain/labor/export/format.py.
-Logo fetch: 3-second timeout, fail-open (logo skipped on any error).
+Logo fetch: pinned to a vetted public IP, 1 MiB / 5 s caps, PNG and JPEG only,
+            fail-open (logo skipped on any error).
             Skipped entirely when running under test flag FOLIO_SKIP_LOGO_FETCH=1
             or when issuer_logo_url is None/empty.
 """
@@ -26,18 +27,22 @@ Logo fetch: 3-second timeout, fail-open (logo skipped on any error).
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import logging
 import os
 import socket
+import ssl
+import threading
+import time
 import urllib.parse
-import urllib.request
 import warnings
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape as _xml_escape
 
+from PIL import Image as PILImage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
@@ -229,21 +234,38 @@ def _styles() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Logo fetch — fail-open, 3 s timeout
+# Logo fetch — fail-open, pinned to the vetted IP, size / time / format bounded
 # ---------------------------------------------------------------------------
 
 _SKIP_LOGO_ENV = "FOLIO_SKIP_LOGO_FETCH"
+_MAX_LOGO_REDIRECTS = 3
+_MAX_LOGO_BYTES = 1024 * 1024  # a logo is a few tens of KB; the cap also bounds the memory a hostile host can cost
+_LOGO_DEADLINE_SECONDS = 5.0  # whole fetch (connect, TLS, headers, body), not one socket operation
+_MAX_LOGO_PIXELS = 4096 * 4096  # checked from the header, before any pixel is decoded
+_LOGO_EMBED_MAX_SIDE = 1200  # the logo prints at 50 x 25 mm: more pixels only bloat the PDF
+_LOGO_FORMATS = ("PNG", "JPEG")
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
 
 
-def _validate_logo_url(url: str) -> None:
-    """Validate that *url* is safe to fetch as a logo.
+def _is_public_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    # is_global alone still lets IPv4 multicast through, hence the explicit extra checks.
+    return ip.is_global and not (ip.is_multicast or ip.is_reserved or ip.is_loopback or ip.is_link_local)
+
+
+def _validate_logo_url(url: str) -> list[str]:
+    """Resolve *url*'s host once and return the vetted addresses to connect to.
 
     Raises ValueError if:
     - Scheme is not http or https.
-    - Resolved host IP is private, loopback, or link-local (SSRF block).
+    - The host does not resolve, or ANY resolved address (IPv4 or IPv6) is not
+      globally routable: private, loopback, link-local (169.254.169.254, the
+      cloud metadata endpoint, included), CGNAT 100.64.0.0/10, multicast, reserved.
 
-    AWS instance metadata (169.254.169.254) is covered by the link-local
-    check but is also explicit to make the guard obvious in code review.
+    The caller connects to the returned addresses, never to the name again, so a
+    DNS answer that changes between this check and the connection cannot matter.
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -254,64 +276,207 @@ def _validate_logo_url(url: str) -> None:
         raise ValueError("Logo URL missing host")
 
     try:
-        resolved_ip = socket.gethostbyname(host)
-        ip_obj = ipaddress.ip_address(resolved_ip)
-    except (socket.gaierror, ValueError) as exc:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, ValueError) as exc:
         raise ValueError(f"Logo URL host could not be resolved: {exc}") from exc
 
-    # Explicit AWS metadata check (also covered by is_link_local, but kept
-    # as a named guard so auditors can spot it without reasoning about CIDR).
-    if resolved_ip == "169.254.169.254":
-        raise ValueError("Logo URL resolves to AWS metadata endpoint — blocked")
+    addresses: list[str] = []
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        address = str(sockaddr[0]).split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError(f"Logo URL host resolved to an unreadable address: {exc}") from exc
+        if not _is_public_address(ip):
+            raise ValueError(f"Logo URL resolves to a non-public address — blocked ({address})")
+        if address not in addresses:
+            addresses.append(address)
+    if not addresses:
+        raise ValueError("Logo URL host did not resolve")
+    return addresses
 
-    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-        raise ValueError(f"Logo URL resolves to a non-public address — blocked ({resolved_ip})")
 
+class _Deadline:
+    """One wall-clock budget for the whole fetch.
 
-_MAX_LOGO_REDIRECTS = 3
-
-
-class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follow a logo URL's redirects only when each target passes _validate_logo_url.
-
-    urlopen follows 3xx on its own: a public URL that redirects to 127.0.0.1 or
-    169.254.169.254 would otherwise reach the internal network (SSRF).
+    socket timeouts apply to each send / recv, so a host dribbling one byte a second
+    never trips them; the watchdog shuts the socket down when the budget is spent,
+    which wakes any blocked read with an error.
     """
 
-    max_redirections = _MAX_LOGO_REDIRECTS
+    def __init__(self, seconds: float) -> None:
+        self.expires = time.monotonic() + seconds
+        self.conn: Optional[_PinnedHTTPConnection | _PinnedHTTPSConnection] = None
+        self._timer = threading.Timer(seconds, self._abort)
+        self._timer.daemon = True
+        self._timer.start()
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+    def remaining(self) -> float:
+        left = self.expires - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("logo fetch deadline exceeded")
+        return left
+
+    def _abort(self) -> None:
+        sock = getattr(self.conn, "live_sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def cancel(self) -> None:
+        self._timer.cancel()
+
+
+def _connect_pinned(addresses: list[str], port: int, deadline: _Deadline) -> socket.socket:
+    last_error: Optional[OSError] = None
+    for address in addresses:
         try:
-            _validate_logo_url(newurl)
-        except ValueError:
-            fp.close()
-            raise
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+            return socket.create_connection((address, port), timeout=deadline.remaining())
+        except OSError as exc:
+            last_error = exc
+    raise last_error or OSError("no address to connect to")
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connects to an already vetted IP while the Host header keeps the original name."""
+
+    def __init__(self, host: str, port: int, addresses: list[str], deadline: _Deadline) -> None:
+        super().__init__(host, port, timeout=deadline.remaining())
+        self._addresses = addresses
+        self._deadline = deadline
+        self.live_sock: Optional[socket.socket] = None  # http.client drops .sock once a response is "will_close"
+
+    def connect(self) -> None:
+        self.sock = self.live_sock = _connect_pinned(self._addresses, self.port, self._deadline)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """As _PinnedHTTPConnection, with TLS: SNI and certificate checks use the original host name."""
+
+    def __init__(self, host: str, port: int, addresses: list[str], deadline: _Deadline) -> None:
+        self._tls = ssl.create_default_context()
+        super().__init__(host, port, timeout=deadline.remaining(), context=self._tls)
+        self._addresses = addresses
+        self._deadline = deadline
+        self.live_sock: Optional[socket.socket] = None
+
+    def connect(self) -> None:
+        raw = _connect_pinned(self._addresses, self.port, self._deadline)
+        # Published on self.sock before the handshake so the watchdog can also cut a stalled handshake.
+        tls = self._tls.wrap_socket(raw, server_hostname=self.host, do_handshake_on_connect=False)
+        self.sock = self.live_sock = tls
+        tls.do_handshake()
+
+
+def _fetch_logo_bytes(url: str, deadline: _Deadline) -> Optional[bytes]:
+    """GET *url* and return the body, following up to _MAX_LOGO_REDIRECTS hops, each vetted and pinned the same way.
+
+    Returns None for a non-200 answer or a body over _MAX_LOGO_BYTES (declared or actual).
+    Raises ValueError when a URL is refused, OSError / HTTPException on network failures.
+    """
+    for _hop in range(_MAX_LOGO_REDIRECTS + 1):
+        addresses = _validate_logo_url(url)
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or ""
+        https = parsed.scheme == "https"
+        port = parsed.port or (443 if https else 80)
+        conn: _PinnedHTTPConnection | _PinnedHTTPSConnection = (
+            _PinnedHTTPSConnection(host, port, addresses, deadline)
+            if https
+            else _PinnedHTTPConnection(host, port, addresses, deadline)
+        )
+        deadline.conn = conn
+        try:
+            target = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+            conn.request(
+                "GET",
+                target,
+                headers={
+                    "User-Agent": "Folio-PDF/1.0",
+                    "Accept": "image/png, image/jpeg",
+                    "Accept-Encoding": "identity",
+                },
+            )
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                location = resp.getheader("Location")
+                if not location:
+                    return None
+                url = urllib.parse.urljoin(url, location)
+                continue
+            if resp.status != 200:
+                return None
+            declared = resp.getheader("Content-Length", "")
+            if declared.isdigit() and int(declared) > _MAX_LOGO_BYTES:
+                return None
+            chunks: list[bytes] = []
+            total = 0
+            while not resp.isclosed():  # http.client closes the socket as soon as a sized body is complete
+                if conn.live_sock is not None:
+                    conn.live_sock.settimeout(deadline.remaining())
+                chunk = resp.read1(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_LOGO_BYTES:
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            conn.close()
+    raise ValueError("Logo URL redirected too many times")
+
+
+def _reencode_logo(data: bytes) -> Optional[BytesIO]:
+    """PNG or JPEG bytes -> a fresh PNG, or None for anything else.
+
+    The magic bytes pick the format before Pillow sees the data, and Pillow is only
+    allowed the two decoders (it would otherwise sniff EPS, TIFF, JPEG 2000...).
+    ReportLab then only ever receives bytes this function wrote.
+    """
+    if not (data.startswith(_PNG_MAGIC) or data.startswith(_JPEG_MAGIC)):
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PILImage.DecompressionBombWarning)
+        with PILImage.open(BytesIO(data), formats=_LOGO_FORMATS) as img:
+            width, height = img.size
+            if width < 1 or height < 1 or width * height > _MAX_LOGO_PIXELS:
+                return None
+            img.load()
+            has_alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+            out = img.convert("RGBA" if has_alpha else "RGB")
+    out.thumbnail((_LOGO_EMBED_MAX_SIDE, _LOGO_EMBED_MAX_SIDE))
+    buf = BytesIO()
+    out.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
 
 
 def _fetch_logo(url: Optional[str]) -> Optional[BytesIO]:
-    """Fetch an image from *url* and return its bytes in a BytesIO buffer.
+    """Fetch an image from *url* and return it, re-encoded as PNG, in a BytesIO buffer.
 
-    Returns None on any error (network failure, timeout, bad content-type,
-    empty URL, env skip flag, SSRF validation failure). Never raises.
+    Returns None on any error (network failure, timeout, oversized body, not a
+    PNG / JPEG, empty URL, env skip flag, SSRF validation failure). Never raises.
 
-    Security: URL is validated by _validate_logo_url (scheme + IP checks)
-    before any network I/O is performed, and again for every redirect hop.
+    Security: every resolved address of the host (and of every redirect hop) must be
+    globally routable, and the connection goes to that vetted address (Host header
+    and TLS SNI keep the name); the body is capped at _MAX_LOGO_BYTES and the whole
+    fetch at _LOGO_DEADLINE_SECONDS; only PNG / JPEG decoded by Pillow, then
+    re-encoded, reach ReportLab.
     """
     if not url:
         return None
     if os.environ.get(_SKIP_LOGO_ENV, "").strip() == "1":
         return None
+    deadline = _Deadline(_LOGO_DEADLINE_SECONDS)
     try:
-        _validate_logo_url(url)
-
-        opener = urllib.request.build_opener(_ValidatingRedirectHandler)
-        req = urllib.request.Request(url, headers={"User-Agent": "Folio-PDF/1.0"})
-        with opener.open(req, timeout=3) as resp:  # noqa: S310
-            data = resp.read()
+        data = _fetch_logo_bytes(url, deadline)
         if not data:
             return None
-        return BytesIO(data)
+        return _reencode_logo(data)
     except ValueError as exc:
         # Log a fingerprint hash only — never log the user-supplied URL to
         # avoid leaking SSRF probe targets in application logs (M10).
@@ -322,6 +487,8 @@ def _fetch_logo(url: Optional[str]) -> Optional[BytesIO]:
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:12]
         logger.debug("billing_pdf: logo fetch failed (url_hash=%s): %s", url_hash, type(err).__name__)
         return None
+    finally:
+        deadline.cancel()
 
 
 # ---------------------------------------------------------------------------

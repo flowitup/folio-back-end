@@ -47,6 +47,7 @@ from app.application.project_documents import (
     UnsupportedDocumentTypeError,
 )
 from app.application.project_documents.confirm_project_document_upload import (
+    DocumentAlreadyConfirmedError,
     DocumentNotInStorageError,
     StorageKeyMismatchError,
 )
@@ -303,6 +304,8 @@ def confirm_project_document_upload(project_id: str):
         )
     except StorageKeyMismatchError as exc:
         return _error_response("KEY_MISMATCH", str(exc), 400)
+    except DocumentAlreadyConfirmedError as exc:
+        return _error_response("DOCUMENT_ALREADY_EXISTS", str(exc), 409)
     except EmptyFileError as exc:
         return _error_response("EMPTY_FILE", str(exc), 400)
     except DocumentFileTooLargeError as exc:

@@ -147,7 +147,7 @@ class JoinCompanyByCodeUseCase:
             UserCompanyAccess(
                 user_id=user_id,
                 company_id=company.id,
-                is_primary=len(self._access.list_for_user(user_id)) == 0,
+                is_primary=not any(a.is_primary for a in self._access.list_for_user(user_id)),
                 attached_at=now,
                 role=CompanyRole.MEMBER.value,
             )

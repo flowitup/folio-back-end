@@ -18,6 +18,7 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
 )
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
+from app.domain.value_objects.display_filename import strip_control_chars
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,6 @@ class RenderBillingDocumentXlsxUseCase:
 
         xlsx_bytes = self._xlsx_renderer.render(doc, project=_linked_project(self._project_repo, doc))
         # Replace any path-unsafe chars in the doc number when forming filename.
-        safe_number = doc.document_number.replace("/", "-").replace("\\", "-")
+        safe_number = strip_control_chars(doc.document_number).replace("/", "-").replace("\\", "-") or "document"
         filename = f"{safe_number}.xlsx"
         return RenderXlsxResult(content=xlsx_bytes, filename=filename)

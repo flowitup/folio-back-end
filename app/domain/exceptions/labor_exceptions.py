@@ -15,6 +15,27 @@ class WorkerNotFoundError(LaborError):
         super().__init__(f"Worker not found: {worker_id}")
 
 
+class WorkerPersonNotFoundError(LaborError):
+    """Raised when the person a worker is linked to is not one this company may use.
+
+    Also raised for an id that does not exist, so the answer is no existence oracle.
+    """
+
+    def __init__(self, person_id: str):
+        self.person_id = person_id
+        super().__init__(f"Person not found: {person_id}")
+
+
+class SharedPersonEditError(LaborError):
+    """Raised when a worker edit would change the identity of a person other companies or an account own."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This person is shared with another company or has an app account: "
+            "their name and phone cannot be changed from a worker."
+        )
+
+
 class WorkerInactiveError(LaborError):
     """Raised when new attendance is logged for a deactivated worker."""
 

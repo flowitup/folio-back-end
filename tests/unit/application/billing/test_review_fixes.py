@@ -13,6 +13,7 @@ Covers:
 
 from __future__ import annotations
 
+import socket
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -86,17 +87,25 @@ class InMemoryProjectRepository:
 # ---------------------------------------------------------------------------
 
 
+def _resolving_to(*addresses: str):
+    """socket.getaddrinfo stand-in answering with the given addresses."""
+    return patch(
+        "app.infrastructure.pdf.billing_document_pdf_renderer.socket.getaddrinfo",
+        return_value=[
+            (socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443)) for ip in addresses
+        ],
+    )
+
+
 class TestValidateLogoUrl:
     def test_accepts_https_url(self):
-        """Valid public HTTPS URL should not raise."""
-        with patch(
-            "app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname", return_value="93.184.216.34"
-        ):
-            _validate_logo_url("https://cdn.example.com/logo.png")
+        """Valid public HTTPS URL should not raise, and returns the address to connect to."""
+        with _resolving_to("93.184.216.34"):
+            assert _validate_logo_url("https://cdn.example.com/logo.png") == ["93.184.216.34"]
 
     def test_accepts_http_url(self):
         """Valid public HTTP URL should not raise."""
-        with patch("app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname", return_value="8.8.8.8"):
+        with _resolving_to("8.8.8.8"):
             _validate_logo_url("http://cdn.example.com/logo.png")
 
     def test_rejects_file_scheme(self):
@@ -109,47 +118,22 @@ class TestValidateLogoUrl:
         with pytest.raises(ValueError, match="scheme"):
             _validate_logo_url("ftp://files.example.com/logo.png")
 
-    def test_rejects_loopback_ip(self):
-        """http://127.0.0.1 must be blocked (loopback)."""
-        # IP is a literal in the URL; gethostbyname resolves it to itself
-        with patch(
-            "app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname", return_value="127.0.0.1"
-        ):
-            with pytest.raises(ValueError):
-                _validate_logo_url("http://127.0.0.1/logo.png")
-
-    def test_rejects_private_ip(self):
-        """http://10.0.0.1 must be blocked (private RFC-1918)."""
-        with patch(
-            "app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname", return_value="10.0.0.1"
-        ):
-            with pytest.raises(ValueError):
-                _validate_logo_url("http://10.0.0.1/logo.png")
-
-    def test_rejects_link_local_aws_metadata(self):
-        """http://169.254.169.254 must be blocked (link-local / AWS metadata)."""
-        with patch(
-            "app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname",
-            return_value="169.254.169.254",
-        ):
-            with pytest.raises(ValueError, match="AWS|non-public"):
-                _validate_logo_url("http://169.254.169.254/latest/meta-data/")
-
-    def test_rejects_private_class_b(self):
-        """http://172.16.0.1 must be blocked (private RFC-1918 Class B)."""
-        with patch(
-            "app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname", return_value="172.16.0.1"
-        ):
-            with pytest.raises(ValueError):
-                _validate_logo_url("http://172.16.0.1/logo.png")
-
-    def test_rejects_private_class_c(self):
-        """http://192.168.1.1 must be blocked (private RFC-1918 Class C)."""
-        with patch(
-            "app.infrastructure.pdf.billing_document_pdf_renderer.socket.gethostbyname", return_value="192.168.1.1"
-        ):
-            with pytest.raises(ValueError):
-                _validate_logo_url("http://192.168.1.1/logo.png")
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "127.0.0.1",  # loopback
+            "10.0.0.1",  # private RFC-1918 class A
+            "172.16.0.1",  # class B
+            "192.168.1.1",  # class C
+            "169.254.169.254",  # link-local / cloud metadata
+            "100.64.0.1",  # carrier-grade NAT
+            "::1",
+        ],
+    )
+    def test_rejects_non_public_addresses(self, address):
+        with _resolving_to(address):
+            with pytest.raises(ValueError, match="non-public"):
+                _validate_logo_url("http://logo.example.com/logo.png")
 
 
 # ---------------------------------------------------------------------------
@@ -262,9 +246,18 @@ class TestH1ProjectAuthorizationCreate:
         with pytest.raises(ForbiddenProjectAccessError):
             usecase.execute(inp, _FakeSession())
 
-    def test_owner_can_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
-        """H1: project owner can create a doc linked to their project."""
+    def test_unassigned_owner_cannot_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
+        """Linking needs a real membership: the bare owner_id shortcut no longer counts."""
         project = _Project(owner_id=user_id)
+        project_repo.save(project)
+
+        inp = self._base_inp(user_id, company_id, project_id=project.id)
+        with pytest.raises(ForbiddenProjectAccessError):
+            usecase.execute(inp, _FakeSession())
+
+    def test_assigned_owner_can_create_doc_with_project(self, usecase, user_id, company_id, project_repo):
+        """H1: a project owner who is still assigned can create a doc linked to their project."""
+        project = _Project(owner_id=user_id, user_ids=[user_id])
         project_repo.save(project)
 
         inp = self._base_inp(user_id, company_id, project_id=project.id)

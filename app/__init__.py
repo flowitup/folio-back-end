@@ -14,7 +14,7 @@ from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 
-from config import Config
+from config import Config, validate_boot_settings
 from app.infrastructure.database.models import Base
 from app.infrastructure.rate_limiter import limiter
 from app.infrastructure.trusted_proxy import apply_trusted_proxy
@@ -44,8 +44,11 @@ def create_app(config_class: type = Config) -> Flask:
     # HTTP errors under /api/ (bad JSON, unknown URL, unhandled 500) answer JSON, not HTML.
     from app.api._helpers.http_errors import register_json_error_handlers
     from app.api._helpers.nul_guard import register_nul_guard
+    from app.api._helpers.request_limits import register_request_limits
 
     register_json_error_handlers(app)
+    # First hook: each request gets the body cap its route needs before anything reads the body.
+    register_request_limits(app)
     # A NUL character in a request's text is a 400 up front, not a 500 from the database.
     register_nul_guard(app)
 
@@ -86,16 +89,11 @@ def create_app(config_class: type = Config) -> Flask:
             "Use proper TLS + Secure cookies for staging/UAT."
         )
 
+    validate_boot_settings(app.config)
+
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
-    # Flask cap above the 150 MiB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
-    # so multipart envelope overhead doesn't false-positive a 413 before the use-case
-    # can return its richer error. Invoice attachments have their own 10 MB cap enforced
-    # in the use-case layer (upload_attachment.py), so this bump does not relax that limit.
-    # Multipart POST through CF is capped at 100 MB; presigned uploads bypass CF.
-    app.config["MAX_CONTENT_LENGTH"] = 151 * 1024 * 1024
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
@@ -129,6 +127,13 @@ def create_app(config_class: type = Config) -> Flask:
         from app.api._helpers.api_key_request_auth import authenticate_api_key_request
 
         authenticate_api_key_request()
+
+    # Writes a key may not make (membership, access, invitations, ...): default-deny, see the module.
+    @app.before_request
+    def _enforce_api_key_route_policy():
+        from app.api._helpers.api_key_request_auth import enforce_api_key_route_policy
+
+        return enforce_api_key_route_policy()
 
     limiter.init_app(app)
     # flask-limiter keys every limit on the client address, which behind cloudflared or the
@@ -523,8 +528,30 @@ def _configure_di_container() -> None:
         )
     else:
         _sms = LoggingSmsSender()
+    # Every message that leaves spends an SMS budget first (the SIM / gateway quota is finite). Two
+    # independent pools: sign-in codes go to an existing account's own phone; sign-up, invitation
+    # sign-up and phone-change codes go to a number the requester picks, so they draw from a smaller
+    # "open" pool and cannot empty the first one. Tests keep both in memory;
+    # production counts in Redis and fails open when Redis is down.
+    from app.infrastructure.adapters.budgeted_sms_sender import BudgetedSmsSender
+    from app.infrastructure.adapters.sms_budget import OPEN_KEY, InMemorySmsBudget, RedisSmsBudget
+
+    _sms_max_10min = int(_cfg.get("SMS_GLOBAL_MAX_PER_10MIN", 60))
+    _sms_max_day = int(_cfg.get("SMS_GLOBAL_MAX_PER_DAY", 400))
+    _sms_open_max_10min = int(_cfg.get("SMS_OPEN_MAX_PER_10MIN", 30))
+    _sms_open_max_day = int(_cfg.get("SMS_OPEN_MAX_PER_DAY", 150))
+    if _cfg.get("TESTING"):
+        _c.sms_budget = InMemorySmsBudget(_sms_max_10min, _sms_max_day)
+        _c.sms_open_budget = InMemorySmsBudget(_sms_open_max_10min, _sms_open_max_day)
+    else:
+        _redis_url = _cfg.get("REDIS_URL") or Config.REDIS_URL
+        _c.sms_budget = RedisSmsBudget(_redis_url, _sms_max_10min, _sms_max_day)
+        _c.sms_open_budget = RedisSmsBudget(_redis_url, _sms_open_max_10min, _sms_open_max_day, key=OPEN_KEY)
+    _sms_open = BudgetedSmsSender(_sms, _c.sms_open_budget, pool="open")
+    _sms = BudgetedSmsSender(_sms, _c.sms_budget)
     _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
     _c.sms_sender = _sms
+    _c.sms_open_sender = _sms_open
 
     # Push notifications around attendance (PUSH_PROVIDER log | expo).
     from app.application.push.attendance_push_notifier import AttendancePushNotifier
@@ -609,7 +636,7 @@ def _configure_di_container() -> None:
         _c.request_signup_otp_usecase = RequestSignupOtpUseCase(
             _c.user_repository,
             _otp_repo,
-            _sms,
+            _sms_open,
             ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
             resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
             hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
@@ -627,7 +654,7 @@ def _configure_di_container() -> None:
         _c.request_phone_change_code_usecase = RequestPhoneChangeCodeUseCase(
             _c.user_repository,
             _otp_repo,
-            _sms,
+            _sms_open,
             ttl_seconds=int(_cfg.get("OTP_TTL_SECONDS", 300)),
             resend_after_seconds=int(_cfg.get("OTP_RESEND_SECONDS", 60)),
             hourly_max=int(_cfg.get("OTP_HOURLY_MAX", 5)),
@@ -636,11 +663,13 @@ def _configure_di_container() -> None:
             _c.user_repository,
             _otp_repo,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+            push_device_repo=_c.push_device_repository,  # sign-out everywhere also drops the push devices
         )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
-        # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact
-        # use case instance, gated by the invitation token instead of being open to
-        # anyone. invitation_repo is wired earlier, in configure_container().
+        # AcceptInvitationUseCase); its "request a code" endpoint reuses the sign-up use case, gated by
+        # the invitation token. The token only authorises the request: the caller still picks the number,
+        # and one token serves any number, so these codes draw from the open SMS pool too.
+        # invitation_repo is wired earlier, in configure_container().
         if _c.invitation_repo is not None:
             from app.application.invitations.accept_invitation_usecase import RequestInviteOtpUseCase
 
@@ -651,6 +680,7 @@ def _configure_di_container() -> None:
                 _c.request_signup_otp_usecase,
                 user_repo=_c.user_repository,
                 request_signin_otp=_c.request_otp_usecase,
+                authz_reader=_c.authz_reader,  # no code for an invitation whose inviter lost the right to invite
             )
 
     # -----------------------------------------------------------------------
@@ -730,6 +760,8 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             company_repo=_company_repo,
         )
+        if _c.attendance_push_notifier is not None:
+            _c.attendance_push_notifier.set_access_repo(_access_repo)  # no decision pushes to a removed member
         _c.billing_push_notifier = BillingPushNotifier(
             dispatcher=_c.push_dispatcher,
             project_repo=_c.project_repository,
@@ -834,10 +866,6 @@ def _configure_di_container() -> None:
     _c.set_primary_company_usecase = _SetPrimaryCompanyUseCase(
         access_repo=_access_repo,
     )
-    _c.set_member_role_usecase = _SetMemberRoleUseCase(
-        access_repo=_access_repo,
-        role_checker=_role_checker,
-    )
     _c.detach_company_usecase = _DetachCompanyUseCase(
         access_repo=_access_repo,
     )
@@ -863,7 +891,7 @@ def _configure_di_container() -> None:
 
     _person_repo = SqlAlchemyPersonRepository(db.session)
     _c.person_repo = _person_repo
-    # Renaming a worker renames the shared Person it is linked to.
+    # Renaming a worker renames the Person it is linked to (when only its own company lists them).
     if _c.update_worker_usecase is not None:
         _c.update_worker_usecase.set_person_repo(_person_repo)
     # A verified phone change moves the account's Person to the new number too.
@@ -882,6 +910,9 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+    # A worker edit renames the shared Person only when no other company lists them.
+    if _c.update_worker_usecase is not None:
+        _c.update_worker_usecase.set_company_person_repo(_c.company_person_repo)
     if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_directory_repos"):
         _c.create_invitation_usecase.set_directory_repos(_person_repo, _c.company_person_repo)
 
@@ -983,6 +1014,7 @@ def _configure_di_container() -> None:
         clock=_clock,
         grant_repo=_member_grant_repo,
         task_repo=_c.task_repository,
+        worker_repo=_c.worker_repository,
     )
     _c.detach_company_usecase = _DetachCompanyUseCaseV2(
         access_repo=_access_repo,
@@ -991,6 +1023,15 @@ def _configure_di_container() -> None:
         person_repo=_person_repo,
         company_person_repo=_c.company_person_repo,
         grant_repo=_member_grant_repo,
+        task_repo=_c.task_repository,
+        worker_repo=_c.worker_repository,
+    )
+    # Demoting an admin drops their project assignments on this company's projects.
+    _c.set_member_role_usecase = _SetMemberRoleUseCase(
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+        authz_reader=_c.authz_reader,
+        membership_repo=_c.project_membership_repo,
         task_repo=_c.task_repository,
     )
 
@@ -1018,6 +1059,7 @@ def _configure_di_container() -> None:
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
             task_repo=_c.task_repository,
+            grant_repo=_member_grant_repo,  # project-scoped grants end with the assignment
         )
 
     # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
@@ -1203,6 +1245,7 @@ def _configure_di_container() -> None:
     )
     _c.list_activity_suggestions_usecase = ListActivitySuggestionsUseCase(
         doc_repo=_billing_doc_repo,
+        access_repo=_access_repo,  # documents of a company the author left stop feeding the suggestions
     )
     _c.clone_billing_document_usecase = CloneBillingDocumentUseCase(
         doc_repo=_billing_doc_repo,
@@ -1231,6 +1274,7 @@ def _configure_di_container() -> None:
         doc_repo=_billing_doc_repo,
         funds_release=_funds_release_adapter,
         access_repo=_access_repo,  # company-admin may manage company billing
+        project_repo=_project_repo,  # a release only goes into a project of the facture's company
     )
     _c.list_billing_documents_usecase = ListBillingDocumentsUseCase(
         doc_repo=_billing_doc_repo,

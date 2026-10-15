@@ -13,7 +13,8 @@ import re
 # Country calling code used when the number has a national prefix only ("0912…").
 DEFAULT_COUNTRY_CODES: dict[str, str] = {"FR": "33", "VN": "84"}
 
-_E164 = re.compile(r"^\+[1-9]\d{7,14}$")
+# [0-9], not \d: \d also matches non-ASCII decimal digits, which would let one number be spelled many ways.
+_E164 = re.compile(r"^\+[1-9][0-9]{7,14}$")
 
 
 class InvalidPhoneNumberError(ValueError):
@@ -57,7 +58,7 @@ def is_phone_number(raw: str) -> bool:
 
 # Sign-in codes leave through a French SMS gateway, so phone authentication takes French numbers
 # only. Everywhere else — persons, workers, company members — numbers stay international.
-_FRENCH_E164 = re.compile(r"^\+33[1-9]\d{8}$")
+_FRENCH_E164 = re.compile(r"^\+33[1-9][0-9]{8}$")
 
 
 def normalize_french_phone(raw: str) -> str:

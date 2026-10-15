@@ -89,6 +89,27 @@ class TestBillingDocumentRepositoryCRUD:
         assert found is not None
         assert found.id == saved.id
 
+    def test_find_by_id_for_update_sees_a_status_committed_by_another_transaction(self, session):
+        """After waiting for the lock, a row this session read earlier must show the winner's status."""
+        from sqlalchemy import update
+
+        from app.infrastructure.database.models.billing_document import BillingDocumentModel
+
+        user_id = _seed_user(session)
+        repo = SqlAlchemyBillingDocumentRepository(session)
+        saved = repo.save(_make_doc(user_id, kind=BillingDocumentKind.FACTURE, status=BillingDocumentStatus.SENT))
+        doc_id = UUID(str(saved.id))
+        earlier_read = session.get(BillingDocumentModel, doc_id)  # the identity map holds rows weakly
+        assert earlier_read.status == "sent"
+        # What a concurrent request committed while this one waited (written without touching the identity map).
+        session.execute(
+            update(BillingDocumentModel)
+            .where(BillingDocumentModel.id == doc_id)
+            .values(status="paid")
+            .execution_options(synchronize_session=False)
+        )
+        assert repo.find_by_id_for_update(doc_id).status == BillingDocumentStatus.PAID
+
     def test_update_via_save(self, session):
         user_id = _seed_user(session)
         repo = SqlAlchemyBillingDocumentRepository(session)
@@ -329,3 +350,52 @@ class TestActivitySuggestionsPrefixIsLiteral:
         compiled = recorder.statements[0].compile(dialect=postgresql.dialect())
         assert "ILIKE" in str(compiled).upper() and "ESCAPE" in str(compiled).upper()
         assert "50\\%\\_off\\\\%" in compiled.params.values()
+
+
+class TestSuggestionsStopAtTheCompaniesTheAuthorLeft:
+    """A company document feeds the author's suggestions only while they are still in that company."""
+
+    @staticmethod
+    def _doc(user_id, description, company_id):
+        item = BillingDocumentItem(
+            description=description, quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("20")
+        )
+        return _make_doc(user_id, items=(item,), company_id=company_id)
+
+    def test_documents_of_a_left_company_are_excluded(self, session):
+        user_id = _seed_user(session)
+        kept, left = uuid4(), uuid4()
+        repo = SqlAlchemyBillingDocumentRepository(session)
+        repo.save(self._doc(user_id, "Still attached", kept))
+        repo.save(self._doc(user_id, "Left company", left))
+        repo.save(self._doc(user_id, "Personal", None))
+
+        def descriptions(owner_company_ids):
+            result = repo.aggregate_item_suggestions(user_id, None, None, 20, owner_company_ids=owner_company_ids)
+            return sorted(s.description for s in result.suggestions)
+
+        assert descriptions([kept]) == ["Personal", "Still attached"]
+        assert descriptions([]) == ["Personal"]
+        # No access repository wired (None): no restriction, as before.
+        assert descriptions(None) == ["Left company", "Personal", "Still attached"]
+
+    def test_postgres_query_filters_on_the_attached_companies(self):
+        from sqlalchemy.dialects import postgresql
+
+        class _RecordingSession:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, stmt):
+                self.statements.append(stmt)
+                return self
+
+            def all(self):
+                return []
+
+        recorder = _RecordingSession()
+        SqlAlchemyBillingDocumentRepository(recorder)._aggregate_suggestions_postgres(
+            uuid4(), None, None, 20, [uuid4()]
+        )
+        sql = str(recorder.statements[0].compile(dialect=postgresql.dialect())).lower()
+        assert "company_id is null or" in sql and "company_id in" in sql

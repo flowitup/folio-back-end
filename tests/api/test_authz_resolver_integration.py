@@ -154,6 +154,18 @@ def test_reader_primary_company_id(two_company_world, reader):
     assert reader.primary_company_id(w["outsider"]) is None
 
 
+def test_reader_primary_company_id_falls_back_to_the_only_company(session, two_company_world, reader):
+    """An account attached by someone else has no primary: its only company is the default."""
+    w = two_company_world
+    session.add(UserCompanyAccessModel(user_id=w["outsider"], company_id=w["company_a"], role="member"))
+    session.commit()
+    assert reader.primary_company_id(w["outsider"]) == w["company_a"]
+    # Two companies and no primary: no guess.
+    session.add(UserCompanyAccessModel(user_id=w["outsider"], company_id=w["company_b"], role="member"))
+    session.commit()
+    assert SqlAlchemyAuthzReader(session).primary_company_id(w["outsider"]) is None
+
+
 def test_reader_matches_rows_regardless_of_insert_path(session, two_company_world):
     """UUID columns are plain CHAR/TEXT on SQLite: an ORM-inserted row (dashless
     hex bind) and a raw-text-inserted row (dashed string literal) must both be

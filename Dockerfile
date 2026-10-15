@@ -1,3 +1,7 @@
+# uv only turns uv.lock into a hash-pinned requirements file (same version as CI).
+# It is copied to /opt in the builder, which the production stage never copies.
+FROM ghcr.io/astral-sh/uv:0.9.26 as uv
+
 # Build stage
 FROM python:3.12-slim as builder
 
@@ -8,8 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Install the exact locked, hash-verified runtime dependencies (no dev extras).
+# Done before the app code is copied so this layer is cached until the lock changes.
+COPY --from=uv /uv /opt/uv/uv
+COPY pyproject.toml uv.lock ./
+RUN /opt/uv/uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt
+
 # Copy project files
-COPY pyproject.toml .
 COPY app/ app/
 COPY config/ config/
 COPY outbox/ outbox/
@@ -18,8 +28,8 @@ COPY scripts/ scripts/
 COPY wiring.py .
 COPY tasks.py .
 
-# Install dependencies
-RUN pip install --no-cache-dir -e .
+# Install the project itself (editable, as before); its dependencies are already locked above
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Production stage
 FROM python:3.12-slim

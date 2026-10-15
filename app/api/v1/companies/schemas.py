@@ -44,9 +44,9 @@ def _validate_logo_url(v: Optional[HttpUrl]) -> Optional[HttpUrl]:
         raise ValueError("logo_url must have a valid hostname")
     # N8: HttpUrl already enforces http/https scheme; redundant check removed.
     # M5 (DNS-rebinding): BE validates once at save time. The BE does fetch the URL
-    # later, when the billing PDF renderer embeds the logo: it re-validates the URL
-    # and every redirect hop then (_fetch_logo), but its own DNS lookup can still
-    # differ from this one, a documented acceptable risk.
+    # later, when the billing PDF renderer embeds the logo: it resolves the host again
+    # there, requires every address to be global and connects to that vetted address
+    # (every redirect hop too, _fetch_logo), so a changed answer cannot reach inside.
     # Attempt to resolve hostname; catch all DNS errors gracefully
     try:
         addrs = socket.getaddrinfo(host, None)

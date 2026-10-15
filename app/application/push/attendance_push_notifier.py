@@ -78,6 +78,10 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
 }
 
 
+class CompanyAccessReader(Protocol):
+    def list_for_company(self, company_id: UUID) -> list: ...
+
+
 class AttendancePushNotifier:
     def __init__(
         self,
@@ -89,10 +93,12 @@ class AttendancePushNotifier:
         run_async: bool = True,
         preferences=None,
         events=None,
+        access_repo: Optional[CompanyAccessReader] = None,
     ) -> None:
         self._devices = devices
         self._workers = worker_repo
         self._projects = project_repo
+        self._access = access_repo
         self._dispatcher = PushDispatcher(
             devices=devices,
             sender=sender,
@@ -114,6 +120,22 @@ class AttendancePushNotifier:
     def sender(self, value) -> None:
         """Injection seam — see `PushDispatcher.sender`."""
         self._dispatcher.sender = value
+
+    def set_access_repo(self, access_repo: CompanyAccessReader) -> None:
+        """Inject company membership; wired after it exists."""
+        self._access = access_repo
+
+    def _still_in_company(self, user_id: UUID, project_id: UUID) -> bool:
+        """False for a worker's account that was removed from the project's company.
+
+        True whenever membership cannot be asked (no access repo wired, no company known).
+        """
+        if self._access is None:
+            return True
+        company_id = getattr(self._projects.find_by_id(project_id), "company_id", None)
+        if company_id is None:
+            return True
+        return any(a.user_id == user_id for a in self._access.list_for_company(company_id))
 
     # -- events -----------------------------------------------------------------
 
@@ -155,6 +177,8 @@ class AttendancePushNotifier:
         """A manager settled a day: tell the worker (validated / rejected / change_applied / change_refused)."""
         worker = self._workers.find_by_id(worker_id)
         if worker is None or worker.user_id is None:
+            return
+        if not self._still_in_company(worker.user_id, worker.project_id):
             return
         self._dispatch(
             event,

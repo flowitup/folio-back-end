@@ -4,12 +4,12 @@ from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import delete, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.project import Project
-from app.infrastructure.database.models import ProjectModel, UserModel, user_projects
+from app.infrastructure.database.models import ChatMessageOrm, ProjectModel, UserModel, user_projects
 
 
 class SQLAlchemyProjectRepository(IProjectRepository):
@@ -87,6 +87,14 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         project = self._session.query(ProjectModel).filter_by(id=project_id).first()
         if project is None:
             return False
+        # Chat channels are virtual (no FK from chat_messages to projects), so the project's messages
+        # go here, in the same transaction; their reactions and reports follow by FK cascade.
+        self._session.execute(
+            delete(ChatMessageOrm).where(
+                ChatMessageOrm.channel_kind == "project", ChatMessageOrm.channel_id == project_id
+            ),
+            execution_options={"synchronize_session": False},
+        )
         self._session.delete(project)
         self._session.commit()
         return True

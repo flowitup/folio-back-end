@@ -332,6 +332,12 @@ class Container:
     delete_account_usecase: Optional[Any] = None
     # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
     sms_sender: Optional[Any] = None
+    # Global budget of outgoing SMS (sliding windows); the sender above spends it before each send
+    sms_budget: Optional[Any] = None
+    # Second, smaller pool for the flows where the requester picks the destination number (sign-up and
+    # phone-change codes), so they cannot use up the one the sign-in codes draw from.
+    sms_open_budget: Optional[Any] = None
+    sms_open_sender: Optional[Any] = None
     # Push notifications (attendance): device registry, provider adapter, notifier
     push_device_repository: Optional[Any] = None
     notification_preference_repository: Optional[Any] = None
@@ -927,8 +933,10 @@ def configure_container(
         )
         container.list_attachments_usecase = ListAttachmentsUseCase(invoice_attachment_repository)
         container.get_attachment_usecase = GetAttachmentUseCase(invoice_attachment_repository, attachment_storage)
-        container.rename_attachment_usecase = RenameAttachmentUseCase(invoice_attachment_repository)
-        container.delete_attachment_usecase = DeleteAttachmentUseCase(invoice_attachment_repository, attachment_storage)
+        container.rename_attachment_usecase = RenameAttachmentUseCase(invoice_attachment_repository, invoice_repository)
+        container.delete_attachment_usecase = DeleteAttachmentUseCase(
+            invoice_attachment_repository, attachment_storage, invoice_repository
+        )
 
     # Wire email port + renderer
     container.email_port = _build_email_port()

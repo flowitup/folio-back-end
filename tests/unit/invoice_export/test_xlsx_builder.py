@@ -13,12 +13,14 @@ Covers:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import BytesIO
 from uuid import uuid4
 
 import openpyxl
+import pytest
 
 from app.domain.entities.invoice import Invoice, InvoiceType
 from app.domain.invoice.export.models import (
@@ -248,3 +250,26 @@ def test_cash_advance_row_is_labelled_as_such():
     rows = [r for r in wb["Summary"].iter_rows(values_only=True) if r and r[3] in ("Advance Holder", "Divers")]
     labels = {r[3]: r[2] for r in rows}
     assert labels == {"Advance Holder": "Others (cash advance)", "Divers": "Others"}
+
+
+@pytest.mark.parametrize(
+    "hostile", ["=1+1", '=HYPERLINK("http://x","y")', "+SUM(A1)", "-2+3", "@SUM(A1)", "\t=1", "\r=1", "  =1+1"]
+)
+@pytest.mark.parametrize("invoice_type", [InvoiceType.RELEASED_FUNDS, InvoiceType.LABOR])
+def test_hostile_recipient_project_and_email_never_become_formulas(hostile, invoice_type):
+    ctx = replace(_make_context(project_name=hostile), generated_by_email=hostile)
+    bundle = _make_bundle([_make_invoice(invoice_type=invoice_type, recipient=hostile)])
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, bundle)))
+    assert [c.coordinate for ws in wb for row in ws.iter_rows() for c in row if c.data_type == "f"] == []
+    recipients = [c for ws in wb for row in ws.iter_rows() for c in row if c.value == hostile.replace("\r", "\n")]
+    assert len(recipients) >= 2  # summary table + the per-type sheet
+    assert all(c.data_type == "s" and c.quotePrefix for c in recipients)
+
+
+def test_benign_recipient_is_unchanged_and_amounts_stay_numeric():
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(_make_context(), _make_bundle([_make_invoice(recipient="ACME")]))))
+    ws = wb["Summary"]
+    acme = next(c for row in ws.iter_rows() for c in row if c.value == "ACME")
+    assert acme.data_type == "s" and not acme.quotePrefix
+    amount = next(c for row in ws.iter_rows() for c in row if c.number_format == EUR_FR_FORMAT)
+    assert amount.data_type == "n"

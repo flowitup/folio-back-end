@@ -43,6 +43,7 @@ from app.application.chat.ports import (
     TransactionalSessionPort,
 )
 from app.domain.entities.chat_message import REACTION_EMOJIS, ChannelRef, ChatAttachment, ChatMessage
+from app.domain.value_objects.display_filename import strip_control_chars
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ class SendMessageUseCase:
                 raise AttachmentTooLargeError(f"Attachment must be 1..{MAX_ATTACHMENT_BYTES} bytes.")
             stored = ChatAttachment(
                 storage_key="",  # set once the message id is known
-                filename=filename[:255] or "attachment",
+                filename=strip_control_chars(filename)[:255] or "attachment",
                 content_type=content_type,
                 size_bytes=len(data),
             )

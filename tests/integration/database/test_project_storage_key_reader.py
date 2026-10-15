@@ -12,6 +12,7 @@ from app.application.projects.delete import DeleteProjectUseCase
 from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
 from app.infrastructure.adapters.sqlalchemy_project import SQLAlchemyProjectRepository
 from app.infrastructure.database.models import (
+    ChatMessageOrm,
     ChiffrageArticleModel,
     ChiffragePosteModel,
     InvoiceAttachmentModel,
@@ -86,8 +87,12 @@ def _project_with_files(session, owner, company_id, tag: str):
             size_bytes=1,
         )
     )
+    chat_key = f"chat/project/{pid}/{uuid4()}/voice.m4a"
+    chat = dict(channel_kind="project", channel_id=pid, sender_id=owner.id, created_at=now)
+    session.add(ChatMessageOrm(body="voice", attachment_key=chat_key, **chat))
+    session.add(ChatMessageOrm(body="text only", **chat))
     session.commit()
-    return pid, keys + [attachment_key]
+    return pid, keys + [attachment_key, chat_key]
 
 
 @pytest.fixture
@@ -124,5 +129,7 @@ def test_deleting_a_project_removes_its_files_from_storage(session, owner):
     ).execute(pid)
 
     assert session.get(ProjectModel, pid) is None
+    assert session.query(ChatMessageOrm).filter_by(channel_id=pid).count() == 0
+    assert session.query(ChatMessageOrm).filter_by(channel_id=_other).count() == 2
     assert [k for k in keys if storage.head_object(k)] == []
     assert all(storage.head_object(k) for k in other_keys)

@@ -55,6 +55,7 @@ def cp_app():
         sent: list[tuple[str, str]] = []
         container = get_container()
         container.sms_sender.send = lambda to, text: sent.append((to, text))
+        container.sms_open_sender.send = lambda to, text: sent.append((to, text))  # sign-up codes
         test_app._sms_sent = sent
 
         yield test_app

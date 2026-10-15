@@ -8,9 +8,10 @@ Configuration follows the 12-factor app methodology.
 import os
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from dotenv import load_dotenv
+from limits import parse_many
 
 # Load environment variables from .env file
 load_dotenv()
@@ -126,6 +127,19 @@ class Config:
     SMS_GATEWAY_URL: str = get_env("SMS_GATEWAY_URL", default="")
     SMS_GATEWAY_USERNAME: str = get_env("SMS_GATEWAY_USERNAME", default="")
     SMS_GATEWAY_PASSWORD: str = get_env("SMS_GATEWAY_PASSWORD", default="")
+    # Most SMS the sign-in codes send in any 10 minutes / any 24 hours (sliding windows,
+    # counted in Redis); past it the code routes answer 429 with a Retry-After. Size them under what the
+    # SIM / gateway can really send: a team onboarding in one morning must fit. 0 switches a window off.
+    SMS_GLOBAL_MAX_PER_10MIN: int = int(get_env("SMS_GLOBAL_MAX_PER_10MIN").strip() or "60")
+    SMS_GLOBAL_MAX_PER_DAY: int = int(get_env("SMS_GLOBAL_MAX_PER_DAY").strip() or "400")
+    # The same windows for the "open" pool: codes whose destination number the requester picks (sign-up,
+    # invitation sign-up and phone-change codes). Smaller, and independent of the pool above, so abuse of
+    # those flows cannot stop sign-in codes. 0 switches a window off.
+    SMS_OPEN_MAX_PER_10MIN: int = int(get_env("SMS_OPEN_MAX_PER_10MIN").strip() or "30")
+    SMS_OPEN_MAX_PER_DAY: int = int(get_env("SMS_OPEN_MAX_PER_DAY").strip() or "150")
+    # Per client address (IPv6: per /64), shared by the routes that text a number the caller picked
+    # (sign-up, sign-in, invitation and phone-change codes), on top of each route's "5 per minute".
+    SMS_SEND_IP_LIMITS: str = get_env("SMS_SEND_IP_LIMITS").strip() or "20 per hour;60 per day"
     OTP_TTL_SECONDS: int = int(get_env("OTP_TTL_SECONDS", default="300"))
     OTP_RESEND_SECONDS: int = int(get_env("OTP_RESEND_SECONDS", default="60"))
     OTP_HOURLY_MAX: int = int(get_env("OTP_HOURLY_MAX", default="5"))
@@ -179,6 +193,53 @@ class Config:
             raise ValueError("OTP_REVIEWER_PHONE and OTP_REVIEWER_CODE must be set together")
         if self.OTP_REVIEWER_CODE and not (self.OTP_REVIEWER_CODE.isdigit() and len(self.OTP_REVIEWER_CODE) == 6):
             raise ValueError("OTP_REVIEWER_CODE must be a 6-digit string")
+
+
+ENVIRONMENTS = ("development", "testing", "production")
+SMS_PROVIDERS = ("log", "twilio", "gateway")
+
+
+def validate_boot_settings(settings: Mapping[str, Any], environ: Mapping[str, str] = os.environ) -> None:
+    """Refuse to boot on a setting that would quietly turn a safeguard off (called by ``create_app``).
+
+    ``Config.__post_init__`` never runs (``create_app`` receives the class, not an instance), and the
+    production-only guards compare FLASK_ENV with the exact word "production": a typo ("prod",
+    "Production", "staging") would otherwise boot with the development defaults, and an unknown
+    SMS_PROVIDER would fall back to the adapter that writes every sign-in code to the API log.
+    An unset FLASK_ENV still means development.
+    """
+    flask_env = environ.get("FLASK_ENV")
+    if flask_env is not None and flask_env not in ENVIRONMENTS:
+        raise RuntimeError(f"CRITICAL: FLASK_ENV={flask_env!r} is not one of {', '.join(ENVIRONMENTS)}.")
+    sms_provider = settings.get("SMS_PROVIDER", "log")
+    if sms_provider not in SMS_PROVIDERS:
+        raise RuntimeError(f"CRITICAL: SMS_PROVIDER={sms_provider!r} is not one of {', '.join(SMS_PROVIDERS)}.")
+    if flask_env == "production" and sms_provider == "log":
+        raise RuntimeError(
+            "CRITICAL: SMS_PROVIDER=log would write sign-in codes to the log; not permitted in production."
+        )
+    # The SMS abuse limits: flask-limiter parses its string on every request and the budget does int(),
+    # so a typo would otherwise show up as a 500 on the sign-in routes instead of a stopped boot.
+    for name in (
+        "SMS_GLOBAL_MAX_PER_10MIN",
+        "SMS_GLOBAL_MAX_PER_DAY",
+        "SMS_OPEN_MAX_PER_10MIN",
+        "SMS_OPEN_MAX_PER_DAY",
+    ):
+        try:
+            if int(settings.get(name, 0)) < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise RuntimeError(f"CRITICAL: {name}={settings.get(name)!r} must be a whole number, 0 or more.") from None
+    ip_limits = settings.get("SMS_SEND_IP_LIMITS")
+    if ip_limits:
+        try:
+            if any(item.amount < 1 for item in parse_many(str(ip_limits))):
+                raise ValueError
+        except ValueError:
+            raise RuntimeError(
+                f"CRITICAL: SMS_SEND_IP_LIMITS={ip_limits!r} is not a rate limit string such as '20 per hour;60 per day'."
+            ) from None
 
 
 class DevelopmentConfig(Config):

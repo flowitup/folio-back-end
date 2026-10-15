@@ -21,9 +21,10 @@ from app.application.invitations.ports import (
     TransactionalSessionPort,
     UserWriteRepositoryPort,
 )
+from app.application.usecases.otp_login import is_placeholder_email
 from app.domain.companies.roles import CompanyRole
 from app.domain.companies.user_company_access import UserCompanyAccess
-from app.domain.entities.invitation import Invitation
+from app.domain.entities.invitation import InvalidInvitationEmailError, Invitation
 from app.domain.entities.project import project_display_label
 from app.domain.entities.project_membership import ProjectMembership
 from tasks import EmailPayload
@@ -114,6 +115,10 @@ class CreateInvitationUseCase:
 
         # 3. Normalize email
         normalized_email = email.strip().lower()
+        if is_placeholder_email(normalized_email):
+            # A phone sign-up's synthetic address is derivable from the number and is no mailbox:
+            # it must neither find the account nor receive mail.
+            raise InvalidInvitationEmailError(f"Invalid email format: {normalized_email}")
 
         # 4. Existing-user fast-path
         #
@@ -216,7 +221,7 @@ class CreateInvitationUseCase:
             UserCompanyAccess(
                 user_id=user_id,
                 company_id=company_id,
-                is_primary=len(self._access_repo.list_for_user(user_id)) == 0,
+                is_primary=False,  # the account did not choose this company
                 attached_at=now,
                 role=self._GRANTED_ROLE,
             )

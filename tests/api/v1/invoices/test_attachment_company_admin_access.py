@@ -289,6 +289,35 @@ def att_app():
         )
         storage.put(release_att.storage_key, BytesIO(b"%PDF-release"), "application/pdf")
         db.session.add(release_att)
+
+        # --- A refunded expense with its receipt (locked against edits) ---
+        refunded = InvoiceModel(
+            id=uuid4(),
+            project_id=project_x.id,
+            invoice_number=f"INV-{uuid4().hex[:8]}",
+            type="materials_services",
+            issue_date=date.today(),
+            recipient_name="Supplier",
+            items=[{"description": "Parts", "quantity": 1.0, "unit_price": 100.0}],
+            created_by=setup_user.id,
+            created_at=now,
+            updated_at=now,
+            refundable_status="refunded",
+        )
+        db.session.add(refunded)
+        db.session.flush()
+        refunded_att = InvoiceAttachmentModel(
+            id=uuid4(),
+            invoice_id=refunded.id,
+            filename="proof.pdf",
+            storage_key=f"test/{uuid4().hex}/proof.pdf",
+            mime_type="application/pdf",
+            size_bytes=512,
+            uploaded_by=setup_user.id,
+            uploaded_at=now,
+        )
+        storage.put(refunded_att.storage_key, BytesIO(b"%PDF-proof"), "application/pdf")
+        db.session.add(refunded_att)
         db.session.commit()
 
         test_app._setup_user_id = setup_user.id
@@ -305,6 +334,10 @@ def att_app():
         test_app._attachment_storage_key = att.storage_key
         test_app._release_id = release.id
         test_app._release_attachment_id = release_att.id
+        test_app._refunded_id = refunded.id
+        test_app._refunded_attachment_id = refunded_att.id
+        test_app._refunded_storage_key = refunded_att.storage_key
+        test_app._storage = storage
 
         # expire_on_commit=True (SQLAlchemy default) already expires all objects after
         # each commit, but expunge_all() makes the identity map fully empty so that
@@ -587,6 +620,65 @@ class TestReleaseAttachmentsFollowBudgetScope:
         _list_url, att_id = self._release_urls(att_app)
         resp = att_client.get(f"/api/v1/attachments/{att_id}/download", headers=_auth_header(company_x_admin_tok))
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# A refunded expense keeps its receipt: the lock covers the attachments too
+# ---------------------------------------------------------------------------
+
+
+class TestRefundedExpenseAttachmentsAreLocked:
+    def _list_url(self, att_app):
+        return f"/api/v1/projects/{att_app._project_x_id}/invoices/{att_app._refunded_id}/attachments"
+
+    def test_upload_to_a_refunded_expense_is_refused(self, att_client, manager_tok, att_app):
+        resp = att_client.post(
+            self._list_url(att_app),
+            data={"file": (BytesIO(b"%PDF-swap"), "swap.pdf", "application/pdf")},
+            content_type="multipart/form-data",
+            headers=_auth_header(manager_tok),
+        )
+        assert resp.status_code == 400
+        assert "locked" in resp.get_json()["message"]
+
+    def test_rename_on_a_refunded_expense_is_refused(self, att_client, manager_tok, att_app):
+        resp = att_client.patch(
+            f"/api/v1/attachments/{att_app._refunded_attachment_id}/rename",
+            json={"filename": "other.pdf"},
+            headers=_auth_header(manager_tok),
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "ValidationError"
+
+    def test_delete_on_a_refunded_expense_is_refused_and_keeps_the_file(self, att_client, manager_tok, att_app):
+        resp = att_client.delete(
+            f"/api/v1/attachments/{att_app._refunded_attachment_id}", headers=_auth_header(manager_tok)
+        )
+        assert resp.status_code == 400
+        listed = att_client.get(self._list_url(att_app), headers=_auth_header(manager_tok))
+        assert [(a["id"], a["filename"]) for a in listed.get_json()] == [
+            (str(att_app._refunded_attachment_id), "proof.pdf")
+        ]
+        assert att_app._storage.get_stream(att_app._refunded_storage_key) is not None
+
+    def test_the_lock_lifts_when_the_refund_status_is_cleared(self, att_client, manager_tok, att_app):
+        from app import db
+        from app.infrastructure.database.models.invoice import InvoiceModel
+
+        row = db.session.get(InvoiceModel, att_app._refunded_id)
+        row.refundable_status = "refundable"
+        db.session.commit()
+        try:
+            resp = att_client.patch(
+                f"/api/v1/attachments/{att_app._refunded_attachment_id}/rename",
+                json={"filename": "other.pdf"},
+                headers=_auth_header(manager_tok),
+            )
+            assert resp.status_code == 200
+        finally:
+            row = db.session.get(InvoiceModel, att_app._refunded_id)
+            row.refundable_status = "refunded"
+            db.session.commit()
 
 
 # ---------------------------------------------------------------------------

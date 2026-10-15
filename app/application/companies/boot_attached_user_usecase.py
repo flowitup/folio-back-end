@@ -62,6 +62,7 @@ class BootAttachedUserUseCase:
         clock: Optional[ClockPort] = None,
         grant_repo: Optional[Any] = None,
         task_repo: Optional[Any] = None,
+        worker_repo: Optional[Any] = None,
     ) -> None:
         self._company_repo = company_repo
         self._access_repo = access_repo
@@ -74,6 +75,7 @@ class BootAttachedUserUseCase:
         self._clock = clock
         self._grant_repo = grant_repo
         self._task_repo = task_repo
+        self._worker_repo = worker_repo
 
     def execute(
         self,
@@ -124,6 +126,11 @@ class BootAttachedUserUseCase:
                 # No task of the company keeps naming (and pushing to) someone who left it.
                 if self._task_repo is not None:
                     self._task_repo.clear_assignee(project_id, inp.target_user_id)
+            # Nor does a worker row keep the account linked (self-logging, decision pushes).
+            if self._worker_repo is not None:
+                self._worker_repo.unlink_user(
+                    self._authz_reader.project_ids_for_company(inp.company_id), inp.target_user_id
+                )
 
         if self._person_repo is not None and self._company_person_repo is not None:
             person = self._person_repo.find_by_user_id(inp.target_user_id)

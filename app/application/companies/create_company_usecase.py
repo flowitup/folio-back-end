@@ -107,7 +107,7 @@ class CreateCompanyUseCase:
         # 3. Attach the creator as company admin (D6) — is_primary when this
         # is their first company. Same transaction as the company insert so
         # a company is never created "orphaned" (no admin) if this fails.
-        is_first_company = len(self._access_repo.list_for_user(inp.caller_id)) == 0
+        is_first_company = not any(a.is_primary for a in self._access_repo.list_for_user(inp.caller_id))
         self._access_repo.save(
             UserCompanyAccess(
                 user_id=inp.caller_id,

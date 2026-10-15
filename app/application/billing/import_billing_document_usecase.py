@@ -36,7 +36,7 @@ from app.application.billing.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
-    assert_project_read_access,
+    assert_project_link_access,
     assert_user_company_access,
 )
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
@@ -54,7 +54,9 @@ from app.domain.time import business_today
 # Matches e.g. FAC2025001, FAC-2025-001, DEV-2026-00003, FLW-FACTURE-2026-007.
 # Skips truly irregular numbers like FAC0026-ANN-2025-11/08 (extra trailing tokens).
 # Groups: year (4 digits), seq (trailing digits after optional dash).
-_DOC_NUMBER_PATTERN = re.compile(r"^(?:[A-Za-z]+-?)+(?P<year>\d{4})-?(?P<seq>\d+)$")
+# Letter runs are separated by single dashes and cannot be split two ways (the former
+# `(?:[A-Za-z]+-?)+` backtracked exponentially on 30 letters and a bad last character).
+_DOC_NUMBER_PATTERN = re.compile(r"^[A-Za-z]+(?:-[A-Za-z]+)*-?(?P<year>\d{4})-?(?P<seq>\d+)$")
 
 # Largest imported sequence that moves the counter. A longer number is not a
 # sequence the counter could continue from (e.g. FAC202403151230459, a timestamp
@@ -108,7 +110,7 @@ class ImportBillingDocumentUseCase:
     ) -> BillingDocumentResponse:
         # 1. An imported document may only link a project the caller can read
         # (company admins read every project of their company, as on create).
-        assert_project_read_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
+        assert_project_link_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
 
         # 2. company_id required — validate attachment and snapshot issuer
         if inp.company_id is None:
