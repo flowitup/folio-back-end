@@ -6,7 +6,8 @@ so it must stay narrowly scoped: only the configured number, only when both env 
 are set, never accepted for any other phone, and a broken configuration disables it
 rather than widening it. `_issue_code` must skip the SMS (and throttle) for that
 number only (and keeps a short throttle on it); `_consume_code` must accept the fixed code for that
-number only. Wrong guesses are budgeted per phone across re-issued codes, reviewer numbers included.
+number only. Wrong guesses are budgeted across re-issued codes for reviewer numbers only: ordinary numbers keep
+the per-code attempts, so a stranger cannot lock the owner out.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app.application.usecases.otp_login import (
     _consume_code,
     _issue_code,
     _reviewer_code_for,
+    is_reviewer_phone,
 )
 from app.domain.entities.login_otp import LoginOtp, OtpPurpose
 from app.domain.exceptions.auth_exceptions import OtpInvalidError, OtpThrottledError
@@ -130,6 +132,30 @@ class TestReviewerCodeFor:
         assert _reviewer_code_for(REVIEWER) == CODE
         assert _reviewer_code_for("+33600000001") == CODE
         assert _reviewer_code_for(OTHER) is None
+
+    @pytest.mark.parametrize(
+        "phone_env",
+        [
+            f"{REVIEWER},{REVIEWER_2},",
+            f",{REVIEWER},{REVIEWER_2}",
+            f"{REVIEWER},,{REVIEWER_2}",
+            f"  {REVIEWER} ,\t{REVIEWER_2}  ,  ",
+            f"{REVIEWER} , , {REVIEWER_2}",
+        ],
+    )
+    def test_stray_separators_and_spaces_do_not_disable_either_number(self, monkeypatch, phone_env):
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", phone_env)
+        monkeypatch.setenv("OTP_REVIEWER_CODE", CODE)
+        assert _reviewer_code_for(REVIEWER) == CODE
+        assert _reviewer_code_for(REVIEWER_2) == CODE
+        assert _reviewer_code_for(OTHER) is None
+        assert is_reviewer_phone(REVIEWER_2) and not is_reviewer_phone(OTHER)
+
+    @pytest.mark.parametrize("phone_env", [",", " , ,,"])
+    def test_a_list_of_only_separators_grants_nothing(self, monkeypatch, phone_env):
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", phone_env)
+        monkeypatch.setenv("OTP_REVIEWER_CODE", CODE)
+        assert _reviewer_code_for(REVIEWER) is None and _reviewer_code_for(OTHER) is None
 
     def test_list_with_a_malformed_entry_disables_the_bypass(self, monkeypatch):
         monkeypatch.setenv("OTP_REVIEWER_PHONE", f"{REVIEWER},+84912345678")
@@ -290,6 +316,18 @@ class TestFailedGuessBudget:
             _consume_code(otps, phone=phone, code=CODE, now=at, max_attempts=5)
         assert otps.latest_for_phone(phone).attempts == 0 and otps.latest_for_phone(phone).consumed_at is None
 
+    @pytest.mark.parametrize("phone", [REVIEWER, REVIEWER_2])
+    def test_budget_covers_every_number_of_a_list_with_a_stray_comma(self, monkeypatch, phone):
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", f" {REVIEWER}, {REVIEWER_2},")
+        monkeypatch.setenv("OTP_REVIEWER_CODE", CODE)
+        otps, sms = FakeOtps(), FakeSms()
+        for i in range(FAILED_GUESS_BUDGET_PER_HOUR // 5):
+            _burn_one_code(otps, sms, phone, NOW + timedelta(seconds=6 * i))
+        at = NOW + timedelta(seconds=60)
+        _issue(otps, sms, phone, now=at)
+        with pytest.raises(OtpInvalidError):
+            _consume_code(otps, phone=phone, code=CODE, now=at, max_attempts=5)
+
     def test_budget_is_per_phone(self, reviewers):
         otps, sms = FakeOtps(), FakeSms()
         for i in range(FAILED_GUESS_BUDGET_PER_HOUR // 5):
@@ -317,24 +355,26 @@ class TestFailedGuessBudget:
         _issue(otps, sms, REVIEWER, now=later)
         assert _consume_code(otps, phone=REVIEWER, code=CODE, now=later, max_attempts=5).consumed_at == later
 
-    def test_ordinary_phone_is_bounded_too_and_keeps_five_guesses_per_code(self):
+    def test_ordinary_numbers_are_not_locked_out_by_other_callers_guesses(self):
+        """A stranger's wrong guesses must not refuse the owner's real code (per-code attempts still apply)."""
         otps, sms = FakeOtps(), FakeSms()
         assert _burn_one_code(otps, sms, OTHER, NOW) == 5  # the per-code cap is unchanged
         with pytest.raises(OtpInvalidError):
             _consume_code(otps, phone=OTHER, code="000000", now=NOW, max_attempts=5)
         assert otps.latest_for_phone(OTHER).attempts == 5
-        # Past the budget the real code is refused as well (rows seeded as if re-issued by other means).
-        for i in range(FAILED_GUESS_BUDGET_PER_HOUR // 5 - 1):
-            row = LoginOtp(
-                id=uuid4(),
-                user_id=None,
-                phone=OTHER,
-                code_hash="x",
-                expires_at=NOW + timedelta(minutes=5),
-                created_at=NOW + timedelta(seconds=i),
-                attempts=5,
+        # Far past the cross-code budget (as if re-issued by other means), the real code still works.
+        for i in range(FAILED_GUESS_BUDGET_PER_HOUR // 5 + 2):
+            otps.save(
+                LoginOtp(
+                    id=uuid4(),
+                    user_id=None,
+                    phone=OTHER,
+                    code_hash="x",
+                    expires_at=NOW + timedelta(minutes=5),
+                    created_at=NOW + timedelta(seconds=i),
+                    attempts=5,
+                )
             )
-            otps.save(row)
         at = NOW + timedelta(minutes=2)
         real = LoginOtp(
             id=uuid4(),
@@ -345,11 +385,10 @@ class TestFailedGuessBudget:
             created_at=at,
         )
         otps.save(real)
-        with pytest.raises(OtpInvalidError):
-            _consume_code(otps, phone=OTHER, code="135790", now=at, max_attempts=5)
-        assert real.consumed_at is None
+        assert _consume_code(otps, phone=OTHER, code="135790", now=at, max_attempts=5).consumed_at == at
+        assert otps.locked_reads  # still read under the row lock
 
-    def test_budget_counts_every_purpose(self):
+    def test_budget_counts_every_purpose(self, reviewers):
         otps = FakeOtps()
         for purpose in (OtpPurpose.SIGN_IN, OtpPurpose.PHONE_CHANGE):
             for i in range(2):
@@ -357,7 +396,7 @@ class TestFailedGuessBudget:
                     LoginOtp(
                         id=uuid4(),
                         user_id=None,
-                        phone=OTHER,
+                        phone=REVIEWER,
                         code_hash="x",
                         expires_at=NOW + timedelta(minutes=5),
                         created_at=NOW - timedelta(minutes=i),
@@ -369,11 +408,11 @@ class TestFailedGuessBudget:
             LoginOtp(
                 id=uuid4(),
                 user_id=None,
-                phone=OTHER,
-                code_hash=_hash_code(OTHER, "135790"),
+                phone=REVIEWER,
+                code_hash=_hash_code(REVIEWER, CODE),
                 expires_at=NOW + timedelta(minutes=5),
                 created_at=NOW + timedelta(seconds=1),
             )
         )
         with pytest.raises(OtpInvalidError):
-            _consume_code(otps, phone=OTHER, code="135790", now=NOW + timedelta(seconds=2), max_attempts=5)
+            _consume_code(otps, phone=REVIEWER, code=CODE, now=NOW + timedelta(seconds=2), max_attempts=5)

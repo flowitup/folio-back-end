@@ -10,8 +10,8 @@ or sent, on sign-in and on sign-up alike.
 ``RequestOtpUseCase`` never reveals whether a phone belongs to an account: unknown or inactive
 numbers are silently ignored. Codes are hashed at rest, expire after ``ttl_seconds``, allow
 ``max_attempts`` guesses and are throttled per phone (``resend_after_seconds``, ``hourly_max``).
-Wrong guesses are also budgeted per phone across codes (``FAILED_GUESS_BUDGET_PER_HOUR``), so asking
-for a fresh code never buys fresh guesses.
+Wrong guesses of a store-review number are also budgeted across codes (``FAILED_GUESS_BUDGET_PER_HOUR``),
+so asking for a fresh code never buys it fresh guesses.
 """
 
 from __future__ import annotations
@@ -55,9 +55,11 @@ SIGNUP_MESSAGE = "Folio: ma dang ky tai khoan cua ban la {code}. Ma het han sau 
 # (.local/.invalid/.test are rejected); the host has no mailbox, nothing is ever sent to it.
 SIGNUP_EMAIL_DOMAIN = "no-email.folio.flowitup.com"
 
-# Wrong guesses a phone absorbs per hour over all its codes (any purpose). Each code only allows
-# ``max_attempts`` of them, but a new code starts again at zero: this total is what bounds a search
-# of the 10^6 codes, whoever asks and from wherever. Reaching it refuses even the right code.
+# Wrong guesses a store-review number absorbs per hour over all its codes (any purpose). Each code only
+# allows ``max_attempts`` of them, but a new code starts again at zero, and the reviewer's code is fixed:
+# this total is what bounds a search of the 10^6 codes. Reaching it refuses even the right code. Ordinary
+# numbers have no such budget (5 guesses per code, 5 codes an hour, and the per-address limits cap them
+# at 25 an hour), so a stranger's wrong guesses never lock the owner out.
 FAILED_GUESS_BUDGET_PER_HOUR = 20
 # The store-review number sends no SMS, so it gets a short gap and a large (but finite) hourly cap.
 REVIEWER_RESEND_AFTER_SECONDS = 5
@@ -161,9 +163,10 @@ def _reviewer_code_for(phone: str) -> Optional[str]:
     if not reviewer_phones or not code:
         return None
     # Comma-separated list: a second account lets reviewers see sign-up and account deletion
-    # without deleting the main demo account. A malformed entry disables the whole bypass.
+    # without deleting the main demo account. Empty entries (a trailing comma, a doubled one) and
+    # surrounding spaces are skipped; a malformed number disables the whole bypass.
     try:
-        normalized = {normalize_french_phone(p.strip()) for p in reviewer_phones.split(",")}
+        normalized = {normalize_french_phone(p) for p in (p.strip() for p in reviewer_phones.split(",")) if p}
     except ValueError:
         return None
     return code if phone in normalized else None
@@ -256,16 +259,22 @@ def _consume_code(
 
     The code's row stays locked until the caller's transaction ends: concurrent guesses at one code
     are checked one after another, so ``max_attempts`` really bounds them and a code is used once.
-    The phone's wrong guesses of the last hour are counted over all its codes, after that lock is
-    taken so a guess that waited sees the ones committed meanwhile.
+    A store-review number is also budgeted across codes: its code is fixed, so re-issuing one (no SMS
+    goes out) would otherwise reset the guesses for good. Its wrong guesses of the last hour are counted
+    over all its codes, after that lock is taken so a guess that waited sees the ones committed
+    meanwhile. Ordinary numbers keep only the per-code attempts: the codes a number may be sent per
+    hour already cap a search, and a shared budget would let a stranger lock the owner out.
     """
     otp = otps.latest_for_phone(phone, purpose, for_update=True)
     if otp is None or not otp.is_active(now) or otp.attempts >= max_attempts:
         raise OtpInvalidError("Invalid or expired code")
-    if otps.sum_attempts_since(phone, now - timedelta(hours=1)) >= FAILED_GUESS_BUDGET_PER_HOUR:
+    reviewer_code = _reviewer_code_for(phone)
+    if (
+        reviewer_code is not None
+        and otps.sum_attempts_since(phone, now - timedelta(hours=1)) >= FAILED_GUESS_BUDGET_PER_HOUR
+    ):
         raise OtpInvalidError("Invalid or expired code")
     submitted = code.strip()
-    reviewer_code = _reviewer_code_for(phone)
     # The reviewer code is compared as bytes: compare_digest raises TypeError on a str that is not ASCII.
     accepted = (
         hmac.compare_digest(otp.code_hash, _hash_code(phone, submitted))
