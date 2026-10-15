@@ -89,9 +89,9 @@ class SQLAlchemyLoginOtpRepository:
         return _aware(oldest) if oldest is not None else None
 
     def purge_stale(self, phone: str, before: datetime, batch_size: int) -> int:
-        removed = self._session.execute(
+        removed: int = self._session.execute(
             delete(LoginOtpOrm).where(LoginOtpOrm.phone == phone, LoginOtpOrm.created_at < before)
-        ).rowcount
+        ).rowcount  # type: ignore[attr-defined]
         # Other numbers' old rows go in a bounded batch, so the table drains a little on every request
         # without one request paying for the whole backlog. SKIP LOCKED (a no-op on SQLite): two
         # requests purging at once take different rows instead of waiting on, or deadlocking with, each other.
@@ -101,7 +101,9 @@ class SQLAlchemyLoginOtpRepository:
             .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
-        removed += self._session.execute(delete(LoginOtpOrm).where(LoginOtpOrm.id.in_(stale))).rowcount
+        removed += self._session.execute(
+            delete(LoginOtpOrm).where(LoginOtpOrm.id.in_(stale))
+        ).rowcount  # type: ignore[attr-defined]
         self._session.flush()
         return removed
 
