@@ -523,6 +523,18 @@ def _configure_di_container() -> None:
         )
     else:
         _sms = LoggingSmsSender()
+    # Every message that leaves spends the global SMS budget first (the SIM / gateway quota is finite).
+    # Tests keep it in memory; production counts in Redis and fails open when Redis is down.
+    from app.infrastructure.adapters.budgeted_sms_sender import BudgetedSmsSender
+    from app.infrastructure.adapters.sms_budget import InMemorySmsBudget, RedisSmsBudget
+
+    _sms_max_10min = int(_cfg.get("SMS_GLOBAL_MAX_PER_10MIN", 60))
+    _sms_max_day = int(_cfg.get("SMS_GLOBAL_MAX_PER_DAY", 400))
+    if _cfg.get("TESTING"):
+        _c.sms_budget = InMemorySmsBudget(_sms_max_10min, _sms_max_day)
+    else:
+        _c.sms_budget = RedisSmsBudget(_cfg.get("REDIS_URL") or Config.REDIS_URL, _sms_max_10min, _sms_max_day)
+    _sms = BudgetedSmsSender(_sms, _c.sms_budget)
     _otp_repo = SQLAlchemyLoginOtpRepository(db.session)
     _c.sms_sender = _sms
 

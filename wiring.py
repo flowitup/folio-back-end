@@ -332,6 +332,8 @@ class Container:
     delete_account_usecase: Optional[Any] = None
     # Sign in with a phone number + SMS code (wired post-configure in app/__init__.py and tests)
     sms_sender: Optional[Any] = None
+    # Global budget of outgoing SMS (sliding windows); the sender above spends it before each send
+    sms_budget: Optional[Any] = None
     # Push notifications (attendance): device registry, provider adapter, notifier
     push_device_repository: Optional[Any] = None
     notification_preference_repository: Optional[Any] = None

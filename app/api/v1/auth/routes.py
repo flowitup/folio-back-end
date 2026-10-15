@@ -55,7 +55,7 @@ from app.domain.exceptions.auth_exceptions import (
     UserInactiveError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
-from app.infrastructure.rate_limiter import limiter
+from app.infrastructure.rate_limiter import limiter, sms_send_ip_limits
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,7 @@ def _login_response(container, result: LoginResult):
     auth=False,
 )
 @limiter.limit("5 per minute")
+@limiter.shared_limit(sms_send_ip_limits, scope="sms-send")
 def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
@@ -552,6 +553,7 @@ def delete_current_user():
     auth=False,
 )
 @limiter.limit("5 per minute")
+@limiter.shared_limit(sms_send_ip_limits, scope="sms-send")
 def request_signup_otp():
     try:
         data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})

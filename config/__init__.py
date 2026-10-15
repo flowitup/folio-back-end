@@ -126,6 +126,14 @@ class Config:
     SMS_GATEWAY_URL: str = get_env("SMS_GATEWAY_URL", default="")
     SMS_GATEWAY_USERNAME: str = get_env("SMS_GATEWAY_USERNAME", default="")
     SMS_GATEWAY_PASSWORD: str = get_env("SMS_GATEWAY_PASSWORD", default="")
+    # Most SMS the whole API sends in any 10 minutes / any 24 hours (sliding windows, counted in Redis),
+    # whatever the flow; past it the code routes answer 429 with a Retry-After. Size them under what the
+    # SIM / gateway can really send: a team onboarding in one morning must fit. 0 switches a window off.
+    SMS_GLOBAL_MAX_PER_10MIN: int = int(get_env("SMS_GLOBAL_MAX_PER_10MIN", default="60"))
+    SMS_GLOBAL_MAX_PER_DAY: int = int(get_env("SMS_GLOBAL_MAX_PER_DAY", default="400"))
+    # Per client address (IPv6: per /64), shared by the three routes that text an unauthenticated
+    # caller (sign-up code, sign-in code, invitation code), on top of each route's "5 per minute".
+    SMS_SEND_IP_LIMITS: str = get_env("SMS_SEND_IP_LIMITS", default="20 per hour;60 per day")
     OTP_TTL_SECONDS: int = int(get_env("OTP_TTL_SECONDS", default="300"))
     OTP_RESEND_SECONDS: int = int(get_env("OTP_RESEND_SECONDS", default="60"))
     OTP_HOURLY_MAX: int = int(get_env("OTP_HOURLY_MAX", default="5"))

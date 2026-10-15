@@ -3,7 +3,7 @@
 import ipaddress
 from typing import Optional
 
-from flask import request
+from flask import current_app, request
 from flask_limiter import Limiter
 
 
@@ -30,6 +30,15 @@ def client_ip_bucket(address: Optional[str]) -> str:
 def remote_address_bucket() -> str:
     """Key function: the bucket of ``request.remote_addr`` (after the trusted-proxy fix-up)."""
     return client_ip_bucket(request.remote_addr)
+
+
+# Per-address caps shared by every route that texts an unauthenticated caller, so that rotating
+# between the routes (or between numbers) does not multiply them. Overridable by SMS_SEND_IP_LIMITS.
+DEFAULT_SMS_SEND_IP_LIMITS = "20 per hour;60 per day"
+
+
+def sms_send_ip_limits() -> str:
+    return current_app.config.get("SMS_SEND_IP_LIMITS") or DEFAULT_SMS_SEND_IP_LIMITS
 
 
 # storage_uri is omitted here so flask-limiter reads RATELIMIT_STORAGE_URI
