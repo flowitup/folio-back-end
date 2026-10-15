@@ -131,6 +131,15 @@ class TestOtpLogin:
         assert inv_client.post("/api/v1/auth/otp/request", json={"phone": "abc"}).status_code == 400
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": "0900000123", "code": "12"}).status_code == 400
 
+    def test_non_ascii_digits_are_refused(self, inv_client):
+        """Unicode digits are not a second spelling of a number or of a code."""
+        spelled = "+336\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18"
+        assert inv_client.post("/api/v1/auth/otp/request", json={"phone": spelled}).status_code == 400
+        assert inv_client.post("/api/v1/auth/signup/request", json={"phone": spelled}).status_code == 400
+        for code in ("\uff11\uff12\uff13\uff14\uff15\uff16", "\u0661\u0662\u0663\u0664\u0665\u0666"):
+            resp = inv_client.post("/api/v1/auth/otp/verify", json={"phone": MEMBER_PHONE, "code": code})
+            assert resp.status_code == 400, resp.get_json()
+
     def test_sign_in_refuses_numbers_outside_france(self, inv_client, invitation_app):
         """Codes leave through a French gateway, so a foreign number is turned away with no SMS."""
         sent_before = len(invitation_app._sms.sent)

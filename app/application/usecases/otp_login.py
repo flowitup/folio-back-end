@@ -239,10 +239,11 @@ def _consume_code(
         raise OtpInvalidError("Invalid or expired code")
     submitted = code.strip()
     reviewer_code = _reviewer_code_for(phone)
+    # The reviewer code is compared as bytes: compare_digest raises TypeError on a str that is not ASCII.
     accepted = (
         hmac.compare_digest(otp.code_hash, _hash_code(phone, submitted))
         or _test_code_accepted(submitted)
-        or (reviewer_code is not None and hmac.compare_digest(submitted, reviewer_code))
+        or (reviewer_code is not None and hmac.compare_digest(submitted.encode(), reviewer_code.encode()))
     )
     if not accepted:
         otp.attempts += 1

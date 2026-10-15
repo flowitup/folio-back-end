@@ -54,3 +54,24 @@ def test_sign_in_accepts_french_numbers(raw: str, expected: str) -> None:
 def test_sign_in_refuses_numbers_from_other_countries(raw: str) -> None:
     with pytest.raises(InvalidPhoneNumberError):
         normalize_french_phone(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "+336\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18",  # fullwidth digits after an ASCII prefix
+        "+33\u0666\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668",  # Arabic-Indic digits
+        "+33 6 \u0661\u0662 34 56 78",
+    ],
+)
+def test_non_ascii_digits_are_refused(raw: str) -> None:
+    """\\d matches every Unicode decimal digit: one number could be spelled many ways past per-number limits."""
+    with pytest.raises(InvalidPhoneNumberError):
+        normalize_french_phone(raw)
+    with pytest.raises(InvalidPhoneNumberError):
+        normalize_phone(raw)
+
+
+def test_accepted_numbers_are_pure_ascii() -> None:
+    for raw in ("06 12 34 56 78", "+84 912-345-678", "0033612345678"):
+        assert normalize_phone(raw).isascii()

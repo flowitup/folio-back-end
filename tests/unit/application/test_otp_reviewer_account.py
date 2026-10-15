@@ -174,6 +174,16 @@ class TestConsumeCode:
             _consume_code(otps, phone=OTHER, code="000000", now=NOW, max_attempts=5)
         assert otps.locked_reads == [OTHER]
 
+    @pytest.mark.parametrize("code", ["\u0661\u0662\u0663\u0664\u0665\u0666", "24681\uff10"])
+    def test_non_ascii_code_is_refused_not_a_server_error(self, monkeypatch, code):
+        """compare_digest raises TypeError on a non-ASCII str: that used to be a 500 for the reviewer number."""
+        monkeypatch.setenv("OTP_REVIEWER_PHONE", REVIEWER)
+        monkeypatch.setenv("OTP_REVIEWER_CODE", CODE)
+        otps = FakeOtps()
+        self._seed(otps, REVIEWER)
+        with pytest.raises(OtpInvalidError):
+            _consume_code(otps, phone=REVIEWER, code=code, now=NOW, max_attempts=5)
+
     def test_reviewer_still_needs_a_requested_code(self, monkeypatch):
         """No /otp/request first → nothing active → refused, like everyone else."""
         monkeypatch.setenv("OTP_REVIEWER_PHONE", REVIEWER)

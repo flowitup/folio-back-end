@@ -61,7 +61,7 @@ class AcceptInviteRequest(BaseModel):
     token: str = Field(min_length=10, max_length=200)
     name: str = Field(min_length=1, max_length=100)
     phone: str = Field(..., min_length=6, max_length=32)
-    code: str = Field(..., pattern=r"^\s*\d{6}\s*$")
+    code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
 
 
 class AcceptInviteAsMeRequest(BaseModel):
