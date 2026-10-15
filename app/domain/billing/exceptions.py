@@ -17,6 +17,14 @@ class InvalidStatusTransitionError(BillingDomainError):
         super().__init__(f"Invalid transition for {kind}: {from_status!r} → {to_status!r}")
 
 
+class StatusChangeNotSavedError(BillingDomainError):
+    """Raised when a status change was rolled back along with its failed funds release."""
+
+    def __init__(self, document_id: UUID) -> None:
+        self.document_id = document_id
+        super().__init__(f"Status change of billing document {document_id} was not saved, please retry")
+
+
 class MissingCompanyProfileError(BillingDomainError):
     """Raised when a billing document is created but no company_profile exists for the user."""
 

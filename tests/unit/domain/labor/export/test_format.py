@@ -158,6 +158,11 @@ def test_a_number_beyond_any_real_amount_prints_as_a_dash(value):
     assert format_unit_price_eur_fr(Decimal(value)) == "—"
 
 
+@pytest.mark.parametrize("value", ["1E+999999999", "1E+400", "1E+31", "NaN", "Infinity", "-Infinity"])
+def test_an_amount_beyond_any_real_one_prints_as_a_dash(value):
+    assert format_eur_fr(Decimal(value)) == "—"
+
+
 def test_real_quantities_and_unit_prices_keep_their_decimals():
     assert format_decimal_fr(Decimal("3.333")) == "3,333"
     assert format_decimal_fr(Decimal("0.000001")) == "0,000001"

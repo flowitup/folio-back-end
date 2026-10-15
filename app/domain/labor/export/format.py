@@ -42,9 +42,12 @@ def format_eur_fr(value: Decimal | None) -> str:
     """
     if value is None:
         return "—"  # em dash
+    d = Decimal(str(value))
+    if not d.is_finite() or d.adjusted() > _MAX_ADJUSTED:
+        return "—"
     # Round half-up in Decimal (a float cast loses digits on large amounts and
     # rounds 0.125 down), then format with thousands comma and 2 dp: "1,234.56"
-    cents = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP, context=_WIDE)
+    cents = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP, context=_WIDE)
     s = f"{cents:,.2f}"
     # Convert to fr-FR notation: comma → thousand-sep space, period → decimal comma
     s = s.replace(",", "X").replace(".", ",").replace("X", " ")  # narrow no-break space
@@ -67,7 +70,7 @@ def format_unit_price_eur_fr(value: Decimal | None) -> str:
     if d is None:
         return "—"
     d = d.normalize()
-    if d.as_tuple().exponent >= -2:
+    if int(d.as_tuple().exponent) >= -2:
         return format_eur_fr(d)
     s = f"{d:,f}".replace(",", "X").replace(".", ",").replace("X", "\u00a0")  # same separators
     return f"{s}\u00a0€"

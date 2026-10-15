@@ -351,6 +351,31 @@ class TestUpdateBillingDocumentStatus:
         )
         assert resp.status_code == 409
 
+    @pytest.mark.parametrize("error_name", ["StatusChangeNotSavedError", "InvoiceNumberConflictError"])
+    def test_a_lost_status_change_or_release_number_conflict_returns_409(
+        self, inv_client, billing_token, seeded_doc, monkeypatch, error_name
+    ):
+        from app.domain.billing import exceptions as billing_exceptions
+        from app.domain.exceptions import invoice_exceptions
+        from wiring import get_container
+
+        if error_name == "StatusChangeNotSavedError":
+            error = billing_exceptions.StatusChangeNotSavedError(uuid.UUID(seeded_doc["id"]))
+        else:
+            error = invoice_exceptions.InvoiceNumberConflictError("Invoice number conflict, please retry")
+
+        def _raise(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr(get_container().update_billing_document_status_usecase, "execute", _raise)
+        resp = inv_client.patch(
+            f"/api/v1/billing-documents/{seeded_doc['id']}/status",
+            json={"new_status": "sent"},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "Conflict"
+
     def test_invalid_status_value_returns_422(self, inv_client, billing_token, seeded_doc):
         resp = inv_client.patch(
             f"/api/v1/billing-documents/{seeded_doc['id']}/status",

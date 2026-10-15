@@ -108,3 +108,10 @@ def test_every_operation_still_works_on_an_expense_that_is_not_refunded(status):
     RenameAttachmentUseCase(attachments, invoices).execute(attachments.att.id, "other.pdf")
     DeleteAttachmentUseCase(attachments, storage, invoices).execute(attachments.att.id)
     assert len(storage.puts) == 1 and attachments.renamed == ["other.pdf"] and attachments.deleted
+
+
+def test_an_invoice_without_a_refund_status_is_not_locked():
+    from app.application.invoice.manage_attachments import assert_attachments_editable
+
+    assert_attachments_editable(SimpleNamespace(id=uuid4()))
+    assert_attachments_editable(None)

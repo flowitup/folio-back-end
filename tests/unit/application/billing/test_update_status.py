@@ -12,6 +12,7 @@ from app.domain.billing.exceptions import (
     BillingDocumentNotFoundError,
     ForbiddenBillingDocumentError,
     InvalidStatusTransitionError,
+    StatusChangeNotSavedError,
 )
 from app.domain.value_objects.invoice_item import InvoiceItem
 from tests.unit.application.billing.conftest import ProjectsByCompany, make_doc, make_item
@@ -377,3 +378,30 @@ class TestConcurrentTransitions:
         doc_repo.save(doc)
         usecase.execute(UpdateStatusInput(id=doc.id, user_id=user_id, new_status=BillingDocumentStatus.PAID), Session())
         assert events == ["release", "commit"]
+
+
+class TestReleaseFailureRollsTheStatusBack:
+    """The release insert's IntegrityError rolls the session back; the adapter swallows it."""
+
+    @pytest.mark.parametrize(
+        "old, new",
+        [
+            (BillingDocumentStatus.SENT, BillingDocumentStatus.PAID),
+            (BillingDocumentStatus.PAID, BillingDocumentStatus.CANCELLED),
+        ],
+    )
+    def test_a_status_the_database_lost_is_not_reported(self, doc_repo, fake_session, user_id, old, new):
+        class RollingBackFundsRelease(FakeFundsRelease):
+            def sync_funds_release(self, **kwargs):
+                doc_repo._store[doc.id] = doc  # the rollback restores the row as it was
+
+            def delete_funds_release(self, source_doc_id):
+                doc_repo._store[doc.id] = doc
+
+        doc = make_doc(user_id=user_id, kind=BillingDocumentKind.FACTURE, status=old, project_id=uuid4())
+        doc_repo.save(doc)
+        usecase = UpdateBillingDocumentStatusUseCase(
+            doc_repo=doc_repo, funds_release=RollingBackFundsRelease(), project_repo=ProjectsByCompany()
+        )
+        with pytest.raises(StatusChangeNotSavedError):
+            usecase.execute(UpdateStatusInput(id=doc.id, user_id=user_id, new_status=new), fake_session)

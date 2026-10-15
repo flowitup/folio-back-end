@@ -68,8 +68,10 @@ from app.domain.billing.exceptions import (
     BillingDocumentAlreadyExistsError,
     BillingDocumentRenderError,
     ForbiddenCompanyBillingError,
+    StatusChangeNotSavedError,
 )
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
+from app.domain.exceptions.invoice_exceptions import InvoiceNumberConflictError
 from app.domain.value_objects.display_filename import quoted_ascii_filename
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -483,6 +485,8 @@ def update_billing_document_status(doc_id: str, billing_doc):
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except InvalidStatusTransitionError as exc:
+        return _err("Conflict", str(exc), 409)
+    except (StatusChangeNotSavedError, InvoiceNumberConflictError) as exc:
         return _err("Conflict", str(exc), 409)
     except DevisLockedByFactureError as exc:
         return jsonify({"error": "Conflict", "reason": "devis_locked_by_facture", "message": str(exc)}), 409

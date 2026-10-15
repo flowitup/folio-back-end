@@ -22,7 +22,7 @@ def assert_attachments_editable(invoice: Optional[Invoice]) -> None:
 
     Otherwise a manager could delete or swap the proof of an expense an admin already approved.
     """
-    if invoice is not None and invoice.refundable_status == RefundableStatus.REFUNDED.value:
+    if invoice is not None and getattr(invoice, "refundable_status", None) == RefundableStatus.REFUNDED.value:
         raise InvalidInvoiceDataError("Refunded expenses are locked; clear the refund status first")
 
 

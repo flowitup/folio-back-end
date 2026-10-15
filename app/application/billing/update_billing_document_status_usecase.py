@@ -22,7 +22,7 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
 )
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
-from app.domain.billing.exceptions import BillingDocumentNotFoundError
+from app.domain.billing.exceptions import BillingDocumentNotFoundError, StatusChangeNotSavedError
 from app.domain.billing.status import validate_status_transition
 
 if TYPE_CHECKING:
@@ -111,3 +111,12 @@ class UpdateBillingDocumentStatusUseCase:
         elif old_status == BillingDocumentStatus.PAID:
             self._funds_release.delete_funds_release(doc.id)
             log.info("Funds release deleted for facture %s, no longer paid", doc.id)
+
+        else:
+            return
+
+        # A release insert rejected by a constraint rolls the whole session back (status
+        # included) and the adapter swallows it: do not report a change the database lost.
+        current = self._doc_repo.find_by_id(doc.id)
+        if current is None or current.status != doc.status:
+            raise StatusChangeNotSavedError(doc.id)
