@@ -421,3 +421,72 @@ def test_a_number_another_profile_holds_in_a_company_is_not_duplicated_there(cli
             .one()
         )
         assert mine.phone_normalized is None
+
+
+def _store_raw_phone(rename_app, person_id: str, raw: str = "06 12 34 56 78") -> None:
+    """A phone saved as typed, the way the web form and the picker store it."""
+    from app import db
+
+    with rename_app.app_context():
+        db.session.get(PersonModel, UUID(person_id)).phone = raw
+        db.session.commit()
+
+
+def _assert_person_unchanged(rename_app, person_id: str, phone: str = "06 12 34 56 78") -> None:
+    from app import db
+
+    with rename_app.app_context():
+        db.session.expire_all()
+        person = db.session.get(PersonModel, UUID(person_id))
+        assert (person.name, person.phone) == ("Jean Dupont", phone)
+
+
+def test_a_form_resending_the_normalised_phone_still_saves_a_shared_person(client, shared_person, rename_app):
+    """The mobile form sends the E.164 form of the stored '06 12 34 56 78' together with the name."""
+    _store_raw_phone(rename_app, shared_person["person_id"])
+    token = mint_access_token(client, shared_person["admin_a"])
+    worker = _add_worker(client, token, shared_person["project_a"], shared_person["person_id"])
+    url = f"/api/v1/projects/{shared_person['project_a']}/workers/{worker['id']}"
+
+    resp = client.put(url, json={"name": "Jean Dupont", "phone": "+33612345678"}, headers=_auth(token))
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.get_json()["person_phone"] == "06 12 34 56 78"
+    _assert_person_unchanged(rename_app, shared_person["person_id"])
+
+    # The same number spelled another way, or the name re-cased and re-spaced, is no change either.
+    for body in (
+        {"name": "Jean Dupont", "phone": "0612345678"},
+        {"name": "  jean   DUPONT ", "phone": "+33612345678"},
+    ):
+        again = client.put(url, json=body, headers=_auth(token))
+        assert again.status_code == 200, again.get_data(as_text=True)
+    _assert_person_unchanged(rename_app, shared_person["person_id"])
+
+    # A genuinely different number or name is still refused.
+    for body in ({"phone": "+33699999999"}, {"name": "Jean Durand"}, {"name": "Jean Dupont", "phone": "+33699999999"}):
+        refused = client.put(url, json=body, headers=_auth(token))
+        assert refused.status_code == 409, refused.get_data(as_text=True)
+    _assert_person_unchanged(rename_app, shared_person["person_id"])
+
+
+def test_a_form_resending_the_normalised_phone_still_saves_an_account_linked_person(client, private_person, rename_app):
+    from app import db
+
+    _store_raw_phone(rename_app, private_person["person_id"])
+    with rename_app.app_context():
+        holder = UserModel(id=uuid4(), email=f"holder-{uuid4().hex[:6]}@test.com", is_active=True)
+        db.session.add(holder)
+        db.session.flush()
+        db.session.get(PersonModel, UUID(private_person["person_id"])).user_id = holder.id
+        db.session.commit()
+    token = mint_access_token(client, private_person["admin"])
+    worker = _add_worker(client, token, private_person["project_one"], private_person["person_id"])
+    url = f"/api/v1/projects/{private_person['project_one']}/workers/{worker['id']}"
+
+    resp = client.put(url, json={"name": "Jean Dupont", "phone": "+33612345678"}, headers=_auth(token))
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    _assert_person_unchanged(rename_app, private_person["person_id"])
+
+    refused = client.put(url, json={"name": "Jean Dupont", "phone": "+33699999999"}, headers=_auth(token))
+    assert refused.status_code == 409, refused.get_data(as_text=True)
+    _assert_person_unchanged(rename_app, private_person["person_id"])
