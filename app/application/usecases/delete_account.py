@@ -13,7 +13,7 @@ company's own data is left exactly as it was.
 """
 
 import logging
-from typing import Protocol
+from typing import Optional, Protocol
 from uuid import UUID
 
 from app.application.companies.ports import (
@@ -53,10 +53,12 @@ class DeletionBlockedByLastAdminError(Exception):
 class PersonalDataEraserPort(Protocol):
     """Deletes the rows that belong to a person rather than to their company."""
 
-    def erase_for_user(self, user_id: UUID) -> None:
+    def erase_for_user(self, user_id: UUID, phone: Optional[str] = None) -> None:
         """Delete every personal/credential row owned by ``user_id``.
 
-        Covers access grants, devices and credentials — never business records.
+        Covers access grants, devices, credentials, the bell history and the user's own chat
+        reactions, reports and blocks — never business records. ``phone`` is the number the account
+        had before it was anonymised, for the sign-up codes that only carry the number.
         Implementations must be idempotent: erasing twice is not an error.
         """
         ...
@@ -97,7 +99,7 @@ class DeleteAccountUseCase:
         orphaned = self._reject_if_last_admin_of_a_shared_company(user_id, accesses)
 
         self._users.save(user.anonymized(self._clock.now()))
-        self._eraser.erase_for_user(user_id)
+        self._eraser.erase_for_user(user_id, phone=user.phone)
         if orphaned:
             # D2 lets a solo user leave, which can strand a company with records
             # and no members. Nothing cleans that up, so leave ops a trail.
