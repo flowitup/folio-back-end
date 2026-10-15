@@ -26,7 +26,7 @@ def _bounded(d: Decimal) -> Decimal | None:
     """The number as the renderers may print it, or None when it cannot be printed at all."""
     if not d.is_finite() or d.adjusted() > _MAX_ADJUSTED:
         return None
-    if d.as_tuple().exponent < -6:
+    if int(d.as_tuple().exponent) < -6:
         d = d.quantize(_MAX_PLACES, rounding=ROUND_HALF_UP, context=_WIDE)
     return Decimal(0) if d.is_zero() else d
 

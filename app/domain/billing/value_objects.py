@@ -37,7 +37,8 @@ def check_line_decimal(value: Decimal) -> Decimal:
     """
     if not value.is_finite():
         raise ValueError("Must be a finite number")
-    sign, digits, exponent = value.as_tuple()
+    _, digits, exponent = value.as_tuple()
+    exponent = int(exponent)  # finite, so never the "n"/"N"/"F" of NaN and Infinity
     if exponent >= 0:
         return value
     too_precise = ValueError(f"Must have at most {MAX_LINE_DECIMAL_PLACES} decimal places")
