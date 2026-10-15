@@ -306,7 +306,7 @@ class AcceptInvitationUseCase:
                     UserCompanyAccess(
                         user_id=user.id,
                         company_id=company_id,
-                        is_primary=len(self._access_repo.list_for_user(user.id)) == 0,
+                        is_primary=not any(a.is_primary for a in self._access_repo.list_for_user(user.id)),
                         attached_at=datetime.now(timezone.utc),
                         role=CompanyRole.MEMBER.value,
                     )

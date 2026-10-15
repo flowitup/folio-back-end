@@ -681,7 +681,7 @@ class TestDirectAddAttachesToTheProjectCompany:
         assert saved.user_id == existing_user.id
         assert saved.company_id == company_id
         assert saved.role == "member"
-        assert saved.is_primary is True  # their first company
+        assert saved.is_primary is False  # the account did not choose this company
 
     def test_an_already_attached_user_keeps_their_role(self):
         access_repo = MagicMock()

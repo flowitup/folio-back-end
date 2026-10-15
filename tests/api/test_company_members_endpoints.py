@@ -12,7 +12,7 @@ block and would need to duplicate every new use case here too).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -167,6 +167,47 @@ class TestAddMemberByPhoneExistingAccount:
         with members_app.app_context():
             access = db.session.get(UserCompanyAccessModel, (target_id, company_id))
             assert access is not None and access.role == "member"
+
+    def test_forced_attach_is_not_primary_and_copies_nothing_from_the_account(self, members_client, members_app):
+        """The account never chose this company: it stays non-primary and its own name is not copied."""
+        admin_id = _make_user(members_app, "mab_admin_prim@test.com")
+        target_id = _make_user(
+            members_app, "mab_target_prim@test.com", phone="+33611110051", display_name="Chosen By Owner"
+        )
+        company_id = _make_company(members_app, admin_id, name="MAB Co primary")
+        token = _login(members_client, "mab_admin_prim@test.com")
+
+        resp = members_client.post(
+            f"/api/v1/companies/{company_id}/members", json={"phone": "0611110051"}, headers=_auth(token)
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+        from app import db
+
+        with members_app.app_context():
+            assert db.session.get(UserCompanyAccessModel, (target_id, company_id)).is_primary is False
+            person = db.session.get(PersonModel, UUID(resp.get_json()["person_id"]))
+            assert person.name == "+33611110051"
+
+    def test_a_company_the_account_creates_later_is_still_its_primary_one(self, members_client, members_app):
+        admin_id = _make_user(members_app, "mab_admin_later@test.com")
+        _make_user(members_app, "mab_target_later@test.com", phone="+33611110052")
+        company_id = _make_company(members_app, admin_id, name="MAB Co later")
+        token = _login(members_client, "mab_admin_later@test.com")
+        assert (
+            members_client.post(
+                f"/api/v1/companies/{company_id}/members", json={"phone": "0611110052"}, headers=_auth(token)
+            ).status_code
+            == 201
+        )
+
+        target = _auth(_login(members_client, "mab_target_later@test.com"))
+        own = members_client.post(
+            "/api/v1/companies", json={"legal_name": "Later Own Co", "address": "1 rue X"}, headers=target
+        )
+        assert own.status_code == 201, own.get_data(as_text=True)
+        companies = members_client.get("/api/v1/auth/me", headers=target).get_json()["companies"]
+        assert {c["id"]: c["is_primary"] for c in companies} == {own.get_json()["id"]: True, str(company_id): False}
 
     def test_registered_and_unregistered_numbers_answer_alike(self, members_client, members_app):
         admin_id = _make_user(members_app, "mab_admin_enum@test.com")

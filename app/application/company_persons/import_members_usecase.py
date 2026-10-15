@@ -112,7 +112,7 @@ class ImportMembersUseCase:
                     UserCompanyAccess(
                         user_id=person.user_id,
                         company_id=inp.company_id,
-                        is_primary=len(self._access.list_for_user(person.user_id)) == 0,
+                        is_primary=False,  # the account did not choose this company
                         attached_at=now,
                         role=CompanyRole.MEMBER.value,
                     )
