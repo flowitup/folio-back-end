@@ -59,19 +59,6 @@ class NoteDismissalRepositoryPort(Protocol):
         """Record that a user dismissed a note notification."""
         ...
 
-    def delete_all_for_note(self, note_id: UUID) -> None:
-        """
-        Delete all dismissal records for a note.
-
-        Called by UpdateNoteUseCase when due_date or lead_time_minutes changes
-        so that re-scheduled reminders fire again for all users.
-        """
-        ...
-
-    def is_dismissed_by(self, user_id: UUID, note_id: UUID) -> bool:
-        """Return True if the user has dismissed this note's notification."""
-        ...
-
 
 class ProjectMembershipReaderPort(Protocol):
     """Read-only membership check contract."""

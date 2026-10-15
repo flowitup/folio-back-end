@@ -246,19 +246,6 @@ class ILaborEntryRepository(ABC):
         ...
 
     @abstractmethod
-    def list_by_project_in_range(
-        self,
-        project_id: UUID,
-        date_from: date,
-        date_to: date,
-    ) -> List[LaborEntry]:
-        """List validated entries for a project within the inclusive date range.
-
-        Ordered by date ASC, then worker_id ASC for deterministic export output.
-        """
-        ...
-
-    @abstractmethod
     def get_monthly_summary(
         self,
         project_id: UUID,

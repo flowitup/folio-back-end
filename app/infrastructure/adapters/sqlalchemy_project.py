@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.project import Project
-from app.infrastructure.database.models import ChatMessageOrm, ProjectModel, UserModel, user_projects
+from app.infrastructure.database.models import ChatMessageOrm, ProjectModel, user_projects
 
 
 class SQLAlchemyProjectRepository(IProjectRepository):
@@ -39,16 +39,6 @@ class SQLAlchemyProjectRepository(IProjectRepository):
             self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
         )
         return self._to_entity(model) if model else None
-
-    def list_by_user(self, user_id: UUID) -> List[Project]:
-        models = (
-            self._session.query(ProjectModel)
-            .join(user_projects)
-            .filter(user_projects.c.user_id == user_id)
-            .options(joinedload(ProjectModel.users))
-            .all()
-        )
-        return [self._to_entity(m) for m in models]
 
     def list_all(self) -> List[Project]:
         models = self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).all()
@@ -98,24 +88,6 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         self._session.delete(project)
         self._session.commit()
         return True
-
-    def add_user(self, project_id: UUID, user_id: UUID) -> None:
-        project = (
-            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
-        )
-        user = self._session.query(UserModel).filter_by(id=user_id).first()
-        if project and user and user not in project.users:
-            project.users.append(user)
-            self._session.commit()
-
-    def remove_user(self, project_id: UUID, user_id: UUID) -> None:
-        project = (
-            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter_by(id=project_id).first()
-        )
-        user = self._session.query(UserModel).filter_by(id=user_id).first()
-        if project and user and user in project.users:
-            project.users.remove(user)
-            self._session.commit()
 
     def get_project_users(self, project_id: UUID) -> List[Tuple[UUID, str]]:
         project = (

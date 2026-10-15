@@ -78,11 +78,6 @@ class IProjectRepository(ABC):
         ...
 
     @abstractmethod
-    def list_by_user(self, user_id: UUID) -> List[Project]:
-        """List projects user is assigned to."""
-        ...
-
-    @abstractmethod
     def list_all(self) -> List[Project]:
         """List all projects (admin only)."""
         ...
@@ -109,16 +104,6 @@ class IProjectRepository(ABC):
     @abstractmethod
     def delete(self, project_id: UUID) -> bool:
         """Delete project. Returns True if deleted."""
-        ...
-
-    @abstractmethod
-    def add_user(self, project_id: UUID, user_id: UUID) -> None:
-        """Assign user to project."""
-        ...
-
-    @abstractmethod
-    def remove_user(self, project_id: UUID, user_id: UUID) -> None:
-        """Remove user from project."""
         ...
 
     @abstractmethod

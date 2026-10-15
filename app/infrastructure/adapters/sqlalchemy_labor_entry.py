@@ -458,30 +458,6 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
     def _bonus_rates_by_worker_month(self, rows) -> dict:
         return bonus_rates_by_worker_month(self._session, rows)
 
-    def list_by_project_in_range(
-        self,
-        project_id: UUID,
-        date_from: date,
-        date_to: date,
-    ) -> List[LaborEntry]:
-        """List validated entries for a project within the inclusive date range.
-
-        Ordered by date ASC, then worker name ASC for deterministic export output.
-        """
-        models = (
-            self._session.query(LaborEntryModel)
-            .join(WorkerModel)
-            .filter(
-                WorkerModel.project_id == project_id,
-                LaborEntryModel.status == "validated",
-                LaborEntryModel.date >= date_from,
-                LaborEntryModel.date <= date_to,
-            )
-            .order_by(LaborEntryModel.date.asc(), WorkerModel.name.asc())
-            .all()
-        )
-        return [self._to_entity(m) for m in models]
-
     def find_cross_project_conflicts(
         self,
         project_id: UUID,

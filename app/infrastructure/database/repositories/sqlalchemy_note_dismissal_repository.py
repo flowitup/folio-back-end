@@ -28,18 +28,3 @@ class SqlAlchemyNoteDismissalRepository:
             orm = NoteDismissalOrm(user_id=user_id, note_id=note_id)
             self._session.add(orm)
             self._session.flush()
-
-    def delete_all_for_note(self, note_id: UUID) -> None:
-        """Delete all dismissal records for a note.
-
-        Called when due_date or lead_time_minutes changes so that
-        re-scheduled reminders fire again for all users.
-        """
-        self._session.query(NoteDismissalOrm).filter(NoteDismissalOrm.note_id == note_id).delete(
-            synchronize_session=False
-        )
-        self._session.flush()
-
-    def is_dismissed_by(self, user_id: UUID, note_id: UUID) -> bool:
-        """Return True if the user has dismissed this note's notification."""
-        return self._session.get(NoteDismissalOrm, (user_id, note_id)) is not None
