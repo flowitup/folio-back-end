@@ -11,17 +11,18 @@ totals and HT + TVA == TTC exactly.
 """
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Mapping, Optional
 
 
 _CENT = Decimal("0.01")
 
 # A line number keeps at most this many decimals. The PDF and xlsx expand a Decimal to all its
-# digits, and the layout of 1E-999999 takes quadratic time, so every entry path refuses it.
+# digits, and the layout of 1E-999999 takes quadratic time, so every entry path bounds it.
 MAX_LINE_DECIMAL_PLACES = 6
-# Raw exponent floor: lets "1.500000000000" through (trailing zeros) but not a 1E-100000 body.
+# Raw exponent floor: a longer tail than this is refused instead of rounded.
 _MIN_RAW_EXPONENT = -30
+_LINE_PLACES = Decimal(1).scaleb(-MAX_LINE_DECIMAL_PLACES)
 
 
 def round_cents(value: Decimal) -> Decimal:
@@ -30,25 +31,28 @@ def round_cents(value: Decimal) -> Decimal:
 
 
 def check_line_decimal(value: Decimal) -> Decimal:
-    """Refuse a line quantity, unit price or VAT rate the renderers cannot lay out in bounded time.
+    """Bound a line quantity, unit price or VAT rate so the renderers can lay it out in bounded time.
 
-    Not finite, or more than MAX_LINE_DECIMAL_PLACES significant decimals (trailing zeros do
-    not count, so "1.50000" stays valid). The magnitude is capped by each field's own bound.
+    Refuses a value that is not finite, has an absurdly long decimal tail (below _MIN_RAW_EXPONENT)
+    or is non-zero but rounds to zero. Anything else with more than MAX_LINE_DECIMAL_PLACES decimals
+    is rounded half-up to that many, so a document stored with a longer value (an old import, a
+    computed quantity) can still be saved. The magnitude is capped by each field's own bound.
     """
     if not value.is_finite():
         raise ValueError("Must be a finite number")
-    _, digits, exponent = value.as_tuple()
-    exponent = int(exponent)  # finite, so never the "n"/"N"/"F" of NaN and Infinity
-    if exponent >= 0:
+    exponent = int(value.as_tuple().exponent)  # finite, so never the "n"/"N"/"F" of NaN and Infinity
+    if exponent >= -MAX_LINE_DECIMAL_PLACES:
         return value
-    too_precise = ValueError(f"Must have at most {MAX_LINE_DECIMAL_PLACES} decimal places")
     if exponent < _MIN_RAW_EXPONENT:
-        raise too_precise
-    text = "".join(map(str, digits))
-    significant = text.rstrip("0")
-    if significant and -exponent - (len(text) - len(significant)) > MAX_LINE_DECIMAL_PLACES:
-        raise too_precise
-    return value
+        raise ValueError(f"Must have at most {-_MIN_RAW_EXPONENT} decimal places")
+    with localcontext() as ctx:
+        ctx.prec = 80  # the field bounds keep the magnitude small; this only avoids a precision error
+        rounded = value.quantize(_LINE_PLACES, rounding=ROUND_HALF_UP)
+    if value == rounded:
+        return value  # only trailing zeros beyond the limit
+    if rounded == 0:
+        raise ValueError("Too small")
+    return rounded
 
 
 @dataclass(frozen=True, slots=True)

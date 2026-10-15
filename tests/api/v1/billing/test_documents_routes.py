@@ -506,6 +506,15 @@ class TestLineNumberBounds:
         resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
         assert resp.status_code == 201, resp.get_data(as_text=True)
 
+    @pytest.mark.parametrize("value", ["33.3333333", "0.30000000000000004"])
+    def test_a_longer_tail_is_rounded_so_an_old_document_can_still_be_saved(
+        self, inv_client, billing_token, billing_profile, value
+    ):
+        body = _create(billing_profile["company_id"])
+        body["items"] = [{**_ITEM, "quantity": value, "unit_price": value}]
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
     def test_zero_price_and_vat_still_pass(self, inv_client, billing_token, billing_profile):
         body = _create(billing_profile["company_id"])
         body["items"] = [{**_ITEM, "unit_price": "0", "vat_rate": "0"}]

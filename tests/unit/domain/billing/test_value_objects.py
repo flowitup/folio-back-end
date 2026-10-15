@@ -137,7 +137,19 @@ class TestCheckLineDecimal:
     def test_a_real_number_passes_unchanged(self, value):
         assert check_line_decimal(Decimal(value)) == Decimal(value)
 
-    @pytest.mark.parametrize("value", ["NaN", "-Infinity", "1E-999999999", "1E-100", "0.0000001", "0E-999999"])
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("33.3333333", "33.333333"),
+            ("0.30000000000000004", "0.3"),
+            ("0.0000005", "0.000001"),
+            ("2.1234565", "2.123457"),
+        ],
+    )
+    def test_a_longer_tail_is_rounded_half_up_not_refused(self, value, expected):
+        assert check_line_decimal(Decimal(value)) == Decimal(expected)
+
+    @pytest.mark.parametrize("value", ["NaN", "-Infinity", "1E-999999999", "1E-100", "0.0000001", "0E-999999", "1E-31"])
     def test_a_number_the_pdf_cannot_lay_out_is_refused(self, value):
         with pytest.raises(ValueError):
             check_line_decimal(Decimal(value))
