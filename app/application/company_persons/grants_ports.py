@@ -76,6 +76,14 @@ class MemberGrantRepositoryPort(Protocol):
         """
         ...
 
+    def delete_project_grants(self, company_id: UUID, user_id: UUID, project_id: UUID) -> int:
+        """Delete the user's "grant" rows scoped to *project_id*; return how many went.
+
+        Called when the user is unassigned from the project, so the grants (which add
+        permissions) do not outlive the assignment. "deny" rows stay: they only remove.
+        """
+        ...
+
 
 class _AccessRow(Protocol):
     role: str

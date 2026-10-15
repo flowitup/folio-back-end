@@ -1021,6 +1021,7 @@ def _configure_di_container() -> None:
             access_repo=_access_repo,
             membership_repo=_c.project_membership_repo,
             task_repo=_c.task_repository,
+            grant_repo=_member_grant_repo,  # project-scoped grants end with the assignment
         )
 
     # LinkPersonOnSignupUseCase only needs company_person_repo/person_repo/
