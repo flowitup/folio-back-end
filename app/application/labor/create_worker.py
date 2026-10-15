@@ -20,6 +20,7 @@ from app.domain.exceptions.labor_exceptions import (
     InvalidWorkerPhoneError,
     WorkerAlreadyLinkedError,
     WorkerAlreadyOnProjectError,
+    WorkerPersonNotFoundError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 
@@ -143,6 +144,35 @@ class CreateWorkerUseCase:
             now=datetime.now(timezone.utc),
         )
 
+    def _assert_person_usable(self, request: CreateWorkerRequest) -> None:
+        """Refuse a person_id this project's company does not hold.
+
+        A person is one global row shared by every company, so a bare id must not link
+        a worker (and expose the person's name and phone) in an unrelated company. Usable:
+        an active profile in the project company's directory, or the web picker's
+        create-then-link case, a person the caller just created that no directory lists yet.
+        Missing and foreign ids give the same answer.
+        """
+        person_id = request.person_id
+        if self._company_person_repo is None or self._authz_reader is None or self._person_repo is None:
+            # Cannot tell whose the person is: refuse rather than skip the check.
+            raise WorkerPersonNotFoundError(str(person_id))
+        person = self._person_repo.find_by_id(person_id)  # type: ignore[arg-type]
+        if person is None:
+            raise WorkerPersonNotFoundError(str(person_id))
+        company_id = self._authz_reader.project_company_id(request.project_id)
+        if company_id is not None:
+            profile = self._company_person_repo.find(company_id, person_id)  # type: ignore[arg-type]
+            if profile is not None and profile.is_active:
+                return
+        if (
+            request.created_by_user_id is not None
+            and person.created_by_user_id == request.created_by_user_id
+            and not self._company_person_repo.list_for_person(person_id)  # type: ignore[arg-type]
+        ):
+            return
+        raise WorkerPersonNotFoundError(str(person_id))
+
     def _company_person_with_phone(self, phone: Optional[str], project_id: UUID) -> Optional[UUID]:
         """The person already listed in the project company under this phone number, if any.
 
@@ -202,6 +232,8 @@ class CreateWorkerUseCase:
         # Only an explicit role needs the check: the profile fallback below is
         # already scoped to this project's company.
         assert_role_in_project_company(self._labor_role_repo, self._authz_reader, request.role_id, request.project_id)
+        if request.person_id is not None:
+            self._assert_person_usable(request)
         name = request.name.strip() if request.name else ""
         phone = request.phone
         if phone and phone.strip() and not is_phone_number(phone) and not self._is_persons_phone(phone, request):

@@ -15,6 +15,17 @@ class WorkerNotFoundError(LaborError):
         super().__init__(f"Worker not found: {worker_id}")
 
 
+class WorkerPersonNotFoundError(LaborError):
+    """Raised when the person a worker is linked to is not one this company may use.
+
+    Also raised for an id that does not exist, so the answer is no existence oracle.
+    """
+
+    def __init__(self, person_id: str):
+        self.person_id = person_id
+        super().__init__(f"Person not found: {person_id}")
+
+
 class WorkerInactiveError(LaborError):
     """Raised when new attendance is logged for a deactivated worker."""
 

@@ -863,7 +863,7 @@ def _configure_di_container() -> None:
 
     _person_repo = SqlAlchemyPersonRepository(db.session)
     _c.person_repo = _person_repo
-    # Renaming a worker renames the shared Person it is linked to.
+    # Renaming a worker renames the Person it is linked to (when only its own company lists them).
     if _c.update_worker_usecase is not None:
         _c.update_worker_usecase.set_person_repo(_person_repo)
     # A verified phone change moves the account's Person to the new number too.
@@ -882,6 +882,9 @@ def _configure_di_container() -> None:
     )
 
     _c.company_person_repo = SqlAlchemyCompanyPersonRepository(db.session)
+    # A worker edit renames the shared Person only when no other company lists them.
+    if _c.update_worker_usecase is not None:
+        _c.update_worker_usecase.set_company_person_repo(_c.company_person_repo)
     if _c.create_invitation_usecase is not None and hasattr(_c.create_invitation_usecase, "set_directory_repos"):
         _c.create_invitation_usecase.set_directory_repos(_person_repo, _c.company_person_repo)
 

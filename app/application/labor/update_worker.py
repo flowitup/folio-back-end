@@ -60,15 +60,44 @@ class UpdateWorkerResponse:
 class UpdateWorkerUseCase:
     """Update an existing worker."""
 
-    def __init__(self, worker_repo: IWorkerRepository, labor_role_repo=None, authz_reader=None, person_repo=None):
+    def __init__(
+        self,
+        worker_repo: IWorkerRepository,
+        labor_role_repo=None,
+        authz_reader=None,
+        person_repo=None,
+        company_person_repo=None,
+    ):
         self._repo = worker_repo
         self._labor_role_repo = labor_role_repo
         self._authz_reader = authz_reader
         self._person_repo = person_repo
+        self._company_person_repo = company_person_repo
 
     def set_person_repo(self, person_repo) -> None:
         """Inject the Person repository; wired after it exists."""
         self._person_repo = person_repo
+
+    def set_company_person_repo(self, company_person_repo) -> None:
+        """Inject the company directory; wired after it exists."""
+        self._company_person_repo = company_person_repo
+
+    def _person_is_company_private(self, worker) -> bool:
+        """Whether the worker's Person may be renamed or re-phoned for everyone using it.
+
+        True only for an unlinked profile that no other company lists. A Person linked to an
+        account belongs to the account holder, and one listed by several companies is shared,
+        so for those a worker edit changes this worker's own copy only. Fails closed when
+        the directory is not wired.
+        """
+        if self._person_repo is None or self._company_person_repo is None or self._authz_reader is None:
+            return False
+        company_id = self._authz_reader.project_company_id(worker.project_id)
+        person = self._person_repo.find_by_id(worker.person_id)
+        if company_id is None or person is None or person.user_id is not None:
+            return False
+        profiles = self._company_person_repo.list_for_person(worker.person_id)
+        return bool(profiles) and all(profile.company_id == company_id for profile in profiles)
 
     def set_role_scope(self, labor_role_repo, authz_reader) -> None:
         """Inject what the role check needs; wired after the labor-role repository exists."""
@@ -86,9 +115,9 @@ class UpdateWorkerUseCase:
             if len(request.name) > 255:
                 raise InvalidWorkerDataError("Worker name exceeds 255 characters")
             worker.name = request.name.strip()
-            # The name belongs to the shared Person: renaming it here renames the
-            # person in every company and project that uses them.
-            if worker.person_id is not None and self._person_repo is not None:
+            # The name belongs to the Person: for a person only this company lists, renaming
+            # it here renames them on every project of the company; otherwise just this worker.
+            if worker.person_id is not None and self._person_is_company_private(worker):
                 self._person_repo.rename(worker.person_id, worker.name, commit=False)
                 worker.person_name = worker.name
 
@@ -99,9 +128,8 @@ class UpdateWorkerUseCase:
             if phone and phone not in (worker.phone, worker.person_phone) and not is_phone_number(phone):
                 raise InvalidWorkerPhoneError()
             worker.phone = phone
-            # Like the name, the phone belongs to the shared Person: changing it here changes
-            # it in every company and project that uses them.
-            if worker.person_id is not None and self._person_repo is not None:
+            # Like the name, the phone moves on the Person only for a person only this company lists.
+            if worker.person_id is not None and self._person_is_company_private(worker):
                 self._person_repo.change_phone(worker.person_id, worker.phone, commit=False)
                 worker.person_phone = worker.phone
 
