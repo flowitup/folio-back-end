@@ -1014,6 +1014,14 @@ def _configure_di_container() -> None:
         grant_repo=_member_grant_repo,
         task_repo=_c.task_repository,
     )
+    # Demoting an admin drops their project assignments on this company's projects.
+    _c.set_member_role_usecase = _SetMemberRoleUseCase(
+        access_repo=_access_repo,
+        role_checker=_role_checker,
+        authz_reader=_c.authz_reader,
+        membership_repo=_c.project_membership_repo,
+        task_repo=_c.task_repository,
+    )
 
     # Project assignment use cases: admin/manager assign or unassign an
     # existing company member to/from a project. Needs the membership repo
