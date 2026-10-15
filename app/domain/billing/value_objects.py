@@ -17,10 +17,37 @@ from typing import Mapping, Optional
 
 _CENT = Decimal("0.01")
 
+# A line number keeps at most this many decimals. The PDF and xlsx expand a Decimal to all its
+# digits, and the layout of 1E-999999 takes quadratic time, so every entry path refuses it.
+MAX_LINE_DECIMAL_PLACES = 6
+# Raw exponent floor: lets "1.500000000000" through (trailing zeros) but not a 1E-100000 body.
+_MIN_RAW_EXPONENT = -30
+
 
 def round_cents(value: Decimal) -> Decimal:
     """Round a money amount half-up to the cent (0.125 → 0.13)."""
     return value.quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def check_line_decimal(value: Decimal) -> Decimal:
+    """Refuse a line quantity, unit price or VAT rate the renderers cannot lay out in bounded time.
+
+    Not finite, or more than MAX_LINE_DECIMAL_PLACES significant decimals (trailing zeros do
+    not count, so "1.50000" stays valid). The magnitude is capped by each field's own bound.
+    """
+    if not value.is_finite():
+        raise ValueError("Must be a finite number")
+    sign, digits, exponent = value.as_tuple()
+    if exponent >= 0:
+        return value
+    too_precise = ValueError(f"Must have at most {MAX_LINE_DECIMAL_PLACES} decimal places")
+    if exponent < _MIN_RAW_EXPONENT:
+        raise too_precise
+    text = "".join(map(str, digits))
+    significant = text.rstrip("0")
+    if significant and -exponent - (len(text) - len(significant)) > MAX_LINE_DECIMAL_PLACES:
+        raise too_precise
+    return value
 
 
 @dataclass(frozen=True, slots=True)

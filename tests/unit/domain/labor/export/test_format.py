@@ -11,7 +11,12 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.labor.export.format import format_eur_fr, format_unit_price_eur_fr, slugify_project_name
+from app.domain.labor.export.format import (
+    format_decimal_fr,
+    format_eur_fr,
+    format_unit_price_eur_fr,
+    slugify_project_name,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -134,3 +139,28 @@ class TestSlugifyProjectName:
         result = slugify_project_name("---", "abcd1234-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
         # "---" has no Ll/Lu/Nd → has_latin_content=False → ID prefix fallback
         assert result == "abcd1234"
+
+
+# ---------------------------------------------------------------------------
+# A stored row with a hostile exponent is printed in bounded time and length
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["1E-999999999", "1E-100000", "-2.5E-9", "0E-999999"])
+def test_a_tiny_or_extreme_exponent_is_rounded_not_written_out(value):
+    assert format_decimal_fr(Decimal(value)) == "0"
+    assert format_unit_price_eur_fr(Decimal(value)) == "0,00 €".replace(" ", "\u00a0")
+
+
+@pytest.mark.parametrize("value", ["1E+999999999", "1E+31", "NaN", "Infinity"])
+def test_a_number_beyond_any_real_amount_prints_as_a_dash(value):
+    assert format_decimal_fr(Decimal(value)) == "—"
+    assert format_unit_price_eur_fr(Decimal(value)) == "—"
+
+
+def test_real_quantities_and_unit_prices_keep_their_decimals():
+    assert format_decimal_fr(Decimal("3.333")) == "3,333"
+    assert format_decimal_fr(Decimal("0.000001")) == "0,000001"
+    assert format_decimal_fr(Decimal("1E+3")) == "1\u00a0000"
+    assert format_unit_price_eur_fr(Decimal("15.015")) == "15,015\u00a0€"
+    assert format_unit_price_eur_fr(Decimal("1234567.89")) == "1\u00a0234\u00a0567,89\u00a0€"
