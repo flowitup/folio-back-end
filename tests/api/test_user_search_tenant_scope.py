@@ -36,14 +36,20 @@ def test_company_manager_finds_users_of_their_company(inv_client, member_token, 
     from app.infrastructure.database.models import UserCompanyAccessModel
 
     with invitation_app.app_context():
-        row = db.session.query(UserCompanyAccessModel).filter_by(user_id=UUID(invitation_app._test_member_user_id)).one()
+        row = (
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=UUID(invitation_app._test_member_user_id)).one()
+        )
         row.role = "manager"
         db.session.commit()
     try:
         assert "admin@invite-test.com" in _emails(inv_client, member_token)
     finally:
         with invitation_app.app_context():
-            row = db.session.query(UserCompanyAccessModel).filter_by(user_id=UUID(invitation_app._test_member_user_id)).one()
+            row = (
+                db.session.query(UserCompanyAccessModel)
+                .filter_by(user_id=UUID(invitation_app._test_member_user_id))
+                .one()
+            )
             row.role = "member"
             db.session.commit()
 
