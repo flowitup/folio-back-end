@@ -70,6 +70,7 @@ from app.domain.billing.exceptions import (
     ForbiddenCompanyBillingError,
 )
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
+from app.domain.value_objects.display_filename import quoted_ascii_filename
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -528,7 +529,7 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
         return _err("ValidationError", "This document cannot be laid out as a PDF", 422)
 
     # RFC-5987 percent-encoding for filenames that may contain non-ASCII chars
-    ascii_name = pdf_result.filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    ascii_name = quoted_ascii_filename(pdf_result.filename)
     encoded_name = quote(pdf_result.filename, safe="")
     content_disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
@@ -568,7 +569,7 @@ def render_billing_document_xlsx(doc_id: str, billing_doc):
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
 
-    ascii_name = xlsx_result.filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    ascii_name = quoted_ascii_filename(xlsx_result.filename)
     encoded_name = quote(xlsx_result.filename, safe="")
     content_disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
