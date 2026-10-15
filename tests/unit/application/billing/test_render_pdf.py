@@ -30,6 +30,30 @@ class TestRenderPdfHappyPath:
         result = usecase.execute(saved_doc.id, user_id)
         assert result.filename == f"{saved_doc.document_number}.pdf"
 
+    def test_filename_drops_control_characters_of_an_imported_number(self, doc_repo, pdf_renderer, user_id):
+        doc = make_doc(user_id=user_id, doc_number="FAC-1\r\nX-Injected: 1")
+        doc_repo.save(doc)
+        usecase = RenderBillingDocumentPdfUseCase(doc_repo=doc_repo, pdf_renderer=pdf_renderer)
+        assert usecase.execute(doc.id, user_id).filename == "FAC-1X-Injected: 1.pdf"
+
+    def test_filename_falls_back_when_the_number_is_only_control_characters(self, doc_repo, pdf_renderer, user_id):
+        doc = make_doc(user_id=user_id, doc_number="\r\n")
+        doc_repo.save(doc)
+        usecase = RenderBillingDocumentPdfUseCase(doc_repo=doc_repo, pdf_renderer=pdf_renderer)
+        assert usecase.execute(doc.id, user_id).filename == "document.pdf"
+
+    def test_xlsx_filename_drops_control_characters_too(self, doc_repo, user_id):
+        from app.application.billing.render_billing_document_xlsx_usecase import RenderBillingDocumentXlsxUseCase
+
+        class _Xlsx:
+            def render(self, doc, project=None):
+                return b"xlsx"
+
+        doc = make_doc(user_id=user_id, doc_number="FAC/1\r\n2")
+        doc_repo.save(doc)
+        result = RenderBillingDocumentXlsxUseCase(doc_repo=doc_repo, xlsx_renderer=_Xlsx()).execute(doc.id, user_id)
+        assert result.filename == "FAC-12.xlsx"
+
 
 class TestRenderPdfErrors:
     def test_not_found_raises(self, usecase, user_id):
