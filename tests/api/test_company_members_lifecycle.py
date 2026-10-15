@@ -42,7 +42,9 @@ def lc_app():
         from wiring import get_container
 
         sent: list[tuple[str, str]] = []
+        # Sign-up codes leave through the "open" sender, sign-in codes through the other one.
         get_container().sms_sender.send = lambda to, text: sent.append((to, text))
+        get_container().sms_open_sender.send = lambda to, text: sent.append((to, text))
         test_app._sms_sent = sent
         yield test_app
         db.session.remove()
