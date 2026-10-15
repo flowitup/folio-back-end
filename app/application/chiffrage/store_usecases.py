@@ -38,8 +38,8 @@ def _clean_address(value: Optional[str]) -> Optional[str]:
 
 
 def _clean_website(value: Optional[str]) -> Optional[str]:
-    """Normalise a website URL. Scheme is not enforced — same as the quote
-    product_url, which also stores whatever the user pasted."""
+    """Normalise a website URL. The API schemas already limit it to http(s); this only
+    trims it and enforces the length for callers that do not go through them."""
     cleaned = clean_optional_text(value)
     if cleaned is not None and len(cleaned) > MAX_STORE_WEBSITE:
         raise InvalidChiffrageInputError(f"Store website cannot exceed {MAX_STORE_WEBSITE} characters.")
