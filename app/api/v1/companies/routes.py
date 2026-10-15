@@ -12,7 +12,7 @@ import dataclasses
 from typing import Tuple
 from uuid import UUID
 
-from flask import Response, jsonify, request
+from flask import Response, g, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
@@ -80,7 +80,9 @@ def _has_superadmin() -> bool:
 def _may_read_join_code(caller_id: UUID, company_id: UUID) -> bool:
     """H4: the join code lets anyone become a member — only a platform admin
     or an admin of THIS company (who manages it) may read it back. Managers
-    and members never see it."""
+    and members never see it. A leaked API key does not either: the code is a way in for anyone."""
+    if g.get("authenticated_via_api_key"):
+        return False
     if _has_superadmin():
         return True
     access = get_container().user_company_access_repo.find(caller_id, company_id)

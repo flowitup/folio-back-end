@@ -73,13 +73,13 @@ class TestCreateApiKeyEndpoint:
         resp = inv_client.post(_keys_url(), json={}, headers=_auth(member_token))
         assert resp.status_code == 422
 
-    def test_409_when_cap_of_20_reached(self, inv_client, superadmin_token):
+    def test_409_when_cap_of_20_reached(self, inv_client, outsider_token):
         """This persona must not be used to create keys anywhere else in this module."""
         for i in range(20):
-            resp = inv_client.post(_keys_url(), json={"name": f"Cap key {i}"}, headers=_auth(superadmin_token))
+            resp = inv_client.post(_keys_url(), json={"name": f"Cap key {i}"}, headers=_auth(outsider_token))
             assert resp.status_code == 201, f"key {i} failed: {resp.get_data(as_text=True)}"
 
-        resp = inv_client.post(_keys_url(), json={"name": "One too many"}, headers=_auth(superadmin_token))
+        resp = inv_client.post(_keys_url(), json={"name": "One too many"}, headers=_auth(outsider_token))
         assert resp.status_code == 409
 
 

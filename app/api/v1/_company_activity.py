@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
+from flask import g
 from flask_jwt_extended import get_jwt_identity
 
 from wiring import get_container
@@ -29,4 +30,5 @@ def notify_admins(
         project_id=UUID(str(project_id)) if project_id else None,
         company_id=UUID(str(company_id)) if company_id else None,
         about_user_id=about_user_id,
+        via_api_key=g.get("api_key_name"),
     )
