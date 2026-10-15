@@ -92,7 +92,7 @@ class TestVerifyInvitation:
         # DTO must not expose invitation_id (VerifyInvitationDto has no invitation_id field)
         assert not hasattr(dto, "invitation_id")
 
-    def test_the_project_is_named_by_its_address_like_in_the_app(self):
+    def test_the_project_is_named_like_in_the_app_name_first(self):
         """projects-members-17: the invitee reads the label the app shows them after joining."""
         from datetime import datetime, timezone
 
@@ -111,10 +111,10 @@ class TestVerifyInvitation:
         )
         uc = VerifyInvitationUseCase(invitation_repo=inv_repo, project_repo=project_repo, user_repo=MagicMock())
 
-        assert uc.execute(raw_token).project_name == "1 rue Principale, Paris"
-
-        project_repo.find_by_id.return_value.address = "   "
         assert uc.execute(raw_token).project_name == "Internal name"
+
+        project_repo.find_by_id.return_value.name = "   "
+        assert uc.execute(raw_token).project_name == "1 rue Principale, Paris"
 
     def test_not_found_raises_invalid_token_error(self):
         inv_repo = MagicMock()

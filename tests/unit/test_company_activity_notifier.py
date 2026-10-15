@@ -82,7 +82,7 @@ def test_every_other_admin_is_told_and_the_actor_is_not():
     notifier.admin_acted("invoice_created", actor_id=a, subject="F-12 · ACME · 120.00 €", project_id=uuid4())
     assert sorted(m.token for m in sender.sent) == sorted([f"tok-{b}", f"tok-{c}"])
     assert sender.sent[0].title == "Invoice added"
-    assert sender.sent[0].body.endswith("F-12 · ACME · 120.00 € · 12 rue Jean Jaurès")
+    assert sender.sent[0].body.endswith("F-12 · ACME · 120.00 € · Chantier")
     assert events.recorded[0][0] == {b, c} and events.recorded[0][1] == "billing"
     assert events.recorded[0][4]["kind"] == "invoice_created"
 

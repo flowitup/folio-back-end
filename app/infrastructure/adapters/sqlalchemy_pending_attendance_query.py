@@ -82,7 +82,7 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 entry_id=r.entry_id,
                 project_id=r.project_id,
                 # The label the apps show a project under: its site address, else its name.
-                project_name=(r.project_address or "").strip() or r.project_name,
+                project_name=(r.project_name or "").strip() or (r.project_address or "").strip(),
                 worker_id=r.worker_id,
                 worker_name=r.worker_name,
                 date=r.date,
