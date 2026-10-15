@@ -8,7 +8,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.invoice.dtos import InvoiceResponse
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import IInvoiceRepository, lock_invoices_in_id_order
 from app.domain.entities.invoice import (
     HIGHLIGHT_COLORS,
     Invoice,
@@ -291,6 +291,21 @@ class UpdateInvoiceUseCase:
             # server-side so no non-labor invoice ever carries a stale worker link.
             updates["worker_id"] = None
 
+        # The refund source and the avoir target this PATCH reads are locked together, in id order, so two
+        # returns that cross cannot deadlock (each branch below uses the row locked here).
+        to_lock = []
+        if effective_type == InvoiceType.RETURN:
+            for requested, stored in (
+                (request.refunds_invoice_id, invoice.refunds_invoice_id),
+                (request.applied_to_invoice_id, invoice.applied_to_invoice_id),
+            ):
+                if requested is _UNSET:
+                    if stored is not None and "items" in updates:
+                        to_lock.append(stored)
+                elif requested is not None and requested != invoice.id:
+                    to_lock.append(requested)
+        locked = lock_invoices_in_id_order(self._repo, to_lock)
+
         # refunds_invoice_id sentinel: absent = keep existing, None = clear, UUID = set+validate.
         if request.refunds_invoice_id is not _UNSET:
             link_id = request.refunds_invoice_id  # None or UUID
@@ -304,7 +319,7 @@ class UpdateInvoiceUseCase:
                 link_uuid: UUID = link_id  # type: ignore[assignment]
                 if link_uuid == invoice.id:
                     raise InvalidInvoiceDataError("An invoice cannot refund itself")
-                source = self._repo.find_by_id_for_update(link_uuid)
+                source = locked[link_uuid]
                 if source is None:
                     raise InvalidInvoiceDataError(f"Source invoice {link_uuid} not found")
                 if source.project_id != invoice.project_id:
@@ -331,7 +346,7 @@ class UpdateInvoiceUseCase:
             # Link was not touched in this PATCH but the invoice already has one.
             # Re-validate the cap in case the item amounts changed.
             if "items" in updates:
-                source = self._repo.find_by_id_for_update(invoice.refunds_invoice_id)
+                source = locked[invoice.refunds_invoice_id]
                 if source is not None:
                     new_items = updates["items"]
                     this_total = sum((item.total for item in new_items), Decimal("0"))
@@ -409,7 +424,7 @@ class UpdateInvoiceUseCase:
                 applied_link_uuid: UUID = applied_link_id  # type: ignore[assignment]
                 if applied_link_uuid == invoice.id:
                     raise InvalidInvoiceDataError("An invoice cannot be applied to itself")
-                target = self._repo.find_by_id_for_update(applied_link_uuid)
+                target = locked[applied_link_uuid]
                 if target is None:
                     raise InvalidInvoiceDataError(f"Target invoice {applied_link_uuid} not found")
                 if target.project_id != invoice.project_id:
@@ -451,7 +466,7 @@ class UpdateInvoiceUseCase:
                     "applied_to_invoice_id requires settled_via='avoir'; clear the link before changing settled_via"
                 )
             if "items" in updates:
-                target = self._repo.find_by_id_for_update(invoice.applied_to_invoice_id)
+                target = locked[invoice.applied_to_invoice_id]
                 if target is not None:
                     new_items = updates["items"]
                     this_total = sum((item.total for item in new_items), Decimal("0"))

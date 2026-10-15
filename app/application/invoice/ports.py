@@ -416,3 +416,14 @@ class IInvoiceAttachmentRepository(ABC):
 
     @abstractmethod
     def delete(self, attachment_id: UUID) -> bool: ...
+
+
+def lock_invoices_in_id_order(repo: IInvoiceRepository, invoice_ids) -> dict:
+    """Lock the given invoice rows (``find_by_id_for_update``), always in the order of their ids.
+
+    Every place that locks several invoice rows in one transaction (a return's refund source and its
+    avoir target) goes through here, so two requests that cross - R1 refunds S and is applied to T, R2
+    refunds T and is applied to S - queue on the same row first instead of deadlocking on PostgreSQL.
+    Returns ``{invoice_id: Invoice | None}``.
+    """
+    return {i: repo.find_by_id_for_update(i) for i in sorted(set(invoice_ids), key=str)}

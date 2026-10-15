@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.application.invoice.dtos import InvoiceResponse
-from app.application.invoice.ports import IInvoiceRepository
+from app.application.invoice.ports import IInvoiceRepository, lock_invoices_in_id_order
 from app.domain.entities.invoice import HIGHLIGHT_COLORS, Invoice, InvoiceType, MIXED_SIGN_TYPES, SettledVia
 from app.domain.exceptions.invoice_exceptions import (
     AppliedAmountExceedsTargetError,
@@ -129,13 +129,21 @@ class CreateInvoiceUseCase:
             payment_method_id = method.id
             payment_method_label = method.label
 
+        # A return may lock both its refund source and its avoir target: lock them together, in id order,
+        # so two returns that cross cannot deadlock. Concurrent returns queue here instead of passing the
+        # cap together.
+        locked: dict = {}
+        if request.type == InvoiceType.RETURN:
+            locked = lock_invoices_in_id_order(
+                self._repo, [i for i in (request.refunds_invoice_id, request.applied_to_invoice_id) if i is not None]
+            )
+
         # Refund link validation + cap (only when refunds_invoice_id is provided).
         refunds_invoice_id: Optional[UUID] = None
         if request.refunds_invoice_id is not None:
             if request.type != InvoiceType.RETURN:
                 raise InvalidInvoiceDataError("refunds_invoice_id may only be set on invoices of type 'refund'")
-            # Lock the source first: concurrent returns queue here instead of passing the cap together.
-            source = self._repo.find_by_id_for_update(request.refunds_invoice_id)
+            source = locked[request.refunds_invoice_id]
             if source is None:
                 raise InvalidInvoiceDataError(f"Source invoice {request.refunds_invoice_id} not found")
             if source.project_id != request.project_id:
@@ -172,7 +180,7 @@ class CreateInvoiceUseCase:
             # the return is settled as store credit, not a straight cash refund.
             if settled_via != SettledVia.AVOIR.value:
                 raise InvalidInvoiceDataError("applied_to_invoice_id may only be set when settled_via is 'avoir'")
-            target = self._repo.find_by_id_for_update(request.applied_to_invoice_id)
+            target = locked[request.applied_to_invoice_id]
             if target is None:
                 raise InvalidInvoiceDataError(f"Target invoice {request.applied_to_invoice_id} not found")
             if target.project_id != request.project_id:
