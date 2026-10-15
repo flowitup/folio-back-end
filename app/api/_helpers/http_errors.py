@@ -21,7 +21,12 @@ from app.domain.exceptions.auth_exceptions import OtpThrottledError
 from app.infrastructure.rate_limiter import limiter
 
 # The routes that text a code: a limiter 429 here is answered like the use cases' own throttling.
-_CODE_REQUEST_PATHS = ("/auth/otp/request", "/auth/signup/request", "/invitations/accept/request-code")
+_CODE_REQUEST_PATHS = (
+    "/auth/otp/request",
+    "/auth/signup/request",
+    "/invitations/accept/request-code",
+    "/auth/me/phone/request-code",
+)
 
 
 def _is_api_request() -> bool:

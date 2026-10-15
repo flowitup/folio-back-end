@@ -48,6 +48,7 @@ def accept_app():
         # real 6-digit code sent to each acceptor's phone.
         sent: list[tuple[str, str]] = []
         get_container().sms_sender.send = lambda to, text: sent.append((to, text))
+        get_container().sms_open_sender.send = lambda to, text: sent.append((to, text))
         test_app._sms_sent = sent
 
         yield test_app

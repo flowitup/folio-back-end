@@ -291,6 +291,8 @@ class TestPhoneChangeCodeCaps:
         clock.offset = 120  # past the per-minute window, well inside the day
         refused = _change(limited_app, headers, "203.0.113.120", "+33611000339")
         assert refused.status_code == 429  # the minute window is over, so this is the daily cap
+        assert refused.get_json()["error"] == "OtpHourlyLimit"  # the key the clients localise, not the default 429
+        assert 1 <= int(refused.headers["Retry-After"]) <= 86400
         other, other_headers = _signed_in_user("+33611000321")
         assert _change(limited_app, other_headers, "203.0.113.121", "+33611000339").status_code == 202  # keyed by user
         clock.offset = 86400 + 120
@@ -326,7 +328,7 @@ def budget_app(_budget_app):
 
 @pytest.fixture
 def budget(budget_app):
-    """The sign-in/invitation pool (emptied); ``open_budget`` is the sign-up/phone-change one."""
+    """The sign-in pool (emptied); ``open_budget`` is the sign-up/invitation/phone-change one."""
     container = _wiring.get_container()
     assert container.sms_budget is not None and container.sms_sender is not None
     container.sms_budget._sent.clear()
@@ -352,7 +354,7 @@ def _add_user(phone: str):
 
 
 class TestSmsBudgetPools:
-    """Sign-in/invitation codes and sign-up/phone-change codes draw from two independent pools."""
+    """Sign-in codes and sign-up/invitation/phone-change codes draw from two independent pools."""
 
     def test_texts_past_the_open_pool_get_the_throttling_429(self, budget_app, budget, open_budget):
         client = budget_app.test_client()
@@ -411,13 +413,30 @@ class TestSmsBudgetPools:
         assert len(open_budget._sent) == 2 and len(budget._sent) == 0
         assert client.post(SIGN_IN, json={"phone": "+33611000261"}).status_code == 202  # sign-in is unaffected
 
-    def test_invitation_codes_draw_from_the_sign_in_pool(self, budget_app, budget, open_budget):
+    def test_invitation_sign_up_codes_draw_from_the_open_pool(self, budget_app, budget, open_budget):
         container = _wiring.get_container()
-        invite_signup = container.request_invite_otp_usecase._request_signup_otp
-        assert invite_signup is not container.request_signup_otp_usecase
-        assert invite_signup._sms is container.sms_sender
+        assert container.request_invite_otp_usecase._request_signup_otp is container.request_signup_otp_usecase
         assert container.request_signup_otp_usecase._sms is container.sms_open_sender
         assert container.request_phone_change_code_usecase._sms is container.sms_open_sender
+        assert container.request_otp_usecase._sms is container.sms_sender  # the invitation's existing-account branch
+
+    def test_a_reusable_invitation_token_cannot_empty_the_sign_in_pool(self, budget_app, budget, open_budget):
+        """One token texts any number the caller names, so those codes must not draw from the sign-in pool."""
+        from types import SimpleNamespace
+
+        _add_user("+33611000270")
+        invite = _wiring.get_container().request_invite_otp_usecase
+        invitation = SimpleNamespace(email="stranger@example.com", accept=lambda: None)
+        invite._inv_repo = SimpleNamespace(find_by_token_hash=lambda _hash: invitation)
+        invite._authz_reader = None
+        client = budget_app.test_client()
+        for n in (1, 2):
+            assert client.post(INVITE_CODE, json={"token": "x" * 40, "phone": f"+3361100027{n}"}).status_code == 202
+        assert client.post(INVITE_CODE, json={"token": "x" * 40, "phone": "+33611000273"}).status_code == 429
+        db.session.rollback()
+        assert len(open_budget._sent) == 2 and len(budget._sent) == 0
+        assert client.post(SIGN_IN, json={"phone": "+33611000270"}).status_code == 202  # sign-in still works
+        assert len(budget._sent) == 1
 
     def test_store_review_numbers_send_nothing_so_neither_spend_nor_wait(
         self, budget_app, budget, open_budget, monkeypatch

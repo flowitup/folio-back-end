@@ -127,14 +127,14 @@ class Config:
     SMS_GATEWAY_URL: str = get_env("SMS_GATEWAY_URL", default="")
     SMS_GATEWAY_USERNAME: str = get_env("SMS_GATEWAY_USERNAME", default="")
     SMS_GATEWAY_PASSWORD: str = get_env("SMS_GATEWAY_PASSWORD", default="")
-    # Most SMS the sign-in and invitation codes send in any 10 minutes / any 24 hours (sliding windows,
+    # Most SMS the sign-in codes send in any 10 minutes / any 24 hours (sliding windows,
     # counted in Redis); past it the code routes answer 429 with a Retry-After. Size them under what the
     # SIM / gateway can really send: a team onboarding in one morning must fit. 0 switches a window off.
     SMS_GLOBAL_MAX_PER_10MIN: int = int(get_env("SMS_GLOBAL_MAX_PER_10MIN").strip() or "60")
     SMS_GLOBAL_MAX_PER_DAY: int = int(get_env("SMS_GLOBAL_MAX_PER_DAY").strip() or "400")
-    # The same windows for the "open" pool: codes whose destination number the requester picks (sign-up and
-    # phone-change codes). Smaller, and independent of the pool above, so abuse of those flows cannot stop
-    # sign-in codes. 0 switches a window off.
+    # The same windows for the "open" pool: codes whose destination number the requester picks (sign-up,
+    # invitation sign-up and phone-change codes). Smaller, and independent of the pool above, so abuse of
+    # those flows cannot stop sign-in codes. 0 switches a window off.
     SMS_OPEN_MAX_PER_10MIN: int = int(get_env("SMS_OPEN_MAX_PER_10MIN").strip() or "30")
     SMS_OPEN_MAX_PER_DAY: int = int(get_env("SMS_OPEN_MAX_PER_DAY").strip() or "150")
     # Per client address (IPv6: per /64), shared by the routes that text a number the caller picked
