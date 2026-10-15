@@ -289,7 +289,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "boto3", specifier = ">=1.42.96" },
     { name = "email-validator", specifier = ">=2.0.0" },
-    { name = "flask", specifier = ">=3.0.0" },
+    { name = "flask", specifier = ">=3.1.0" },
     { name = "flask-cors", specifier = ">=4.0.0" },
     { name = "flask-jwt-extended", specifier = ">=4.7.1" },
     { name = "flask-limiter", specifier = ">=3.5.0" },
