@@ -10,6 +10,7 @@ from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.application.chat.ports import ChannelInfo, MemberInfo, ReactionInfo
+from app.application.usecases.otp_login import is_placeholder_email
 from app.domain.companies.roles import CompanyRole
 from app.domain.entities.chat_message import ChannelRef, ChatMessage
 from app.infrastructure.database.models.chat_message import (
@@ -28,6 +29,9 @@ from app.infrastructure.database.models.user_company_access import UserCompanyAc
 # translated one: this is an API value read by three locales, so the clients map it
 # if they want it localized.
 DELETED_ACCOUNT_NAME = "Deleted account"
+# Shown for a phone sign-up without a display name: their only e-mail is a placeholder that embeds
+# their number, which no colleague should read.
+UNNAMED_ACCOUNT_NAME = "Unnamed member"
 
 
 def _naive_utc(value: datetime) -> datetime:
@@ -375,7 +379,8 @@ class SqlAlchemyChatRepository:
         its own id, so falling through to `email` would print that user's internal
         UUID to everyone else in the channel. Messages are deliberately kept when
         an account is deleted, so the sender needs a name that is neither the
-        person nor their id.
+        person nor their id. The same goes for a phone sign-up's placeholder address,
+        which spells the phone number.
         """
         if not user_ids:
             return {}
@@ -385,6 +390,10 @@ class SqlAlchemyChatRepository:
             )
         ).all()
         return {
-            uid: (DELETED_ACCOUNT_NAME if deleted_at is not None else (display_name or email))
+            uid: (
+                DELETED_ACCOUNT_NAME
+                if deleted_at is not None
+                else (display_name or "").strip() or (UNNAMED_ACCOUNT_NAME if is_placeholder_email(email) else email)
+            )
             for uid, display_name, email, deleted_at in rows
         }

@@ -53,29 +53,36 @@ class SQLAlchemyUserRepository:
         query: str,
         limit: int = 10,
         sharing_company_with: Optional[UUID] = None,
+        caller_roles: Optional[Tuple[str, ...]] = None,
     ) -> List[Tuple[UUID, str]]:
         """Search users by email substring. Returns list of (id, email) tuples.
 
         Wildcard chars in ``query`` are escaped so a literal ``%`` matches a literal ``%``.
+        The placeholder address of a phone sign-up embeds the number: it is neither matched
+        nor returned.
 
         ``sharing_company_with`` limits the result to users attached to at least one
         company that user is attached to, so a tenant cannot enumerate another
         tenant's accounts. ``None`` searches every user (platform ops only).
+        ``caller_roles`` narrows those companies to the ones where that user holds one of the roles.
         """
+        from app.application.usecases.otp_login import SIGNUP_EMAIL_DOMAIN
         from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 
         pattern = f"%{_escape_like(query)}%"
         q = (
             self._session.query(UserModel)
             .filter(UserModel.email.ilike(pattern, escape="\\"))
+            .filter(~UserModel.email.ilike(f"%@{SIGNUP_EMAIL_DOMAIN}"))
             .filter(UserModel.is_active.is_(True))
         )
         if sharing_company_with is not None:
-            caller_companies = (
-                self._session.query(UserCompanyAccessModel.company_id)
-                .filter(UserCompanyAccessModel.user_id == sharing_company_with)
-                .scalar_subquery()
+            own_companies = self._session.query(UserCompanyAccessModel.company_id).filter(
+                UserCompanyAccessModel.user_id == sharing_company_with
             )
+            if caller_roles is not None:
+                own_companies = own_companies.filter(UserCompanyAccessModel.role.in_(caller_roles))
+            caller_companies = own_companies.scalar_subquery()
             same_tenant_users = (
                 self._session.query(UserCompanyAccessModel.user_id)
                 .filter(UserCompanyAccessModel.company_id.in_(caller_companies))

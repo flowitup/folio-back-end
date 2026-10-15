@@ -671,3 +671,52 @@ class TestReportAndBlock:
         assert inv_client.put(f"/api/v1/chat/blocks/{admin_id}", headers=_auth(admin_token)).status_code == 400
         stranger = uuid.uuid4()
         assert inv_client.put(f"/api/v1/chat/blocks/{stranger}", headers=_auth(admin_token)).status_code == 404
+
+
+class TestPhoneOnlyColleagueName:
+    """A phone sign-up without a display name is shown by a neutral label, never by their placeholder e-mail."""
+
+    @pytest.fixture
+    def phone_only_token(self, invitation_app, inv_client):
+        from datetime import datetime, timezone
+
+        from sqlalchemy import text
+
+        from app import db
+        from app.infrastructure.database.models import ProjectModel, UserCompanyAccessModel, UserModel
+        from tests.auth_login_helper import mint_access_token
+
+        email = "phone-33600000042@no-email.folio.flowitup.com"
+        with invitation_app.app_context():
+            company_id = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id)).company_id
+            user = UserModel(email=email, phone="+33600000042", display_name=None, is_active=True)
+            db.session.add(user)
+            db.session.flush()
+            db.session.add(UserCompanyAccessModel(user_id=user.id, company_id=company_id, role="member"))
+            db.session.execute(
+                text("INSERT INTO user_projects (user_id, project_id, assigned_at) VALUES (:u, :p, :at)"),
+                {"u": str(user.id), "p": invitation_app._test_project_id, "at": datetime.now(timezone.utc)},
+            )
+            db.session.commit()
+            user_id = user.id
+        yield mint_access_token(inv_client, email)
+        with invitation_app.app_context():
+            db.session.execute(text("DELETE FROM user_projects WHERE user_id = :u"), {"u": str(user_id)})
+            db.session.query(UserCompanyAccessModel).filter_by(user_id=user_id).delete()
+            db.session.query(UserModel).filter_by(id=user_id).delete()
+            db.session.commit()
+
+    def test_sender_and_members_never_show_the_placeholder_email(
+        self, inv_client, admin_token, phone_only_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        sent = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages", json={"body": "hello"}, headers=_auth(phone_only_token)
+        )
+        assert sent.status_code == 201, sent.get_json()
+        assert sent.get_json()["sender_name"] == "Unnamed member"
+        page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
+        raw = page.get_data(as_text=True)
+        assert "no-email.folio" not in raw
+        assert "33600000042" not in raw
+        assert "Unnamed member" in [m["name"] for m in page.get_json()["members"]]
