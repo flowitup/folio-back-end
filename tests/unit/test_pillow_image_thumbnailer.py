@@ -207,15 +207,20 @@ class TestDecompressionBombGuard:
         # without allocating a real 90 MP buffer.
         original_open = Image.open
 
-        def _fake_open(fp):
-            img = original_open(fp)
+        def _fake_open(fp, *args, **kwargs):
+            img = original_open(fp, *args, **kwargs)
             # Monkey-patch the size property to report an oversized image.
             type(img).size = property(lambda self: (10000, 9000))
             return img
 
-        with _mock.patch.object(_mod.Image, "open", side_effect=_fake_open):
-            with pytest.raises(ThumbnailGenerationError, match="decompression-bomb ceiling"):
-                self.thumbnailer.generate(data, "image/png")
+        png_cls = type(original_open(BytesIO(data)))
+        original_size = png_cls.size  # restored below: the fake replaces the class attribute
+        try:
+            with _mock.patch.object(_mod.Image, "open", side_effect=_fake_open):
+                with pytest.raises(ThumbnailGenerationError, match="decompression-bomb ceiling"):
+                    self.thumbnailer.generate(data, "image/png")
+        finally:
+            png_cls.size = original_size
 
     def test_normal_phone_photo_succeeds(self):
         """A 4000×3000 (12 MP) image must pass the guard and produce a thumbnail."""
@@ -229,3 +234,53 @@ class TestDecompressionBombGuard:
         out = Image.open(BytesIO(result))
         assert out.format == "JPEG"
         assert max(out.width, out.height) <= _MAX_EDGE
+
+
+class TestOnlyTheAcceptedFormatsAreDecoded:
+    """The upload takes .jpg / .png / .webp; Pillow must not sniff any other decoder."""
+
+    def setup_method(self):
+        self.thumbnailer = PillowImageThumbnailer()
+
+    @staticmethod
+    def _encoded(fmt: str, **save_kwargs) -> bytes:
+        buf = BytesIO()
+        Image.new("RGB", (32, 24), (10, 200, 30)).save(buf, format=fmt, **save_kwargs)
+        return buf.getvalue()
+
+    @pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+    def test_accepted_formats_still_work_whatever_the_declared_type(self, fmt):
+        out = self.thumbnailer.generate(self._encoded(fmt), "image/jpeg")
+        assert out[:3] == b"\xff\xd8\xff"
+
+    @pytest.mark.parametrize("fmt", ["GIF", "TIFF", "BMP", "PPM", "ICO", "PCX", "TGA", "EPS", "JPEG2000"])
+    def test_other_formats_are_refused_even_labelled_as_a_png(self, fmt):
+        kwargs = {"format": fmt}
+        buf = BytesIO()
+        try:
+            Image.new("RGB", (32, 24), (10, 200, 30)).save(buf, **kwargs)
+        except (OSError, ValueError, KeyError):
+            pytest.skip(f"Pillow cannot write {fmt} here")
+        with pytest.raises(ThumbnailGenerationError):
+            self.thumbnailer.generate(buf.getvalue(), "image/png")
+
+    def test_an_eps_that_loops_in_the_eps_parser_is_refused_fast(self):
+        """An ordinary header line, then a negative %%BeginBinary count: Pillow's EPS parser never returns.
+
+        Run in a child process so a regression fails on the timeout instead of hanging the suite.
+        """
+        import subprocess
+        import sys
+
+        code = (
+            "from app.application.project_photos.exceptions import ThumbnailGenerationError\n"
+            "from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer\n"
+            "eps = (b'%!PS-Adobe-3.0 EPSF-3.0\\n%%BoundingBox: 0 0 10 10\\n%%EndComments\\n%%Foo: bar\\n'\n"
+            "       b'%%BeginBinary: -40\\n' + b'0' * 64 + b'\\n')\n"
+            "try:\n"
+            "    PillowImageThumbnailer().generate(eps, 'image/jpeg')\n"
+            "except ThumbnailGenerationError:\n"
+            "    print('refused')\n"
+        )
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=15)
+        assert result.stdout.strip() == "refused", result.stderr

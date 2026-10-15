@@ -516,3 +516,44 @@ class TestOrphanCleanup:
 
         storage.put.assert_not_called()
         storage.delete.assert_not_called()
+
+
+class TestVideoWithOversizedFrame:
+    """A tiny clip declaring a huge frame is refused by the header check: 422 path, nothing stored."""
+
+    def test_nothing_is_stored_or_saved(self):
+        import shutil
+        import subprocess
+        import tempfile
+
+        if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+            pytest.skip("ffmpeg / ffprobe not installed")
+        from app.infrastructure.adapters.ffmpeg_video_thumbnailer import FfmpegVideoThumbnailer
+        from app.infrastructure.adapters.media_thumbnailer import MediaThumbnailer
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as clip:
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=8200x16:rate=2"]
+                + ["-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast", clip.name],
+                capture_output=True,
+                check=True,
+            )
+            with open(clip.name, "rb") as fh:
+                data = fh.read()
+
+        uc, repo, storage, session = _make_use_case(
+            thumbnailer=MediaThumbnailer(PillowImageThumbnailer(), FfmpegVideoThumbnailer())
+        )
+        with pytest.raises(ThumbnailGenerationError):
+            uc.execute(
+                project_id=uuid4(),
+                filename="clip.mp4",
+                content_type="video/mp4",
+                size_bytes=len(data),
+                data=data,
+                uploader_user_id=uuid4(),
+                caption=None,
+                captured_at=None,
+            )
+        storage.put.assert_not_called()
+        repo.save.assert_not_called()
