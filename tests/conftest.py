@@ -1235,7 +1235,12 @@ def invitation_app():
         from app.application.usecases.change_phone import RequestPhoneChangeCodeUseCase as _RequestPhoneChangeUC
 
         _c.request_phone_change_code_usecase = _RequestPhoneChangeUC(user_repo, _otp_repo, _sms)
-        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(user_repo, _otp_repo, person_repo=_c.person_repo)
+        from app.infrastructure.adapters.sqlalchemy_push_device import SQLAlchemyPushDeviceRepository as _PushDeviceRepo
+
+        _c.push_device_repository = _PushDeviceRepo(db.session)
+        _c.confirm_phone_change_usecase = _ConfirmPhoneChangeUC(
+            user_repo, _otp_repo, person_repo=_c.person_repo, push_device_repo=_c.push_device_repository
+        )
 
         # Invitation acceptance proves a phone by the same sign-up code flow (phase 02) —
         # mirrors app/__init__.py's wiring, which this fixture had drifted from (the

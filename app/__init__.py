@@ -636,6 +636,7 @@ def _configure_di_container() -> None:
             _c.user_repository,
             _otp_repo,
             max_attempts=int(_cfg.get("OTP_MAX_ATTEMPTS", 5)),
+            push_device_repo=_c.push_device_repository,  # sign-out everywhere also drops the push devices
         )
         # Invitation acceptance proves a phone by the same sign-up code flow (see
         # AcceptInvitationUseCase); its "request a code" endpoint reuses this exact

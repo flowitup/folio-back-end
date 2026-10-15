@@ -309,3 +309,40 @@ def test_refused_change_signs_nobody_out(inv_client, invitation_app, member_toke
     assert inv_client.post(CONFIRM, json={"phone": NEW, "code": wrong}, headers=_auth(member_token)).status_code == 400
     assert inv_client.get("/api/v1/auth/me", headers=_auth(other_access)).status_code == 200
     assert inv_client.get("/api/v1/auth/me", headers=_auth(member_token)).status_code == 200
+
+
+def _device_tokens(invitation_app, user_id: str) -> list[str]:
+    from uuid import UUID
+
+    from wiring import get_container
+
+    with invitation_app.app_context():
+        return get_container().push_device_repository.tokens_for_users([UUID(user_id)]).get(UUID(user_id), [])
+
+
+def test_confirmed_change_forgets_the_accounts_push_devices_and_a_new_one_registers(
+    inv_client, invitation_app, member_token, member_id
+):
+    """A handset registered by an ended session must not keep receiving the account's pushes."""
+    token = "ExponentPushToken[lost-handset-0000000]"
+    fresh = "ExponentPushToken[this-handset-0000000]"
+    device = {"token": token, "platform": "ios"}
+    assert inv_client.post("/api/v1/push/devices", json=device, headers=_auth(member_token)).status_code == 204
+
+    # A refused change leaves the device alone.
+    assert inv_client.post(REQUEST, json={"phone": NEW}, headers=_auth(member_token)).status_code == 202
+    code = _code_from_sms(invitation_app)
+    wrong = "000000" if code != "000000" else "111111"
+    assert inv_client.post(CONFIRM, json={"phone": NEW, "code": wrong}, headers=_auth(member_token)).status_code == 400
+    assert _device_tokens(invitation_app, member_id) == [token]
+
+    ok = inv_client.post(CONFIRM, json={"phone": NEW, "code": code}, headers=_auth(member_token))
+    assert ok.status_code == 200, ok.get_json()
+    assert _device_tokens(invitation_app, member_id) == []
+
+    # The device that made the change registers again with its fresh session.
+    new_session = _auth(ok.get_json()["access_token"])
+    assert (
+        inv_client.post("/api/v1/push/devices", json={**device, "token": fresh}, headers=new_session).status_code == 204
+    )
+    assert _device_tokens(invitation_app, member_id) == [fresh]

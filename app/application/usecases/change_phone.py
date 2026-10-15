@@ -121,12 +121,14 @@ class ConfirmPhoneChangeUseCase:
         max_attempts: int = 5,
         clock: Callable[[], datetime] = _utcnow,
         person_repo: Optional[IPersonRepository] = None,
+        push_device_repo=None,
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
         self._max_attempts = max_attempts
         self._clock = clock
         self._persons = person_repo
+        self._push_devices = push_device_repo
 
     def set_person_repo(self, person_repo: IPersonRepository) -> None:
         """Inject the Person repository; wired after it exists."""
@@ -159,5 +161,9 @@ class ConfirmPhoneChangeUseCase:
         # Whoever else holds a session on this account (a lost or shared phone, the old number's
         # new owner) is signed out; the caller gets fresh tokens from the route.
         self._users.end_sessions_issued_before(user.id, self._clock())
+        # A device registered by one of those sessions would keep receiving this account's pushes;
+        # the app registers the token again when it next opens.
+        if self._push_devices is not None:
+            self._push_devices.delete_all_for_user(user.id)
         logger.info("auth.phone_change.confirmed user=%s", user.id)
         return user
