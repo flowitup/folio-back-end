@@ -114,6 +114,11 @@ class _ProdSafeConfig:
     S3_BUCKET: str = "test-bucket"
     S3_REGION: str = "us-east-1"
     S3_PUBLIC_ENDPOINT_URL: str = ""
+    # Production refuses SMS_PROVIDER=log (and the default); a real provider needs its settings.
+    SMS_PROVIDER: str = "gateway"
+    SMS_GATEWAY_URL: str = "https://sms-gateway.example.com/message"
+    SMS_GATEWAY_USERNAME: str = "test-user"
+    SMS_GATEWAY_PASSWORD: str = "test-password"
     # Other config attrs accessed by create_app() internals
     EMAIL_PROVIDER: str = "inmemory"
     RESEND_API_KEY: str = "test"

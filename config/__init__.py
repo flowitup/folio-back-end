@@ -8,7 +8,7 @@ Configuration follows the 12-factor app methodology.
 import os
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from dotenv import load_dotenv
 
@@ -187,6 +187,31 @@ class Config:
             raise ValueError("OTP_REVIEWER_PHONE and OTP_REVIEWER_CODE must be set together")
         if self.OTP_REVIEWER_CODE and not (self.OTP_REVIEWER_CODE.isdigit() and len(self.OTP_REVIEWER_CODE) == 6):
             raise ValueError("OTP_REVIEWER_CODE must be a 6-digit string")
+
+
+ENVIRONMENTS = ("development", "testing", "production")
+SMS_PROVIDERS = ("log", "twilio", "gateway")
+
+
+def validate_boot_settings(settings: Mapping[str, Any], environ: Mapping[str, str] = os.environ) -> None:
+    """Refuse to boot on a setting that would quietly turn a safeguard off (called by ``create_app``).
+
+    ``Config.__post_init__`` never runs (``create_app`` receives the class, not an instance), and the
+    production-only guards compare FLASK_ENV with the exact word "production": a typo ("prod",
+    "Production", "staging") would otherwise boot with the development defaults, and an unknown
+    SMS_PROVIDER would fall back to the adapter that writes every sign-in code to the API log.
+    An unset FLASK_ENV still means development.
+    """
+    flask_env = environ.get("FLASK_ENV")
+    if flask_env is not None and flask_env not in ENVIRONMENTS:
+        raise RuntimeError(f"CRITICAL: FLASK_ENV={flask_env!r} is not one of {', '.join(ENVIRONMENTS)}.")
+    sms_provider = settings.get("SMS_PROVIDER", "log")
+    if sms_provider not in SMS_PROVIDERS:
+        raise RuntimeError(f"CRITICAL: SMS_PROVIDER={sms_provider!r} is not one of {', '.join(SMS_PROVIDERS)}.")
+    if flask_env == "production" and sms_provider == "log":
+        raise RuntimeError(
+            "CRITICAL: SMS_PROVIDER=log would write sign-in codes to the log; not permitted in production."
+        )
 
 
 class DevelopmentConfig(Config):

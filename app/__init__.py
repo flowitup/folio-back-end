@@ -14,7 +14,7 @@ from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 
-from config import Config
+from config import Config, validate_boot_settings
 from app.infrastructure.database.models import Base
 from app.infrastructure.rate_limiter import limiter
 from app.infrastructure.trusted_proxy import apply_trusted_proxy
@@ -85,6 +85,8 @@ def create_app(config_class: type = Config) -> Flask:
             "CRITICAL: FLASK_DEV_INSECURE=1 is only permitted when FLASK_ENV=development. "
             "Use proper TLS + Secure cookies for staging/UAT."
         )
+
+    validate_boot_settings(app.config)
 
     # Configure SQLAlchemy
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
