@@ -96,3 +96,61 @@ def test_sum_attempts_since_adds_the_wrong_guesses_of_every_code_in_the_window(s
     assert repo.sum_attempts_since(PHONE, NOW - timedelta(hours=1)) == 8
     assert repo.sum_attempts_since(PHONE, NOW - timedelta(hours=2)) == 13
     assert repo.sum_attempts_since("+33620100997", NOW - timedelta(hours=1)) == 0
+
+
+def _row(repo, phone, hours_ago, user_id=None):
+    repo.save(
+        LoginOtp(
+            id=uuid4(),
+            user_id=user_id,
+            phone=phone,
+            code_hash="x",
+            expires_at=NOW - timedelta(hours=hours_ago) + timedelta(minutes=5),
+            created_at=NOW - timedelta(hours=hours_ago),
+            purpose=OtpPurpose.SIGN_IN,
+        )
+    )
+
+
+def test_purge_stale_drops_the_numbers_old_codes_and_a_bounded_batch_of_others(session):
+    repo = SQLAlchemyLoginOtpRepository(session)
+    other = "+33620100998"
+    _row(repo, PHONE, 30)  # sign-up code (no user): the phone's old rows go
+    _row(repo, PHONE, 0.5)  # inside the throttle window: kept
+    for hours_ago in (26, 27, 28, 29, 30):
+        _row(repo, other, hours_ago)
+    _row(repo, other, 2)  # recent: kept
+
+    removed = repo.purge_stale(PHONE, NOW - timedelta(hours=24), batch_size=2)
+
+    assert removed == 1 + 2
+    assert repo.count_created_since(PHONE, NOW - timedelta(hours=1)) == 1
+    assert repo.count_created_since(PHONE, NOW - timedelta(days=2)) == 1
+    assert repo.count_created_since(other, NOW - timedelta(days=2)) == 4  # 5 old - 2 purged + 1 recent
+    assert repo.count_created_since(other, NOW - timedelta(hours=24)) == 1
+
+
+def test_requesting_a_code_purges_old_codes_in_the_same_transaction(session):
+    from app.application.usecases.otp_login import _issue_code
+
+    class Sms:
+        def send(self, phone, message):
+            pass
+
+    repo = SQLAlchemyLoginOtpRepository(session)
+    other = "+33620100998"
+    _row(repo, PHONE, 48)
+    _row(repo, other, 48)
+    _issue_code(
+        repo,
+        Sms(),
+        phone=PHONE,
+        user_id=None,
+        now=NOW,
+        ttl=300,
+        resend_after=60,
+        hourly_max=5,
+        message="{code} {minutes}",
+    )
+    assert repo.count_created_since(PHONE, NOW - timedelta(days=3)) == 1  # only the new one
+    assert repo.count_created_since(other, NOW - timedelta(days=3)) == 0

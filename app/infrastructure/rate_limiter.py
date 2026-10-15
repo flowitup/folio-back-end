@@ -41,6 +41,16 @@ def sms_send_ip_limits() -> str:
     return current_app.config.get("SMS_SEND_IP_LIMITS") or DEFAULT_SMS_SEND_IP_LIMITS
 
 
+def code_request_answered(response) -> bool:
+    """``deduct_when`` of the code-request caps: only an answered request (202, or the 409 that tells a
+    sign-up number already has an account) spends them, not a 400, the resend-gap 429 or a 503.
+
+    A user who taps resend before the countdown ends must not lose the hour's allowance for codes that
+    were never issued. The 409 stays counted so probing for registered numbers is still capped.
+    """
+    return response.status_code in (202, 409)
+
+
 # storage_uri is omitted here so flask-limiter reads RATELIMIT_STORAGE_URI
 # from the Flask app config at init_app() time (allows test overrides)
 limiter = Limiter(

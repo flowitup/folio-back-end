@@ -38,6 +38,14 @@ class LoginOtpRepositoryPort(Protocol):
         """Mark every still-active code of the phone for ``purpose`` as consumed (a new one replaces them)."""
         ...
 
+    def purge_stale(self, phone: str, before: datetime, batch_size: int) -> int:
+        """Delete the phone's codes created before ``before``, plus at most ``batch_size`` other numbers' old ones.
+
+        Retention for rows that otherwise stay forever (a phone number and a code hash). The caller picks
+        a cutoff well beyond every window the throttles look at. Returns how many rows went.
+        """
+        ...
+
     def oldest_created_since(self, phone: str, since: datetime) -> Optional[datetime]:
         """Creation time of the phone's oldest code created since ``since`` (None if none)."""
         ...

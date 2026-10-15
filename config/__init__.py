@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any, Mapping, Optional
 
 from dotenv import load_dotenv
+from limits import parse_many
 
 # Load environment variables from .env file
 load_dotenv()
@@ -129,11 +130,11 @@ class Config:
     # Most SMS the whole API sends in any 10 minutes / any 24 hours (sliding windows, counted in Redis),
     # whatever the flow; past it the code routes answer 429 with a Retry-After. Size them under what the
     # SIM / gateway can really send: a team onboarding in one morning must fit. 0 switches a window off.
-    SMS_GLOBAL_MAX_PER_10MIN: int = int(get_env("SMS_GLOBAL_MAX_PER_10MIN", default="60"))
-    SMS_GLOBAL_MAX_PER_DAY: int = int(get_env("SMS_GLOBAL_MAX_PER_DAY", default="400"))
+    SMS_GLOBAL_MAX_PER_10MIN: int = int(get_env("SMS_GLOBAL_MAX_PER_10MIN").strip() or "60")
+    SMS_GLOBAL_MAX_PER_DAY: int = int(get_env("SMS_GLOBAL_MAX_PER_DAY").strip() or "400")
     # Per client address (IPv6: per /64), shared by the three routes that text an unauthenticated
     # caller (sign-up code, sign-in code, invitation code), on top of each route's "5 per minute".
-    SMS_SEND_IP_LIMITS: str = get_env("SMS_SEND_IP_LIMITS", default="20 per hour;60 per day")
+    SMS_SEND_IP_LIMITS: str = get_env("SMS_SEND_IP_LIMITS").strip() or "20 per hour;60 per day"
     OTP_TTL_SECONDS: int = int(get_env("OTP_TTL_SECONDS", default="300"))
     OTP_RESEND_SECONDS: int = int(get_env("OTP_RESEND_SECONDS", default="60"))
     OTP_HOURLY_MAX: int = int(get_env("OTP_HOURLY_MAX", default="5"))
@@ -212,6 +213,23 @@ def validate_boot_settings(settings: Mapping[str, Any], environ: Mapping[str, st
         raise RuntimeError(
             "CRITICAL: SMS_PROVIDER=log would write sign-in codes to the log; not permitted in production."
         )
+    # The SMS abuse limits: flask-limiter parses its string on every request and the budget does int(),
+    # so a typo would otherwise show up as a 500 on the sign-in routes instead of a stopped boot.
+    for name in ("SMS_GLOBAL_MAX_PER_10MIN", "SMS_GLOBAL_MAX_PER_DAY"):
+        try:
+            if int(settings.get(name, 0)) < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise RuntimeError(f"CRITICAL: {name}={settings.get(name)!r} must be a whole number, 0 or more.") from None
+    ip_limits = settings.get("SMS_SEND_IP_LIMITS")
+    if ip_limits:
+        try:
+            if any(item.amount < 1 for item in parse_many(str(ip_limits))):
+                raise ValueError
+        except ValueError:
+            raise RuntimeError(
+                f"CRITICAL: SMS_SEND_IP_LIMITS={ip_limits!r} is not a rate limit string such as '20 per hour;60 per day'."
+            ) from None
 
 
 class DevelopmentConfig(Config):

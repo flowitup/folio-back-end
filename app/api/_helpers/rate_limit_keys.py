@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from flask import request
+import hashlib
+import hmac
+
+from flask import current_app, request
 from flask_jwt_extended import get_jwt_identity
 
 from app.domain.value_objects.phone_number import normalize_french_phone
@@ -30,8 +33,13 @@ def phone_and_caller_key() -> str:
 
     The per-number caps are shared by every caller, so one stranger can spend a victim's whole
     allowance; this caps what a single source can ask for one number, leaving the rest to the owner.
+
+    The number is not put in the key: it is hashed under the app secret (the same on every worker),
+    so the limiter's storage holds no phone number in the clear.
     """
-    return f"phone:{body_phone()}:{_caller_bucket()}"
+    secret = str(current_app.config.get("SECRET_KEY") or "").encode()
+    digest = hmac.new(secret, body_phone().encode(), hashlib.sha256).hexdigest()[:32]
+    return f"phone:{digest}:{_caller_bucket()}"
 
 
 def jwt_user_key() -> str:  # pragma: no cover

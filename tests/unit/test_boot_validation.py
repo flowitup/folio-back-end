@@ -44,6 +44,47 @@ def test_production_refuses_the_log_provider_even_when_it_is_the_default(setting
         validate_boot_settings(settings, {"FLASK_ENV": "production"})
 
 
+@pytest.mark.parametrize("limits", ["twenty per hour", "20 per fortnight", "0 per hour", "20 per hour;lots per day"])
+def test_a_malformed_sms_send_ip_limit_stops_the_boot(limits):
+    with pytest.raises(RuntimeError, match="SMS_SEND_IP_LIMITS"):
+        validate_boot_settings({"SMS_PROVIDER": "gateway", "SMS_SEND_IP_LIMITS": limits}, {})
+
+
+@pytest.mark.parametrize("name", ["SMS_GLOBAL_MAX_PER_10MIN", "SMS_GLOBAL_MAX_PER_DAY"])
+@pytest.mark.parametrize("value", ["lots", "-1", None, "1.5"])
+def test_a_malformed_sms_budget_stops_the_boot(name, value):
+    with pytest.raises(RuntimeError, match=name):
+        validate_boot_settings({"SMS_PROVIDER": "gateway", name: value}, {})
+
+
+def test_valid_sms_limits_and_a_switched_off_budget_boot():
+    validate_boot_settings(
+        {
+            "SMS_PROVIDER": "gateway",
+            "SMS_SEND_IP_LIMITS": "20 per hour;60 per day",
+            "SMS_GLOBAL_MAX_PER_10MIN": 0,
+            "SMS_GLOBAL_MAX_PER_DAY": "400",
+        },
+        {},
+    )
+    validate_boot_settings({"SMS_PROVIDER": "gateway", "SMS_SEND_IP_LIMITS": ""}, {})
+
+
+def test_empty_sms_limit_variables_fall_back_to_the_defaults():
+    """Read in a fresh interpreter: the values are class attributes fixed at import."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    env = {**os.environ, "SMS_GLOBAL_MAX_PER_10MIN": " ", "SMS_GLOBAL_MAX_PER_DAY": "", "SMS_SEND_IP_LIMITS": " "}
+    code = "from config import Config as C; print(C.SMS_GLOBAL_MAX_PER_10MIN, C.SMS_GLOBAL_MAX_PER_DAY, C.SMS_SEND_IP_LIMITS)"
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True, cwd=Path(__file__).parents[2]
+    )
+    assert out.stdout.strip() == "60 400 20 per hour;60 per day"
+
+
 def test_create_app_refuses_a_mistyped_environment(monkeypatch):
     monkeypatch.setenv("FLASK_ENV", "prod")
     with pytest.raises(RuntimeError, match="FLASK_ENV"):

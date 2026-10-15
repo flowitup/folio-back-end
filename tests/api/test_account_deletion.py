@@ -335,6 +335,74 @@ class TestWhatSurvivesErasure:
             assert db.session.query(PushDeviceOrm).filter_by(user_id=user.id).count() == 0
             assert db.session.query(NotificationPreferenceModel).filter_by(user_id=user.id).count() == 0
 
+    def test_bell_history_chat_reactions_reports_blocks_and_signup_codes_are_gone(self, inv_client, invitation_app):
+        from app import db
+        from app.infrastructure.database.models.chat_message import (
+            ChatMessageOrm,
+            ChatMessageReactionOrm,
+            ChatMessageReportOrm,
+            ChatUserBlockOrm,
+        )
+        from app.infrastructure.database.models.login_otp import LoginOtpOrm
+        from app.infrastructure.database.models.notification_event import NotificationEventModel
+
+        phone = "+33600009034"
+        user = _make_user(invitation_app, "leaves-traces@example.com", phone)
+        other = _make_user(invitation_app, "stays-behind@example.com", "+33600009035")
+        token = mint_access_token(inv_client, "leaves-traces@example.com")
+        now = datetime.now(timezone.utc)
+
+        def event(owner_id):
+            return NotificationEventModel(
+                id=uuid4(), user_id=owner_id, category="chat", kind="chat.message", texts={}, data={}, created_at=now
+            )
+
+        with invitation_app.app_context():
+            message = ChatMessageOrm(
+                id=uuid4(), channel_kind="project", channel_id=uuid4(), sender_id=other.id, body="Salut", created_at=now
+            )
+            db.session.add_all([message, event(user.id), event(other.id)])
+            db.session.flush()
+            db.session.add_all(
+                [
+                    ChatMessageReactionOrm(message_id=message.id, user_id=user.id, emoji="+1"),
+                    ChatMessageReactionOrm(message_id=message.id, user_id=other.id, emoji="+1"),
+                    ChatMessageReportOrm(id=uuid4(), message_id=message.id, reporter_id=user.id, reason="spam"),
+                    ChatMessageReportOrm(id=uuid4(), message_id=message.id, reporter_id=other.id, reason="spam"),
+                    ChatUserBlockOrm(blocker_id=user.id, blocked_id=other.id),
+                    ChatUserBlockOrm(blocker_id=other.id, blocked_id=user.id),
+                ]
+            )
+            for otp_phone, owner in ((phone, None), (phone, user.id), ("+33600009099", None)):
+                db.session.add(
+                    LoginOtpOrm(
+                        id=uuid4(),
+                        user_id=owner,
+                        phone=otp_phone,
+                        code_hash="0" * 64,
+                        expires_at=now,
+                        created_at=now,
+                    )
+                )
+            db.session.commit()
+            message_id = message.id
+
+        assert inv_client.delete("/api/v1/auth/me", headers=_auth(token)).status_code == 204
+
+        with invitation_app.app_context():
+            q = db.session.query
+            assert q(NotificationEventModel).filter_by(user_id=user.id).count() == 0
+            assert q(ChatMessageReactionOrm).filter_by(user_id=user.id).count() == 0
+            assert q(ChatMessageReportOrm).filter_by(reporter_id=user.id).count() == 0
+            assert q(ChatUserBlockOrm).filter_by(blocker_id=user.id).count() == 0
+            assert q(LoginOtpOrm).filter_by(phone=phone).count() == 0
+            # What belongs to other people is left alone.
+            assert q(NotificationEventModel).filter_by(user_id=other.id).count() == 1
+            assert q(ChatMessageReactionOrm).filter_by(user_id=other.id, message_id=message_id).count() == 1
+            assert q(ChatMessageReportOrm).filter_by(reporter_id=other.id).count() == 1
+            assert q(ChatUserBlockOrm).filter_by(blocker_id=other.id, blocked_id=user.id).count() == 1
+            assert q(LoginOtpOrm).filter_by(phone="+33600009099").count() == 1
+
     def test_the_platform_ops_bypass_is_cleared(self, inv_client, invitation_app):
         """An erased support account must not come back carrying its bypass."""
         from app import db

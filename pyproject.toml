@@ -16,6 +16,7 @@ dependencies = [
     "psycopg2-binary>=2.9.11",
     "alembic>=1.18.1",
     "flask-jwt-extended>=4.7.1",
+    "pyjwt>=2.15.1",
     "flask-login>=0.6.3",
     "pydantic>=2.12.5",
     "flask-limiter>=3.5.0",
