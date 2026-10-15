@@ -732,6 +732,8 @@ def _configure_di_container() -> None:
             project_repo=_c.project_repository,
             company_repo=_company_repo,
         )
+        if _c.attendance_push_notifier is not None:
+            _c.attendance_push_notifier.set_access_repo(_access_repo)  # no decision pushes to a removed member
         _c.billing_push_notifier = BillingPushNotifier(
             dispatcher=_c.push_dispatcher,
             project_repo=_c.project_repository,
