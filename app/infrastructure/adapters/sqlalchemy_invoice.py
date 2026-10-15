@@ -162,6 +162,12 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         model = self._session.query(InvoiceModel).filter_by(id=invoice_id).first()
         return _model_to_entity(model) if model else None
 
+    def find_by_id_for_update(self, invoice_id: UUID) -> Optional[Invoice]:
+        # populate_existing: a row this session loaded before waiting for the lock is refreshed
+        # (the cap compares the source's total, which a queued-behind edit may have changed).
+        model = self._session.query(InvoiceModel).filter_by(id=invoice_id).with_for_update().populate_existing().first()
+        return _model_to_entity(model) if model else None
+
     def list_by_project(
         self,
         project_id: UUID,

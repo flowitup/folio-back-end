@@ -134,7 +134,8 @@ class CreateInvoiceUseCase:
         if request.refunds_invoice_id is not None:
             if request.type != InvoiceType.RETURN:
                 raise InvalidInvoiceDataError("refunds_invoice_id may only be set on invoices of type 'refund'")
-            source = self._repo.find_by_id(request.refunds_invoice_id)
+            # Lock the source first: concurrent returns queue here instead of passing the cap together.
+            source = self._repo.find_by_id_for_update(request.refunds_invoice_id)
             if source is None:
                 raise InvalidInvoiceDataError(f"Source invoice {request.refunds_invoice_id} not found")
             if source.project_id != request.project_id:
@@ -171,7 +172,7 @@ class CreateInvoiceUseCase:
             # the return is settled as store credit, not a straight cash refund.
             if settled_via != SettledVia.AVOIR.value:
                 raise InvalidInvoiceDataError("applied_to_invoice_id may only be set when settled_via is 'avoir'")
-            target = self._repo.find_by_id(request.applied_to_invoice_id)
+            target = self._repo.find_by_id_for_update(request.applied_to_invoice_id)
             if target is None:
                 raise InvalidInvoiceDataError(f"Target invoice {request.applied_to_invoice_id} not found")
             if target.project_id != request.project_id:
@@ -181,10 +182,8 @@ class CreateInvoiceUseCase:
                     "applied_to_invoice_id must reference an invoice that is not a return or released_funds"
                 )
             # Cap: abs(Σ applied returns incl. this one) must stay <= target total.
-            # Race (accepted, not locked): this is a read-then-write check with no
-            # row/advisory lock, so two concurrent creates against the same target
-            # could both pass and jointly exceed the cap — identical, accepted class
-            # of drift as the pre-existing refunds_invoice_id cap check above.
+            # The target row is locked above, so concurrent creates against it queue and
+            # each sums the credits the previous one committed.
             this_total = sum((item.total for item in invoice_items), Decimal("0"))
             existing_applied = self._repo.sum_applied_for_target(target.id)
             total_applied = existing_applied + this_total
