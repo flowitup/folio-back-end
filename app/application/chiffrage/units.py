@@ -32,8 +32,3 @@ PRESET_UNITS: tuple[str, ...] = (
 # Large gaps let a drop between two neighbours land on a free integer without
 # renumbering the rest of the list.
 POSITION_STEP = 1000
-
-
-def is_preset_unit(symbol: str) -> bool:
-    """Return True if *symbol* is one of the built-in units."""
-    return symbol in PRESET_UNITS

@@ -27,7 +27,3 @@ class FlaskSessionManager:
     def destroy_session(self, session_id: str) -> None:
         """Destroy session by ID."""
         self._sessions.pop(session_id, None)
-
-    def clear_all(self) -> None:
-        """Clear all sessions. For testing only."""
-        self._sessions.clear()

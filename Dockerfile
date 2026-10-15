@@ -22,7 +22,6 @@ RUN /opt/uv/uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.t
 # Copy project files
 COPY app/ app/
 COPY config/ config/
-COPY outbox/ outbox/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
 COPY wiring.py .

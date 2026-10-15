@@ -7,7 +7,6 @@ No Flask / SQLAlchemy / infrastructure imports allowed.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
@@ -18,15 +17,6 @@ if TYPE_CHECKING:
 
 _TOKEN_EXPIRY_DAYS = 7
 _PREFIX_PATTERN = re.compile(r"^[A-Z0-9]{1,8}$")
-
-
-def _now_utc() -> datetime:
-    """Return the current UTC-aware datetime.
-
-    Use-cases that already have a ClockPort should call clock.now() directly.
-    This helper is for one-off use when no port is injected.
-    """
-    return datetime.now(timezone.utc)
 
 
 def _assert_admin(caller_id: UUID, company_id: UUID, is_admin: bool) -> None:

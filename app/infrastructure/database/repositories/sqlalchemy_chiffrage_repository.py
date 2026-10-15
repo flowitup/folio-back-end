@@ -336,12 +336,6 @@ class SqlAlchemyChiffrageRepository:
         ).scalar()
         return int(value) if value is not None else 0
 
-    def count_articles_in_room(self, room_id: UUID) -> int:
-        value = self._session.execute(
-            select(func.count(ChiffrageArticleModel.id)).where(ChiffrageArticleModel.room_id == room_id)
-        ).scalar()
-        return int(value or 0)
-
     # ------------------------------------------------------------------
     # Stores
     # ------------------------------------------------------------------
@@ -479,11 +473,6 @@ class SqlAlchemyChiffrageRepository:
     # ------------------------------------------------------------------
     # Ownership resolution — a nested id must never leak across projects
     # ------------------------------------------------------------------
-
-    def project_id_for_poste(self, poste_id: UUID) -> Optional[UUID]:
-        return self._session.execute(
-            select(ChiffragePosteModel.project_id).where(ChiffragePosteModel.id == poste_id)
-        ).scalar_one_or_none()
 
     def project_id_for_article(self, article_id: UUID) -> Optional[UUID]:
         return self._session.execute(

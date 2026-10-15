@@ -28,17 +28,6 @@ class CreateLaborActivityRequest:
 
 
 @dataclass
-class CreateLaborActivityResponse:
-    id: UUID
-    project_id: UUID
-    date: str
-    title: str
-    created_by: Optional[str]
-    created_at: str
-    updated_at: str
-
-
-@dataclass
 class UpdateLaborActivityRequest:
     activity_id: UUID
     # The project the caller was authorised for; an activity of another project is "not found".

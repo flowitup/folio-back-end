@@ -141,10 +141,6 @@ class ChiffrageRepositoryPort(Protocol):
         """Return the highest room position, or 0 when the project has none."""
         ...
 
-    def count_articles_in_room(self, room_id: UUID) -> int:
-        """How many articles currently point at this room."""
-        ...
-
     # -- stores ------------------------------------------------------------
 
     def stores_for_project(self, project_id: UUID) -> list[ChiffrageStore]:
@@ -210,10 +206,6 @@ class ChiffrageRepositoryPort(Protocol):
 
     # -- ownership resolution ---------------------------------------------
 
-    def project_id_for_poste(self, poste_id: UUID) -> Optional[UUID]:
-        """Return the owning project id of a poste, or None if it does not exist."""
-        ...
-
     def project_id_for_article(self, article_id: UUID) -> Optional[UUID]:
         """Return the owning project id of an article, walking poste -> project."""
         ...
@@ -257,14 +249,6 @@ class IArticleImageStorage(Protocol):
     @staticmethod
     def build_key(article_id: UUID) -> str:
         """Canonical key for an article's image."""
-        ...
-
-
-class ProjectOwnerReaderPort(Protocol):
-    """Read-only access to a project's owner, for the owner-or-permission check."""
-
-    def owner_id(self, project_id: UUID) -> Optional[UUID]:
-        """Return the project's owner id, or None if the project does not exist."""
         ...
 
 
