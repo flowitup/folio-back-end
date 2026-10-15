@@ -38,6 +38,7 @@ from __future__ import annotations
 import functools
 import logging
 from datetime import timezone
+from typing import Any, Callable
 
 from flask import g, jsonify, request
 
@@ -119,7 +120,7 @@ def authenticate_api_key_request() -> None:
         logger.exception("API key authentication failed unexpectedly; request stays unauthenticated.")
 
 
-def _key_may_sign_in(container, row) -> bool:
+def _key_may_sign_in(container: Any, row: Any) -> bool:
     """True when the key's owner may sign in and the key was not made before their cut-off."""
     check = getattr(getattr(container, "user_repository", None), "is_sign_in_allowed", None)
     if check is None:
@@ -184,7 +185,7 @@ def reject_api_key_mutations():
     return None
 
 
-def deny_api_key_callers(view):
+def deny_api_key_callers(view: Callable[..., Any]) -> Callable[..., Any]:
     """Route decorator: refuse a key-authenticated caller on this one route.
 
     For a write on an otherwise readable blueprint whose sibling writes a key legitimately needs
@@ -193,7 +194,7 @@ def deny_api_key_callers(view):
     """
 
     @functools.wraps(view)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         if g.get("authenticated_via_api_key"):
             return _forbidden("API keys cannot change notification settings")
         return view(*args, **kwargs)

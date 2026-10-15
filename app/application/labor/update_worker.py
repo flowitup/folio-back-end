@@ -2,11 +2,12 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository
 from app.application.labor.role_scope import assert_role_in_project_company
+from app.domain.entities.worker import Worker
 from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     InvalidWorkerDataError,
@@ -79,11 +80,11 @@ class UpdateWorkerUseCase:
         """Inject the Person repository; wired after it exists."""
         self._person_repo = person_repo
 
-    def set_company_person_repo(self, company_person_repo) -> None:
+    def set_company_person_repo(self, company_person_repo: Any) -> None:
         """Inject the company directory; wired after it exists."""
         self._company_person_repo = company_person_repo
 
-    def _person_is_company_private(self, worker) -> bool:
+    def _person_is_company_private(self, worker: Worker) -> bool:
         """Whether the worker's Person may be renamed or re-phoned for everyone using it.
 
         True only for an unlinked profile that no other company lists. A Person linked to an

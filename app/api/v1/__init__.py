@@ -34,7 +34,10 @@ def list_users():
     container = get_container()
     scope = None if is_platform_ops(caller_id) else caller_id
     roles = (CompanyRole.ADMIN.value, CompanyRole.MANAGER.value)
-    if scope is not None and not any(a.role in roles for a in container.user_company_access_repo.list_for_user(scope)):
+    access_repo = container.user_company_access_repo
+    if scope is not None and (
+        access_repo is None or not any(a.role in roles for a in access_repo.list_for_user(scope))
+    ):
         return jsonify({"error": "Forbidden", "message": "Access denied", "status_code": 403}), 403
     users = container.user_repository.search_by_email(
         query, limit=10, sharing_company_with=scope, caller_roles=None if scope is None else roles

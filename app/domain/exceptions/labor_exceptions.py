@@ -29,7 +29,7 @@ class WorkerPersonNotFoundError(LaborError):
 class SharedPersonEditError(LaborError):
     """Raised when a worker edit would change the identity of a person other companies or an account own."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(
             "This person is shared with another company or has an app account: "
             "their name and phone cannot be changed from a worker."

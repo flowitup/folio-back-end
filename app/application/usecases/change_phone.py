@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from uuid import UUID
 
 from app.application.persons.ports import IPersonRepository
@@ -121,7 +121,7 @@ class ConfirmPhoneChangeUseCase:
         max_attempts: int = 5,
         clock: Callable[[], datetime] = _utcnow,
         person_repo: Optional[IPersonRepository] = None,
-        push_device_repo=None,
+        push_device_repo: Optional[Any] = None,
     ) -> None:
         self._users = user_repo
         self._otps = otp_repo
