@@ -13,6 +13,8 @@ import re
 
 # C0 controls (incl. TAB, CR, LF, NUL) and DEL.
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+# What breaks a quoted header parameter, plus the "?" that encode("ascii", "replace") leaves.
+_QUOTED_UNSAFE = re.compile(r'["\\?]')
 
 
 def has_control_chars(name: str) -> bool:
@@ -23,3 +25,12 @@ def has_control_chars(name: str) -> bool:
 def strip_control_chars(name: str) -> str:
     """Return ``name`` without its control characters."""
     return _CONTROL_CHARS.sub("", name)
+
+
+def quoted_ascii_filename(name: str) -> str:
+    """``name`` as the content of a quoted ``filename="..."`` parameter: ASCII, no control characters.
+
+    A double quote or backslash would end the quoted string early (or escape its end), so they,
+    like any non-ASCII character, become an underscore; the real name travels in ``filename*``.
+    """
+    return _QUOTED_UNSAFE.sub("_", strip_control_chars(name).encode("ascii", "replace").decode("ascii"))

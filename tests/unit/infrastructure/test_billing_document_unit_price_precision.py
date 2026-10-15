@@ -74,3 +74,17 @@ def test_expense_export_pdf_prints_a_released_line_unit_price_with_its_own_decim
     text = text.replace("\u00a0", " ").replace("\u202f", " ")
     assert "1 234,565 €" in text
     assert "1 234,57 €" not in text
+
+
+def test_stored_rows_with_hostile_exponents_render_in_bounded_time():
+    """Rows saved before the entry validation: 1E-100000 used to take about 23 s to lay out."""
+    import time
+    from dataclasses import replace
+
+    hostile = BillingDocumentItem("Piege", Decimal("1E-100000"), Decimal("1E-100000"), Decimal("1E-100000"))
+    doc = replace(_doc(), items=(hostile,))
+    started = time.monotonic()
+    pdf = ReportLabBillingDocumentPdfRenderer().render(doc)
+    OpenpyxlBillingDocumentXlsxRenderer().render(doc)
+    assert time.monotonic() - started < 5
+    assert pdf.startswith(b"%PDF")

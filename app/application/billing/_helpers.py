@@ -15,7 +15,7 @@ from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import DevisLockedByFactureError, ForbiddenBillingDocumentError
 from app.domain.billing.template import BillingDocumentTemplate
-from app.domain.billing.value_objects import BillingDocumentItem
+from app.domain.billing.value_objects import BillingDocumentItem, check_line_decimal
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
 from app.domain.time import business_today
@@ -199,20 +199,20 @@ def _items_from_inputs(item_inputs: list[ItemInput]) -> tuple[BillingDocumentIte
     """Convert ItemInput DTOs to BillingDocumentItem value objects.
 
     Validates each item: description non-empty, quantity > 0, unit_price >= 0,
-    vat_rate >= 0.  Raises ValueError on the first invalid item.
+    vat_rate >= 0, each finite with bounded decimals.  Raises ValueError on the first invalid item.
     """
     result: list[BillingDocumentItem] = []
     for raw in item_inputs:
         desc = raw.description.strip() if raw.description else ""
         if not desc:
             raise ValueError("Item description is required")
-        qty = Decimal(str(raw.quantity))
+        qty = check_line_decimal(Decimal(str(raw.quantity)))
         if qty <= 0:
             raise ValueError("Item quantity must be greater than 0")
-        price = Decimal(str(raw.unit_price))
+        price = check_line_decimal(Decimal(str(raw.unit_price)))
         if price < 0:
             raise ValueError("Item unit_price cannot be negative")
-        vat = Decimal(str(raw.vat_rate))
+        vat = check_line_decimal(Decimal(str(raw.vat_rate)))
         if vat < 0:
             raise ValueError("Item vat_rate cannot be negative")
         result.append(

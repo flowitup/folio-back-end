@@ -304,7 +304,7 @@ class UpdateInvoiceUseCase:
                 link_uuid: UUID = link_id  # type: ignore[assignment]
                 if link_uuid == invoice.id:
                     raise InvalidInvoiceDataError("An invoice cannot refund itself")
-                source = self._repo.find_by_id(link_uuid)
+                source = self._repo.find_by_id_for_update(link_uuid)
                 if source is None:
                     raise InvalidInvoiceDataError(f"Source invoice {link_uuid} not found")
                 if source.project_id != invoice.project_id:
@@ -331,7 +331,7 @@ class UpdateInvoiceUseCase:
             # Link was not touched in this PATCH but the invoice already has one.
             # Re-validate the cap in case the item amounts changed.
             if "items" in updates:
-                source = self._repo.find_by_id(invoice.refunds_invoice_id)
+                source = self._repo.find_by_id_for_update(invoice.refunds_invoice_id)
                 if source is not None:
                     new_items = updates["items"]
                     this_total = sum((item.total for item in new_items), Decimal("0"))
@@ -409,7 +409,7 @@ class UpdateInvoiceUseCase:
                 applied_link_uuid: UUID = applied_link_id  # type: ignore[assignment]
                 if applied_link_uuid == invoice.id:
                     raise InvalidInvoiceDataError("An invoice cannot be applied to itself")
-                target = self._repo.find_by_id(applied_link_uuid)
+                target = self._repo.find_by_id_for_update(applied_link_uuid)
                 if target is None:
                     raise InvalidInvoiceDataError(f"Target invoice {applied_link_uuid} not found")
                 if target.project_id != invoice.project_id:
@@ -419,10 +419,7 @@ class UpdateInvoiceUseCase:
                         "applied_to_invoice_id must reference an invoice that is not a return or released_funds"
                     )
                 # Cap: exclude this invoice's own row from the Σ (avoid self-double-counting on update).
-                # Race (accepted, not locked): this is a read-then-write check with no
-                # row/advisory lock, so two concurrent updates against the same target
-                # could both pass and jointly exceed the cap — identical, accepted class
-                # of drift as the pre-existing sum_refunds_for_source cap check above.
+                # The target row is locked above, so concurrent updates against it queue.
                 new_items = updates.get("items", invoice.items)
                 this_total = sum((item.total for item in new_items), Decimal("0"))
                 existing_applied = self._repo.sum_applied_for_target(target.id, exclude_invoice_id=invoice.id)
@@ -454,7 +451,7 @@ class UpdateInvoiceUseCase:
                     "applied_to_invoice_id requires settled_via='avoir'; clear the link before changing settled_via"
                 )
             if "items" in updates:
-                target = self._repo.find_by_id(invoice.applied_to_invoice_id)
+                target = self._repo.find_by_id_for_update(invoice.applied_to_invoice_id)
                 if target is not None:
                     new_items = updates["items"]
                     this_total = sum((item.total for item in new_items), Decimal("0"))

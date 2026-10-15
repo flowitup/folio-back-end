@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
 
 from app.api.v1.date_bounds import BusinessDate
+from app.domain.billing.value_objects import check_line_decimal
 
 
 class _StrictBase(BaseModel):
@@ -33,6 +34,9 @@ class ItemSchema(_StrictBase):
     unit_price: Decimal = Field(..., ge=Decimal("0"), le=Decimal("999999999"))
     vat_rate: Decimal = Field(..., ge=Decimal("0"), le=Decimal("100"))
     category: Optional[str] = Field(None, max_length=120)
+
+    # Lines are stored as text and written out digit by digit by the PDF and xlsx.
+    _bounded = field_validator("quantity", "unit_price", "vat_rate")(check_line_decimal)
 
 
 # ---------------------------------------------------------------------------

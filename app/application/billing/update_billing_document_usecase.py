@@ -76,7 +76,9 @@ class UpdateBillingDocumentUseCase:
         inp: UpdateBillingDocumentInput,
         db_session: TransactionalSessionPort,
     ) -> BillingDocumentResponse:
-        doc = self._doc_repo.find_by_id(inp.id)
+        # Locked so the paid-facture release below follows the status a concurrent
+        # PATCH /status committed, not the one read before waiting for it.
+        doc = self._doc_repo.find_by_id_for_update(inp.id)
         if doc is None:
             raise BillingDocumentNotFoundError(inp.id)
         _assert_billing_doc_write_access(doc, inp.user_id, self._access_repo)
@@ -144,8 +146,9 @@ class UpdateBillingDocumentUseCase:
         if _DATE_FIELDS.intersection(updates):
             _check_dates(updated)
         saved = self._doc_repo.save(updated)
-        db_session.commit()
 
+        # Still under the row lock: the release adapter's commit makes the edit and the
+        # release durable together.
         if (
             self._funds_release is not None
             and saved.kind == BillingDocumentKind.FACTURE
@@ -161,5 +164,7 @@ class UpdateBillingDocumentUseCase:
                 issue_date=saved.issue_date,
                 created_by=saved.user_id,
             )
+
+        db_session.commit()
 
         return BillingDocumentResponse.from_entity(saved, *_conversion_link(self._doc_repo, saved))

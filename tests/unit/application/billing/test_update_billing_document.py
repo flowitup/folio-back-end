@@ -299,3 +299,75 @@ class TestPaidFactureFundsReleaseSync:
         )
 
         assert funds.synced == []
+
+
+class TestConcurrentCancelDuringEdit:
+    """A PATCH /status cancelling the facture commits while the PUT waits for the row lock."""
+
+    def test_the_row_is_read_under_its_lock(self, doc_repo, fake_session, user_id):
+        locked: list = []
+        original = doc_repo.find_by_id_for_update
+        doc_repo.find_by_id_for_update = lambda doc_id: locked.append(doc_id) or original(doc_id)
+        doc = make_doc(user_id=user_id)
+        doc_repo.save(doc)
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo).execute(
+            UpdateBillingDocumentInput(id=doc.id, user_id=user_id, notes="x"), fake_session
+        )
+        assert locked == [doc.id]
+
+    def test_an_edit_that_waited_for_a_cancel_creates_no_release(self, doc_repo, fake_session, user_id):
+        funds = _RecordingFundsRelease()
+        doc = make_doc(
+            user_id=user_id,
+            kind=BillingDocumentKind.FACTURE,
+            status=BillingDocumentStatus.PAID,
+            doc_number="FAC-2026-009",
+            project_id=uuid4(),
+        )
+        doc_repo.save(doc)
+        original = doc_repo.find_by_id_for_update
+
+        def after_the_cancel_committed(doc_id):
+            # The cancel took the lock first and committed; the lock wait ends on its row.
+            doc_repo.save(doc_repo.find_by_id(doc_id).with_updates(status=BillingDocumentStatus.CANCELLED))
+            return original(doc_id)
+
+        doc_repo.find_by_id_for_update = after_the_cancel_committed
+        result = UpdateBillingDocumentUseCase(
+            doc_repo=doc_repo, funds_release=funds, project_repo=ProjectsByCompany()
+        ).execute(
+            UpdateBillingDocumentInput(
+                id=doc.id,
+                user_id=user_id,
+                items=[
+                    ItemInput(description="x", quantity=Decimal("1"), unit_price=Decimal("10"), vat_rate=Decimal("20"))
+                ],
+            ),
+            fake_session,
+        )
+        assert result.status == "cancelled"
+        assert funds.synced == []
+
+    def test_the_release_is_synced_before_the_commit(self, doc_repo, user_id):
+        events: list[str] = []
+
+        class Session:
+            def commit(self):
+                events.append("commit")
+
+        class Funds:
+            def sync_funds_release(self, **kwargs):
+                events.append("release")
+
+        doc = make_doc(
+            user_id=user_id,
+            kind=BillingDocumentKind.FACTURE,
+            status=BillingDocumentStatus.PAID,
+            doc_number="FAC-2026-010",
+            project_id=uuid4(),
+        )
+        doc_repo.save(doc)
+        UpdateBillingDocumentUseCase(
+            doc_repo=doc_repo, funds_release=Funds(), project_repo=ProjectsByCompany()
+        ).execute(UpdateBillingDocumentInput(id=doc.id, user_id=user_id, recipient_name="other"), Session())
+        assert events == ["release", "commit"]

@@ -24,7 +24,7 @@ from app.application.invoice import (
     UnsupportedFileTypeError,
 )
 from app.domain.entities.invoice import InvoiceType
-from app.domain.exceptions.invoice_exceptions import InvoiceNotFoundError
+from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, InvoiceNotFoundError
 from app.domain.value_objects.display_filename import strip_control_chars
 from wiring import get_container
 
@@ -151,6 +151,8 @@ def upload_attachment(project_id: str, invoice_id: str):
         return _error_response("FILE_TOO_LARGE", str(e), 413)
     except UnsupportedFileTypeError as e:
         return _error_response("UNSUPPORTED_TYPE", str(e), 415)
+    except InvalidInvoiceDataError as e:
+        return _error_response("ValidationError", str(e), 400)
 
     return jsonify(_serialize(att)), 201
 
@@ -214,6 +216,8 @@ def delete_attachment(attachment_id: str):
         container.delete_attachment_usecase.execute(att_uuid)
     except AttachmentNotFoundError as e:
         return _error_response("NOT_FOUND", str(e), 404)
+    except InvalidInvoiceDataError as e:
+        return _error_response("ValidationError", str(e), 400)
 
     return "", 204
 
@@ -245,6 +249,8 @@ def rename_attachment(attachment_id: str):
         att = container.rename_attachment_usecase.execute(att_uuid, new_filename.strip())
     except AttachmentNotFoundError as e:
         return _error_response("NOT_FOUND", str(e), 404)
+    except InvalidInvoiceDataError as exc:
+        return _error_response("ValidationError", str(exc), 400)
     except ValueError as exc:
         return _error_response("INVALID_FILENAME", str(exc), 400)
 

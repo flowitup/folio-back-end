@@ -118,6 +118,15 @@ class IInvoiceRepository(ABC):
     @abstractmethod
     def find_by_id(self, invoice_id: UUID) -> Optional[Invoice]: ...
 
+    def find_by_id_for_update(self, invoice_id: UUID) -> Optional[Invoice]:
+        """find_by_id holding a row lock until the transaction ends.
+
+        Taken on a refund source or avoir target before summing the credits against it,
+        so concurrent credit notes queue instead of each passing the cap on the same sum.
+        The default reads without a lock; the SQL adapter overrides it.
+        """
+        return self.find_by_id(invoice_id)
+
     @abstractmethod
     def list_by_project(
         self,

@@ -71,6 +71,7 @@ def _make_mock_repo(find_by_id_result=None, sum_refunds: Decimal = Decimal("0"))
     repo.next_invoice_number.return_value = "INV-2026-0002"
     repo.create.side_effect = lambda inv: inv
     repo.find_by_id.return_value = find_by_id_result
+    repo.find_by_id_for_update.side_effect = lambda invoice_id: repo.find_by_id(invoice_id)
     repo.update.side_effect = lambda inv: inv
     repo.sum_refunds_for_source.return_value = sum_refunds
     repo.sum_applied_for_target.return_value = Decimal("0")
@@ -583,9 +584,10 @@ class TestUpdateRefundsInvoiceIdSentinel:
         source = _make_invoice(project_id=project_id, invoice_type=InvoiceType.MATERIALS_SERVICES, unit_price=500.0)
         existing = self._refund_invoice(project_id)  # no existing link
 
-        # find_by_id is called first for the existing invoice, then for the source.
+        # find_by_id loads the existing invoice; the source is read under a lock.
         repo = MagicMock(spec=IInvoiceRepository)
-        repo.find_by_id.side_effect = [existing, source]
+        repo.find_by_id.return_value = existing
+        repo.find_by_id_for_update.return_value = source
         repo.update.side_effect = lambda inv: inv
         repo.sum_refunds_for_source.return_value = Decimal("0")
 
@@ -601,7 +603,8 @@ class TestUpdateRefundsInvoiceIdSentinel:
         source = _make_invoice(project_id=project_id, invoice_type=InvoiceType.MATERIALS_SERVICES)
 
         repo = MagicMock(spec=IInvoiceRepository)
-        repo.find_by_id.side_effect = [ms_invoice, source]
+        repo.find_by_id.return_value = ms_invoice
+        repo.find_by_id_for_update.return_value = source
         repo.update.side_effect = lambda inv: inv
         uc = UpdateInvoiceUseCase(repo)
 
@@ -639,8 +642,9 @@ class TestUpdateCapExcludesSelf:
         )
 
         repo = MagicMock(spec=IInvoiceRepository)
-        # First call: load the existing invoice; second call: load the source for cap check.
-        repo.find_by_id.side_effect = [existing_refund, source]
+        # find_by_id loads the existing invoice; the source for the cap check is read under a lock.
+        repo.find_by_id.return_value = existing_refund
+        repo.find_by_id_for_update.return_value = source
         repo.update.side_effect = lambda inv: inv
         # sum_refunds_for_source returns 0 when self is excluded (no other linked refunds)
         repo.sum_refunds_for_source.return_value = Decimal("0")
@@ -684,8 +688,9 @@ class TestUpdateCapExcludesSelf:
         )
 
         repo = MagicMock(spec=IInvoiceRepository)
-        # First call: load the existing invoice; second call: load the source for cap check.
-        repo.find_by_id.side_effect = [existing_refund, source]
+        # find_by_id loads the existing invoice; the source for the cap check is read under a lock.
+        repo.find_by_id.return_value = existing_refund
+        repo.find_by_id_for_update.return_value = source
         # Another refund of -200 already exists for the same source (excluding self → -200 remains)
         repo.sum_refunds_for_source.return_value = Decimal("-200")
         uc = UpdateInvoiceUseCase(repo)
@@ -741,7 +746,8 @@ class TestSumRefundsForSourceContract:
         )
         repo = MagicMock(spec=IInvoiceRepository)
         # First call: load the existing invoice; second call: load source for cap check.
-        repo.find_by_id.side_effect = [existing_refund, source]
+        repo.find_by_id.return_value = existing_refund
+        repo.find_by_id_for_update.return_value = source
         repo.update.side_effect = lambda inv: inv
         repo.sum_refunds_for_source.return_value = Decimal("0")
         uc = UpdateInvoiceUseCase(repo)

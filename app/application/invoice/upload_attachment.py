@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import BinaryIO, Optional
 from uuid import UUID, uuid4
 
+from app.application.invoice.manage_attachments import assert_attachments_editable
 from app.application.invoice.ports import IAttachmentStorage, IInvoiceAttachmentRepository, IInvoiceRepository
 from app.domain.entities.invoice_attachment import MAX_ATTACHMENT_FILENAME_LENGTH, InvoiceAttachment
 from app.domain.exceptions.invoice_exceptions import InvoiceNotFoundError
@@ -99,6 +100,7 @@ class UploadAttachmentUseCase:
         invoice = self._invoices.find_by_id(invoice_id)
         if invoice is None:
             raise InvoiceNotFoundError(f"Invoice {invoice_id} not found")
+        assert_attachments_editable(invoice)
 
         if size_bytes > MAX_FILE_SIZE_BYTES:
             raise FileTooLargeError(f"File exceeds {MAX_FILE_SIZE_BYTES} bytes (got {size_bytes})")

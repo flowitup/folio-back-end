@@ -351,6 +351,31 @@ class TestUpdateBillingDocumentStatus:
         )
         assert resp.status_code == 409
 
+    @pytest.mark.parametrize("error_name", ["StatusChangeNotSavedError", "InvoiceNumberConflictError"])
+    def test_a_lost_status_change_or_release_number_conflict_returns_409(
+        self, inv_client, billing_token, seeded_doc, monkeypatch, error_name
+    ):
+        from app.domain.billing import exceptions as billing_exceptions
+        from app.domain.exceptions import invoice_exceptions
+        from wiring import get_container
+
+        if error_name == "StatusChangeNotSavedError":
+            error = billing_exceptions.StatusChangeNotSavedError(uuid.UUID(seeded_doc["id"]))
+        else:
+            error = invoice_exceptions.InvoiceNumberConflictError("Invoice number conflict, please retry")
+
+        def _raise(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr(get_container().update_billing_document_status_usecase, "execute", _raise)
+        resp = inv_client.patch(
+            f"/api/v1/billing-documents/{seeded_doc['id']}/status",
+            json={"new_status": "sent"},
+            headers=_auth(billing_token),
+        )
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "Conflict"
+
     def test_invalid_status_value_returns_422(self, inv_client, billing_token, seeded_doc):
         resp = inv_client.patch(
             f"/api/v1/billing-documents/{seeded_doc['id']}/status",
@@ -430,6 +455,71 @@ class TestBillingDocumentDates:
         resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
         assert resp.status_code == 422, resp.get_data(as_text=True)
         assert "issue_date" in resp.get_json()["message"]
+
+
+_HOSTILE_NUMBERS = ["1E-999999", "1E-100", "0.0000001", "NaN", "Infinity", "1E+400"]
+
+
+class TestLineNumberBounds:
+    """A line number is stored as text and written digit by digit by the PDF: 1E-999999 hung a worker."""
+
+    @pytest.mark.parametrize("field", ["quantity", "unit_price", "vat_rate"])
+    @pytest.mark.parametrize("value", _HOSTILE_NUMBERS)
+    def test_create_refuses_a_hostile_number(self, inv_client, billing_token, billing_profile, field, value):
+        body = _create(billing_profile["company_id"])
+        body["items"] = [{**_ITEM, field: value}]
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "validation_error"
+
+    @pytest.mark.parametrize("value", ["1E-999999", "NaN", "0.0000001"])
+    def test_update_import_and_templates_refuse_it_too(self, inv_client, billing_token, billing_profile, value):
+        company_id = billing_profile["company_id"]
+        bad = [{**_ITEM, "quantity": value}]
+        doc = inv_client.post(
+            "/api/v1/billing-documents", json=_create(company_id), headers=_auth(billing_token)
+        ).get_json()
+        attempts = [
+            inv_client.put(f"/api/v1/billing-documents/{doc['id']}", json={"items": bad}, headers=_auth(billing_token)),
+            inv_client.post(
+                "/api/v1/billing-documents/import",
+                json={
+                    **_create(company_id),
+                    "items": bad,
+                    "document_number": f"IMP-{uuid.uuid4().hex[:8]}",
+                    "status": "draft",
+                },
+                headers=_auth(billing_token),
+            ),
+            inv_client.post(
+                "/api/v1/billing-document-templates",
+                json={"kind": "devis", "name": "Hostile", "items": bad},
+                headers=_auth(billing_token),
+            ),
+        ]
+        assert [r.status_code for r in attempts] == [422, 422, 422]
+
+    @pytest.mark.parametrize("value", ["0.001", "3.333", "15.015", "1234567.89", "1E+3", "1.500000000000", "0.000001"])
+    def test_real_numbers_still_pass(self, inv_client, billing_token, billing_profile, value):
+        body = _create(billing_profile["company_id"])
+        body["items"] = [{**_ITEM, "quantity": value, "unit_price": value}]
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    @pytest.mark.parametrize("value", ["33.3333333", "0.30000000000000004"])
+    def test_a_longer_tail_is_rounded_so_an_old_document_can_still_be_saved(
+        self, inv_client, billing_token, billing_profile, value
+    ):
+        body = _create(billing_profile["company_id"])
+        body["items"] = [{**_ITEM, "quantity": value, "unit_price": value}]
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_zero_price_and_vat_still_pass(self, inv_client, billing_token, billing_profile):
+        body = _create(billing_profile["company_id"])
+        body["items"] = [{**_ITEM, "unit_price": "0", "vat_rate": "0"}]
+        resp = inv_client.post("/api/v1/billing-documents", json=body, headers=_auth(billing_token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
 
 
 class TestBillingDocumentSearch:

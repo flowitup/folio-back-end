@@ -89,6 +89,27 @@ class TestBillingDocumentRepositoryCRUD:
         assert found is not None
         assert found.id == saved.id
 
+    def test_find_by_id_for_update_sees_a_status_committed_by_another_transaction(self, session):
+        """After waiting for the lock, a row this session read earlier must show the winner's status."""
+        from sqlalchemy import update
+
+        from app.infrastructure.database.models.billing_document import BillingDocumentModel
+
+        user_id = _seed_user(session)
+        repo = SqlAlchemyBillingDocumentRepository(session)
+        saved = repo.save(_make_doc(user_id, kind=BillingDocumentKind.FACTURE, status=BillingDocumentStatus.SENT))
+        doc_id = UUID(str(saved.id))
+        earlier_read = session.get(BillingDocumentModel, doc_id)  # the identity map holds rows weakly
+        assert earlier_read.status == "sent"
+        # What a concurrent request committed while this one waited (written without touching the identity map).
+        session.execute(
+            update(BillingDocumentModel)
+            .where(BillingDocumentModel.id == doc_id)
+            .values(status="paid")
+            .execution_options(synchronize_session=False)
+        )
+        assert repo.find_by_id_for_update(doc_id).status == BillingDocumentStatus.PAID
+
     def test_update_via_save(self, session):
         user_id = _seed_user(session)
         repo = SqlAlchemyBillingDocumentRepository(session)

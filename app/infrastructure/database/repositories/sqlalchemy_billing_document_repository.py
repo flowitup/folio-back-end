@@ -45,8 +45,15 @@ class SqlAlchemyBillingDocumentRepository:
 
         Falls back to a plain SELECT on dialects that don't support FOR UPDATE
         (e.g. SQLite in tests) — SQLAlchemy silently drops the hint on SQLite.
+        A row this session already loaded is refreshed: after waiting for the lock, its
+        attributes must be what the transaction that held it committed, not the earlier read.
         """
-        stmt = select(BillingDocumentModel).where(BillingDocumentModel.id == doc_id).with_for_update()
+        stmt = (
+            select(BillingDocumentModel)
+            .where(BillingDocumentModel.id == doc_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         row = self._session.execute(stmt).scalar_one_or_none()
         if row is None:
             return None

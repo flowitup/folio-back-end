@@ -929,8 +929,10 @@ def configure_container(
         )
         container.list_attachments_usecase = ListAttachmentsUseCase(invoice_attachment_repository)
         container.get_attachment_usecase = GetAttachmentUseCase(invoice_attachment_repository, attachment_storage)
-        container.rename_attachment_usecase = RenameAttachmentUseCase(invoice_attachment_repository)
-        container.delete_attachment_usecase = DeleteAttachmentUseCase(invoice_attachment_repository, attachment_storage)
+        container.rename_attachment_usecase = RenameAttachmentUseCase(invoice_attachment_repository, invoice_repository)
+        container.delete_attachment_usecase = DeleteAttachmentUseCase(
+            invoice_attachment_repository, attachment_storage, invoice_repository
+        )
 
     # Wire email port + renderer
     container.email_port = _build_email_port()
