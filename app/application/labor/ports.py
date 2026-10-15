@@ -183,6 +183,11 @@ class IWorkerRepository(ABC):
         """Soft delete worker (set is_active=False). Returns True if updated."""
         ...
 
+    @abstractmethod
+    def unlink_user(self, project_ids: List[UUID], user_id: UUID) -> int:
+        """Clear ``user_id`` on the user's workers of these projects (flush only, no commit)."""
+        ...
+
 
 class ILaborEntryRepository(ABC):
     """Port for labor entry persistence operations."""

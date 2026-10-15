@@ -293,6 +293,186 @@ class TestTasksUnassignedOnLeave:
         assert _assignee_of(boot_app, task_id) is None
 
 
+def _assign(app, user_id, project_id):
+    from app import db
+    from sqlalchemy import text
+
+    with app.app_context():
+        db.session.execute(
+            text(
+                "INSERT INTO user_projects (user_id, project_id, invited_by_user_id, assigned_at) "
+                "VALUES (:uid, :pid, NULL, :at)"
+            ),
+            {"uid": str(user_id), "pid": str(project_id), "at": datetime.now(timezone.utc)},
+        )
+        db.session.commit()
+
+
+def _is_assigned(app, user_id, project_id) -> bool:
+    from app import db
+    from sqlalchemy import text
+
+    with app.app_context():
+        return (
+            db.session.execute(
+                text("SELECT 1 FROM user_projects WHERE user_id=:u AND project_id=:p"),
+                {"u": str(user_id), "p": str(project_id)},
+            ).fetchone()
+            is not None
+        )
+
+
+def _attach(app, user_id, company_id, role: str, *, primary: bool = False):
+    from app import db
+
+    with app.app_context():
+        db.session.add(
+            UserCompanyAccessModel(
+                user_id=user_id,
+                company_id=company_id,
+                role=role,
+                is_primary=primary,
+                attached_at=datetime.now(timezone.utc),
+            )
+        )
+        db.session.commit()
+
+
+def _project(app, owner_id, company_id):
+    from app import db
+
+    with app.app_context():
+        project = ProjectModel(id=uuid4(), name="Demotion Project", owner_id=owner_id, company_id=company_id)
+        db.session.add(project)
+        db.session.commit()
+        return project.id
+
+
+class TestDemotedAdminLosesProjectAssignments:
+    """Demoting an admin drops the project rows they got as an admin, in that company only."""
+
+    def _set_role(self, client, token, company_id, user_id, role):
+        return client.patch(
+            f"/api/v1/companies/{company_id}/access/{user_id}/role", json={"role": role}, headers=_auth(token)
+        )
+
+    @pytest.mark.parametrize("new_role", ["manager", "member"])
+    def test_demotion_removes_assignments_on_this_companys_projects_only(self, boot_client, boot_app, new_role):
+        owner_id = _make_user(boot_app, f"demote_owner_{new_role}@test.com")
+        other_admin_id = _make_user(boot_app, f"demote_admin_{new_role}@test.com")
+        manager_id = _make_user(boot_app, f"demote_manager_{new_role}@test.com")
+        company_id = _make_company(boot_app, owner_id, name=f"Demote Co {new_role}")
+        _attach(boot_app, other_admin_id, company_id, "admin")
+        _attach(boot_app, manager_id, company_id, "manager")
+        project_one = _project(boot_app, owner_id, company_id)
+        project_two = _project(boot_app, owner_id, company_id)
+        other_company_id = _make_company(boot_app, owner_id, name=f"Demote Other {new_role}")
+        _attach(boot_app, other_admin_id, other_company_id, "admin")
+        other_project = _project(boot_app, owner_id, other_company_id)
+        task_id = _task_assigned_to(boot_app, other_admin_id, project_one)
+        for project_id in (project_one, project_two, other_project):
+            _assign(boot_app, other_admin_id, project_id)
+        _assign(boot_app, manager_id, project_one)
+        token = _login(boot_client, f"demote_owner_{new_role}@test.com")
+
+        resp = self._set_role(boot_client, token, company_id, other_admin_id, new_role)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        assert not _is_assigned(boot_app, other_admin_id, project_one)
+        assert not _is_assigned(boot_app, other_admin_id, project_two)
+        assert _assignee_of(boot_app, task_id) is None
+        # Another company's rows and an unrelated member's rows stay.
+        assert _is_assigned(boot_app, other_admin_id, other_project)
+        assert _is_assigned(boot_app, manager_id, project_one)
+
+    def test_other_role_changes_keep_assignments(self, boot_client, boot_app):
+        owner_id = _make_user(boot_app, "demote_owner_keep@test.com")
+        member_id = _make_user(boot_app, "demote_member_keep@test.com")
+        company_id = _make_company(boot_app, owner_id, name="Demote Keep Co")
+        _attach(boot_app, member_id, company_id, "member")
+        project_id = _project(boot_app, owner_id, company_id)
+        _assign(boot_app, member_id, project_id)
+        token = _login(boot_client, "demote_owner_keep@test.com")
+
+        for role in ("manager", "member", "admin"):
+            resp = self._set_role(boot_client, token, company_id, member_id, role)
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            assert _is_assigned(boot_app, member_id, project_id), role
+
+    def test_last_admin_demotion_is_refused_and_keeps_rows(self, boot_client, boot_app):
+        owner_id = _make_user(boot_app, "demote_owner_last@test.com")
+        company_id = _make_company(boot_app, owner_id, name="Demote Last Co")
+        project_id = _project(boot_app, owner_id, company_id)
+        _assign(boot_app, owner_id, project_id)
+        token = _login(boot_client, "demote_owner_last@test.com")
+
+        resp = self._set_role(boot_client, token, company_id, owner_id, "member")
+        assert resp.status_code == 409
+        assert _is_assigned(boot_app, owner_id, project_id)
+
+
+def _worker_linked_to(app, user_id, project_id):
+    from decimal import Decimal
+
+    from app import db
+    from app.infrastructure.database.models import WorkerModel
+
+    with app.app_context():
+        worker = WorkerModel(
+            id=uuid4(), project_id=project_id, name="Linked Worker", daily_rate=Decimal("100.00"), user_id=user_id
+        )
+        db.session.add(worker)
+        db.session.commit()
+        return worker.id
+
+
+def _worker_account(app, worker_id):
+    from app import db
+    from app.infrastructure.database.models import WorkerModel
+
+    with app.app_context():
+        db.session.expire_all()
+        return db.session.get(WorkerModel, worker_id).user_id
+
+
+class TestWorkersUnlinkedOnLeave:
+    """Whoever leaves a company no longer has a worker row of its projects tied to their account."""
+
+    def _setup(self, app, tag):
+        admin_id = _make_user(app, f"boot_admin_{tag}@test.com")
+        target_id = _make_user(app, f"boot_target_{tag}@test.com")
+        company_id = _make_company(app, admin_id, name=f"Unlink Co {tag}")
+        _person_id, project_id = _attach_with_person_and_project(app, target_id, company_id)
+        other_company_id = _make_company(app, admin_id, name=f"Unlink Other {tag}")
+        _attach(app, target_id, other_company_id, "member")
+        other_project_id = _project(app, admin_id, other_company_id)
+        return (
+            admin_id,
+            target_id,
+            company_id,
+            _worker_linked_to(app, target_id, project_id),
+            _worker_linked_to(app, target_id, other_project_id),
+        )
+
+    def test_boot_unlinks_the_targets_workers_in_that_company_only(self, boot_client, boot_app):
+        _admin, target_id, company_id, worker_id, other_worker_id = self._setup(boot_app, "wk1")
+        token = _login(boot_client, "boot_admin_wk1@test.com")
+
+        resp = boot_client.delete(f"/api/v1/companies/{company_id}/access/{target_id}", headers=_auth(token))
+        assert resp.status_code == 204
+        assert _worker_account(boot_app, worker_id) is None
+        assert _worker_account(boot_app, other_worker_id) == target_id
+
+    def test_self_detach_unlinks_their_workers_in_that_company_only(self, boot_client, boot_app):
+        _admin, target_id, company_id, worker_id, other_worker_id = self._setup(boot_app, "wk2")
+        token = _login(boot_client, "boot_target_wk2@test.com")
+
+        resp = boot_client.delete(f"/api/v1/companies/{company_id}/access", headers=_auth(token))
+        assert resp.status_code == 204
+        assert _worker_account(boot_app, worker_id) is None
+        assert _worker_account(boot_app, other_worker_id) == target_id
+
+
 class TestJoinCodeCreatesCompanyPerson:
     def test_join_by_code_creates_active_company_person(self, boot_client, boot_app):
         admin_id = _make_user(boot_app, "boot_admin3@test.com")

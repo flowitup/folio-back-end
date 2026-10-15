@@ -14,10 +14,45 @@ from app.domain.exceptions.labor_exceptions import (
     InvalidWorkerPhoneError,
     SharedPersonEditError,
 )
-from app.domain.value_objects.phone_number import is_phone_number
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 
 
 _ROLE_SENTINEL = object()
+
+
+def _same_name(sent: str, *stored: Optional[str]) -> bool:
+    """Whether a name sent back is a stored one, ignoring case and spacing (clients re-format it)."""
+
+    def fold(value: str) -> str:
+        return " ".join(value.split()).casefold()
+
+    return any(value is not None and fold(value) == fold(sent) for value in stored)
+
+
+def _same_phone(sent: Optional[str], *stored: Optional[str]) -> bool:
+    """Whether a phone sent back is a stored one: equal as typed, or the same number once normalised.
+
+    The mobile form re-sends the E.164 form of the number it shows ("+33612345678"), while the
+    stored text is whatever was typed ("06 12 34 56 78"); free-text legacy values only match as typed.
+    """
+    if sent is None:
+        return None in stored
+    try:
+        sent_normalized: Optional[str] = normalize_phone(sent)
+    except InvalidPhoneNumberError:
+        sent_normalized = None
+    for value in stored:
+        if value is None:
+            continue
+        if value == sent:
+            return True
+        if sent_normalized is not None:
+            try:
+                if normalize_phone(value) == sent_normalized:
+                    return True
+            except InvalidPhoneNumberError:
+                pass
+    return False
 
 
 @dataclass
@@ -123,7 +158,7 @@ class UpdateWorkerUseCase:
                 if self._person_is_company_private(worker):
                     self._person_repo.rename(worker.person_id, name, commit=False)
                     worker.person_name = name
-                elif name not in (worker.name, worker.person_name):
+                elif not _same_name(name, worker.name, worker.person_name):
                     raise SharedPersonEditError()
             worker.name = name
 
@@ -131,7 +166,7 @@ class UpdateWorkerUseCase:
             phone = request.phone.strip() or None
             # A number saved before phones were checked may be free text: sent back unchanged it
             # passes, so the rest of the worker stays editable; a new value must be a phone number.
-            if phone and phone not in (worker.phone, worker.person_phone) and not is_phone_number(phone):
+            if phone and not _same_phone(phone, worker.phone, worker.person_phone) and not is_phone_number(phone):
                 raise InvalidWorkerPhoneError()
             # Like the name, the phone moves on the Person only for a person only this company
             # lists; a different number for any other is refused.
@@ -139,7 +174,7 @@ class UpdateWorkerUseCase:
                 if self._person_is_company_private(worker):
                     self._person_repo.change_phone(worker.person_id, phone, commit=False)
                     worker.person_phone = phone
-                elif phone not in (worker.phone, worker.person_phone):
+                elif not _same_phone(phone, worker.phone, worker.person_phone):
                     raise SharedPersonEditError()
             worker.phone = phone
 
