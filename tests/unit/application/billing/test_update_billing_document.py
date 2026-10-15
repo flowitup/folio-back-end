@@ -10,7 +10,7 @@ from app.application.billing.update_billing_document_usecase import UpdateBillin
 from app.application.billing.dtos import ItemInput, UpdateBillingDocumentInput
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import BillingDocumentNotFoundError, ForbiddenBillingDocumentError
-from tests.unit.application.billing.conftest import make_doc
+from tests.unit.application.billing.conftest import ProjectsByCompany, make_doc
 
 
 @pytest.fixture
@@ -251,7 +251,9 @@ class TestPaidFactureFundsReleaseSync:
             ],
         )
 
-        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds).execute(inp, fake_session)
+        UpdateBillingDocumentUseCase(doc_repo=doc_repo, funds_release=funds, project_repo=ProjectsByCompany()).execute(
+            inp, fake_session
+        )
 
         assert len(funds.synced) == 1
         call = funds.synced[0]

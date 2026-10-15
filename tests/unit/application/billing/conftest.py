@@ -424,6 +424,16 @@ def make_item(
     )
 
 
+class ProjectsByCompany:
+    """Project repo stub: every project belongs to *company_id* (a document without a company by default)."""
+
+    def __init__(self, company_id=None):
+        self._company_id = company_id
+
+    def find_by_id(self, project_id):
+        return type("P", (), {"id": project_id, "company_id": self._company_id})()
+
+
 def make_doc(
     user_id: UUID,
     kind: BillingDocumentKind = BillingDocumentKind.DEVIS,

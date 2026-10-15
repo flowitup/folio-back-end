@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from app.domain.billing.document import BillingDocument
@@ -25,17 +25,15 @@ _DEFAULT_VALIDITY_DAYS = 30  # devis
 _DEFAULT_PAYMENT_DAYS = 30  # facture
 
 
-def _release_allowed(project_repo, doc: BillingDocument) -> bool:
+def _release_allowed(project_repo: Any, doc: BillingDocument) -> bool:
     """Whether a facture may move money into its linked project.
 
     A facture can link a project of another company (a subcontractor's member), but only a
     project of the facture's own company may receive its funds release: the row would
     otherwise land, undeletable by that company, in a project whose admins never asked for it.
-    No project_repo (tests) leaves the check out.
+    Without a project repository the company cannot be checked, so nothing is released.
     """
-    if project_repo is None:
-        return True
-    if doc.project_id is None:
+    if project_repo is None or doc.project_id is None:
         return False
     project = project_repo.find_by_id(doc.project_id)
     return project is not None and getattr(project, "company_id", None) == doc.company_id
