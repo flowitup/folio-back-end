@@ -55,7 +55,10 @@ _DEMUXERS = {
 
 def _limit_resources() -> None:
     """preexec_fn of the child: cap what a hostile clip can make ffprobe / ffmpeg use."""
-    resource.setrlimit(resource.RLIMIT_AS, (_RLIMIT_AS_BYTES, _RLIMIT_AS_BYTES))
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_RLIMIT_AS_BYTES, _RLIMIT_AS_BYTES))
+    except (ValueError, OSError):  # not supported on every OS (macOS dev machines); Linux production has it
+        pass
     resource.setrlimit(resource.RLIMIT_CPU, (_RLIMIT_CPU_SECONDS, _RLIMIT_CPU_SECONDS))
     resource.setrlimit(resource.RLIMIT_FSIZE, (_RLIMIT_FSIZE_BYTES, _RLIMIT_FSIZE_BYTES))
 
@@ -97,10 +100,8 @@ class FfmpegVideoThumbnailer:
             "error",
             "-protocol_whitelist",
             "file",
-            "-select_streams",
-            "v:0",
             "-show_entries",
-            "stream=width,height:format=format_name",
+            "stream=codec_type,width,height:format=format_name",
             "-of",
             "json",
             in_path,
@@ -115,22 +116,33 @@ class FfmpegVideoThumbnailer:
             )
         except subprocess.TimeoutExpired as exc:
             raise ThumbnailGenerationError("Video header could not be read in time") from exc
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            raise ThumbnailGenerationError("Video header could not be read") from exc
         if result.returncode != 0:
             raise ThumbnailGenerationError("Video could not be read")
         try:
             info = json.loads(result.stdout)
             demuxer = _DEMUXERS[info["format"]["format_name"]]
-            stream = info["streams"][0]
-            width, height = int(stream["width"]), int(stream["height"])
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            # Every video stream is measured, not just the first: a tiny first stream must not
+            # hide a huge second one.
+            sizes = [
+                (int(stream["width"]), int(stream["height"]))
+                for stream in info["streams"]
+                if stream.get("codec_type") == "video"
+            ]
+            if not sizes:
+                raise ValueError("no video stream")
+        except (ValueError, KeyError, TypeError) as exc:
             raise ThumbnailGenerationError("Video has no readable video stream in a supported container") from exc
-        if width < 1 or height < 1 or width > _MAX_SIDE or height > _MAX_SIDE or width * height > _MAX_PIXELS:
-            raise ThumbnailGenerationError(f"Video frame size {width}x{height} exceeds the supported maximum")
+        for width, height in sizes:
+            if width < 1 or height < 1 or width > _MAX_SIDE or height > _MAX_SIDE or width * height > _MAX_PIXELS:
+                raise ThumbnailGenerationError(f"Video frame size {width}x{height} exceeds the supported maximum")
         return demuxer
 
     @staticmethod
     def _run_ffmpeg(in_path: str, out_path: str, seek: str, demuxer: str) -> bool:
-        # -ss before -i = fast input seek; -frames:v 1 grabs one frame;
+        # -ss before -i = fast input seek; -map 0:v:0 decodes the first video stream (the one
+        # whose size ffprobe checked); -frames:v 1 grabs one frame;
         # scale keeps aspect, caps the long edge, ensures even dims (-2).
         # -threads 1 (decoder, then the JPEG encoder) bounds memory and CPU;
         # -protocol_whitelist file keeps a crafted container from reaching the network.
@@ -148,6 +160,8 @@ class FfmpegVideoThumbnailer:
             seek,
             "-i",
             in_path,
+            "-map",
+            "0:v:0",
             "-frames:v",
             "1",
             "-vf",
@@ -169,6 +183,8 @@ class FfmpegVideoThumbnailer:
         except subprocess.TimeoutExpired:
             _log.warning("ffmpeg poster extraction timed out (seek=%s)", seek)
             return False
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            raise ThumbnailGenerationError("ffmpeg could not be started for the uploaded video") from exc
         if result.returncode != 0:
             _log.info("ffmpeg poster attempt failed (seek=%s, rc=%s)", seek, result.returncode)
             return False

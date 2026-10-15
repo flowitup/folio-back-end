@@ -114,7 +114,10 @@ class TestFfmpegHardening:
         assert ran == []  # ffmpeg never decoded it
 
     def test_a_frame_over_40_megapixels_is_refused(self, monkeypatch):
-        probe = {"format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"}, "streams": [{"width": 8000, "height": 5200}]}
+        probe = {
+            "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+            "streams": [{"codec_type": "video", "width": 8000, "height": 5200}],
+        }
         monkeypatch.setattr(
             subprocess,
             "run",
@@ -122,6 +125,44 @@ class TestFfmpegHardening:
         )
         with pytest.raises(ThumbnailGenerationError, match="8000x5200"):
             FfmpegVideoThumbnailer._probe("/nonexistent")
+
+    @pytest.mark.parametrize("big", ["7000x7000", "8200x16"])
+    def test_a_huge_second_video_stream_behind_a_tiny_first_one_is_refused(self, big):
+        with tempfile.NamedTemporaryFile(suffix=".mkv") as clip:
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y"]
+                + ["-f", "lavfi", "-i", "color=c=black:size=64x64:duration=1:rate=1"]
+                + ["-f", "lavfi", "-i", f"color=c=black:size={big}:duration=1:rate=1"]
+                + ["-map", "0:v", "-map", "1:v", "-c:v", "libx264", "-preset", "ultrafast", clip.name],
+                capture_output=True,
+                check=True,
+            )
+            with open(clip.name, "rb") as fh:
+                data = fh.read()
+        with pytest.raises(ThumbnailGenerationError, match="exceeds"):
+            FfmpegVideoThumbnailer().generate(data, "video/webm")
+
+    def test_ffmpeg_decodes_the_first_video_stream_only(self, monkeypatch):
+        clip = _clip("320x240")
+        calls = []
+        real_run = subprocess.run
+        monkeypatch.setattr(subprocess, "run", lambda args, **kw: calls.append(args) or real_run(args, **kw))
+        FfmpegVideoThumbnailer().generate(clip, "video/mp4")
+        ffmpeg_args = next(a for a in calls if a[0] == "ffmpeg")
+        assert ffmpeg_args[ffmpeg_args.index("-map") + 1] == "0:v:0"
+
+    @pytest.mark.parametrize(
+        "exc", [OSError("no exec"), subprocess.SubprocessError("preexec failed"), ValueError("rlimit")]
+    )
+    def test_a_child_that_cannot_start_is_a_thumbnail_error(self, monkeypatch, exc):
+        clip = _clip("64x64")
+
+        def boom(*a, **k):
+            raise exc
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        with pytest.raises(ThumbnailGenerationError):
+            FfmpegVideoThumbnailer().generate(clip, "video/mp4")
 
     @pytest.mark.parametrize(
         "payload",
