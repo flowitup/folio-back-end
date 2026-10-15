@@ -108,3 +108,10 @@ def test_unknown_event_or_missing_company_is_a_silent_no_op():
     notifier.admin_acted("invoice_created", actor_id=a, subject="x", project_id=uuid4())
     notifier.admin_acted("no_such_event", actor_id=a, subject="x", company_id=uuid4())
     assert sender.sent == []
+
+
+def test_an_action_made_with_an_api_key_names_the_key_in_the_actor():
+    a, b = uuid4(), uuid4()
+    notifier, sender, _ = _build([(a, "admin"), (b, "admin")])
+    notifier.admin_acted("invoice_created", actor_id=a, subject="F-12", project_id=uuid4(), via_api_key="Claude plugin")
+    assert sender.sent[0].body.startswith(f"user-{str(a)[:4]} (API key Claude plugin) · F-12")

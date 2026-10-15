@@ -132,6 +132,13 @@ def create_app(config_class: type = Config) -> Flask:
 
         authenticate_api_key_request()
 
+    # Writes a key may not make (membership, access, invitations, ...): default-deny, see the module.
+    @app.before_request
+    def _enforce_api_key_route_policy():
+        from app.api._helpers.api_key_request_auth import enforce_api_key_route_policy
+
+        return enforce_api_key_route_policy()
+
     limiter.init_app(app)
     # flask-limiter keys every limit on the client address, which behind cloudflared or the
     # Next.js server actions is the proxy rather than the visitor unless the forwarded one is

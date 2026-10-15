@@ -83,10 +83,12 @@ class CompanyActivityNotifier:
         project_id: Optional[UUID] = None,
         company_id: Optional[UUID] = None,
         about_user_id: Optional[UUID] = None,
+        via_api_key: Optional[str] = None,
     ) -> None:
         """Notify every admin of the company except ``actor_id``. Never raises.
 
-        ``about_user_id`` puts that person's name in front of ``subject`` (member events)."""
+        ``about_user_id`` puts that person's name in front of ``subject`` (member events);
+        ``via_api_key`` names the API key the action came through, so a key's use shows."""
         try:
             if event not in _EVENTS:
                 return
@@ -106,6 +108,8 @@ class CompanyActivityNotifier:
             looked_up = [actor_id] + ([about_user_id] if about_user_id is not None else [])
             names = self._names.display_names(looked_up)
             actor = names.get(actor_id, "?")
+            if via_api_key:
+                actor = f"{actor} (API key {via_api_key})"
             if about_user_id is not None:
                 subject = " ".join(part for part in (names.get(about_user_id, ""), subject) if part)
             site = project_label(project)

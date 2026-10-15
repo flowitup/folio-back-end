@@ -31,6 +31,7 @@ from app.api._helpers.validation_error import safe_validation_fields
 from app.api.openapi import openapi_doc
 from app.api.v1.api_keys import api_keys_bp
 from app.api.v1.api_keys.schemas import CreateApiKeyBody
+from app.api.v1.ops_context import is_platform_ops
 from app.application.api_keys.dtos import ApiKeyDto
 from app.application.api_keys.exceptions import (
     ApiKeyLimitReachedError,
@@ -105,6 +106,9 @@ def create_api_key() -> Any:
         return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
 
     actor_id = UUID(get_jwt_identity())
+    # A never-expiring key is not a credential a platform-ops account may hold (it would reach every tenant).
+    if is_platform_ops(actor_id):
+        return _err(403, "Forbidden", "Platform accounts cannot create API keys.")
     container = get_container()
     if container.create_api_key_usecase is None:
         raise RuntimeError("create_api_key_usecase not wired in container")
