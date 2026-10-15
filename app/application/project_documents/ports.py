@@ -94,6 +94,10 @@ class ITransactionalSession(Protocol):
         """Flush pending changes and commit the current transaction."""
         ...
 
+    def rollback(self) -> None:
+        """Roll back the current transaction (a failed flush leaves the session unusable until then)."""
+        ...
+
 
 @runtime_checkable
 class IFilenameSanitizer(Protocol):

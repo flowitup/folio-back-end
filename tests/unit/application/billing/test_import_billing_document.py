@@ -323,3 +323,46 @@ class TestImportDateOrder:
             _minimal_input(user_id, company_id), issue_date=date(2026, 5, 10), payment_due_date=date(2026, 5, 10)
         )
         assert uc.execute(inp, _FakeSession()).payment_due_date == date(2026, 5, 10)
+
+
+# ---------------------------------------------------------------------------
+# Document-number pattern: linear time, same meaning
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "number,expected",
+    [
+        ("FAC-2025-001", (2025, 1)),
+        ("FAC2025001", (2025, 1)),
+        ("DEV-2026-00003", (2026, 3)),
+        ("FLW-FACTURE-2026-007", (2026, 7)),
+        ("A-B-C-2024-9", (2024, 9)),
+        ("FAC-2025001", (2025, 1)),
+        ("FAC0026-ANN-2025-11/08", None),
+        ("2025-001", None),
+        ("FAC--2025-001", None),
+        ("-FAC-2025-001", None),
+        ("FAC-2025", None),
+        ("FAC-20251", (2025, 1)),
+        ("A" * 31 + "!", None),
+        ("A-" * 15 + "!", None),
+        ("A" * 32, None),
+    ],
+)
+def test_parse_year_seq_meaning_is_unchanged(number, expected):
+    from app.application.billing.import_billing_document_usecase import _parse_year_seq
+
+    assert _parse_year_seq(number) == expected
+
+
+@pytest.mark.parametrize("hostile", ["A" * 31 + "!", "A" * 5000 + "!", "A-" * 2500 + "!", "AB" * 2500 + "1x"])
+def test_parse_year_seq_is_linear_on_hostile_input(hostile):
+    """The former (?:[A-Za-z]+-?)+ pattern took ~12 s on 29 letters and a bad last character."""
+    import time
+
+    from app.application.billing.import_billing_document_usecase import _parse_year_seq
+
+    started = time.perf_counter()
+    assert _parse_year_seq(hostile) is None
+    assert time.perf_counter() - started < 0.05

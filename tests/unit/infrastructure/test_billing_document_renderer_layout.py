@@ -361,3 +361,39 @@ def test_xlsx_splits_the_issuer_address_over_rows():
     one_line = _cells(_sheet(_doc(issuer_address="9 rue du Test, 75011 Paris")))
     assert one_line["C2"] == "Siège : 9 rue du Test, 75011 Paris"
     assert one_line["B8"] == "Réf Devis"  # a one-line address keeps the source layout
+
+
+HOSTILE = ["=1+1", '=HYPERLINK("http://x","y")', "+SUM(A1)", "-2+3", "@SUM(A1)", "\t=1", "\r=1", "  =1+1"]
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_xlsx_hostile_text_in_every_user_field_never_becomes_a_formula(hostile):
+    doc = _doc(
+        document_number=hostile,
+        issuer_legal_name=hostile,
+        issuer_address=f"{hostile}\n{hostile}",
+        issuer_siret=hostile,
+        issuer_tva_number=hostile,
+        issuer_iban=hostile,
+        issuer_bic=hostile,
+        recipient_name=hostile,
+        recipient_address=hostile,
+        recipient_email=hostile,
+        payment_terms=hostile,
+        notes=hostile,
+        terms=hostile,
+        signature_block_text=hostile,
+        items=(_item(hostile, category=hostile), _item("Peinture", category=hostile)),
+    )
+    project = _project()
+    project.name = hostile
+    project.address = hostile
+    ws = _sheet(doc, project)
+    formulas = {c.coordinate for row in ws.iter_rows() for c in row if c.data_type == "f"}
+    # Only the computed totals (column K) are formulas: Montant HT of each item, Total HT, Total TTC.
+    assert formulas and all(coord.startswith("K") for coord in formulas), formulas
+    hostile_cells = [
+        c for row in ws.iter_rows() for c in row if isinstance(c.value, str) and hostile.replace("\r", "\n") in c.value
+    ]
+    assert hostile_cells
+    assert all(c.data_type == "s" and c.quotePrefix for c in hostile_cells if c.value == hostile.replace("\r", "\n"))

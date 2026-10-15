@@ -44,8 +44,11 @@ def create_app(config_class: type = Config) -> Flask:
     # HTTP errors under /api/ (bad JSON, unknown URL, unhandled 500) answer JSON, not HTML.
     from app.api._helpers.http_errors import register_json_error_handlers
     from app.api._helpers.nul_guard import register_nul_guard
+    from app.api._helpers.request_limits import register_request_limits
 
     register_json_error_handlers(app)
+    # First hook: each request gets the body cap its route needs before anything reads the body.
+    register_request_limits(app)
     # A NUL character in a request's text is a 400 up front, not a 500 from the database.
     register_nul_guard(app)
 
@@ -92,12 +95,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = config_class.DATABASE_URL
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Flask cap above the 150 MiB use-case limit (PROJECT_DOCUMENT_MAX_SIZE_BYTES)
-    # so multipart envelope overhead doesn't false-positive a 413 before the use-case
-    # can return its richer error. Invoice attachments have their own 10 MB cap enforced
-    # in the use-case layer (upload_attachment.py), so this bump does not relax that limit.
+    # MAX_CONTENT_LENGTH is set per request by app/api/_helpers/request_limits.py: a small
+    # default, and each multipart upload route's own file limit plus envelope headroom.
     # Multipart POST through CF is capped at 100 MB; presigned uploads bypass CF.
-    app.config["MAX_CONTENT_LENGTH"] = 151 * 1024 * 1024
 
     # Initialize extensions
     cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]

@@ -10,12 +10,27 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.api.v1.numeric_bounds import MAX_LIBRARY_AMOUNT
+from app.api.v1.url_scheme import normalize_http_url
 from app.domain.value_objects.library_category import is_valid_category_slug
 
 
 def _strip(v: object) -> object:
     """Trim names before min_length runs, so a name of spaces only is a 422, not a blank product."""
     return v.strip() if isinstance(v, str) else v
+
+
+def _http_url_or_none(max_length: int):
+    """Before-validator for an imported URL: a usable http(s) address, else None.
+
+    An import comes from scraped receipts; one odd link must not 422 the whole batch, and
+    must not be stored as a tel: / javascript: value either.
+    """
+
+    def validate(v: object) -> object:
+        url = normalize_http_url(v)
+        return url if url is not None and len(url) <= max_length else None
+
+    return validate
 
 
 def _strip_required(v: object) -> object:
@@ -45,6 +60,7 @@ class ImportRecordSchema(BaseModel):
     description: Optional[str] = Field(default=None, max_length=1000)
 
     _strip_name = field_validator("product_name", mode="before")(_strip)
+    _http_only = field_validator("product_url", mode="before")(_http_url_or_none(500))
 
 
 class ImportRequestSchema(BaseModel):
@@ -60,6 +76,10 @@ class ImportRequestSchema(BaseModel):
     records: List[ImportRecordSchema] = Field(min_length=1, max_length=1000)
 
     _strip_name = field_validator("supplier_name", mode="before")(_strip)
+    # The template carries a placeholder: only its scheme prefix is checked.
+    _http_only = field_validator("supplier_website_url", "supplier_product_url_template", mode="before")(
+        _http_url_or_none(500)
+    )
 
     @field_validator("records")
     @classmethod

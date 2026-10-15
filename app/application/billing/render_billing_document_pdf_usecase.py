@@ -14,6 +14,7 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
 )
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
+from app.domain.value_objects.display_filename import strip_control_chars
 
 
 @dataclass(frozen=True)
@@ -50,5 +51,6 @@ class RenderBillingDocumentPdfUseCase:
         _assert_billing_doc_access(doc, user_id, self._access_repo)
 
         pdf_bytes = self._pdf_renderer.render(doc, project=_linked_project(self._project_repo, doc))
-        filename = f"{doc.document_number}.pdf"
+        # An imported number may hold a line break, which Content-Disposition refuses.
+        filename = f"{strip_control_chars(doc.document_number) or 'document'}.pdf"
         return RenderPdfResult(content=pdf_bytes, filename=filename)

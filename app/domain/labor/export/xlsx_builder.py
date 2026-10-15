@@ -41,6 +41,7 @@ from app.domain.labor.export.format import format_eur_fr, format_generated_at
 from app.domain.labor.export.labels import month_label as month_name
 from app.domain.labor.export.labels import shift_label, t
 from app.domain.labor.export.models import ExportContext, MonthBucket
+from app.domain.services.xlsx_safe_cell import safe_cell, strip_formula_lead
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -198,17 +199,18 @@ def _write_header_block(ws: Worksheet, context: ExportContext, month_label: str 
     from_label = month_name(context.range.from_month, locale)
     to_label = month_name(context.range.to_month, locale)
 
-    ws["A1"] = t(locale, "title")
-    ws["A1"].font = Font(bold=True, size=14)
+    safe_cell(ws, 1, 1, t(locale, "title")).font = Font(bold=True, size=14)
 
-    ws["A2"] = t(locale, "project", name=context.project_name)
+    safe_cell(ws, 2, 1, t(locale, "project", name=context.project_name))
 
     if month_label:
-        ws["A3"] = t(locale, "month", month=month_label)
+        safe_cell(ws, 3, 1, t(locale, "month", month=month_label))
     else:
-        ws["A3"] = t(locale, "range", start=from_label, end=to_label)
+        safe_cell(ws, 3, 1, t(locale, "range", start=from_label, end=to_label))
 
-    ws["A4"] = t(locale, "generated", at=format_generated_at(context.generated_at), email=context.generated_by_email)
+    safe_cell(
+        ws, 4, 1, t(locale, "generated", at=format_generated_at(context.generated_at), email=context.generated_by_email)
+    )
 
     # Row 5 blank
     return 5
@@ -231,7 +233,7 @@ def _write_summary_table(
     # Header row
     hdr_row = start_row
     for i, key in enumerate(_SUMMARY_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=t(locale, key))
+        cell = safe_cell(ws, hdr_row, i + 1, t(locale, key))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -252,7 +254,7 @@ def _write_summary_table(
             agg.total_cost,
         ]
         for col_idx, val in enumerate(values):
-            cell = ws.cell(row=r, column=col_idx + 1, value=val)
+            cell = safe_cell(ws, r, col_idx + 1, val)
             cell.border = thin
             if col_idx in _SUMMARY_CURRENCY_COLS:
                 cell.number_format = EUR_FR_FORMAT
@@ -275,7 +277,7 @@ def _write_summary_table(
         sum(r.total_cost for r in agg_rows),
     ]
     for col_idx, val in enumerate(totals):
-        cell = ws.cell(row=footer_row, column=col_idx + 1, value=val)
+        cell = safe_cell(ws, footer_row, col_idx + 1, val)
         cell.font = _bold_font()
         cell.border = thick
         if col_idx in _SUMMARY_CURRENCY_COLS:
@@ -301,13 +303,13 @@ def _write_daily_detail(
     fill = _header_fill()
 
     # Section label
-    section_cell = ws.cell(row=start_row, column=1, value=t(locale, "daily_detail"))
+    section_cell = safe_cell(ws, start_row, 1, t(locale, "daily_detail"))
     section_cell.font = _bold_font()
 
     # Table header row
     hdr_row = start_row + 1
     for i, key in enumerate(_DETAIL_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=t(locale, key))
+        cell = safe_cell(ws, hdr_row, i + 1, t(locale, key))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -332,7 +334,7 @@ def _write_daily_detail(
             entry.note or "",
         ]
         for col_idx, val in enumerate(values):
-            cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
+            cell = safe_cell(ws, data_row, col_idx + 1, val)
             cell.border = thin
             if col_idx == 0:  # a real Excel date, so the column sorts and filters as dates
                 cell.number_format = "DD/MM/YYYY"
@@ -368,7 +370,7 @@ def _sanitize_sheet_name(name: str, fallback: str) -> str:
     sanitized = re.sub(r"[\[\]:*?/\\]", "", name).strip()
     if not sanitized:
         sanitized = fallback[:8] or "Worker"
-    return sanitized[:31]
+    return strip_formula_lead(sanitized)[:31] or "Worker"
 
 
 # ---------------------------------------------------------------------------
@@ -403,9 +405,7 @@ def _build_xlsx_single_worker(
     rate = context.worker_daily_rate
     rate_str = format_eur_fr(rate)  # "100,56 €" as in the PDF; "—" when unknown
     locale = context.locale
-    ws.cell(row=next_row, column=1, value=t(locale, "worker_rate", name=worker_name, rate=rate_str)).font = Font(
-        italic=True
-    )
+    safe_cell(ws, next_row, 1, t(locale, "worker_rate", name=worker_name, rate=rate_str)).font = Font(italic=True)
     next_row += 1  # advance past worker sub-header (row 6 is now available for data)
 
     all_empty = all(not bucket.summary.rows and not bucket.daily_entries for bucket in buckets) if buckets else True
@@ -413,8 +413,8 @@ def _build_xlsx_single_worker(
     if all_empty:
         from_label = month_name(context.range.from_month, locale)
         to_label = month_name(context.range.to_month, locale)
-        ws.cell(row=next_row, column=1, value=t(locale, "no_entries_range", start=from_label, end=to_label)).font = (
-            Font(italic=True)
+        safe_cell(ws, next_row, 1, t(locale, "no_entries_range", start=from_label, end=to_label)).font = Font(
+            italic=True
         )
         _set_summary_col_widths(ws)
         _set_detail_col_widths(ws)
@@ -424,7 +424,7 @@ def _build_xlsx_single_worker(
         month_label = month_name(bucket.month, locale)
 
         # Month section label
-        label_cell = ws.cell(row=next_row, column=1, value=month_label)
+        label_cell = safe_cell(ws, next_row, 1, month_label)
         label_cell.font = Font(bold=True, size=12)
         next_row += 1
 
@@ -433,7 +433,7 @@ def _build_xlsx_single_worker(
         if month_rows:
             next_row = _write_summary_table(ws, start_row=next_row, agg_rows=month_rows, locale=locale)
         else:
-            ws.cell(row=next_row, column=1, value=t(locale, "no_entries_month")).font = Font(italic=True)
+            safe_cell(ws, next_row, 1, t(locale, "no_entries_month")).font = Font(italic=True)
             next_row += 1
 
         _set_summary_col_widths(ws)
@@ -489,8 +489,9 @@ def build_xlsx(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
     if all_empty:
         from_label = month_name(context.range.from_month, locale)
         to_label = month_name(context.range.to_month, locale)
-        ws_summary["A6"] = t(locale, "no_entries_range", start=from_label, end=to_label)
-        ws_summary["A6"].font = Font(italic=True)
+        safe_cell(ws_summary, 6, 1, t(locale, "no_entries_range", start=from_label, end=to_label)).font = Font(
+            italic=True
+        )
         _set_summary_col_widths(ws_summary)
         buf = BytesIO()
         wb.save(buf)

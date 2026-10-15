@@ -212,3 +212,10 @@ def test_vat_split_rounds_each_line_like_the_total():
     with_vat = _make_invoice(invoice_type=InvoiceType.MATERIALS_SERVICES)
     with_vat.items[:] = [vat_line]
     assert _vat_split(with_vat) == (Decimal("5.00"), Decimal("0.28"))
+
+
+def test_notes_and_address_at_the_schema_caps_still_lay_out():
+    """5000-char notes and a 1000-char address (the API caps) must not raise LayoutError."""
+    inv = _make_invoice(notes=("Prévoir une bâche de protection. " * 200)[:5000])
+    inv.recipient_address = "12 rue des Lilas, 75011 Paris " * 33
+    assert build_pdf(_make_context(), _make_bundle([inv])).startswith(b"%PDF-")

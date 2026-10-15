@@ -40,6 +40,7 @@ from app.domain.invoice.export.format import (
 from app.domain.invoice.export.labels import t
 from app.domain.invoice.export.models import InvoiceBundle, InvoiceExportContext, TypeSubtotal
 from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.services.xlsx_safe_cell import safe_cell
 
 # ---------------------------------------------------------------------------
 # Column definitions
@@ -110,7 +111,7 @@ def _money(value: Decimal) -> float:
 
 def _merge_and_write(ws: Worksheet, row: int, start_col: int, end_col: int, value: str, font: Font) -> None:
     ws.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=end_col)
-    cell = ws.cell(row=row, column=start_col, value=value)
+    cell = safe_cell(ws, row, start_col, value)
     cell.font = font
     cell.alignment = Alignment(horizontal="left", vertical="center")
 
@@ -155,7 +156,7 @@ def _write_summary_header_band(ws: Worksheet, context: InvoiceExportContext) -> 
             email=context.generated_by_email,
         )
     )
-    cell2 = ws.cell(row=2, column=1, value=meta)
+    cell2 = safe_cell(ws, 2, 1, meta)
     cell2.font = Font(italic=True, size=9)
 
     # Row 3 blank
@@ -180,16 +181,16 @@ def _write_kpi_table(ws: Worksheet, start_row: int, context: InvoiceExportContex
 
     for i, (label, value) in enumerate(kpi_rows):
         r = start_row + i
-        label_cell = ws.cell(row=r, column=1, value=label)
+        label_cell = safe_cell(ws, r, 1, label)
         label_cell.font = _bold_font(10)
         label_cell.fill = fill
         label_cell.border = thin
 
         if isinstance(value, Decimal):  # money rows — write float once, apply currency format
-            val_cell = ws.cell(row=r, column=2, value=_money(value))
+            val_cell = safe_cell(ws, r, 2, _money(value))
             val_cell.number_format = EUR_FR_FORMAT
         else:
-            val_cell = ws.cell(row=r, column=2, value=value)
+            val_cell = safe_cell(ws, r, 2, value)
             val_cell.alignment = Alignment(horizontal="left")
         val_cell.border = thin
 
@@ -205,13 +206,13 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
     fill = _header_fill()
 
     # Heading
-    heading_cell = ws.cell(row=start_row, column=1, value=t(locale, "subtotals_by_type"))
+    heading_cell = safe_cell(ws, start_row, 1, t(locale, "subtotals_by_type"))
     heading_cell.font = _bold_font(11)
 
     # Header row
     hdr_row = start_row + 1
     for i, label in enumerate(_SUBTYPE_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=t(locale, label))
+        cell = safe_cell(ws, hdr_row, i + 1, t(locale, label))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -222,7 +223,7 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
     for sub in subtotals:
         cells_data = [subtotal_type_label(sub, locale), sub.invoice_count, sub.total_amount]
         for col_idx, val in enumerate(cells_data):
-            cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
+            cell = safe_cell(ws, data_row, col_idx + 1, val)
             cell.border = thin
             if col_idx == 2:  # Total column — currency
                 cell.value = _money(sub.total_amount)
@@ -245,13 +246,13 @@ def _write_invoices_section(
     grand_fill = _grand_total_fill()
 
     # Section heading
-    heading_cell = ws.cell(row=start_row, column=1, value=t(locale, "invoices"))
+    heading_cell = safe_cell(ws, start_row, 1, t(locale, "invoices"))
     heading_cell.font = _bold_font(11)
 
     # Header row
     hdr_row = start_row + 1
     for i, label in enumerate(_INVOICE_HEADERS):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=_header(locale, label))
+        cell = safe_cell(ws, hdr_row, i + 1, _header(locale, label))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -271,7 +272,7 @@ def _write_invoices_section(
             _money(inv.total_amount),
         ]
         for col_idx, val in enumerate(values):
-            cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
+            cell = safe_cell(ws, data_row, col_idx + 1, val)
             cell.border = thin
             if col_idx == 5:  # Total column — currency
                 cell.number_format = EUR_FR_FORMAT
@@ -291,7 +292,7 @@ def _write_invoices_section(
         cell.fill = grand_fill
         cell.font = _bold_font()
 
-    ws.cell(row=grand_row, column=1, value=t(locale, "grand_total_row")).font = _bold_font()
+    safe_cell(ws, grand_row, 1, t(locale, "grand_total_row")).font = _bold_font()
     ws.cell(row=grand_row, column=1).border = thick
     ws.cell(row=grand_row, column=1).fill = grand_fill
 
@@ -342,12 +343,12 @@ def _write_type_sheet(
 
     # Row 2 — meta
     meta = t(context.locale, "range", start=from_label, end=to_label)
-    ws.cell(row=2, column=1, value=meta).font = _italic_font(9)
+    safe_cell(ws, 2, 1, meta).font = _italic_font(9)
 
     # Row 3 blank → header at row 4
     hdr_row = 4
     for i, label in enumerate(headers):
-        cell = ws.cell(row=hdr_row, column=i + 1, value=_header(context.locale, label))
+        cell = safe_cell(ws, hdr_row, i + 1, _header(context.locale, label))
         cell.font = _bold_font()
         cell.border = thin
         cell.fill = fill
@@ -363,7 +364,7 @@ def _write_type_sheet(
             values.append(inv.service_month)
         values.append(_money(inv.total_amount))
         for col_idx, val in enumerate(values):
-            cell = ws.cell(row=data_row, column=col_idx + 1, value=val)
+            cell = safe_cell(ws, data_row, col_idx + 1, val)
             cell.border = thin
             if col_idx == total_col_idx:  # Total
                 cell.number_format = EUR_FR_FORMAT
@@ -385,7 +386,7 @@ def _write_type_sheet(
         cell.border = thick
         cell.font = _bold_font()
 
-    ws.cell(row=footer_row, column=1, value=t(context.locale, "total_row")).font = _bold_font()
+    safe_cell(ws, footer_row, 1, t(context.locale, "total_row")).font = _bold_font()
     ws.cell(row=footer_row, column=1).border = thick
 
     total_cell = ws.cell(row=footer_row, column=len(headers), value=_money(type_total))

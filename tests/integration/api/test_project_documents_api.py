@@ -1180,3 +1180,84 @@ class TestListDocumentUploaders:
         assert all(
             "no-email" not in i["display_name"] and "deleted.invalid" not in i["display_name"] for i in items.values()
         )
+
+
+# ===========================================================================
+# CONFIRM  POST /api/v1/projects/<pid>/documents/confirm — replays keep the stored file
+# ===========================================================================
+
+
+class TestConfirmReplayKeepsTheStoredObject:
+    @pytest.fixture(autouse=True)
+    def _wire_confirm(self, doc_app):
+        from app import db
+        from app.application.project_documents.confirm_project_document_upload import (
+            ConfirmProjectDocumentUploadUseCase,
+        )
+        from app.infrastructure.adapters.in_memory_document_storage import InMemoryDocumentStorage
+        from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFilenameSanitizer
+        from app.infrastructure.database.repositories.sqlalchemy_project_document_repository import (
+            SqlAlchemyProjectDocumentRepository,
+        )
+        from wiring import get_container
+
+        c = get_container()
+        repo, storage = SqlAlchemyProjectDocumentRepository(db.session), InMemoryDocumentStorage()
+        saved = (c.project_document_repository, c.document_storage, c.confirm_project_document_usecase)
+        c.project_document_repository, c.document_storage = repo, storage
+        c.confirm_project_document_usecase = ConfirmProjectDocumentUploadUseCase(
+            repo=repo, storage=storage, db_session=db.session, filename_sanitizer=WerkzeugFilenameSanitizer()
+        )
+        yield
+        c.project_document_repository, c.document_storage, c.confirm_project_document_usecase = saved
+
+    def _put_object(self, project_id: str) -> tuple[str, str]:
+        from wiring import get_container
+
+        doc_id = str(uuid4())
+        key = f"project-documents/{project_id}/{doc_id}/plan.pdf"
+        get_container().document_storage.put(key, io.BytesIO(b"%PDF-1.4 plan"), "application/pdf")
+        return doc_id, key
+
+    def _confirm(self, client, token, project_id, doc_id, key):
+        return client.post(
+            f"/api/v1/projects/{project_id}/documents/confirm",
+            json={
+                "doc_id": doc_id,
+                "storage_key": key,
+                "filename": "plan.pdf",
+                "content_type": "application/pdf",
+                "size_bytes": 13,
+            },
+            headers=_auth(token),
+        )
+
+    def test_confirming_twice_returns_the_document_and_keeps_the_file(self, doc_client, owner_token, doc_app):
+        from wiring import get_container
+
+        project_id = doc_app._doc_project_id
+        doc_id, key = self._put_object(project_id)
+
+        first = self._confirm(doc_client, owner_token, project_id, doc_id, key)
+        second = self._confirm(doc_client, owner_token, project_id, doc_id, key)
+
+        assert first.status_code == 201, first.get_data(as_text=True)
+        assert second.status_code == 201, second.get_data(as_text=True)
+        assert second.get_json()["id"] == first.get_json()["id"] == doc_id
+        assert get_container().document_storage.has(key)
+        listed = doc_client.get(_docs_url(project_id), headers=_auth(owner_token)).get_json()["items"]
+        assert [d["id"] for d in listed].count(doc_id) == 1
+
+    def test_confirming_a_deleted_document_is_a_409_and_keeps_the_file(self, doc_client, owner_token, doc_app):
+        from wiring import get_container
+
+        project_id = doc_app._doc_project_id
+        doc_id, key = self._put_object(project_id)
+        assert self._confirm(doc_client, owner_token, project_id, doc_id, key).status_code == 201
+        assert doc_client.delete(_delete_url(project_id, doc_id), headers=_auth(owner_token)).status_code in (200, 204)
+
+        resp = self._confirm(doc_client, owner_token, project_id, doc_id, key)
+
+        assert resp.status_code == 409, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "DOCUMENT_ALREADY_EXISTS"
+        assert get_container().document_storage.has(key)
