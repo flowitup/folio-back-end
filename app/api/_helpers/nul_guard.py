@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from flask import Flask, Response, jsonify, request
 from sqlalchemy.exc import DataError
+from werkzeug.exceptions import RequestEntityTooLarge
 
 NUL_MESSAGE = "Text contains an invalid character (NUL)."
 
@@ -48,7 +49,13 @@ def nul_error_response() -> tuple[Response, int]:
 
 def reject_nul_characters() -> tuple[Response, int] | None:
     """``before_request`` hook: a 400 when an /api/ request carries a NUL character."""
-    if request.path.startswith("/api/") and _request_has_nul():
+    if not request.path.startswith("/api/"):
+        return None
+    # Never parse more than the request is allowed to carry (the cap is set by request_limits).
+    limit = request.max_content_length
+    if limit is not None and request.content_length is not None and request.content_length > limit:
+        raise RequestEntityTooLarge()
+    if _request_has_nul():
         return nul_error_response()
     return None
 
