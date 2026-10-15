@@ -27,6 +27,8 @@ from app.domain.value_objects.display_filename import strip_control_chars
 
 _log = logging.getLogger(__name__)
 
+_NO_ROW = object()
+
 
 class DocumentNotInStorageError(Exception):
     """Raised when confirm is called but the object is not found in S3."""
@@ -36,6 +38,12 @@ class DocumentNotInStorageError(Exception):
 
 class StorageKeyMismatchError(Exception):
     """Raised when the storage key is not the one presign issued for this doc_id and filename."""
+
+    pass
+
+
+class DocumentAlreadyConfirmedError(Exception):
+    """Raised when doc_id already has a row that this confirm cannot be a retry of (e.g. it was deleted)."""
 
     pass
 
@@ -80,6 +88,9 @@ class ConfirmProjectDocumentUploadUseCase:
             UnsupportedDocumentTypeError: Filename or MIME type not allowed.
             StorageKeyMismatchError: storage_key is not the key presign issued
                 for this doc_id and filename.
+            DocumentAlreadyConfirmedError: doc_id already has a deleted or foreign row.
+                A repeated confirm of a live document just returns it; neither case
+                ever deletes the stored object, which that row owns.
             DocumentNotInStorageError: Object not found at storage_key.
             EmptyFileError / DocumentFileTooLargeError: The stored object is
                 empty or over MAX_SIZE_BYTES (it is deleted).
@@ -90,6 +101,11 @@ class ConfirmProjectDocumentUploadUseCase:
         validate_file_type(sanitized, content_type)
         if storage_key != f"project-documents/{project_id}/{doc_id}/{sanitized}":
             raise StorageKeyMismatchError("storage_key does not match this document and filename")
+
+        # --- A retry (double click, timeout) of a confirm that already succeeded ---
+        existing = self._repo.find_by_id(doc_id)
+        if existing is not None:
+            return self._existing_or_conflict(existing, project_id, storage_key)
 
         # --- Verify the object actually landed in S3 ---
         head = self._storage.head_object(storage_key)
@@ -122,9 +138,33 @@ class ConfirmProjectDocumentUploadUseCase:
             self._db_session.commit()
             return saved
         except Exception:
-            # Orphan cleanup — same pattern as UploadProjectDocumentUseCase
-            self._discard(storage_key)
+            # Orphan cleanup, but only when no row owns the object: a concurrent confirm of
+            # the same document may have just saved it, and its file must survive.
+            winner = self._row_owning(doc_id)
+            if winner is _NO_ROW:
+                self._discard(storage_key)
+            elif isinstance(winner, ProjectDocument):
+                try:
+                    return self._existing_or_conflict(winner, project_id, storage_key)
+                except DocumentAlreadyConfirmedError:
+                    pass
             raise
+
+    @staticmethod
+    def _existing_or_conflict(existing: ProjectDocument, project_id: UUID, storage_key: str) -> ProjectDocument:
+        if existing.deleted_at is None and existing.project_id == project_id and existing.storage_key == storage_key:
+            return existing
+        raise DocumentAlreadyConfirmedError("A document with this id already exists")
+
+    def _row_owning(self, doc_id: UUID) -> object:
+        """The row for doc_id after a failed save, _NO_ROW when none exists, None when that cannot be told."""
+        try:
+            self._db_session.rollback()
+            row = self._repo.find_by_id(doc_id)
+        except Exception:
+            _log.warning("Could not check whether document %s was saved; keeping its storage object", doc_id)
+            return None
+        return _NO_ROW if row is None else row
 
     def _discard(self, storage_key: str) -> None:
         """Delete an object that will never get a DB row; a failure is only logged."""

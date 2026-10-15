@@ -25,6 +25,7 @@ from app.infrastructure.adapters.werkzeug_filename_sanitizer import WerkzeugFile
 def _use_case(content_length=10):
     repo = MagicMock(spec=IProjectDocumentRepository)
     repo.save.side_effect = lambda doc: doc
+    repo.find_by_id.return_value = None
     storage = MagicMock(spec=IDocumentStorage)
     storage.head_object.return_value = {"ContentLength": content_length}
     uc = ConfirmProjectDocumentUploadUseCase(
@@ -113,3 +114,124 @@ def test_an_unlisted_dwg_mime_is_stored_as_the_generic_type():
     uc, repo, _ = _use_case()
     doc = _confirm(uc, filename="plan.dwg", content_type="application/" + "x" * 300)
     assert doc.content_type == "application/octet-stream"
+
+
+# ---------------------------------------------------------------------------
+# Replays and races never delete the stored object
+# ---------------------------------------------------------------------------
+
+
+def _saved_document(project_id, doc_id, key, deleted_at=None):
+    from datetime import datetime, timezone
+
+    from app.domain.project_document import ProjectDocument
+
+    return ProjectDocument(
+        id=doc_id,
+        project_id=project_id,
+        uploader_user_id=uuid4(),
+        filename="plan.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        storage_key=key,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        deleted_at=deleted_at,
+    )
+
+
+def _execute(uc, project_id, doc_id, key):
+    return uc.execute(
+        project_id=project_id,
+        doc_id=doc_id,
+        storage_key=key,
+        filename="plan.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+        uploader_user_id=uuid4(),
+    )
+
+
+def test_replaying_a_confirm_returns_the_existing_document_and_deletes_nothing():
+    uc, repo, storage = _use_case()
+    project_id, doc_id = uuid4(), uuid4()
+    key = f"project-documents/{project_id}/{doc_id}/plan.pdf"
+    existing = _saved_document(project_id, doc_id, key)
+    repo.find_by_id.return_value = existing
+
+    assert _execute(uc, project_id, doc_id, key) is existing
+    repo.save.assert_not_called()
+    storage.delete.assert_not_called()
+
+
+def test_replaying_a_confirm_whose_object_is_now_oversized_still_deletes_nothing():
+    uc, repo, storage = _use_case(content_length=MAX_SIZE_BYTES + 1)
+    project_id, doc_id = uuid4(), uuid4()
+    key = f"project-documents/{project_id}/{doc_id}/plan.pdf"
+    repo.find_by_id.return_value = _saved_document(project_id, doc_id, key)
+
+    _execute(uc, project_id, doc_id, key)
+    storage.delete.assert_not_called()
+
+
+def test_confirming_a_soft_deleted_document_is_a_conflict_and_deletes_nothing():
+    from datetime import datetime, timezone
+
+    from app.application.project_documents.confirm_project_document_upload import DocumentAlreadyConfirmedError
+
+    uc, repo, storage = _use_case()
+    project_id, doc_id = uuid4(), uuid4()
+    key = f"project-documents/{project_id}/{doc_id}/plan.pdf"
+    repo.find_by_id.return_value = _saved_document(project_id, doc_id, key, deleted_at=datetime.now(timezone.utc))
+
+    with pytest.raises(DocumentAlreadyConfirmedError):
+        _execute(uc, project_id, doc_id, key)
+    repo.save.assert_not_called()
+    storage.delete.assert_not_called()
+
+
+def test_confirming_a_doc_id_owned_by_another_project_is_a_conflict_and_deletes_nothing():
+    from app.application.project_documents.confirm_project_document_upload import DocumentAlreadyConfirmedError
+
+    uc, repo, storage = _use_case()
+    project_id, doc_id = uuid4(), uuid4()
+    key = f"project-documents/{project_id}/{doc_id}/plan.pdf"
+    repo.find_by_id.return_value = _saved_document(uuid4(), doc_id, key)
+
+    with pytest.raises(DocumentAlreadyConfirmedError):
+        _execute(uc, project_id, doc_id, key)
+    storage.delete.assert_not_called()
+
+
+def test_a_concurrent_confirm_that_wins_the_race_keeps_the_object_and_is_returned():
+    from sqlalchemy.exc import IntegrityError
+
+    uc, repo, storage = _use_case()
+    project_id, doc_id = uuid4(), uuid4()
+    key = f"project-documents/{project_id}/{doc_id}/plan.pdf"
+    winner = _saved_document(project_id, doc_id, key)
+    repo.find_by_id.side_effect = [None, winner]  # nothing at first, the other request's row after our insert fails
+    repo.save.side_effect = IntegrityError("insert", {}, Exception("duplicate key"))
+
+    assert _execute(uc, project_id, doc_id, key) is winner
+    storage.delete.assert_not_called()
+    uc._db_session.rollback.assert_called_once()
+
+
+def test_a_genuine_save_failure_still_discards_the_orphan_object():
+    uc, repo, storage = _use_case()
+    repo.find_by_id.return_value = None
+    repo.save.side_effect = RuntimeError("database is down")
+
+    with pytest.raises(RuntimeError):
+        _confirm(uc)
+    storage.delete.assert_called_once()
+
+
+def test_when_the_row_cannot_be_checked_after_a_failure_the_object_is_kept():
+    uc, repo, storage = _use_case()
+    repo.find_by_id.side_effect = [None, RuntimeError("database is down")]
+    repo.save.side_effect = RuntimeError("database is down")
+
+    with pytest.raises(RuntimeError):
+        _confirm(uc)
+    storage.delete.assert_not_called()
