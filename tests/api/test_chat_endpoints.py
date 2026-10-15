@@ -282,6 +282,82 @@ class TestAttachments:
         assert download.mimetype == "image/png"
         assert inv_client.get(url, headers=_auth(outsider_token)).status_code == 403
 
+    def test_filename_with_a_line_break_is_sanitised_and_downloadable(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        key = _project_key(invitation_app)
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        boundary = "folio-boundary"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="a.png"; '
+                "filename*=UTF-8''a%0D%0AX-Evil%3A%201.png\r\n"
+                "Content-Type: image/png\r\n\r\n"
+            ).encode()
+            + png
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data=body,
+            content_type=f"multipart/form-data; boundary={boundary}",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        attachment = resp.get_json()["attachment"]
+        assert "\r" not in attachment["filename"] and "\n" not in attachment["filename"]
+
+        download = inv_client.get(attachment["url"], headers=_auth(admin_token))
+        assert download.status_code == 200
+        assert all("\r" not in v and "\n" not in v for _, v in download.headers)
+
+    def test_an_already_stored_line_break_filename_is_still_served(
+        self, inv_client, member_token, admin_token, invitation_app
+    ):
+        from app import db
+        from app.infrastructure.database.models.chat_message import ChatMessageOrm
+
+        key = _project_key(invitation_app)
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data={"file": (io.BytesIO(png), "ok.png", "image/png")},
+            content_type="multipart/form-data",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        message_id = resp.get_json()["id"]
+        with invitation_app.app_context():
+            row = db.session.get(ChatMessageOrm, uuid.UUID(message_id))
+            row.attachment_filename = "legacy\r\nX-Evil: 1.png"
+            db.session.commit()
+
+        download = inv_client.get(f"/api/v1/chat/messages/{message_id}/attachment", headers=_auth(admin_token))
+        assert download.status_code == 200
+        assert all("\r" not in v and "\n" not in v for _, v in download.headers)
+
+    def test_a_filename_made_only_of_control_characters_falls_back(self, inv_client, member_token, invitation_app):
+        key = _project_key(invitation_app)
+        boundary = "folio-boundary"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="a.png"; filename*=UTF-8\'\'%0D%0A%09\r\n'
+                "Content-Type: image/png\r\n\r\n"
+            ).encode()
+            + b"\x89PNG\r\n\x1a\n0000"
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/{key}/messages",
+            data=body,
+            content_type=f"multipart/form-data; boundary={boundary}",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 201, resp.get_json()
+        assert resp.get_json()["attachment"]["filename"] == "attachment"
+
     def test_image_only_message_allowed(self, inv_client, member_token, invitation_app):
         key = _project_key(invitation_app)
         resp = inv_client.post(
