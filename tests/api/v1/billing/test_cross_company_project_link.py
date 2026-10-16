@@ -1,8 +1,8 @@
 """A facture linked to a project of another company never moves money into it.
 
-A subcontractor who really belongs to a project of another company may still link their own
-company's documents to it, but the paid facture must not inject a released_funds row there (the
-project's own admins could not remove it), and a creator who was unassigned cannot link at all.
+Since QA round 3 (company-scope) a document cannot be linked to another company's project at
+all (400), so a paid facture never injects a released_funds row there; a creator who was
+unassigned cannot link at all either.
 """
 
 from __future__ import annotations
@@ -86,23 +86,15 @@ def test_paid_facture_releases_funds_into_its_own_companys_project(inv_client, a
     assert _releases(invitation_app, projects["own"]) == 1
 
 
-def test_paid_facture_of_another_companys_project_releases_nothing(inv_client, admin_token, invitation_app, projects):
+def test_a_facture_cannot_be_linked_to_another_companys_project(inv_client, admin_token, invitation_app, projects):
+    """QA3 company-scope: a document stays inside its issuer's company (400 ProjectCompanyMismatch),
+    so it can never move money into another company's project either."""
     created = _facture(inv_client, admin_token, invitation_app, projects["assigned"])
-    assert created.status_code == 201, created.get_data(as_text=True)
-    doc_id = created.get_json()["id"]
-    _pay(inv_client, admin_token, doc_id)
-    assert _releases(invitation_app, projects["assigned"]) == 0
-
-    edited = inv_client.put(
-        f"/api/v1/billing-documents/{doc_id}",
-        json={"recipient_name": "Renamed after paid"},
-        headers=_auth(admin_token),
-    )
-    assert edited.status_code == 200, edited.get_data(as_text=True)
+    assert created.status_code == 400, created.get_data(as_text=True)
     assert _releases(invitation_app, projects["assigned"]) == 0
 
 
-def test_relinking_a_paid_facture_to_another_companys_project_removes_its_release(
+def test_relinking_a_paid_facture_to_another_companys_project_is_refused(
     inv_client, admin_token, invitation_app, projects
 ):
     created = _facture(inv_client, admin_token, invitation_app, projects["own"])
@@ -112,8 +104,8 @@ def test_relinking_a_paid_facture_to_another_companys_project_removes_its_releas
     moved = inv_client.put(
         f"/api/v1/billing-documents/{doc_id}", json={"project_id": projects["assigned"]}, headers=_auth(admin_token)
     )
-    assert moved.status_code == 200, moved.get_data(as_text=True)
-    assert _releases(invitation_app, projects["own"]) == before - 1
+    assert moved.status_code == 400, moved.get_data(as_text=True)
+    assert _releases(invitation_app, projects["own"]) == before
     assert _releases(invitation_app, projects["assigned"]) == 0
 
 

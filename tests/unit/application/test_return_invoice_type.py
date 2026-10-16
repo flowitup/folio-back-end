@@ -30,7 +30,6 @@ from app.domain.exceptions.invoice_exceptions import (
 )
 from app.domain.value_objects.invoice_item import InvoiceItem
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -414,12 +413,13 @@ class TestUpdateEffectiveTypeSignGuard:
 
         repo = _make_mock_repo(find_by_id_result=existing)
         uc = UpdateInvoiceUseCase(repo)
+        # A negative line is fine on a purchase as long as the total stays >= 0 (billing, QA3).
         req = UpdateInvoiceRequest(
             invoice_id=existing.id,
-            items=[_make_item(-50.0)],
+            items=[_make_item(100.0), _make_item(-50.0)],
         )
         result = uc.execute(req)
-        assert result.total_amount == -50.0
+        assert result.total_amount == 50.0
 
     def test_patch_negative_items_on_labor_without_type_raises(self):
         """PATCH negative item on existing labor invoice without resending type → 400."""
@@ -476,13 +476,25 @@ class TestUpdateEffectiveTypeSignGuard:
             uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, type=new_type))
         repo.update.assert_not_called()
 
-    def test_type_only_patch_of_a_return_to_materials_services_is_allowed(self):
-        """materials_services is mixed-sign, so negative stored lines may stay."""
+    def test_type_only_patch_of_a_return_to_materials_services_needs_a_non_negative_total(self):
+        """materials_services takes negative lines, but a purchase never totals below zero (billing,
+        QA3): retyping a -50 return without new lines is refused, with lines that total >= 0 it passes."""
         existing = _make_invoice(invoice_type=InvoiceType.RETURN, unit_price=-50.0)
-        uc = UpdateInvoiceUseCase(_make_mock_repo(find_by_id_result=existing))
-        result = uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, type=InvoiceType.MATERIALS_SERVICES))
+        repo = _make_mock_repo(find_by_id_result=existing)
+        uc = UpdateInvoiceUseCase(repo)
+        with pytest.raises(InvalidInvoiceDataError, match="cannot be negative"):
+            uc.execute(UpdateInvoiceRequest(invoice_id=existing.id, type=InvoiceType.MATERIALS_SERVICES))
+        repo.update.assert_not_called()
+
+        result = uc.execute(
+            UpdateInvoiceRequest(
+                invoice_id=existing.id,
+                type=InvoiceType.MATERIALS_SERVICES,
+                items=[_make_item(80.0), _make_item(-30.0)],
+            )
+        )
         assert result.type == "materials_services"
-        assert result.total_amount == -50.0
+        assert result.total_amount == 50.0
 
 
 # ---------------------------------------------------------------------------
