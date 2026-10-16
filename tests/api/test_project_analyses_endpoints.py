@@ -906,8 +906,9 @@ class TestGetAnalysisContentEndpoint:
         )
         assert resp.status_code == 200
         directives = [d.strip() for d in resp.headers.get("Content-Security-Policy", "").split(";")]
-        assert "sandbox allow-scripts" in directives
+        assert "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox" in directives
         assert "allow-same-origin" not in resp.headers["Content-Security-Policy"]
+        assert "allow-top-navigation" not in resp.headers["Content-Security-Policy"]
 
     def test_404_missing_analysis(self, inv_client, member_token, analyses_app):
         """Non-existent analysis → 404."""

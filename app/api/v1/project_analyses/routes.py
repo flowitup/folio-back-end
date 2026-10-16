@@ -361,7 +361,11 @@ def get_analysis_content(project_id: UUID, analysis_id: UUID) -> Any:
         "default-src 'none'; img-src 'self' data: https:; "
         "style-src 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; frame-ancestors 'self'; "
-        "sandbox allow-scripts"
+        # Popups let the report's links open in a new tab (a CSP sandbox is intersected
+        # with the iframe's sandbox attribute, so without them every link is dead).
+        # Never allow-same-origin or allow-top-navigation: the opaque origin keeps the
+        # report away from Folio's cookies and page.
+        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
     )
     return response
 
