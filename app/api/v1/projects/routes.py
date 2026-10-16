@@ -1,5 +1,6 @@
 """Project API routes."""
 
+import logging
 from decimal import Decimal
 from uuid import UUID
 
@@ -45,6 +46,8 @@ from app.domain.entities.project_membership import ProjectMembership
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError, InvalidProjectDataError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+logger = logging.getLogger(__name__)
 
 # Zero rollup for projects with no spend, or when the reader is not wired.
 _NO_SPEND = ProjectSpent(
@@ -592,6 +595,12 @@ def delete_project(project_id: str):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.delete_project_usecase.execute(UUID(project_id))
+    # Bell entries about the project would only lead to "page not found" now.
+    if container.notification_event_repository is not None:
+        try:
+            container.notification_event_repository.delete_matching(match={"project_id": str(project_id)})
+        except Exception:
+            logger.exception("bell cleanup failed for deleted project %s", project_id)
     # The project row is gone, so name it and its company here rather than letting the notifier look it up.
     notify_admins("project_deleted", project_label(project), company_id=getattr(project, "company_id", None))
     return "", 204

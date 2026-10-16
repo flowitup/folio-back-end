@@ -68,13 +68,16 @@ def _entry_subject(worker_id: str, day: str) -> str:
         return ""
 
 
-def _existing_entry_subject(entry_id: str) -> str:
-    """Same label for an entry about to be deleted; empty if it cannot be resolved."""
+def _existing_entry_subject(entry_id: str) -> tuple:
+    """Same label for an entry about to be deleted, plus its day (the apps open the calendar
+    on it); empty strings if it cannot be resolved."""
     try:
         entry = get_container().labor_entry_repository.find_by_id(UUID(entry_id))
-        return _entry_subject(str(entry.worker_id), entry.date.isoformat()) if entry is not None else ""
+        if entry is None:
+            return "", ""
+        return _entry_subject(str(entry.worker_id), entry.date.isoformat()), entry.date.isoformat()
     except Exception:
-        return ""
+        return "", ""
 
 
 def _notify_logged(project_id: str, day: str, worker_ids: list) -> None:
@@ -453,7 +456,12 @@ def update_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
-    notify_admins("attendance_edited", _entry_subject(result.worker_id, result.date), project_id=project_id)
+    notify_admins(
+        "attendance_edited",
+        _entry_subject(result.worker_id, result.date),
+        project_id=project_id,
+        extra_data={"date": str(result.date)[:10]} if result.date else None,
+    )
     return jsonify(
         {
             "id": result.id,
@@ -476,7 +484,7 @@ def update_attendance(project_id: str, entry_id: str):
 @require_project_access(write=False)
 def delete_attendance(project_id: str, entry_id: str):
     """Delete a labor entry."""
-    subject = _existing_entry_subject(entry_id)
+    subject, day = _existing_entry_subject(entry_id)
     try:
         get_container().delete_attendance_usecase.execute(
             DeleteAttendanceRequest(entry_id=UUID(entry_id), project_id=UUID(project_id))
@@ -486,7 +494,7 @@ def delete_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
-    notify_admins("attendance_deleted", subject, project_id=project_id)
+    notify_admins("attendance_deleted", subject, project_id=project_id, extra_data={"date": day} if day else None)
     return "", 204
 
 

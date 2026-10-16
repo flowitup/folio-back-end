@@ -391,6 +391,8 @@ def test_bell_feed_keeps_the_decisions_and_reads_in_the_viewers_language(client,
     assert [e["created_at"] for e in feed["events"]] == sorted((e["created_at"] for e in feed["events"]), reverse=True)
     owner_kinds = {e["kind"] for e in client.get("/api/v1/notifications", headers=owner_h).get_json()["events"]}
     assert "validated" not in owner_kinds
+    # A day waiting for validation is listed (and counted) once, in attendance_pending.
+    assert "submitted" not in owner_kinds
 
 
 def test_marking_events_read_is_scoped_to_the_caller(client, linked_h, owner_h):
@@ -470,9 +472,12 @@ def test_other_admins_hear_about_an_edit_or_delete_but_not_the_one_who_did_it(cl
     assert r.status_code == 200, r.get_json()
     assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(boss_tok, "attendance_edited")]
     assert "Linked" in recorder.sent[0].body
+    # The day rides along so the apps open the calendar on it.
+    assert recorder.sent[0].data["date"] == day
     recorder.sent.clear()
     assert client.delete(f"/api/v1/projects/{ids['project']}/labor-entries/{entry}", headers=chef_h).status_code == 204
     assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(boss_tok, "attendance_deleted")]
+    assert recorder.sent[0].data["date"] == day
     # An admin acting alone is not told about their own action.
     recorder.sent.clear()
     boss_day = (datetime.now(timezone.utc).date() - timedelta(days=11)).isoformat()

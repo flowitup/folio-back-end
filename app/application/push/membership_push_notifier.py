@@ -14,6 +14,7 @@ from uuid import UUID
 
 from app.application.push.dispatcher import PushDispatcher
 from app.application.push.project_label import project_label
+from app.application.push.push_format import role_label
 from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,11 @@ logger = logging.getLogger(__name__)
 _TEXT: Dict[str, Dict[str, tuple]] = {
     "project_member_added": {
         "vi": ("Bạn được thêm vào công trình", "{name}"),
-        "fr": ("Vous avez rejoint un chantier", "{name}"),
+        "fr": ("Vous avez été ajouté à un chantier", "{name}"),
         "en": ("You were added to a project", "{name}"),
     },
     "project_member_removed": {
-        "vi": ("Bạn đã rời khỏi công trình", "{name}"),
+        "vi": ("Bạn đã bị gỡ khỏi công trình", "{name}"),
         "fr": ("Vous avez été retiré d'un chantier", "{name}"),
         "en": ("You were removed from a project", "{name}"),
     },
@@ -39,23 +40,23 @@ _TEXT: Dict[str, Dict[str, tuple]] = {
         "fr": ("Vos permissions ont changé", "{name}"),
         "en": ("Your permissions changed", "{name}"),
     },
+    # Says who accepted: an admin who invited several people must tell them apart.
     "invitation_accepted": {
-        "vi": ("Lời mời đã được chấp nhận", "{name}"),
-        "fr": ("Invitation acceptée", "{name}"),
-        "en": ("Invitation accepted", "{name}"),
+        "vi": ("Lời mời đã được chấp nhận", "{actor} đã chấp nhận lời mời · {name}"),
+        "fr": ("Invitation acceptée", "{actor} a accepté l'invitation · {name}"),
+        "en": ("Invitation accepted", "{actor} accepted the invitation · {name}"),
+    },
+    # An admin attached an existing account to their company (add by phone, import).
+    "company_member_added": {
+        "vi": ("Bạn đã được thêm vào công ty", "{name}"),
+        "fr": ("Vous avez été ajouté à une entreprise", "{name}"),
+        "en": ("You were added to a company", "{name}"),
     },
     "company_member_removed": {
-        "vi": ("Bạn đã rời khỏi công ty", "{name}"),
+        "vi": ("Bạn đã bị gỡ khỏi công ty", "{name}"),
         "fr": ("Vous avez été retiré d'une entreprise", "{name}"),
         "en": ("You were removed from a company", "{name}"),
     },
-}
-
-# Company roles as the mobile app names them (`companies.x.<role>`); the push lands there.
-_ROLE_LABELS: Dict[str, Dict[str, str]] = {
-    "vi": {"admin": "Quản trị viên", "manager": "Quản lý", "member": "Thành viên"},
-    "fr": {"admin": "Admin", "manager": "Responsable", "member": "Membre"},
-    "en": {"admin": "Admin", "manager": "Manager", "member": "Member"},
 }
 
 _PROJECT_EVENTS = (
@@ -75,10 +76,13 @@ class MembershipPushNotifier:
         dispatcher: PushDispatcher,
         project_repo: NamedEntityReader,
         company_repo: NamedEntityReader,
+        names=None,
     ) -> None:
         self._dispatcher = dispatcher
         self._projects = project_repo
         self._companies = company_repo
+        # Optional ``display_names(user_ids) -> {id: name}``: names the actor where the text says who.
+        self._names = names
 
     def notify(
         self,
@@ -101,17 +105,23 @@ class MembershipPushNotifier:
             else:
                 name = getattr(entity, "name", None) or getattr(entity, "legal_name", "") or ""
             key = "project_id" if is_project else "company_id"
+            names_actor = "{actor}" in _TEXT[event]["en"][1]
+            actor = ""
+            if names_actor and self._names is not None:
+                actor = self._names.display_names([actor_id]).get(actor_id, "") or ""
 
             def render(locale: str) -> tuple[str, str]:
                 title, body = _TEXT[event][locale]
-                role_label = _ROLE_LABELS.get(locale, {}).get(role or "", role or "")
-                return title, body.format(name=name, role=role_label)
+                if names_actor and not actor:
+                    # No name to show: keep the plain "{name}" body rather than a dangling verb.
+                    body = "{name}"
+                return title, body.format(name=name, role=role_label(role, locale), actor=actor)
 
             self._dispatcher.dispatch(
                 category=NotificationCategory.MEMBERSHIP.value,
                 recipients=[user_id],
                 render=render,
-                data={"kind": event, key: str(entity_id)},
+                data={"kind": event, key: str(entity_id), "actor_id": str(actor_id)},
                 exclude=actor_id,
             )
         except Exception:  # a push must never break the membership change

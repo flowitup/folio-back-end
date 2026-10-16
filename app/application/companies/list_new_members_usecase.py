@@ -22,6 +22,7 @@ from app.application.companies.dtos import NewMemberEvent
 from app.application.companies.ports import UserCompanyAccessRepositoryPort
 from app.application.company_persons.ports import CompanyPersonRepositoryPort
 from app.application.persons.ports import IPersonRepository
+from app.application.push.push_format import looks_like_phone
 from app.domain.companies.roles import CompanyRole
 
 if TYPE_CHECKING:
@@ -90,9 +91,22 @@ class ListNewMembersUseCase:
                 events.append(
                     NewMemberEvent(
                         user_id=person.user_id,
-                        display_name=person.name,
+                        display_name=self._name_of(person),
                         company_id=company_id,
                         attached_at=profile.created_at,
                     )
                 )
         return events
+
+    def _name_of(self, person: Any) -> str:
+        """The directory name, or the account's own name when the directory only has the phone
+        (someone added by phone without a name)."""
+        name = person.name
+        if not looks_like_phone(name) or self._users is None:
+            return name
+        try:
+            user = self._users.find_by_id(person.user_id)
+        except Exception:
+            return name
+        account_name = (getattr(user, "display_name", None) or "").strip()
+        return account_name if account_name and not looks_like_phone(account_name) else name

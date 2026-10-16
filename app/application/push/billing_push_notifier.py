@@ -127,8 +127,12 @@ class BillingPushNotifier:
         document_id: UUID,
         company_id: Optional[UUID],
         number: str,
+        document_kind: Optional[str] = None,
     ) -> None:
-        """Accepted / paid go to the company's admins too; rejected / overdue stay with the author."""
+        """Accepted / paid go to the company's admins too; rejected / overdue stay with the author.
+
+        ``document_kind`` (devis / facture) lets the apps open the right page; when absent it is
+        inferred from the status (accepted / rejected are quotes, paid / overdue invoices)."""
         try:
             if status not in _STATUS_TEXT:
                 return
@@ -146,7 +150,14 @@ class BillingPushNotifier:
                 category=NotificationCategory.BILLING.value,
                 recipients=set(recipients),
                 render=render,
-                data={"kind": "billing_status", "document_id": str(document_id), "status": status},
+                data={
+                    "kind": "billing_status",
+                    "document_id": str(document_id),
+                    "status": status,
+                    "document_kind": document_kind or ("devis" if status in ("accepted", "rejected") else "facture"),
+                    "actor_id": str(actor_id),
+                    **({"company_id": str(company_id)} if company_id is not None else {}),
+                },
                 exclude=actor_id,
             )
         except Exception:  # a push must never break the status transition

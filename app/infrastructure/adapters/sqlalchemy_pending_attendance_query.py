@@ -7,6 +7,7 @@ from sqlalchemy import func, literal, or_
 from sqlalchemy.orm import Session
 
 from app.application.labor.ports import IPendingAttendanceQuery, PendingAttendanceItem
+from app.application.push.push_format import looks_like_phone
 from app.infrastructure.database.labor_validation_scope import may_validate_clause
 from app.infrastructure.database.models import (
     LaborEntryModel,
@@ -15,6 +16,14 @@ from app.infrastructure.database.models import (
     UserModel,
     WorkerModel,
 )
+
+
+def _display_name(*candidates: Optional[str]) -> str:
+    """First name that is not just a phone number (someone added by phone without a name)."""
+    for name in candidates:
+        if name and not looks_like_phone(name):
+            return name
+    return next((n for n in candidates if n), "")
 
 
 class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
@@ -51,6 +60,8 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 ProjectModel.address.label("project_address"),
                 WorkerModel.id.label("worker_id"),
                 worker_name.label("worker_name"),
+                WorkerModel.name.label("worker_row_name"),
+                UserModel.display_name.label("account_name"),
                 LaborEntryModel.date.label("date"),
                 LaborEntryModel.shift_type.label("shift_type"),
                 LaborEntryModel.supplement_hours.label("supplement_hours"),
@@ -65,6 +76,7 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
             .join(WorkerModel, WorkerModel.id == LaborEntryModel.worker_id)
             .join(ProjectModel, ProjectModel.id == WorkerModel.project_id)
             .outerjoin(PersonModel, PersonModel.id == WorkerModel.person_id)
+            .outerjoin(UserModel, UserModel.id == WorkerModel.user_id)
             .filter(
                 or_(LaborEntryModel.status == "pending", LaborEntryModel.change_requested_at.isnot(None)),
                 may_validate,
@@ -84,7 +96,7 @@ class SQLAlchemyPendingAttendanceQuery(IPendingAttendanceQuery):
                 # The label the apps show a project under: its site address, else its name.
                 project_name=(r.project_name or "").strip() or (r.project_address or "").strip(),
                 worker_id=r.worker_id,
-                worker_name=r.worker_name,
+                worker_name=_display_name(r.worker_name, r.worker_row_name, r.account_name),
                 date=r.date,
                 shift_type=r.shift_type,
                 supplement_hours=r.supplement_hours or 0,

@@ -16,6 +16,7 @@ from app.application.labor.ports import IWorkerRepository
 from app.application.ports.push_sender import PushSenderPort
 from app.application.push.dispatcher import PushDispatcher
 from app.application.push.project_label import project_label
+from app.application.push.push_format import looks_like_phone
 from app.domain.notifications.categories import NotificationCategory
 
 logger = logging.getLogger(__name__)
@@ -94,8 +95,12 @@ class AttendancePushNotifier:
         preferences=None,
         events=None,
         access_repo: Optional[CompanyAccessReader] = None,
+        names=None,
     ) -> None:
         self._devices = devices
+        # Optional ``display_names(user_ids) -> {id: name}``: the account's own name, used
+        # when the worker's directory name is only the phone they were added with.
+        self._names = names
         self._workers = worker_repo
         self._projects = project_repo
         self._access = access_repo
@@ -137,6 +142,26 @@ class AttendancePushNotifier:
             return True
         return any(a.user_id == user_id for a in self._access.list_for_company(company_id))
 
+    def _worker_label(self, worker) -> str:
+        """The worker's name as people know it, never just a phone number.
+
+        A person added by phone without a name is stored under that phone; the worker row or
+        the linked account usually has the real name, so prefer those."""
+        candidates = [getattr(worker, "person_name", None), getattr(worker, "name", None)]
+        for name in candidates:
+            if name and not looks_like_phone(name):
+                return name
+        user_id = getattr(worker, "user_id", None)
+        if user_id is not None and self._names is not None:
+            try:
+                account_name = self._names.display_names([user_id]).get(user_id)
+            except Exception:
+                logger.exception("attendance push: display name lookup failed")
+                account_name = None
+            if account_name and not looks_like_phone(account_name):
+                return account_name
+        return next((n for n in candidates if n), "")
+
     # -- events -----------------------------------------------------------------
 
     def worker_submitted(self, worker_id: UUID, day: date, entry_id: UUID, *, change: bool = False) -> None:
@@ -145,13 +170,18 @@ class AttendancePushNotifier:
         if worker is None:
             return
         recipients = [u for u in self._devices.validator_user_ids(worker.project_id) if u != worker.user_id]
+        # Push only: the bell already lists the day under "to validate" with its buttons, and
+        # it leaves that list once settled. A second activity entry counted it twice and
+        # stayed unread after validation.
         self._dispatch(
             "change_requested" if change else "submitted",
             recipients,
-            worker_name=worker.person_name or worker.name,
+            worker_name=self._worker_label(worker),
             day=day,
             project_id=worker.project_id,
             entry_id=entry_id,
+            record=False,
+            actor_id=worker.user_id,
         )
 
     def logged(self, project_id: UUID, day: date, worker_ids: List[UUID], actor_id: Optional[UUID]) -> None:
@@ -166,11 +196,12 @@ class AttendancePushNotifier:
         self._dispatch(
             event,
             recipients,
-            worker_name=(first.person_name or first.name) if first is not None else "",
+            worker_name=self._worker_label(first) if first is not None else "",
             day=day,
             project_id=project_id,
             data={"kind": "logged", "project_id": str(project_id), "date": day.isoformat()},
             count=len(worker_ids),
+            actor_id=actor_id,
         )
 
     def decision(self, worker_id: UUID, day: date, entry_id: UUID, event: str) -> None:
@@ -183,7 +214,7 @@ class AttendancePushNotifier:
         self._dispatch(
             event,
             [worker.user_id],
-            worker_name=worker.person_name or worker.name,
+            worker_name=self._worker_label(worker),
             day=day,
             project_id=worker.project_id,
             entry_id=entry_id,
@@ -202,6 +233,8 @@ class AttendancePushNotifier:
         entry_id: Optional[UUID] = None,
         data: Optional[Dict[str, str]] = None,
         count: int = 0,
+        record: bool = True,
+        actor_id: Optional[UUID] = None,
     ) -> None:
         if not recipients:
             return
@@ -212,9 +245,14 @@ class AttendancePushNotifier:
             title, body = _TEXT[event][locale]
             return title, body.format(worker=worker_name, date=day.strftime("%d/%m"), project=project_name, count=count)
 
+        payload = dict(data or {"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)})
+        payload.setdefault("date", day.isoformat())
+        if actor_id is not None:
+            payload["actor_id"] = str(actor_id)
         self._dispatcher.dispatch(
             category=NotificationCategory.ATTENDANCE.value,
             recipients=recipients,
             render=render,
-            data=data or {"kind": event, "project_id": str(project_id), "entry_id": str(entry_id)},
+            data=payload,
+            record=record,
         )

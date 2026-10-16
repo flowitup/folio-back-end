@@ -17,7 +17,7 @@ only their link to the account cleared.
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, or_, update
 from sqlalchemy.orm import Session
 
 from app.infrastructure.database.models.api_key import ApiKeyOrm
@@ -74,6 +74,14 @@ class SQLAlchemyPersonalDataEraser:
             # and block list. The messages themselves stay (see the module docstring); other members'
             # reactions, reports and blocks are theirs and are not touched.
             delete(NotificationEventModel).where(NotificationEventModel.user_id == user_id),
+            # Colleagues' bell entries written about them (their chat previews, "X logged a day",
+            # "X joined"): chat already shows "Deleted account", so the bell must not keep the name.
+            delete(NotificationEventModel).where(
+                or_(
+                    NotificationEventModel.data["actor_id"].as_string() == str(user_id),
+                    NotificationEventModel.data["user_id"].as_string() == str(user_id),
+                )
+            ),
             delete(ChatMessageReactionOrm).where(ChatMessageReactionOrm.user_id == user_id),
             delete(ChatMessageReportOrm).where(ChatMessageReportOrm.reporter_id == user_id),
             delete(ChatUserBlockOrm).where(ChatUserBlockOrm.blocker_id == user_id),

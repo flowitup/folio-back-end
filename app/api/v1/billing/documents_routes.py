@@ -502,6 +502,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
             document_id=result.id,
             company_id=getattr(result, "company_id", None),
             number=getattr(result, "document_number", "") or "",
+            document_kind=getattr(getattr(result, "kind", None), "value", getattr(result, "kind", None)),
         )
     return jsonify(_doc_to_json(result))
 

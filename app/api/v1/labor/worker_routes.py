@@ -237,7 +237,7 @@ def create_worker(project_id: str):
     if roster is not None:
         roster.after_worker_created(UUID(project_id), UUID(result.person_id) if result.person_id else None)
 
-    notify_admins("worker_added", result.name, project_id=project_id)
+    notify_admins("worker_added", result.name, project_id=project_id, extra_data={"worker_id": str(result.id)})
     return jsonify(_worker_response(result).model_dump()), 201
 
 
@@ -331,5 +331,12 @@ def delete_worker(project_id: str, worker_id: str):
     if roster is not None:
         roster.after_worker_stopped(UUID(project_id), person_id, _sites_caller_manages(project_id, person_id))
 
-    notify_admins("worker_removed", subject, project_id=project_id)
+    # A worker linked to a directory person is stopped on every site of the company.
+    notify_admins(
+        "worker_removed",
+        subject,
+        project_id=project_id,
+        all_sites=person_id is not None,
+        extra_data={"worker_id": worker_id},
+    )
     return "", 204
