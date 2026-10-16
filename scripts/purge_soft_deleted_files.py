@@ -7,7 +7,7 @@ owns the object) once they are a day old.
 Scheduled daily by the deploy repo (scripts/backup/install-backup-cron.sh in
 flowitup/folio), which runs it inside the API container:
 
-    docker compose run --rm api python scripts/purge_soft_deleted_files.py
+    docker compose exec -T -e PYTHONPATH=/app api python scripts/purge_soft_deleted_files.py
 
 Usage (from folio-back-end/):
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from app import create_app, db
 from app.application.storage_janitor import PurgeSoftDeletedFilesUseCase
@@ -34,7 +35,21 @@ from app.infrastructure.database.repositories.soft_deleted_file_sources import (
     SoftDeletedPhotoSource,
     known_document_keys,
 )
-from wiring import get_container
+
+
+def get_container():
+    """The DI container from wiring.py at the repo root.
+
+    `python scripts/<name>.py` puts scripts/ first on sys.path, not the repo root (the editable
+    install maps only app/ and config/), so `import wiring` failed when cron or
+    `docker compose exec` started the script that way. Add the root before importing.
+    """
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from wiring import get_container as wiring_container
+
+    return wiring_container()
 
 
 def main() -> int:
