@@ -698,7 +698,11 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
 
         resp = avoir_client.put(
             _invoice_url(avoir_app._test_project_id, invoice_id),
-            json={"type": "materials_services"},
+            # A purchase cannot total less than zero: the lines turn positive with the type.
+            json={
+                "type": "materials_services",
+                "items": [{"description": "Line item", "quantity": 1, "unit_price": 300.0}],
+            },
             headers=_auth(admin_token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
@@ -738,7 +742,11 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
 
         away = avoir_client.put(
             _invoice_url(avoir_app._test_project_id, invoice_id),
-            json={"type": "materials_services"},
+            # A purchase cannot total less than zero: the lines turn positive with the type.
+            json={
+                "type": "materials_services",
+                "items": [{"description": "Line item", "quantity": 1, "unit_price": 300.0}],
+            },
             headers=_auth(admin_token),
         )
         assert away.status_code == 200, away.get_data(as_text=True)
@@ -747,7 +755,7 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
 
         back = avoir_client.put(
             _invoice_url(avoir_app._test_project_id, invoice_id),
-            json={"type": "return"},
+            json={"type": "return", "items": [{"description": "Line item", "quantity": 1, "unit_price": -300.0}]},
             headers=_auth(admin_token),
         )
         assert back.status_code == 200, back.get_data(as_text=True)
