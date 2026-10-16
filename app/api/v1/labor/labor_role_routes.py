@@ -25,7 +25,8 @@ from app.domain.exceptions.labor_exceptions import (
     DuplicateLaborRoleError,
     LaborRoleNotFoundError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
 
 
@@ -130,7 +131,7 @@ def list_labor_roles():
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("30 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 def create_labor_role():
     """Create a new labor role, scoped to the caller's company."""
     try:
@@ -169,7 +170,7 @@ def create_labor_role():
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("30 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 def update_labor_role(role_id: UUID):
     """Update name and/or color of a labor role (company admin or manager)."""
     try:
@@ -206,7 +207,7 @@ def update_labor_role(role_id: UUID):
 @labor_bp.route("/labor/roles/<uuid:role_id>", methods=["DELETE"])
 @openapi_doc(summary="Delete a labor role", tags=["labor"])
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("30 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 def delete_labor_role(role_id: UUID):
     """Delete a labor role (company admin or manager). Workers referencing it
     will have their role cleared."""

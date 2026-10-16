@@ -37,7 +37,8 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerAlreadyLinkedError,
     WorkerAlreadyOnProjectError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
 
 
@@ -141,7 +142,7 @@ def _worker_name(worker_id: str) -> str:
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def create_worker(project_id: str):
@@ -215,7 +216,7 @@ def create_worker(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def update_worker(project_id: str, worker_id: str):
@@ -264,7 +265,7 @@ def update_worker(project_id: str, worker_id: str):
 @labor_bp.route("/projects/<project_id>/workers/<worker_id>", methods=["DELETE"])
 @openapi_doc(summary="Soft delete a worker (deactivate)", tags=["labor"])
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def delete_worker(project_id: str, worker_id: str):

@@ -141,7 +141,9 @@ class TestSmsSendCapsPerAddress:
 
 
 class TestLimiterAnswersTellTheClientHowLongToWait:
-    """The hourly caps answer like the use cases' own hourly cap: ``OtpHourlyLimit`` + Retry-After."""
+    """The per-number hourly cap answers like the use cases' own hourly cap (``OtpHourlyLimit``);
+    a per-address cap says it is the network (``NetworkThrottled``), never the number. All carry
+    Retry-After."""
 
     def test_the_per_phone_hourly_cap(self, limited_app):
         ip = "203.0.113.70"
@@ -158,8 +160,11 @@ class TestLimiterAnswersTellTheClientHowLongToWait:
         assert _post(limited_app, SIGNUP, ip, "+33611000051").status_code == 202
         blocked = _post(limited_app, SIGNUP, ip, "+33611000052")
         assert blocked.status_code == 429
-        assert blocked.get_json()["error"] == "OtpHourlyLimit"
+        # +33611000052 never asked for a code: the answer must not blame the number.
+        assert blocked.get_json()["error"] == "NetworkThrottled"
+        assert "network" in blocked.get_json()["message"]
         assert 3500 < int(blocked.headers["Retry-After"]) <= 3600
+        assert blocked.get_json()["retry_after"] == int(blocked.headers["Retry-After"])
 
     def test_the_per_minute_limit_keeps_the_short_wait(self, limited_app):
         ip = "203.0.113.72"
@@ -167,10 +172,11 @@ class TestLimiterAnswersTellTheClientHowLongToWait:
             _post(limited_app, SIGN_IN, ip, _phone(i))
         blocked = _post(limited_app, SIGN_IN, ip, _phone(5))
         assert blocked.status_code == 429
-        assert blocked.get_json()["error"] == "TooManyRequests"
+        # The 6th worker on the site Wi-Fi never got a code: not "a code was sent recently".
+        assert blocked.get_json()["error"] == "NetworkThrottled"
         assert 0 < int(blocked.headers["Retry-After"]) <= 60
 
-    def test_other_routes_keep_the_default_answer(self, limited_app):
+    def test_the_code_check_says_it_is_the_network_and_how_long(self, limited_app):
         for _ in range(5):
             limited_app.test_client().post(
                 "/api/v1/auth/otp/verify", json={}, environ_base={"REMOTE_ADDR": "10.1.0.77"}
@@ -179,7 +185,9 @@ class TestLimiterAnswersTellTheClientHowLongToWait:
             "/api/v1/auth/otp/verify", json={}, environ_base={"REMOTE_ADDR": "10.1.0.77"}
         )
         assert blocked.status_code == 429
-        assert blocked.get_json()["error"] == "TooManyRequests"
+        assert blocked.get_json()["error"] == "NetworkThrottled"
+        assert "per 1 minute" not in blocked.get_json()["message"]
+        assert 0 < int(blocked.headers["Retry-After"]) <= 60
 
 
 def test_the_phone_is_not_in_the_limiter_key(limited_app):
@@ -363,7 +371,9 @@ class TestSmsBudgetPools:
         refused = client.post(SIGNUP, json={"phone": "+33611000203"})
         assert refused.status_code == 429
         body = refused.get_json()
-        assert body["status_code"] == 429 and body["error"] in ("TooManyRequests", "OtpHourlyLimit")
+        # The platform budget ran out: a service problem, not this number asking too often.
+        assert body["status_code"] == 429 and body["error"] == "SmsServiceBusy"
+        assert "this number" not in body["message"]
         assert 1 <= int(refused.headers["Retry-After"]) <= 600
         # Nothing was committed for the refused request (the test's open app context keeps the session
         # alive, so end it by hand as the request teardown does): it can be repeated once there is room.

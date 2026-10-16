@@ -33,7 +33,8 @@ from app.domain.exceptions.labor_exceptions import (
     RateChangeNotFoundError,
     WorkerNotFoundError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
 
 
@@ -73,7 +74,7 @@ def list_worker_rate_changes(project_id: str, worker_id: str):
 
 @labor_bp.route("/projects/<project_id>/workers/<worker_id>/rate-changes", methods=["POST"])
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("30 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def set_worker_rate_change(project_id: str, worker_id: str):
@@ -105,7 +106,7 @@ def set_worker_rate_change(project_id: str, worker_id: str):
     methods=["DELETE"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("30 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def delete_worker_rate_change(project_id: str, worker_id: str, rc_id: str):

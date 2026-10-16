@@ -155,7 +155,7 @@ def list_materials_expenses():
 
 @billing_documents_bp.route("/billing/materials-expenses/<invoice_id>", methods=["PATCH"])
 @jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 def set_materials_expense_refundable_status(invoice_id: str):
     """Set or clear the refundable_status on a materials_services invoice.
 

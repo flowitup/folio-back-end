@@ -101,11 +101,14 @@ def create_app(config_class: type = Config) -> Flask:
     # cross-origin browser fetches cannot read non-default-safelisted headers without
     # explicit exposure. Without this, fetchLaborExport's filename parsing falls back
     # to a generic timestamped name in production.
+    # Retry-After is exposed so the web can say how long to wait after a 429. max_age lets the
+    # browser reuse a preflight for a day instead of sending a new OPTIONS every 5 seconds.
     CORS(
         app,
         supports_credentials=True,
         origins=cors_origins,
-        expose_headers=["Content-Disposition", "X-Content-Type-Options"],
+        expose_headers=["Content-Disposition", "X-Content-Type-Options", "Retry-After"],
+        max_age=86400,
     )
     db.init_app(app)
     jwt.init_app(app)

@@ -55,7 +55,12 @@ from app.domain.exceptions.auth_exceptions import (
     UserInactiveError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
-from app.infrastructure.rate_limiter import code_request_answered, limiter, sms_send_ip_limits
+from app.infrastructure.rate_limiter import (
+    code_request_answered,
+    limiter,
+    remote_address_bucket,
+    sms_send_ip_limits,
+)
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -134,8 +139,10 @@ def _login_response(container, result: LoginResult):
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 # One source asks for a given number 4 times an hour at most: the per-number cap (5) is shared with
 # strangers, and this keeps one of them from using it all up. The store-review numbers are exempt.
 @limiter.limit(
@@ -177,7 +184,7 @@ def request_otp():
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
 def verify_otp():
     try:
         data = OtpVerifyBody.model_validate(request.get_json(silent=True) or {})
@@ -281,6 +288,7 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
     auth=False,
 )
 @jwt_required(refresh=True)
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 def refresh():
     """Refresh access token using refresh token."""
     user_id = get_jwt_identity()
@@ -300,6 +308,9 @@ def refresh():
 @auth_bp.route("/me", methods=["GET"])
 @openapi_doc(summary="Get current authenticated user info", responses={200: UserResponse}, tags=["auth"])
 @jwt_required()
+# Every page load and app foregrounding checks the session: a per-user budget, never one shared
+# by the whole office network.
+@limiter.limit("300 per minute", key_func=jwt_user_key)
 def get_current_user():
     """Get current authenticated user info."""
     user_id = get_jwt_identity()
@@ -387,7 +398,9 @@ _PHONE_TAKEN = "This phone number is already used by another account."
 )
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 # The caller chooses the destination number, so one account may ask for 5 codes a day at most.
 @limiter.limit("5 per day", key_func=jwt_user_key, deduct_when=code_request_answered)
 def request_phone_change_code():
@@ -564,8 +577,10 @@ def delete_current_user():
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 def request_signup_otp():
     try:
         data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})
@@ -600,7 +615,7 @@ def request_signup_otp():
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
 def verify_signup_otp():
     try:
         data = SignupVerifyBody.model_validate(request.get_json(silent=True) or {})

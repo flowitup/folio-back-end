@@ -105,7 +105,7 @@ def _parse_captured_at(raw: str | None) -> datetime | None:
 @jwt_required()
 @require_permission("project:update")
 @require_project_access(write=True, permission="project:update")
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 def upload_project_photo(project_id: str):
     if "file" not in request.files:
         return _error_response("MISSING_FILE", "No file part in request (expected field 'file')", 400)
@@ -203,6 +203,9 @@ def list_project_photos(project_id: str):
 @project_photos_bp.route("/projects/<project_id>/photos/<photo_id>/thumbnail", methods=["GET"])
 @openapi_doc(summary="Stream the JPEG thumbnail for a project photo", tags=["project_photos"])
 @jwt_required()
+# Thumbnails and originals are cheap and cached for an hour by the clients; a gallery page alone
+# asks for 50-60 of them, so they get their own generous per-user budget instead of the default.
+@limiter.limit("1000 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
 @require_project_access(write=False)
 def get_photo_thumbnail(project_id: str, photo_id: str):
@@ -228,6 +231,7 @@ def get_photo_thumbnail(project_id: str, photo_id: str):
 @project_photos_bp.route("/projects/<project_id>/photos/<photo_id>/original", methods=["GET"])
 @openapi_doc(summary="Stream the original full-resolution image for a project photo", tags=["project_photos"])
 @jwt_required()
+@limiter.limit("600 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
 @require_project_access(write=False)
 def get_photo_original(project_id: str, photo_id: str):
