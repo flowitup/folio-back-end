@@ -205,6 +205,14 @@ class SqlAlchemyProjectDocumentRepository:
             total=total,
         )
 
+    def live_filenames(self, project_id: UUID) -> set[str]:
+        """Lower-cased file names of the project's non-deleted documents."""
+        stmt = select(ProjectDocumentModel.filename).where(
+            ProjectDocumentModel.project_id == project_id,
+            ProjectDocumentModel.deleted_at.is_(None),
+        )
+        return {name.lower() for name in self._session.execute(stmt).scalars().all()}
+
     def update_filename(self, doc_id: UUID, new_filename: str) -> None:
         """Update the display filename of a document.
 

@@ -41,6 +41,7 @@ from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.application.project_documents import (
     DocumentFileTooLargeError,
     DocumentPermissionDeniedError,
+    DuplicateDocumentNameError,
     EmptyFileError,
     ListFiltersDTO,
     ProjectDocumentNotFoundError,
@@ -437,6 +438,8 @@ def rename_project_document(project_id: str, document_id: str):
         )
     except DocumentPermissionDeniedError:
         return _error_response("FORBIDDEN", "You are not permitted to rename this document", 403)
+    except DuplicateDocumentNameError as exc:
+        return _error_response("DUPLICATE_NAME", str(exc), 409)
     except ProjectDocumentNotFoundError:
         return _error_response("NOT_FOUND", "Document not found", 404)
     except ValueError as exc:

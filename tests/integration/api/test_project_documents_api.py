@@ -1261,3 +1261,41 @@ class TestConfirmReplayKeepsTheStoredObject:
         assert resp.status_code == 409, resp.get_data(as_text=True)
         assert resp.get_json()["error"] == "DOCUMENT_ALREADY_EXISTS"
         assert get_container().document_storage.has(key)
+
+
+class TestQa3DuplicateDocumentNames:
+    """QA3 documents-photos-analyses-16: same-name documents are kept apart, renames refused."""
+
+    @pytest.fixture(autouse=True)
+    def _wire_rename(self, doc_app):
+        from app import db
+        from app.application.project_documents import RenameProjectDocumentUseCase
+        from wiring import get_container
+
+        _c = get_container()
+        _c.rename_project_document_usecase = RenameProjectDocumentUseCase(
+            repo=_c.project_document_repository, db_session=db.session
+        )
+
+    def test_second_upload_of_the_same_name_gets_a_suffix(self, doc_client, owner_token, doc_app):
+        pid = doc_app._doc_project_id
+        first = _upload(doc_client, pid, owner_token, filename="QA3 Plan.pdf")
+        second = _upload(doc_client, pid, owner_token, filename="qa3 plan.pdf")
+        third = _upload(doc_client, pid, owner_token, filename="QA3 Plan.pdf")
+        assert first.get_json()["filename"] == "QA3 Plan.pdf"
+        assert second.get_json()["filename"] == "qa3 plan (2).pdf"
+        assert third.get_json()["filename"] == "QA3 Plan (3).pdf"
+
+    def test_rename_onto_an_existing_name_is_409(self, doc_client, owner_token, doc_app):
+        pid = doc_app._doc_project_id
+        _upload(doc_client, pid, owner_token, filename="QA3 Devis.pdf")
+        other = _upload(doc_client, pid, owner_token, filename="QA3 Autre.pdf").get_json()["id"]
+        resp = doc_client.patch(
+            f"{_docs_url(pid)}/{other}/rename", json={"filename": "qa3 devis.pdf"}, headers=_auth(owner_token)
+        )
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "DUPLICATE_NAME"
+        same = doc_client.patch(
+            f"{_docs_url(pid)}/{other}/rename", json={"filename": "QA3 AUTRE.pdf"}, headers=_auth(owner_token)
+        )
+        assert same.status_code == 200

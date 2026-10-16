@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 from uuid import UUID
 
-from app.application.project_documents.exceptions import DocumentPermissionDeniedError
+from app.application.project_documents.exceptions import (
+    DocumentPermissionDeniedError,
+    DuplicateDocumentNameError,
+)
 from app.application.project_documents.ports import (
     IProjectDocumentRepository,
     ITransactionalSession,
@@ -67,6 +70,11 @@ class RenameProjectDocumentUseCase:
         new_ext = os.path.splitext(new_filename)[1].lower()
         if new_ext != original_ext:
             raise ValueError(f"File extension must remain {original_ext}")
+
+        if new_filename.lower() != doc.filename.lower() and new_filename.lower() in self._repo.live_filenames(
+            doc.project_id
+        ):
+            raise DuplicateDocumentNameError(f"A document named '{new_filename}' already exists in this project")
 
         self._repo.update_filename(doc_id, new_filename)
         self._db_session.commit()

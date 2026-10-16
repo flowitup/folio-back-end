@@ -49,6 +49,20 @@ def canonical_content_type(filename: str, fallback: str) -> str:
     return EXT_TO_MIME.get(os.path.splitext(filename)[1].lower(), fallback)
 
 
+def unique_filename(filename: str, taken: set[str]) -> str:
+    """``filename``, or 'name (2).ext', 'name (3).ext'... when that name (any case) is taken.
+
+    ``taken`` holds lower-cased names already used in the project.
+    """
+    if filename.lower() not in taken:
+        return filename
+    stem, ext = os.path.splitext(filename)
+    n = 2
+    while f"{stem} ({n}){ext}".lower() in taken:
+        n += 1
+    return f"{stem} ({n}){ext}"
+
+
 def kind_for_extension(extension: str) -> str:
     """Return the kind tag for a file extension, defaulting to 'other'.
 

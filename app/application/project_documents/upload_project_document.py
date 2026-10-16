@@ -19,7 +19,7 @@ from app.application.project_documents.ports import (
     IProjectDocumentRepository,
     ITransactionalSession,
 )
-from app.domain.project_document import ProjectDocument, canonical_content_type, kind_for_extension
+from app.domain.project_document import ProjectDocument, canonical_content_type, kind_for_extension, unique_filename
 from app.domain.value_objects.display_filename import strip_control_chars
 
 _log = logging.getLogger(__name__)
@@ -173,7 +173,8 @@ class UploadProjectDocumentUseCase:
             project_id=project_id,
             uploader_user_id=uploader_user_id,
             # Minus control characters: a line break would 500 every download
-            filename=strip_control_chars(filename),
+            # Same name as a live document of the project: kept apart as 'name (2).ext'
+            filename=unique_filename(strip_control_chars(filename), self._repo.live_filenames(project_id)),
             content_type=content_type,
             size_bytes=size_bytes,
             storage_key=storage_key,

@@ -17,6 +17,7 @@ from app.application.project_documents.exceptions import (
     EmptyFileError,
     UnsupportedDocumentTypeError,
     DocumentPermissionDeniedError,
+    DuplicateDocumentNameError,
 )
 from app.application.project_documents.upload_project_document import (
     UploadProjectDocumentUseCase,
@@ -70,6 +71,7 @@ __all__ = [
     "EmptyFileError",
     "UnsupportedDocumentTypeError",
     "DocumentPermissionDeniedError",
+    "DuplicateDocumentNameError",
     # Upload constants / helpers (useful for Flask layer validation)
     "MAX_SIZE_BYTES",
     "ALLOWED_EXTENSIONS",
