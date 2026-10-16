@@ -707,11 +707,18 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         all_companies=True bypasses the company_id filter (superadmin view).
         """
+        from app.infrastructure.database.models.company import CompanyModel
         from app.infrastructure.database.models.project import ProjectModel
 
         query = (
-            self._session.query(InvoiceModel, ProjectModel.name.label("project_name"))
+            self._session.query(
+                InvoiceModel,
+                ProjectModel.name.label("project_name"),
+                ProjectModel.company_id.label("company_id"),
+                CompanyModel.legal_name.label("company_name"),
+            )
             .join(ProjectModel, InvoiceModel.project_id == ProjectModel.id)
+            .outerjoin(CompanyModel, CompanyModel.id == ProjectModel.company_id)
             .filter(
                 InvoiceModel.type == InvoiceType.MATERIALS_SERVICES.value,
                 # Always require a company — projects with no company are excluded
@@ -766,7 +773,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         # Collect invoice ids from this page so we can batch-load their attachments
         # in a single query, avoiding N+1 round-trips.
-        page_invoice_ids = [inv_model.id for inv_model, _ in rows]
+        page_invoice_ids = [row[0].id for row in rows]
 
         # Build a {invoice_id -> [attachment dict, ...]} map. Newest-first with an
         # id tiebreaker — mirrors the per-invoice attachments endpoint so the same
@@ -796,13 +803,15 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 )
 
         result = []
-        for inv_model, project_name in rows:
+        for inv_model, project_name, company_id, company_name in rows:
             entity = _model_to_entity(inv_model)
             result.append(
                 {
                     "id": str(entity.id),
                     "project_id": str(entity.project_id),
                     "project_name": project_name,
+                    "company_id": str(company_id) if company_id else None,
+                    "company_name": company_name,
                     "invoice_number": entity.invoice_number,
                     "recipient_name": entity.recipient_name,
                     "issue_date": entity.issue_date.isoformat(),

@@ -176,3 +176,74 @@ class TestApplySharedCompanyTemplate:
 
         with pytest.raises(ForbiddenBillingDocumentError):
             usecase.execute(_inp(other_user_id, tpl.id, company_id=company_id), fake_session)
+
+
+class TestApplyTemplateIssuerIsTheTemplatesCompany:
+    """Templates are company-wide: with no company_id the template's company issues the document."""
+
+    @staticmethod
+    def _second_company(company_repo, access_repo, user_id):
+        from tests.unit.application.billing.conftest import make_company
+
+        other = make_company(owner_id=user_id)
+        company_repo.save(other)
+        access_repo.save(make_access(user_id=user_id, company_id=other.id, is_primary=False))
+        return other
+
+    def test_company_id_none_uses_the_templates_company_not_the_primary(
+        self, usecase, fake_session, user_id, company_id, seeded_company, company_repo, access_repo, template_repo
+    ):
+        from dataclasses import replace
+
+        other = self._second_company(company_repo, access_repo, user_id)
+        tpl = replace(make_template(user_id=user_id), company_id=other.id)
+        template_repo.save(tpl)
+
+        result = usecase.execute(_inp(user_id, tpl.id, company_id=None), fake_session)
+
+        assert str(result.company_id) == str(other.id)
+
+    def test_an_issuer_other_than_the_templates_company_is_refused(
+        self, usecase, fake_session, user_id, company_id, seeded_company, company_repo, access_repo, template_repo
+    ):
+        from dataclasses import replace
+
+        other = self._second_company(company_repo, access_repo, user_id)
+        tpl = replace(make_template(user_id=user_id), company_id=other.id)
+        template_repo.save(tpl)
+
+        with pytest.raises(ValueError, match="another company"):
+            usecase.execute(_inp(user_id, tpl.id, company_id=company_id), fake_session)
+
+    def test_a_project_of_another_company_is_refused(
+        self,
+        doc_repo,
+        template_repo,
+        counter_repo,
+        company_repo,
+        access_repo,
+        fake_session,
+        user_id,
+        company_id,
+        seeded_company,
+        devis_template,
+    ):
+        from types import SimpleNamespace
+
+        from app.domain.billing.exceptions import ProjectCompanyMismatchError
+
+        project_id = uuid4()
+        foreign_project = SimpleNamespace(id=project_id, company_id=uuid4(), user_ids=[user_id], owner_id=user_id)
+        project_repo = SimpleNamespace(find_by_id=lambda pid: foreign_project if pid == project_id else None)
+        usecase = ApplyTemplateToCreateDocumentUseCase(
+            doc_repo=doc_repo,
+            template_repo=template_repo,
+            counter_repo=counter_repo,
+            project_repo=project_repo,
+            company_repo=company_repo,
+            access_repo=access_repo,
+        )
+        with pytest.raises(ProjectCompanyMismatchError):
+            usecase.execute(
+                _inp(user_id, devis_template.id, company_id=company_id, project_id=project_id), fake_session
+            )
