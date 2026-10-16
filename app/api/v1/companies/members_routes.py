@@ -261,12 +261,23 @@ def list_directory(company_id: str):
 
     result = get_container().list_directory_usecase.execute(company_uuid)
 
+    # A person linked to an account shows the name that account chose, not the label the
+    # first admin typed (often just the phone) on the Person shared by every company.
+    from app import db
+    from app.infrastructure.database.user_names import own_display_names
+
+    own_names = own_display_names(
+        db.session, [e.linked_user_id for e in result.items if not e.pending], company_ids=[company_uuid]
+    )
+
     return jsonify(
         {
             "items": [
                 {
                     "person_id": str(entry.person_id),
-                    "name": entry.name,
+                    "name": (
+                        own_names.get(str(entry.linked_user_id), entry.name) if entry.linked_user_id else entry.name
+                    ),
                     "phone": entry.phone,
                     "linked_user_id": str(entry.linked_user_id) if entry.linked_user_id else None,
                     "assigned_project_ids": [str(pid) for pid in entry.assigned_project_ids],
@@ -275,6 +286,11 @@ def list_directory(company_id: str):
                     "labor_role_id": str(entry.labor_role_id) if entry.labor_role_id else None,
                     "default_daily_rate": (
                         float(entry.default_daily_rate) if entry.default_daily_rate is not None else None
+                    ),
+                    # Pending rows only: the role granted at sign-up and the end of the window.
+                    "pending_role": entry.pending_company_role,
+                    "pending_expires_at": (
+                        entry.pending_expires_at.isoformat() if entry.pending_expires_at is not None else None
                     ),
                 }
                 for entry in result.items

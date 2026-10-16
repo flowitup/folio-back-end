@@ -44,6 +44,11 @@ def test_rejects_garbage(raw: str) -> None:
         ("+33 6 12 34 56 78", "+33612345678"),
         ("0033612345678", "+33612345678"),
         ("01 42 34 56 78", "+33142345678"),
+        # The international notation that keeps the trunk 0 in brackets.
+        ("+33 (0)6 20 10 00 01", "+33620100001"),
+        ("+33(0)620100001", "+33620100001"),
+        ("0033 (0)6 20 10 00 01", "+33620100001"),
+        ("+330620100001", "+33620100001"),
     ],
 )
 def test_sign_in_accepts_french_numbers(raw: str, expected: str) -> None:

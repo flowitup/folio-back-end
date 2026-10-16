@@ -204,9 +204,18 @@ def search_persons():
 
     result = _get_search_usecase().execute(SearchPersonsRequest(query=query, limit=limit, company_ids=company_ids))
 
+    # A person linked to an account is shown under the name that account chose.
+    from app import db
+    from app.infrastructure.database.user_names import own_display_names
+
+    own_names = own_display_names(db.session, [p.user_id for p in result.persons], company_ids=company_ids)
+
     return jsonify(
         SearchPersonsResponseSchema(
-            persons=[PersonSummarySchema(id=p.id, name=p.name, phone=p.phone) for p in result.persons],
+            persons=[
+                PersonSummarySchema(id=p.id, name=own_names.get(p.user_id or "", p.name), phone=p.phone)
+                for p in result.persons
+            ],
             total=result.total,
         ).model_dump()
     )

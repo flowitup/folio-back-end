@@ -469,7 +469,7 @@ class VerifySignupOtpUseCase:
         # row never blocks sign-up itself.
         if self._link_person_on_signup is not None:
             try:
-                self._link_person_on_signup.execute(user.id, phone)
+                self._link_person_on_signup.execute(user.id, phone, display_name=name)
             except Exception:
                 logger.exception(
                     "link_person_on_signup failed during sign-up for user %s; continuing without it", user.id
