@@ -82,7 +82,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "banked_hours": "Heures en banque",
         "date": "Date",
         "shift": "Type de journée",
-        "supplement_hrs": "Heures en plus (cumulées en jours bonus)",
+        "supplement_hrs": "Heures en banque (cumulées en jours bonus)",
         "override": "Tarif personnalisé",
         "effective_cost": "Coût retenu",
         "note": "Note",

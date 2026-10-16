@@ -65,7 +65,7 @@ def test_pdf_follows_the_locale():
     ("locale", "full", "overtime", "supplement"),
     [
         ("en", "Full day", "Overtime", "Extra hrs (banked into bonus days)"),
-        ("fr", "Journée complète", "Journée majorée (x1,5)", "Heures en plus (cumulées en jours bonus)"),
+        ("fr", "Journée complète", "Journée majorée (x1,5)", "Heures en banque (cumulées en jours bonus)"),
         ("vi", "Cả ngày", "Tăng ca", "Giờ thêm (cộng dồn thành ngày công thưởng)"),
     ],
 )
