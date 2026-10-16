@@ -53,6 +53,8 @@ class RequestInviteCodeRequest(BaseModel):
 
     token: str = Field(min_length=10, max_length=200)
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class AcceptInviteRequest(BaseModel):

@@ -10,6 +10,8 @@ class OtpRequestBody(BaseModel):
     """POST /auth/otp/request — ask for a 6-digit code by SMS."""
 
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional, Vietnamese by default.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class OtpRequestResponse(BaseModel):
@@ -39,6 +41,8 @@ class SignupRequestBody(BaseModel):
     """POST /auth/signup/request — text a sign-up code to a phone without an account."""
 
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional, Vietnamese by default.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class SignupVerifyBody(BaseModel):
@@ -54,6 +58,8 @@ class PhoneChangeRequestBody(BaseModel):
     """POST /auth/me/phone/request-code — text a code to the new number the caller wants to use."""
 
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional, Vietnamese by default.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class PhoneChangeConfirmBody(BaseModel):

@@ -332,7 +332,9 @@ def request_invite_code():
         return _err(503, "ServiceUnavailable", "Invitation service not configured.")
 
     try:
-        result = container.request_invite_otp_usecase.execute(data.token, data.phone)
+        result = container.request_invite_otp_usecase.execute(
+            data.token, data.phone, locale=data.locale or request.accept_languages.best_match(["fr", "en", "vi"])
+        )
     except InvalidInvitationTokenError:
         return _err(404, "NotFound", "Invitation not found.")
     except InvitationExpiredError as e:

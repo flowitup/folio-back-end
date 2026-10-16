@@ -84,7 +84,7 @@ class RequestInviteOtpUseCase:
         self._request_signin_otp = request_signin_otp
         self._authz_reader = authz_reader
 
-    def execute(self, raw_token: str, raw_phone: str) -> RequestOtpResult:
+    def execute(self, raw_token: str, raw_phone: str, locale: Optional[str] = None) -> RequestOtpResult:
         """Send a code to ``raw_phone`` once ``raw_token`` proves a live invitation.
 
         Raises:
@@ -112,13 +112,13 @@ class RequestInviteOtpUseCase:
             phone = normalize_french_phone(raw_phone)
             owner = self._users.find_by_phone(phone) if self._users is not None else None
             if owner is not None and owner.is_active and self._request_signin_otp is not None:
-                return self._request_signin_otp.execute(phone)
-            return self._request_signup_otp.execute(raw_phone)
+                return self._request_signin_otp.execute(phone, locale=locale)
+            return self._request_signup_otp.execute(raw_phone, locale=locale)
 
         phone = normalize_french_phone(raw_phone)
         if self._request_signin_otp is None or not account.phone or account.phone != phone:
             raise InvitationAccountExistsError("This invitation is for an existing account; use its phone number.")
-        return self._request_signin_otp.execute(phone)
+        return self._request_signin_otp.execute(phone, locale=locale)
 
 
 class AcceptInvitationUseCase:

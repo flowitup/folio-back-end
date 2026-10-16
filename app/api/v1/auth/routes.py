@@ -109,6 +109,21 @@ def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
 
 
+def _sms_locale(requested: "str | None") -> "str | None":
+    """The language to text the code in: the body's ``locale``, else the Accept-Language header."""
+    if requested:
+        return requested
+    best = request.accept_languages.best_match(["fr", "en", "vi"])
+    return best
+
+
+def _conflict(reason: str, message: str):
+    """409 with a ``reason`` discriminator the apps branch on (the message is a fallback)."""
+    body = ErrorResponse(error="Conflict", message=message, status_code=409).model_dump()
+    body["reason"] = reason
+    return jsonify(body), 409
+
+
 def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
     """Companies the user is attached to — shared by login and /auth/me responses."""
     companies: list[UserCompanySummary] = []
@@ -176,7 +191,7 @@ def request_otp():
     if container.request_otp_usecase is None:
         return _error(500, "ServerError", "SMS sign-in not configured")
     try:
-        result = container.request_otp_usecase.execute(data.phone)
+        result = container.request_otp_usecase.execute(data.phone, locale=_sms_locale(data.locale))
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except OtpThrottledError as exc:
@@ -441,7 +456,7 @@ def request_phone_change_code():
     if usecase is None:
         return _error(500, "ServerError", "Phone change not configured")
     try:
-        result = usecase.execute(UUID(get_jwt_identity()), data.phone)
+        result = usecase.execute(UUID(get_jwt_identity()), data.phone, locale=_sms_locale(data.locale))
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except PhoneUnchangedError:
@@ -609,11 +624,16 @@ def request_signup_otp():
     if container.request_signup_otp_usecase is None:
         return _error(500, "ServerError", "Sign-up not configured")
     try:
-        result = container.request_signup_otp_usecase.execute(data.phone)
+        result = container.request_signup_otp_usecase.execute(data.phone, locale=_sms_locale(data.locale))
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
+    except UserInactiveError:
+        return _conflict(
+            "account_deactivated",
+            "This account was deactivated. Contact your company administrator to get access back.",
+        )
     except PhoneAlreadyRegisteredError:
-        return _error(409, "Conflict", "This phone number already has an account. Sign in instead.")
+        return _conflict("phone_registered", "This phone number already has an account. Sign in instead.")
     except OtpThrottledError as exc:
         error, message, headers = otp_throttled(exc)
         body, status = _error(429, error, message)
