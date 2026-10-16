@@ -28,15 +28,16 @@ ALLOWED_MIME_TYPES = {
 # Read once from the stream and rewind — keeps the upload single-pass.
 _MAGIC_PEEK_BYTES = 16
 
+# Major brands of HEIC/HEIF still images and sequences (ISO/IEC 23008-12).
+_HEIF_BRANDS = frozenset({b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"})
+
 
 def _matches_magic(mime_type: str, head: bytes) -> bool:
     """Validate that ``head`` (the first bytes of the file) matches the
     signature expected for the claimed MIME.
 
-    Returning True for MIMEs we cannot cheaply detect (HEIC/HEIF) keeps
-    the existing whitelist behavior — the relevant attack surface is the
-    common formats a browser will render inline (PDF/PNG/JPEG/WEBP),
-    which we cover here.
+    HEIC/HEIF are ISO-BMFF files: an ``ftyp`` box at offset 4 whose major
+    brand is one of the HEIF brands.
     """
     if mime_type == "application/pdf":
         return head.startswith(b"%PDF-")
@@ -46,9 +47,8 @@ def _matches_magic(mime_type: str, head: bytes) -> bool:
         return head.startswith(b"\xff\xd8\xff")
     if mime_type == "image/webp":
         return len(head) >= 12 and head[0:4] == b"RIFF" and head[8:12] == b"WEBP"
-    # HEIC/HEIF use a variable "ftyp" box; trust the MIME for those.
     if mime_type in ("image/heic", "image/heif"):
-        return True
+        return len(head) >= 12 and head[4:8] == b"ftyp" and head[8:12] in _HEIF_BRANDS
     return False
 
 

@@ -12,8 +12,9 @@ from app.application.project_photos.ports import IProjectPhotoRepository, ITrans
 class DeleteProjectPhotoUseCase:
     """Soft-delete a project photo after verifying ownership and permissions.
 
-    Storage objects (original + thumbnail) are NOT removed — soft-delete retains
-    them for audit trails.  A background janitor is out of scope for v1.
+    Storage objects (original + thumbnail) are kept for the retention window
+    and then erased with the row by the storage janitor
+    (scripts/purge_soft_deleted_files.py, scheduled daily).
     """
 
     def __init__(

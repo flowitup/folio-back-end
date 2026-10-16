@@ -63,3 +63,14 @@ def test_name_within_the_column_is_kept_as_is():
 def test_overlong_extension_is_cut_to_the_column():
     att, _ = _upload("a." + "b" * 300)
     assert len(att.filename) == 255
+
+
+def test_heic_magic_bytes_are_checked():
+    """QA3 sweep-cannot-open-04: HEIC is no longer trusted on its declared MIME."""
+    from app.application.invoice.upload_attachment import _matches_magic
+
+    real_heic = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00"
+    assert _matches_magic("image/heic", real_heic)
+    assert _matches_magic("image/heif", b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00")
+    assert not _matches_magic("image/heic", b"<html><script>alert(1)")
+    assert not _matches_magic("image/heic", b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00")
