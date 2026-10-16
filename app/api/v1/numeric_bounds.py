@@ -23,6 +23,10 @@ MAX_LIBRARY_AMOUNT = Decimal("99999999999999.9999")
 # Expense line items (JSON, no column limit): same caps as billing document lines.
 MAX_LINE_QUANTITY = Decimal("9999999")
 MAX_LINE_UNIT_PRICE = Decimal("999999999")
+# A line's TTC amount (quantity x unit price x (1 + VAT)): the same ceiling as a project
+# budget, so a single line can never exceed what any project total can hold, and the
+# Decimal-from-float maths stays exact to the cent.
+MAX_LINE_TOTAL = MAX_BUDGET
 
 
 CENT = Decimal("0.01")

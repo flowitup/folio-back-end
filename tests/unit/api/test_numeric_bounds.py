@@ -66,8 +66,38 @@ def test_invoice_line_refuses_non_finite_numbers(value):
 
 
 def test_largest_allowed_expense_line_is_accepted():
-    item = InvoiceItemSchema(description="x", quantity=9_999_999, unit_price=999_999_999)
+    item = InvoiceItemSchema(description="x", quantity=10, unit_price=999_999_999)
     assert item.unit_price == 999_999_999
+
+
+def test_expense_line_amount_is_capped_not_just_its_factors():
+    """9 999 999 x 999 999 999 passed both caps and was stored float-rounded."""
+    with pytest.raises(ValidationError, match="Line amount exceeds"):
+        InvoiceItemSchema(description="x", quantity=9_999_999, unit_price=999_999_999)
+
+
+def test_expense_total_is_capped():
+    from app.api.v1.invoices.schemas import CreateInvoiceSchema
+
+    line = {"description": "x", "quantity": 9, "unit_price": 999_999_999}
+    with pytest.raises(ValidationError, match="Expense total exceeds"):
+        CreateInvoiceSchema(type="others", issue_date="2026-10-01", recipient_name="x", items=[line, line])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("vat_rate", 33.333), ("quantity", 0.00001), ("unit_price", 1.23456)],
+)
+def test_expense_line_precision_matches_the_forms(field, value):
+    """The web and mobile forms show and re-save 4 decimals (2 for VAT); more blocked web edits."""
+    line = {"description": "x", "quantity": 1, "unit_price": 10, "vat_rate": 0, field: value}
+    with pytest.raises(ValidationError):
+        InvoiceItemSchema(**line)
+
+
+def test_expense_line_at_the_precision_limit_is_accepted():
+    item = InvoiceItemSchema(description="x", quantity=1.2345, unit_price=-0.0005, vat_rate=5.5)
+    assert (item.quantity, item.unit_price, item.vat_rate) == (1.2345, -0.0005, 5.5)
 
 
 def test_money_handles_amounts_beyond_28_digits():

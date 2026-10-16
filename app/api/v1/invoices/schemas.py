@@ -1,13 +1,14 @@
 """Invoice API request/response schemas."""
 
 import re
+from decimal import Decimal
 from typing import Literal, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.v1.date_bounds import BusinessDate
-from app.api.v1.numeric_bounds import MAX_LINE_QUANTITY, MAX_LINE_UNIT_PRICE
+from app.api.v1.numeric_bounds import MAX_LINE_QUANTITY, MAX_LINE_TOTAL, MAX_LINE_UNIT_PRICE
 from app.api.v1.projects.schemas import ErrorResponse  # reuse shared error schema
 
 InvoiceTypeLiteral = Literal["released_funds", "labor", "materials_services", "others", "return"]
@@ -36,6 +37,11 @@ class InvoiceItemSchema(BaseModel):
     enforced in the use-case (mixed-sign allowed for materials_services + return).
     quantity must be > 0; vat_rate is 0–100. Both are capped like billing lines,
     and inf/NaN are refused.
+
+    Precision matches what the web and mobile forms can show and re-save: quantity and
+    unit_price at most 4 decimals, vat_rate at most 2 (a stored 33.333 % blocked every
+    later web edit). The line's TTC amount is capped too: quantity and price were capped
+    separately, so their product could reach ~10^16 and lose cents in float maths.
     """
 
     model_config = ConfigDict(allow_inf_nan=False)
@@ -45,6 +51,48 @@ class InvoiceItemSchema(BaseModel):
     # sign enforcement is in the use-case, not here
     unit_price: float = Field(..., ge=-float(MAX_LINE_UNIT_PRICE), le=float(MAX_LINE_UNIT_PRICE))
     vat_rate: float = Field(default=0.0, ge=0, le=100)
+
+    @field_validator("quantity", "unit_price")
+    @classmethod
+    def _at_most_four_decimals(cls, v: float) -> float:
+        if _decimal_places(v) > 4:
+            raise ValueError("at most 4 decimals")
+        return v
+
+    @field_validator("vat_rate")
+    @classmethod
+    def _at_most_two_decimals(cls, v: float) -> float:
+        if _decimal_places(v) > 2:
+            raise ValueError("VAT rate allows at most 2 decimals")
+        return v
+
+    @model_validator(mode="after")
+    def _line_total_capped(self) -> "InvoiceItemSchema":
+        ht = Decimal(str(self.quantity)) * Decimal(str(self.unit_price))
+        if abs(ht * (1 + Decimal(str(self.vat_rate)) / 100)) > MAX_LINE_TOTAL:
+            raise ValueError(f"Line amount exceeds the maximum of {MAX_LINE_TOTAL}")
+        return self
+
+
+def _items_capped(items: Optional[List[InvoiceItemSchema]]) -> Optional[List[InvoiceItemSchema]]:
+    """An expense's TTC total stays under the same ceiling as each of its lines."""
+    if items:
+        total = sum(
+            (
+                Decimal(str(i.quantity)) * Decimal(str(i.unit_price)) * (1 + Decimal(str(i.vat_rate)) / 100)
+                for i in items
+            ),
+            Decimal("0"),
+        )
+        if abs(total) > MAX_LINE_TOTAL:
+            raise ValueError(f"Expense total exceeds the maximum of {MAX_LINE_TOTAL}")
+    return items
+
+
+def _decimal_places(value: float) -> int:
+    """Decimals of a JSON number as the client wrote it (5.5 → 1, 33.333 → 3, 1e-05 → 5)."""
+    exponent = Decimal(str(value)).normalize().as_tuple().exponent
+    return -exponent if isinstance(exponent, int) and exponent < 0 else 0
 
 
 class CreateInvoiceSchema(BaseModel):
@@ -77,6 +125,7 @@ class CreateInvoiceSchema(BaseModel):
     recipient_address: Optional[str] = Field(None, max_length=2000)
     notes: Optional[str] = Field(None, max_length=20000)
     items: List[InvoiceItemSchema] = Field(..., min_length=1, max_length=500)
+    _items_total_capped = field_validator("items")(_items_capped)
     payment_method_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
     service_month: Optional[BusinessDate] = None
@@ -111,6 +160,7 @@ class UpdateInvoiceSchema(BaseModel):
     recipient_address: Optional[str] = Field(None, max_length=2000)
     notes: Optional[str] = Field(None, max_length=20000)
     items: Optional[List[InvoiceItemSchema]] = Field(None, max_length=500)
+    _items_total_capped = field_validator("items")(_items_capped)
     payment_method_id: Optional[UUID] = None
     refunds_invoice_id: Optional[UUID] = None
     service_month: Optional[BusinessDate] = None
