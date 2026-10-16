@@ -91,6 +91,7 @@ class UpdateWorkerResponse:
     role_id: Optional[str] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+    role_slug: Optional[str] = None
     user_id: Optional[str] = None
 
 
@@ -212,5 +213,6 @@ class UpdateWorkerUseCase:
             role_id=str(saved.role_id) if saved.role_id else None,
             role_name=saved.role_name,
             role_color=saved.role_color,
+            role_slug=getattr(saved, "role_slug", None),
             user_id=str(saved.user_id) if saved.user_id else None,
         )

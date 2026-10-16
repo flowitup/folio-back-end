@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
+from app.application.labor.default_role_names import default_slug_for_name, is_default_name
 from app.application.labor.labor_role_ports import ILaborRoleRepository
 from app.domain.entities.labor_role import LaborRole
 from app.domain.exceptions.labor_exceptions import DuplicateLaborRoleError
@@ -39,7 +40,9 @@ class CreateLaborRoleUseCase:
             DuplicateLaborRoleError: a role with *name* already exists in *company_id*'s scope.
             ValueError: entity-level validation fails (empty name, bad hex).
         """
-        existing = self._repo.find_by_name(name, company_id=company_id)
+        existing = self._repo.find_by_name(name, company_id=company_id) or find_default_role_named(
+            self._repo, name, company_id
+        )
         if existing is not None:
             raise DuplicateLaborRoleError(name)
 
@@ -54,3 +57,18 @@ class CreateLaborRoleUseCase:
         saved = self._repo.create(role)
         self._db.commit()
         return saved
+
+
+def find_default_role_named(repo: ILaborRoleRepository, name: str, company_id: Optional[UUID]) -> Optional[LaborRole]:
+    """The company's default role that clients display as ``name``, if any.
+
+    A default role is shown translated (by slug) in every language, so "Ouvrier principal"
+    duplicates the role stored as "Thợ chính" for a French viewer: two indistinguishable rows.
+    """
+    slug = default_slug_for_name(name)
+    if slug is None:
+        return None
+    return next(
+        (r for r in repo.list_all(company_id=company_id) if r.slug == slug and is_default_name(r.slug, r.name)),
+        None,
+    )

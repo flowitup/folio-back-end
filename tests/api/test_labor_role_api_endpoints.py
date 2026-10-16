@@ -423,6 +423,8 @@ class TestWorkerRoleIntegration:
         assert data["role_id"] == role_id
         assert data["role_name"] == "Thợ chính Create"
         assert data["role_color"] == "#E11D48"
+        # A custom role has no slug; clients translate only default roles (tho_chinh / tho_phu).
+        assert data["role_slug"] is None
 
     def test_create_worker_without_role_id_returns_null_role_fields(self, role_client, admin_token, role_app):
         """POST worker without role_id → role_* fields are null."""
@@ -577,6 +579,8 @@ class TestWorkerRoleCompanyScope:
             headers=_auth(admin_token),
         )
         assert resp.status_code == 400, resp.get_data(as_text=True)
+        # Its own code, so clients point at the Role field and reload the role list.
+        assert resp.get_json()["error"] == "InvalidLaborRole"
         assert "Foreign secret role" not in resp.get_data(as_text=True)
 
     def test_update_refuses_a_foreign_role(self, role_client, admin_token, role_app, outside_roles):
@@ -591,3 +595,4 @@ class TestWorkerRoleCompanyScope:
             headers=_auth(admin_token),
         )
         assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "InvalidLaborRole"

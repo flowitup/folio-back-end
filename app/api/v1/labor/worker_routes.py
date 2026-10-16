@@ -33,6 +33,7 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerPersonNotFoundError,
     SharedPersonEditError,
     InvalidWorkerDataError,
+    InvalidLaborRoleError,
     InvalidWorkerPhoneError,
     WorkerAlreadyLinkedError,
     WorkerAlreadyOnProjectError,
@@ -93,6 +94,7 @@ def _worker_response(w) -> WorkerResponse:
         role_id=str(w.role_id) if w.role_id else None,
         role_name=w.role_name,
         role_color=w.role_color,
+        role_slug=getattr(w, "role_slug", None),
         current_daily_rate=float(_current) if _current is not None else float(w.daily_rate),
         user_id=str(w.user_id) if getattr(w, "user_id", None) else None,
     )
@@ -178,6 +180,9 @@ def create_worker(project_id: str):
     except InvalidWorkerPhoneError as e:
         # Its own code so a client can point at the phone field.
         return _error_response("InvalidPhone", str(e), 400)
+    except InvalidLaborRoleError as e:
+        # Its own code so clients can point at the Role field and reload the role list.
+        return _error_response("InvalidLaborRole", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerPersonNotFoundError:
@@ -251,6 +256,9 @@ def update_worker(project_id: str, worker_id: str):
     except InvalidWorkerPhoneError as e:
         # Its own code so a client can point at the phone field.
         return _error_response("InvalidPhone", str(e), 400)
+    except InvalidLaborRoleError as e:
+        # Its own code so clients can point at the Role field and reload the role list.
+        return _error_response("InvalidLaborRole", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except SharedPersonEditError as e:

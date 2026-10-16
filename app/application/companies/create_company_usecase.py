@@ -147,7 +147,7 @@ class CreateCompanyUseCase:
 
         if self._seed_default_labor_roles is not None:
             try:
-                self._seed_default_labor_roles.execute(company_id=saved.id)
+                self._seed_default_labor_roles.execute(company_id=saved.id, locale=inp.locale)
             except Exception:
                 _log.exception(
                     "Default labor role seed failed for company %s — company was created successfully",
