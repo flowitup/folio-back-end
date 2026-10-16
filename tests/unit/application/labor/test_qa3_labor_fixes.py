@@ -156,6 +156,28 @@ class TestSingleLogCheckIsOptIn:
     def test_the_user_acknowledging_after_the_check_logs(self):
         assert self._body(check_conflicts=True, acknowledge_conflicts=True).conflicts_acknowledged is True
 
+    def test_the_409_names_its_reason_so_apps_can_say_already_logged_elsewhere(self):
+        from flask import Flask
+
+        from app.api.v1.labor.entry_routes import _conflicts_response
+        from app.application.labor.ports import CrossProjectConflict, CrossProjectConflictEntry
+
+        conflict = CrossProjectConflict(
+            person_id=uuid4(),
+            person_name="Hugo",
+            entries=[
+                CrossProjectConflictEntry(
+                    project_id=uuid4(), project_name="Villa Martin", shift_type="full", supplement_hours=0
+                )
+            ],
+        )
+        with Flask(__name__).app_context():
+            response, status = _conflicts_response(ConflictsNotAcknowledgedError([conflict]))
+        body = response.get_json()
+        assert status == 409
+        assert body["error"] == "Conflict" and body["reason"] == "cross_project_conflict"
+        assert body["conflicts"][0]["entries"][0]["project_name"] == "Villa Martin"
+
 
 def _person_model(session, name, phone=None, phone_normalized=None):
     from app.infrastructure.database.models import PersonModel

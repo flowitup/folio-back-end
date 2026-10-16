@@ -193,6 +193,8 @@ def _conflicts_response(e: ConflictsNotAcknowledgedError):
         jsonify(
             {
                 "error": "Conflict",
+                # Lets a client tell this 409 from a duplicate entry and say "already logged elsewhere".
+                "reason": "cross_project_conflict",
                 "message": ("Cross-project conflicts exist; resend with " "acknowledge_conflicts=true to override."),
                 "conflicts": [
                     CrossProjectConflictResponse(
