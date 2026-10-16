@@ -21,6 +21,7 @@ from app.domain.entities.project import project_display_label
 from app.domain.entities.worker import worker_display_name
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
+from app.domain.labor.export.labels import t as export_label
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
 
 
@@ -283,11 +284,12 @@ class ExportLaborUseCase:
 
         # 7. Generate filename
         project_slug = slugify_project_name(project_label, str(project.id))
+        prefix = export_label(req.locale, "file_prefix")
         if worker is not None:
             worker_slug = slugify_worker_name(worker_display_name(worker.person_name, worker.name), str(worker.id))
-            filename = f"labor-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
+            filename = f"{prefix}-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
         else:
-            filename = f"labor-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"
+            filename = f"{prefix}-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"
 
         return ExportLaborResult(
             content=file_bytes,

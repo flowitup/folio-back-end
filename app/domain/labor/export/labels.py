@@ -14,6 +14,8 @@ DEFAULT_LOCALE = "en"
 _LABELS: dict[str, dict[str, str]] = {
     "en": {
         "title": "Folio · Labor Export",
+        # File names stay ASCII (slug-safe on every OS); the words follow the locale.
+        "file_prefix": "labor",
         "project": "Project: {name}",
         "month": "Month: {month}",
         "range": "Range: {start} → {end}",
@@ -61,6 +63,7 @@ _LABELS: dict[str, dict[str, str]] = {
     },
     "fr": {
         "title": "Folio · Export main-d'œuvre",
+        "file_prefix": "main-oeuvre",
         "project": "Projet : {name}",
         "month": "Mois : {month}",
         "range": "Période : {start} → {end}",
@@ -108,6 +111,7 @@ _LABELS: dict[str, dict[str, str]] = {
     },
     "vi": {
         "title": "Folio · Xuất nhân công",
+        "file_prefix": "nhan-cong",
         "project": "Dự án: {name}",
         "month": "Tháng: {month}",
         "range": "Khoảng thời gian: {start} → {end}",

@@ -198,6 +198,24 @@ class TestExportXlsxHappyPath:
         assert "2026-01-to-2026-03" in result.filename
         assert result.filename.endswith(".xlsx")
 
+    def test_filename_prefix_follows_the_locale(self):
+        project = _make_project("Downtown Office Tower")
+        uc = _build_usecase(project)
+        names = {}
+        for locale in ("fr", "vi", "en"):
+            req = ExportLaborRequest(
+                project_id=project.id,
+                from_month="2026-01",
+                to_month="2026-01",
+                format="xlsx",
+                acting_user_email="user@example.com",
+                locale=locale,
+            )
+            names[locale] = uc.execute(req).filename
+        assert names["fr"].startswith("main-oeuvre-downtown-office-tower-")
+        assert names["vi"].startswith("nhan-cong-downtown-office-tower-")
+        assert names["en"].startswith("labor-downtown-office-tower-")
+
 
 # ---------------------------------------------------------------------------
 # Happy path — pdf
