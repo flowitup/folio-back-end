@@ -184,6 +184,19 @@ class TestRefreshEndpoint:
             again = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {token}"})
             assert again.status_code == 200
 
+    def test_an_old_client_keeps_reusing_its_original_refresh_token(self, client):
+        """Mobile 0.5.27 ignores the rotated refresh_token and keeps presenting the one from sign-in.
+        Rotation must not log it out sooner: every reuse within that token's lifetime still works,
+        and the access tokens it gets back are accepted."""
+        tokens = mint_tokens(client, "active@example.com")
+        original = {"Authorization": f"Bearer {tokens['refresh_token']}"}
+        for _ in range(4):
+            response = client.post("/api/v1/auth/refresh", headers=original)
+            assert response.status_code == 200, response.get_json()
+            access = response.get_json()["access_token"]
+            me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access}"})
+            assert me.status_code == 200
+
     def test_refresh_without_token(self, client):
         """Test refresh without token."""
         response = client.post("/api/v1/auth/refresh")
