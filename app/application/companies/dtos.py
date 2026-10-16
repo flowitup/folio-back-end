@@ -42,6 +42,8 @@ class CreateCompanyInput:
     logo_url: Optional[str] = None
     default_payment_terms: Optional[str] = None
     prefix_override: Optional[str] = None
+    # UI language of the creator (fr/en/vi): names the default labor roles.
+    locale: Optional[str] = None
 
 
 @dataclass(frozen=True)

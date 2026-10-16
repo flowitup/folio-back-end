@@ -17,6 +17,7 @@ from app.domain.billing.template import BillingDocumentTemplate
 from app.domain.billing.exceptions import (
     ForbiddenCompanyBillingError,
     ForbiddenProjectAccessError,
+    ProjectCompanyMismatchError,
 )
 from app.domain.companies.company import Company
 from app.domain.companies.roles import CompanyRole
@@ -292,6 +293,33 @@ def assert_project_link_access(
         if access is not None and access.role == CompanyRole.ADMIN.value:
             return
     raise ForbiddenProjectAccessError(project_id)
+
+
+def project_in_company(
+    project_repo: Optional[ProjectReadPort],
+    project_id: Optional[UUID],
+    company_id: Optional[UUID],
+) -> bool:
+    """True unless *project_id* is known to belong to another company than *company_id*."""
+    if project_id is None or company_id is None or project_repo is None:
+        return True
+    project = project_repo.find_by_id(project_id)
+    project_company_id = getattr(project, "company_id", None) if project is not None else None
+    return project_company_id is None or project_company_id == company_id
+
+
+def assert_project_in_company(
+    project_repo: Optional[ProjectReadPort],
+    project_id: Optional[UUID],
+    company_id: Optional[UUID],
+) -> None:
+    """Refuse linking a document issued by *company_id* to another company's project.
+
+    Otherwise the document shows on that company's project to that company's members (not
+    to its own admins), and its PDF prints the other company's site as its subject.
+    """
+    if not project_in_company(project_repo, project_id, company_id):
+        raise ProjectCompanyMismatchError()
 
 
 class CompanyRepositoryPort(Protocol):

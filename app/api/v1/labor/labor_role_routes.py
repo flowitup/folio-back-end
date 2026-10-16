@@ -21,6 +21,7 @@ from app.api.v1.labor.labor_role_schemas import (
     ROLE_COLOR_PALETTE,
     UpdateLaborRoleRequest,
 )
+from app.application.companies.default_company import default_company_id
 from app.domain.exceptions.labor_exceptions import (
     DuplicateLaborRoleError,
     LaborRoleNotFoundError,
@@ -70,42 +71,58 @@ def _require_company_admin_or_manager(caller_id: UUID, company_id):
 
 
 def _resolve_company_scope():
-    """Resolve the company scope for the global /labor/roles routes (Phase 2).
+    """Resolve the company the global /labor/roles routes apply to.
 
-    `?company_id=` is honored only when the caller belongs to that company
-    (any role) — returns a (company_id, error_response) tuple where exactly
-    one element is None. Falls back to the caller's primary company; when
-    neither resolves (no query param and no primary company — e.g. a
-    platform admin with no company of their own, or a test fixture with no
-    company set up at all), scope stays None (legacy/unscoped rows) rather
-    than failing, so callers with no company context keep working.
+    Returns a (company_id, error_response) tuple where at most one element is set.
+
+    - ``?company_id=`` wins; the caller must belong to that company (any role).
+    - ``?project_id=`` means "the company of this project" (same membership rule), so
+      a client that only knows the project never has to guess its company.
+    - With neither (older clients), the caller's default company: primary, else the
+      oldest attachment (see ``default_company_id``).
+    - ``(None, None)`` when the caller belongs to no company at all. Company-less
+      legacy rows are never served: no project accepts them.
     """
     container = get_container()
     caller_id = UUID(get_jwt_identity())
+    access_repo = getattr(container, "user_company_access_repo", None)
 
     raw_company_id = request.args.get("company_id")
+    raw_project_id = request.args.get("project_id")
+    requested = None
     if raw_company_id:
         try:
             requested = UUID(raw_company_id)
         except ValueError:
             return None, _error_response("ValidationError", f"Invalid company id: {raw_company_id!r}", 400)
-        access_repo = getattr(container, "user_company_access_repo", None)
+    elif raw_project_id:
+        try:
+            project_id = UUID(raw_project_id)
+        except ValueError:
+            return None, _error_response("ValidationError", f"Invalid project id: {raw_project_id!r}", 400)
+        authz_reader = getattr(container, "authz_reader", None)
+        requested = authz_reader.project_company_id(project_id) if authz_reader is not None else None
+        if requested is None:
+            return None, _error_response("NotFound", f"Project {raw_project_id} not found", 404)
+
+    if requested is not None:
         access = access_repo.find(caller_id, requested) if access_repo is not None else None
-        if access is None:
-            return None, _error_response("Forbidden", f"Not a member of company {raw_company_id}", 403)
+        if access is None and not _is_platform_admin(caller_id):
+            return None, _error_response("Forbidden", f"Not a member of company {requested}", 403)
         return requested, None
 
-    authz_reader = getattr(container, "authz_reader", None)
-    if authz_reader is not None:
-        primary = authz_reader.primary_company_id(caller_id)
-        if primary is not None:
-            return primary, None
-    return None, None
+    return default_company_id(getattr(container, "authz_reader", None), access_repo, caller_id), None
+
+
+def _is_platform_admin(caller_id: UUID) -> bool:
+    role_checker = getattr(get_container(), "authorization_service", None)
+    return role_checker is not None and bool(role_checker.is_platform_admin(caller_id))
 
 
 @labor_bp.route("/labor/roles", methods=["GET"])
 @openapi_doc(
-    summary="List labor roles (scoped to the caller's company) with the suggested color palette", tags=["labor"]
+    summary="List a company's labor roles (?company_id= or ?project_id=, else the caller's default company) and the color palette",
+    tags=["labor"],
 )
 @jwt_required()
 def list_labor_roles():
@@ -113,7 +130,7 @@ def list_labor_roles():
     company_id, error = _resolve_company_scope()
     if error is not None:
         return error
-    roles = get_container().list_labor_roles_usecase.execute(company_id=company_id)
+    roles = [] if company_id is None else get_container().list_labor_roles_usecase.execute(company_id=company_id)
     return jsonify(
         LaborRoleListResponse(
             roles=[_role_response(r) for r in roles],
@@ -141,6 +158,8 @@ def create_labor_role():
     company_id, error = _resolve_company_scope()
     if error is not None:
         return error
+    if company_id is None:
+        return _error_response("ValidationError", "company_id is required", 400)
 
     caller_id = UUID(get_jwt_identity())
     auth_error = _require_company_admin_or_manager(caller_id, company_id)

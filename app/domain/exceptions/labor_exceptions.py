@@ -68,6 +68,13 @@ class InvalidWorkerDataError(LaborError):
         super().__init__(message)
 
 
+class InvalidLaborRoleError(InvalidWorkerDataError):
+    """A worker's role is unknown, legacy (no company) or another company's (deleted or stale list)."""
+
+    def __init__(self) -> None:
+        super().__init__("Labor role not found")
+
+
 class InvalidWorkerPhoneError(InvalidWorkerDataError):
     """Raised when a worker's phone does not read as a phone number ("hello world")."""
 

@@ -22,6 +22,7 @@ from app.application.billing.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
+    assert_project_in_company,
     assert_project_link_access,
     assert_user_company_access,
 )
@@ -75,6 +76,7 @@ class CreateBillingDocumentUseCase:
 
         # Only company admins may create/manage the company's billing.
         assert_company_admin(self._access_repo, inp.user_id, inp.company_id)
+        assert_project_in_company(self._project_repo, inp.project_id, inp.company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
         effective_prefix = _effective_prefix_from_company(company) or ""

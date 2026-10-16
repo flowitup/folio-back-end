@@ -43,6 +43,9 @@ class MaterialsExpenseItem:
     # one exists (bank-refund reconciliation). None otherwise.
     funds_release_number: Optional[str]
     attachments: list[MaterialsExpenseAttachment]
+    # The company of the expense's project (an admin of several companies sees them all).
+    company_id: Optional[str] = None
+    company_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,8 @@ class ListMaterialsExpensesUseCase:
                 refunded_by=r.get("refunded_by"),
                 has_bank_refund=UUID(r["id"]) in bank_refunded,
                 funds_release_number=release_numbers.get(UUID(r["id"])),
+                company_id=r.get("company_id"),
+                company_name=r.get("company_name"),
                 attachments=[
                     MaterialsExpenseAttachment(
                         id=a["id"],

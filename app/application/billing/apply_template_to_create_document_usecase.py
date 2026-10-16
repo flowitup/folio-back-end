@@ -1,7 +1,8 @@
 """ApplyTemplateToCreateDocumentUseCase — create a document pre-filled from a template.
 
-H2 fix: if company_id is None, resolve to the caller's primary company via
-access_repo. If user has no attached companies, raises MissingCompanyProfileError.
+If company_id is None the document is issued by the template's company (templates are
+company-wide); only a legacy template with no company falls back to the caller's primary
+company. With neither, raises MissingCompanyProfileError.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from app.application.billing.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
+    assert_project_in_company,
     assert_project_link_access,
     assert_user_company_access,
 )
@@ -44,7 +46,9 @@ class ApplyTemplateToCreateDocumentUseCase:
 
     Validation:
       - Template must exist; its author or a company admin of its company may use it.
-      - If company_id is None, the user's primary company is resolved automatically.
+      - If company_id is None, the template's company issues the document (a legacy
+        template with no company: the caller's primary company).
+      - A company_id other than the template's company is refused (ValueError).
       - If user has no attached companies, raises MissingCompanyProfileError (409).
       - User must be attached to the resolved company.
     """
@@ -79,8 +83,12 @@ class ApplyTemplateToCreateDocumentUseCase:
             raise BillingTemplateNotFoundError(inp.template_id)
         _assert_billing_template_access(template, inp.user_id, self._access_repo)
 
-        # 3. Resolve company_id — H2: fall back to caller's primary company if None
-        company_id = inp.company_id
+        # 3. Resolve company_id: the requested issuer, else the template's own company,
+        # else (legacy template with no company) the caller's primary company.
+        template_company_id = getattr(template, "company_id", None)
+        if inp.company_id is not None and template_company_id is not None and inp.company_id != template_company_id:
+            raise ValueError("The template belongs to another company than the requested issuer")
+        company_id = inp.company_id or template_company_id
         if company_id is None:
             # Find the primary access row for this user
             accesses = self._access_repo.list_for_user(inp.user_id)
@@ -95,6 +103,7 @@ class ApplyTemplateToCreateDocumentUseCase:
 
         # Only company admins may create company billing documents.
         assert_company_admin(self._access_repo, inp.user_id, company_id)
+        assert_project_in_company(self._project_repo, inp.project_id, company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
         effective_prefix = _effective_prefix_from_company(company) or ""

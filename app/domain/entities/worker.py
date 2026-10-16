@@ -38,6 +38,8 @@ class Worker:
     role_id: Optional[UUID] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+    # Stable key of a default role (tho_chinh / tho_phu) so clients can translate it.
+    role_slug: Optional[str] = None
 
     # Signed-in account allowed to log its own attendance for this worker.
     # None for the (common) case of a worker without an app account.
