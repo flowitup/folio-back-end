@@ -733,10 +733,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         all_companies=True bypasses the company_id filter (superadmin view).
         """
+        from app.infrastructure.adapters.project_label_sql import project_label_expr
         from app.infrastructure.database.models.company import CompanyModel
         from app.infrastructure.database.models.project import ProjectModel
-
-        from app.infrastructure.adapters.project_label_sql import project_label_expr
 
         # Name first, site address second (project_label); the address also goes out on its own.
         query = (
