@@ -183,6 +183,35 @@ def list_labor_entries(project_id: str):
     )
 
 
+def _conflicts_response(e: ConflictsNotAcknowledgedError):
+    """409 listing the other sites where the same person already has a day on that date."""
+    return (
+        jsonify(
+            {
+                "error": "Conflict",
+                "message": ("Cross-project conflicts exist; resend with " "acknowledge_conflicts=true to override."),
+                "conflicts": [
+                    CrossProjectConflictResponse(
+                        person_id=str(c.person_id),
+                        person_name=c.person_name,
+                        entries=[
+                            CrossProjectConflictEntryResponse(
+                                project_id=str(ent.project_id),
+                                project_name=ent.project_name,
+                                shift_type=ent.shift_type,
+                                supplement_hours=ent.supplement_hours,
+                            )
+                            for ent in c.entries
+                        ],
+                    ).model_dump()
+                    for c in e.conflicts
+                ],
+            }
+        ),
+        409,
+    )
+
+
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["POST"])
 @openapi_doc(
     summary="Log daily attendance for a worker",
@@ -210,6 +239,7 @@ def log_attendance(project_id: str):
                 note=data.note,
                 shift_type=data.shift_type,
                 supplement_hours=data.supplement_hours,
+                acknowledge_conflicts=data.acknowledge_conflicts,
             )
         )
     except ValueError as e:
@@ -222,6 +252,8 @@ def log_attendance(project_id: str):
         return _error_response("NotFound", str(e), 404)
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
+    except ConflictsNotAcknowledgedError as e:
+        return _conflicts_response(e)
 
     _notify_logged(project_id, result.date, [result.worker_id])
     return (
@@ -355,33 +387,7 @@ def bulk_log_attendance(project_id: str):
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
     except ConflictsNotAcknowledgedError as e:
-        return (
-            jsonify(
-                {
-                    "error": "Conflict",
-                    "message": (
-                        "Cross-project conflicts exist; resend with " "acknowledge_conflicts=true to override."
-                    ),
-                    "conflicts": [
-                        CrossProjectConflictResponse(
-                            person_id=str(c.person_id),
-                            person_name=c.person_name,
-                            entries=[
-                                CrossProjectConflictEntryResponse(
-                                    project_id=str(ent.project_id),
-                                    project_name=ent.project_name,
-                                    shift_type=ent.shift_type,
-                                    supplement_hours=ent.supplement_hours,
-                                )
-                                for ent in c.entries
-                            ],
-                        ).model_dump()
-                        for c in e.conflicts
-                    ],
-                }
-            ),
-            409,
-        )
+        return _conflicts_response(e)
 
     _notify_logged(
         project_id,

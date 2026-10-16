@@ -22,6 +22,14 @@ from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
 
 
+# File name words per export locale: (prefix, range connector).
+_FILENAME_WORDS = {
+    "en": ("labor", "to"),
+    "fr": ("main-d-oeuvre", "a"),
+    "vi": ("nhan-cong", "den"),
+}
+
+
 @dataclass
 class ExportLaborRequest:
     """Input DTO for the export use case."""
@@ -255,12 +263,14 @@ class ExportLaborUseCase:
             ext = "pdf"
 
         # 7. Generate filename
+        # The file name speaks the export's language (ASCII only, safe in every browser).
+        prefix, to = _FILENAME_WORDS.get(req.locale, _FILENAME_WORDS["en"])
         project_slug = slugify_project_name(project.name, str(project.id))
         if worker is not None:
             worker_slug = slugify_worker_name(worker.person_name or worker.name, str(worker.id))
-            filename = f"labor-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
+            filename = f"{prefix}-{project_slug}-{worker_slug}-{req.from_month}-{to}-{req.to_month}.{ext}"
         else:
-            filename = f"labor-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"
+            filename = f"{prefix}-{project_slug}-{req.from_month}-{to}-{req.to_month}.{ext}"
 
         return ExportLaborResult(
             content=file_bytes,

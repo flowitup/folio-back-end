@@ -95,6 +95,24 @@ class MergePersonsUseCase:
         if target is None:
             raise PersonNotFoundError(f"target person {request.target_person_id} not found")
 
+        # One person is listed once per project: when both are workers on the same project,
+        # the merge would leave two rows for one person. Refuse and name the projects; the
+        # duplicate worker must be deactivated or removed there first.
+        target_projects = {
+            row.project_id for row in self._db.query(WorkerModel.project_id).filter(WorkerModel.person_id == target.id)
+        }
+        shared = sorted(
+            {
+                str(row.project_id)
+                for row in self._db.query(WorkerModel.project_id).filter(WorkerModel.person_id == source.id)
+                if row.project_id in target_projects
+            }
+        )
+        if shared:
+            raise InvalidMergeError(
+                "Both persons are workers on the same project(s): " + ", ".join(shared) + ". Merge their workers first."
+            )
+
         # Reassign all Worker rows in one UPDATE — much cheaper than
         # loading entities and rewriting them one at a time.
         reassigned = (

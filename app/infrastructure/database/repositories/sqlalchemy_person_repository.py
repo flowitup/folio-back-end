@@ -3,14 +3,37 @@
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.application.persons.ports import IPersonRepository
 from app.domain.entities.person import Person
-from app.domain.value_objects.phone_number import InvalidPhoneNumberError, normalize_phone
+from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 from app.infrastructure.database.models import PersonModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
+
+
+def _phone_conditions(query: str) -> list:
+    """Extra matches when the query is a phone number typed in any format.
+
+    "06 20 30 00 04", "0620300004" and "+33620300004" are the same number: match the stored
+    E.164 form, and a stored free-text number ("06 20 30 00 04") by its last nine digits.
+    """
+    digits = "".join(ch for ch in query if ch.isdigit())
+    if len(digits) < 9 or not is_phone_number(query):
+        return []
+    try:
+        e164 = normalize_phone(query)
+    except InvalidPhoneNumberError:
+        return []
+    stripped_phone = PersonModel.phone
+    for separator in (" ", ".", "-", "(", ")", "/"):
+        stripped_phone = func.replace(stripped_phone, separator, "")
+    return [
+        PersonModel.phone_normalized == e164,
+        PersonModel.phone == e164,
+        stripped_phone.like(f"%{e164[-9:]}"),
+    ]
 
 
 class SqlAlchemyPersonRepository(IPersonRepository):
@@ -150,13 +173,13 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             # Match either substring on normalized_name or exact phone (when
             # the query happens to be a phone number — cheap union, no
             # ambiguity since phone formats rarely collide with name fragments).
-            q = q.filter(
-                or_(
-                    # autoescape: "%" and "_" in the search text match only themselves.
-                    PersonModel.normalized_name.contains(normalized, autoescape=True),
-                    PersonModel.phone == query.strip(),
-                )
-            )
+            conditions = [
+                # autoescape: "%" and "_" in the search text match only themselves.
+                PersonModel.normalized_name.contains(normalized, autoescape=True),
+                PersonModel.phone == query.strip(),
+            ]
+            conditions.extend(_phone_conditions(query))
+            q = q.filter(or_(*conditions))
 
         if company_ids is not None:
             # Tenancy scope (Phase 2): only persons with an active

@@ -71,8 +71,12 @@ class ImportMembersUseCase:
             # Someone without an account only joins on sign-up through a pending
             # profile (`list_pending_by_phone`), so their copy here is pending too,
             # as a member (the import role; "member" is stored as None).
+            # A person with no phone can never sign up: they are a plain directory person
+            # (a worker without phone), copied as such rather than as an invitation that
+            # nobody can accept and that expires.
             pending_expires_at: Optional[datetime] = None
-            if person.user_id is None:
+            has_phone = bool(source_profile.phone_normalized or person.phone_normalized or person.phone)
+            if person.user_id is None and has_phone:
                 source_until = source_profile.pending_expires_at
                 pending_expires_at = (
                     source_until
