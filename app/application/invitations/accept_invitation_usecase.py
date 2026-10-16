@@ -105,6 +105,14 @@ class RequestInviteOtpUseCase:
 
         account = self._users.find_by_email(inv.email) if self._users is not None else None
         if account is None:
+            # Nobody holds the invited address. A phone that already signs an account in (someone
+            # who signed up on mobile, whose address is synthetic) proves that account with a
+            # sign-in code, like any sign-in; the token authorises the account to join, exactly as
+            # it authorises a brand-new number to create one.
+            phone = normalize_french_phone(raw_phone)
+            owner = self._users.find_by_phone(phone) if self._users is not None else None
+            if owner is not None and owner.is_active and self._request_signin_otp is not None:
+                return self._request_signin_otp.execute(phone)
             return self._request_signup_otp.execute(raw_phone)
 
         phone = normalize_french_phone(raw_phone)
@@ -236,11 +244,15 @@ class AcceptInvitationUseCase:
             _assert_inviter_still_authorised(self._authz_reader, inv)
 
             user = self._user_repo.find_by_email(inv.email)
-            is_new_user = user is None
-            if is_new_user:
-                if otp.user_id is not None:
-                    # A sign-in code proves an existing account, not a new one.
+            is_new_user = user is None and otp.user_id is None
+            if user is None and otp.user_id is not None:
+                # Nobody holds the invited address and the code signs an existing account in
+                # (RequestInviteOtpUseCase sends one to a phone that already has an account):
+                # that account takes the invitation up, it is not created a second time.
+                user = self._user_repo.find_by_id(otp.user_id)
+                if user is None or not user.is_active or user.phone != normalized_phone:
                     raise OtpInvalidError("Invalid or expired code")
+            elif is_new_user:
                 if self._user_repo.find_by_phone(normalized_phone) is not None:
                     raise PhoneAlreadyRegisteredError("This phone number already has an account.")
                 user = User.create(
@@ -249,7 +261,7 @@ class AcceptInvitationUseCase:
                     phone=normalized_phone,
                 )
                 user = self._user_repo.save(user)
-            elif otp.user_id != user.id or not user.is_active:
+            elif user is not None and (otp.user_id != user.id or not user.is_active):
                 # The invited address already has an account: only a code that signs THAT
                 # account in may accept for it. A code proving any other phone would hand
                 # out a session for someone else's account.
@@ -278,14 +290,17 @@ class AcceptInvitationUseCase:
     def accept_as(self, raw_token: str, user_id: UUID) -> Invitation:
         """Accept an invitation for an account that is already signed in; return the accepted invitation.
 
-        The session proves the account, so no phone code is needed — but only the
-        account the invitation was sent to may take it up.
+        The session proves the account, so no phone code is needed. The token is the
+        authorisation (it already lets an unknown new phone create an account), so any
+        signed-in account may take it up — except when the invited address belongs to
+        ANOTHER account: the invitation is then that account's.
 
         Raises:
             InvalidInvitationTokenError: token unknown.
             InvitationExpiredError / InvitationRevokedError / InvitationAlreadyAcceptedError:
                 via inv.accept().
-            InvitationWrongAccountError: the signed-in account's email is not the invited one.
+            InvitationWrongAccountError: the invited address belongs to another account (or the
+                signed-in account is gone or deactivated).
         """
         with self._db.begin_nested():
             inv = self._inv_repo.find_by_token_hash_for_update(hash_token(raw_token))
@@ -295,8 +310,12 @@ class AcceptInvitationUseCase:
             _assert_inviter_still_authorised(self._authz_reader, inv)
 
             user = self._user_repo.find_by_id(user_id)
-            if user is None or (user.email or "").strip().lower() != inv.email.strip().lower():
+            if user is None or not user.is_active:
                 raise InvitationWrongAccountError("This invitation was sent to another email address.")
+            if (user.email or "").strip().lower() != inv.email.strip().lower():
+                owner = self._user_repo.find_by_email(inv.email)
+                if owner is not None and owner.id != user.id:
+                    raise InvitationWrongAccountError("This invitation was sent to another email address.")
 
             self._join_project(inv, user)
             self._inv_repo.save(accepted_inv)

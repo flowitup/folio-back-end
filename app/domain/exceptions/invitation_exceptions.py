@@ -19,6 +19,16 @@ class InvitationRevokedError(InvitationNotUsableError):
     pass
 
 
+class InvitationSupersededError(InvitationRevokedError):
+    """Invitation was revoked because a newer one went to the same address for the same project.
+
+    A subclass of ``InvitationRevokedError`` so every caller that refuses a revoked invitation
+    keeps refusing this one; only the verify endpoint tells the invitee to use the latest e-mail.
+    """
+
+    pass
+
+
 class InvitationAlreadyAcceptedError(InvitationNotUsableError):
     """Invitation was already accepted and cannot be used again."""
 

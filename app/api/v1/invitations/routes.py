@@ -44,6 +44,7 @@ from app.domain.exceptions.invitation_exceptions import (
     InvitationExpiredError,
     InvitationNotFoundError,
     InvitationRevokedError,
+    InvitationSupersededError,
     InvalidInvitationTokenError,
     InvitationWrongAccountError,
 )
@@ -58,12 +59,23 @@ def _err(code: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=code).model_dump()), code
 
 
-def _gone(reason: str, message: str):
+# Public answers: fixed texts, never the domain message (which may name the invitation's id).
+_GONE_MESSAGES = {
+    "expired": "This invitation has expired.",
+    "revoked": "This invitation has been revoked.",
+    "superseded": "A newer invitation was sent to this address; use the latest e-mail.",
+    "accepted": "This invitation was already accepted.",
+}
+
+
+def _gone(reason: str, _detail: object = None):
     """410 Gone with a `reason` discriminator the frontend uses to pick the error UI.
 
-    reason ∈ {'expired', 'revoked', 'accepted'}.
+    reason ∈ {'expired', 'revoked', 'superseded', 'accepted'}. 'superseded' is a revoked
+    invitation replaced by a re-send; older clients that do not know it fall back to their
+    generic "unavailable" text.
     """
-    body = ErrorResponse(error="Gone", message=message, status_code=410).model_dump()
+    body = ErrorResponse(error="Gone", message=_GONE_MESSAGES[reason], status_code=410).model_dump()
     body["reason"] = reason
     return jsonify(body), 410
 
@@ -267,6 +279,8 @@ def verify_invitation(token: str):
         return _err(404, "NotFound", "Invitation not found.")
     except InvitationExpiredError as e:
         return _gone("expired", str(e))
+    except InvitationSupersededError as e:
+        return _gone("superseded", str(e))
     except InvitationRevokedError as e:
         return _gone("revoked", str(e))
     except InvitationAlreadyAcceptedError as e:
