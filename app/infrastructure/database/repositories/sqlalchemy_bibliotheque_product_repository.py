@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.domain.entities.library_product import LibraryProduct
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
+from app.infrastructure.database.text_fold import folded, folded_like_pattern
 
 
 class SqlAlchemyBibliothequeProductRepository:
@@ -103,13 +104,13 @@ class SqlAlchemyBibliothequeProductRepository:
         if category is not None:
             base = base.where(BibliothequeProductModel.category == category)
         if q:
-            # Escape LIKE wildcards so "%" or "_" match only themselves, not any text.
-            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            # Accent- and case-insensitive substring ('platre' finds 'Plâtre');
+            # "%" and "_" in the search text match only themselves.
+            pattern = folded_like_pattern(q)
             base = base.where(
-                BibliothequeProductModel.name.ilike(pattern, escape="\\")
-                | BibliothequeProductModel.description.ilike(pattern, escape="\\")
-                | BibliothequeProductModel.supplier_reference.ilike(pattern, escape="\\")
+                folded(BibliothequeProductModel.name).like(pattern, escape="\\")
+                | folded(BibliothequeProductModel.description).like(pattern, escape="\\")
+                | folded(BibliothequeProductModel.supplier_reference).like(pattern, escape="\\")
             )
 
         total = self._session.execute(select(func.count()).select_from(base.subquery())).scalar_one()
