@@ -455,6 +455,9 @@ def invitation_app():
             from app.infrastructure.adapters.sqlalchemy_personal_data_eraser import (
                 SQLAlchemyPersonalDataEraser,
             )
+            from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+                SqlAlchemyCompanyPersonRepository as _DeletionCompanyPersonRepository,
+            )
 
             _c.delete_account_usecase = DeleteAccountUseCase(
                 user_repo=_c.user_repository,
@@ -463,6 +466,7 @@ def invitation_app():
                 eraser=SQLAlchemyPersonalDataEraser(db.session),
                 db_session=db.session,
                 clock=_clock,
+                company_person_repo=_DeletionCompanyPersonRepository(db.session),
             )
 
         # Company-aware authz resolver read port (configure_container() above

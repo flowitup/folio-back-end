@@ -747,6 +747,9 @@ def _configure_di_container() -> None:
         from app.infrastructure.adapters.sqlalchemy_personal_data_eraser import (
             SQLAlchemyPersonalDataEraser,
         )
+        from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+            SqlAlchemyCompanyPersonRepository as _DeletionCompanyPersonRepository,
+        )
 
         _c.delete_account_usecase = DeleteAccountUseCase(
             user_repo=_c.user_repository,
@@ -755,6 +758,7 @@ def _configure_di_container() -> None:
             eraser=SQLAlchemyPersonalDataEraser(db.session),
             db_session=db.session,
             clock=_clock,
+            company_person_repo=_DeletionCompanyPersonRepository(db.session),
         )
 
     # Membership pushes need both name sources, so they are wired here rather than in the
