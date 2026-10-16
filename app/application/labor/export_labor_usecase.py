@@ -17,6 +17,8 @@ from app.application.labor.labor_day_description_usecases import (
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
 from app.application.projects.ports import IProjectRepository
+from app.domain.entities.project import project_display_label
+from app.domain.entities.worker import worker_display_name
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.labor.export.models import ExportContext, ExportFormat, ExportRange, MonthBucket
@@ -130,6 +132,28 @@ class ExportLaborUseCase:
                 return rc.daily_rate
         return worker.daily_rate
 
+    def _rate_periods(self, worker, from_d: date, to_d: date) -> tuple:
+        """Rates in force during the range, as ((first day, daily rate), ...) in date order.
+
+        The first period starts at the beginning of the range with the rate in force
+        that day; each rate change inside the range opens a new period. Consecutive
+        equal rates are merged. Empty when no worker or no repo is wired.
+        """
+        if worker is None or self._rate_change_repo is None:
+            return ()
+        range_start = _month_bounds(from_d)[0]
+        range_end = _month_bounds(to_d)[1]
+        changes = sorted(self._rate_change_repo.list_by_worker(worker.id), key=lambda rc: rc.effective_date)
+        start_rate = worker.daily_rate
+        for rc in changes:
+            if rc.effective_date <= range_start:
+                start_rate = rc.daily_rate
+        periods = [(range_start, start_rate)]
+        for rc in changes:
+            if range_start < rc.effective_date <= range_end and rc.daily_rate != periods[-1][1]:
+                periods.append((rc.effective_date, rc.daily_rate))
+        return tuple(periods)
+
     def execute(self, req: ExportLaborRequest) -> ExportLaborResult:
         """Generate export file.
 
@@ -227,14 +251,17 @@ class ExportLaborUseCase:
             )
 
         # 5. Build export context
+        # Projects are shown by their site address everywhere else (project_display_label).
+        project_label = project_display_label(project)
         context = ExportContext(
-            project_name=project.name,
+            project_name=project_label,
             project_id=req.project_id,
             range=ExportRange(from_month=from_d, to_month=to_d),
             generated_at=datetime.now(timezone.utc),
             generated_by_email=req.acting_user_email,
-            worker_name=(worker.person_name or worker.name) if worker is not None else None,
+            worker_name=worker_display_name(worker.person_name, worker.name) if worker is not None else None,
             worker_daily_rate=self._header_rate(worker, to_d),
+            worker_rate_periods=self._rate_periods(worker, from_d, to_d),
             locale=req.locale,
         )
 
@@ -255,9 +282,9 @@ class ExportLaborUseCase:
             ext = "pdf"
 
         # 7. Generate filename
-        project_slug = slugify_project_name(project.name, str(project.id))
+        project_slug = slugify_project_name(project_label, str(project.id))
         if worker is not None:
-            worker_slug = slugify_worker_name(worker.person_name or worker.name, str(worker.id))
+            worker_slug = slugify_worker_name(worker_display_name(worker.person_name, worker.name), str(worker.id))
             filename = f"labor-{project_slug}-{worker_slug}-{req.from_month}-to-{req.to_month}.{ext}"
         else:
             filename = f"labor-{project_slug}-{req.from_month}-to-{req.to_month}.{ext}"

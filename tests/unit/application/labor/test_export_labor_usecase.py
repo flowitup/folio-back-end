@@ -35,7 +35,6 @@ from app.domain.entities.worker import Worker
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 
-
 # ---------------------------------------------------------------------------
 # Helpers / stubs
 # ---------------------------------------------------------------------------
@@ -722,6 +721,41 @@ class TestWorkerIdHappyPath:
         assert "antoine-dupont" in result.filename
         assert "old-copy" not in result.filename
 
+    def test_a_phone_number_person_name_falls_back_to_the_worker_name(self):
+        """A Person made for a phone-only account is named by its phone: print the worker's name."""
+        pid = uuid4()
+        project = _make_project("Office Tower", project_id=pid)
+        worker = _make_worker(project_id=pid, name="Nguyễn Văn An")
+        worker.person_name = "+33621500003"
+        uc = _build_usecase_with_worker(project, worker)
+        req = ExportLaborRequest(
+            project_id=pid,
+            worker_id=worker.id,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert "nguyen-van-an" in result.filename
+        assert "33621500003" not in result.filename
+
+    def test_filename_names_the_site_address(self):
+        """Projects are shown by their address: the file name too."""
+        pid = uuid4()
+        project = _make_project("QA3 interne", project_id=pid)
+        project.address = "12 rue des Lilas"
+        uc = _build_usecase_with_worker(project, None)
+        req = ExportLaborRequest(
+            project_id=pid,
+            from_month="2026-01",
+            to_month="2026-01",
+            format="xlsx",
+            acting_user_email="user@example.com",
+        )
+        result = uc.execute(req)
+        assert result.filename.startswith("labor-12-rue-des-lilas-")
+
     def test_filename_includes_project_slug_and_range(self):
         """Filename format: labor-{project-slug}-{worker-slug}-{from}-to-{to}.xlsx"""
         pid = uuid4()
@@ -1211,3 +1245,34 @@ class TestExportHeaderRate:
     def test_project_wide_export_has_no_header_rate(self):
         uc = _build_usecase(_make_project())
         assert uc._header_rate(None, date(2026, 3, 1)) is None
+
+
+class TestExportRatePeriods:
+    """labor-09: a raise inside the range is shown as two rates with their dates."""
+
+    def test_single_period_when_no_change_in_range(self):
+        from decimal import Decimal
+
+        worker = _make_worker(daily_rate="200.00")
+        uc = _usecase_with_rates(worker, [_rate_change(worker.id, date(2026, 1, 1), "220.00")])
+        assert uc._rate_periods(worker, date(2026, 3, 1), date(2026, 3, 1)) == ((date(2026, 3, 1), Decimal("220.00")),)
+
+    def test_change_inside_range_opens_a_new_period(self):
+        from decimal import Decimal
+
+        worker = _make_worker(daily_rate="200.00")
+        uc = _usecase_with_rates(
+            worker,
+            [
+                _rate_change(worker.id, date(2026, 3, 15), "250.00"),
+                _rate_change(worker.id, date(2026, 6, 1), "300.00"),
+            ],
+        )
+        assert uc._rate_periods(worker, date(2026, 3, 1), date(2026, 4, 1)) == (
+            (date(2026, 3, 1), Decimal("200.00")),
+            (date(2026, 3, 15), Decimal("250.00")),
+        )
+
+    def test_no_periods_without_repo_or_worker(self):
+        uc = _build_usecase(_make_project())
+        assert uc._rate_periods(None, date(2026, 3, 1), date(2026, 3, 1)) == ()

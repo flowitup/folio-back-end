@@ -106,6 +106,20 @@ def month_start_rates_by_worker_month(session: Session, rows) -> dict:
     return resolved
 
 
+def _worker_display_name_expr():
+    """SQL twin of worker_display_name(): the Person's name, unless it is a phone
+    number (a Person made for a phone-only account) — then the worker row's name.
+    "Starts with + or a digit" stands for "is a phone number"; no one's name does.
+    """
+    first_char = func.substr(PersonModel.name, 1, 1)
+    looks_like_phone = first_char.in_(["+", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
+    return sa_case(
+        (PersonModel.name.is_(None), WorkerModel.name),
+        (looks_like_phone, WorkerModel.name),
+        else_=PersonModel.name,
+    )
+
+
 class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
     """SQLAlchemy adapter for labor entry persistence."""
 
@@ -263,7 +277,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             WorkerModel.daily_rate,
         )
 
-        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
+        display_name = _worker_display_name_expr()
         query = (
             self._session.query(
                 WorkerModel.id.label("worker_id"),
@@ -390,7 +404,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
 
         year_expr = func.extract("year", LaborEntryModel.date)
         month_expr = func.extract("month", LaborEntryModel.date)
-        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
+        display_name = _worker_display_name_expr()
 
         query = (
             self._session.query(

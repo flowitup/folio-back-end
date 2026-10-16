@@ -64,9 +64,9 @@ def test_pdf_follows_the_locale():
 @pytest.mark.parametrize(
     ("locale", "full", "overtime", "supplement"),
     [
-        ("en", "Full day", "Overtime", "Extra hrs (unpaid)"),
-        ("fr", "Journée complète", "Heures sup. (x1,5)", "Heures en plus (non payées)"),
-        ("vi", "Cả ngày", "Tăng ca", "Giờ thêm (không tính lương)"),
+        ("en", "Full day", "Overtime", "Extra hrs (count toward the bonus)"),
+        ("fr", "Journée complète", "Heures sup. (x1,5)", "Heures en plus (converties en prime)"),
+        ("vi", "Cả ngày", "Tăng ca", "Giờ thêm (quy đổi thành thưởng)"),
     ],
 )
 def test_xlsx_day_log_names_shifts_in_the_locale(locale, full, overtime, supplement):
