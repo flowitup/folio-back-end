@@ -10,3 +10,9 @@ def test_fold_text_strips_french_and_vietnamese_accents():
 
 def test_fold_text_handles_decomposed_input():
     assert fold_text("béton") == "beton"
+
+
+def test_fold_text_handles_nfd_input_from_macos_names():
+    import unicodedata
+
+    assert fold_text(unicodedata.normalize("NFD", "Étude Hương")) == "etude huong"

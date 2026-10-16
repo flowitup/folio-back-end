@@ -51,6 +51,25 @@ def test_folded_compiles_to_translate_on_postgres_and_lower_elsewhere():
     t = table("x", column("name"))
     stmt = select(folded(t.c.name))
     pg = str(stmt.compile(dialect=postgresql.dialect()))
-    assert "lower(translate(x.name, '" in pg
+    # NFC first, so a name saved in decomposed form folds like the precomposed one.
+    assert "lower(translate(normalize(x.name, NFC), '" in pg
     lite = str(stmt.compile(dialect=sqlite.dialect()))
     assert "lower(x.name)" in lite
+
+
+def test_decomposed_accents_fold_like_precomposed_ones():
+    """Regression review #3: macOS / iOS names arrive decomposed ('e' + U+0301)."""
+    import unicodedata
+
+    from app.domain.entities.person import fold_accents
+    from app.infrastructure.database import text_collation
+
+    for word in ("Ống nhựa Lefèvre", "Plâtre ÉCHAFAUDAGE", "Đường Hương"):
+        decomposed = unicodedata.normalize("NFD", word)
+        assert decomposed != word
+        expected = fold_text(word)
+        assert fold_text(decomposed) == expected
+        # One rule everywhere: documents/analyses, persons and the other searches agree.
+        assert text_collation.fold_text(decomposed) == expected
+        assert fold_accents(decomposed) == expected
+    assert fold_text(unicodedata.normalize("NFD", "Ống nhựa Lefèvre")) == "ong nhua lefevre"

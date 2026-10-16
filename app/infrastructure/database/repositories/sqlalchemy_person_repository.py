@@ -7,10 +7,11 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.application.persons.ports import IPersonRepository
-from app.domain.entities.person import ACCENTED_LETTERS, PLAIN_LETTERS, Person, fold_accents
+from app.domain.entities.person import Person, fold_accents
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 from app.infrastructure.database.models import PersonModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
+from app.infrastructure.database.text_fold import folded as folded_column
 
 
 def _phone_conditions(query: str) -> list:
@@ -187,7 +188,7 @@ class SqlAlchemyPersonRepository(IPersonRepository):
                 PersonModel.phone.in_(phones), PersonModel.phone_normalized.in_(phones), *phone_conditions
             )
             if self._session.get_bind().dialect.name == "postgresql":
-                folded_name = func.translate(PersonModel.normalized_name, ACCENTED_LETTERS, PLAIN_LETTERS)
+                folded_name = folded_column(PersonModel.normalized_name)
                 # autoescape: "%" and "_" in the search text match only themselves.
                 q = q.filter(or_(folded_name.contains(folded, autoescape=True), phone_match))
             else:
