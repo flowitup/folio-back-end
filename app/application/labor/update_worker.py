@@ -136,6 +136,38 @@ class UpdateWorkerUseCase:
         profiles = self._company_person_repo.list_for_person(worker.person_id)
         return bool(profiles) and all(profile.company_id == company_id for profile in profiles)
 
+    def _own_account_to_relink(self, worker: Worker) -> Optional[UUID]:
+        """The person's app account, when it is still in the project's company and free on this project."""
+        if worker.person_id is None or self._person_repo is None or self._authz_reader is None:
+            return None
+        person = self._person_repo.find_by_id(worker.person_id)
+        account = getattr(person, "user_id", None) if person is not None else None
+        if account is None:
+            return None
+        company_id = self._authz_reader.project_company_id(worker.project_id)
+        company_role_for = getattr(self._authz_reader, "company_role_for", None)
+        if company_id is None or company_role_for is None or company_role_for(account, company_id) is None:
+            return None
+        taken = self._repo.find_by_project_and_user(worker.project_id, account)
+        return account if taken is None or taken.id == worker.id else None
+
+    def _person_name_is_placeholder(self, worker: Worker) -> bool:
+        """Whether the Person is only named by a phone number (added by phone without a name).
+
+        Giving such a person a readable name is allowed even when they have an account or
+        another company lists them: it replaces no one's chosen name.
+        """
+        if self._person_repo is None or worker.person_id is None:
+            return False
+        person = self._person_repo.find_by_id(worker.person_id)
+        if person is None:
+            return False
+        current = person.name.strip() if isinstance(person.name, str) else ""
+        if not current:
+            return False
+        phone = person.phone.strip() if isinstance(person.phone, str) else ""
+        return current == phone or is_phone_number(current)
+
     def set_role_scope(self, labor_role_repo, authz_reader) -> None:
         """Inject what the role check needs; wired after the labor-role repository exists."""
         self._labor_role_repo = labor_role_repo
@@ -155,7 +187,7 @@ class UpdateWorkerUseCase:
             # The name belongs to the Person: for a person only this company lists, renaming
             # it here renames them on every project of the company; for any other it is refused.
             if worker.person_id is not None:
-                if self._person_is_company_private(worker):
+                if self._person_is_company_private(worker) or self._person_name_is_placeholder(worker):
                     self._person_repo.rename(worker.person_id, name, commit=False)
                     worker.person_name = name
                 elif not _same_name(name, worker.name, worker.person_name):
@@ -193,6 +225,10 @@ class UpdateWorkerUseCase:
             worker.user_id = request.user_id  # type: ignore[assignment]
 
         if request.reactivate:
+            if not worker.is_active and worker.user_id is None and request.user_id is _ROLE_SENTINEL:
+                # The stop freed the account slot (soft delete clears user_id): give the person
+                # their own account back, so they can log their own days here again.
+                worker.user_id = self._own_account_to_relink(worker)  # type: ignore[assignment]
             worker.is_active = True
 
         worker.updated_at = datetime.now(timezone.utc)
