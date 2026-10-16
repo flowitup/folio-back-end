@@ -25,10 +25,12 @@ from app.api.v1.payment_methods.schemas import (
 from app.application.payment_methods.dtos import CreatePaymentMethodInput, UpdatePaymentMethodInput
 from app.domain.companies.exceptions import ForbiddenCompanyError
 from app.domain.payment_methods.exceptions import (
+    BuiltinCompanyPaymentFlagError,
     BuiltinPaymentMethodDeletionError,
     PaymentMethodAlreadyExistsError,
     PaymentMethodConflictingFlagsError,
     PaymentMethodNotFoundError,
+    PaymentMethodRefundTrackedExpensesError,
 )
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
@@ -210,6 +212,16 @@ def update_payment_method(company_id: str, payment_method_id: str):
         )
     except PaymentMethodConflictingFlagsError as e:
         return _err("conflicting_payment_flags", str(e), 400)
+    except BuiltinCompanyPaymentFlagError as e:
+        return (
+            jsonify({"error": "builtin_protected", "message": str(e), "reason": "company_flag"}),
+            409,
+        )
+    except PaymentMethodRefundTrackedExpensesError as e:
+        return (
+            jsonify({"error": "refund_tracked_expenses", "message": str(e), "count": e.count}),
+            409,
+        )
 
     return jsonify(dataclasses.asdict(result))
 
