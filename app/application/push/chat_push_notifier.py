@@ -123,10 +123,10 @@ class ChatPushNotifier:
     def _unread_since(self, channel: ChannelRef, user_id: UUID, last_read: Optional[datetime]) -> int:
         """Unread count for one member; with no read marker, count from when they joined (when known)."""
         if last_read is None:
-            joined_at = getattr(self._directory, "joined_at", None)
-            if joined_at is not None:
+            joined_at_many = getattr(self._directory, "joined_at_many", None)
+            if joined_at_many is not None:
                 try:
-                    last_read = joined_at(user_id, channel)
+                    last_read = joined_at_many(user_id, [channel]).get(channel.key)
                 except Exception:
                     last_read = None
         return self._messages.count_since(channel, last_read, user_id)

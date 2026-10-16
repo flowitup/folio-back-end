@@ -258,3 +258,43 @@ def test_reading_or_writing_in_a_channel_clears_its_bell_entries():
     assert marker.calls[-1] == (("chat_message",), {"channel_key": CHANNEL.key}, [bob], NOW)
     notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="x", sent_at=NOW)
     assert marker.calls[-1][2] == [alice]
+
+
+class SinceRecordingReads(StubReads):
+    def __init__(self) -> None:
+        super().__init__()
+        self.since: list = []
+
+    def count_since(self, channel, since, exclude_sender):
+        self.since.append(since)
+        return 1
+
+
+class JoiningDirectory(StubDirectory):
+    def __init__(self, members, joined) -> None:
+        super().__init__(members)
+        self._joined = joined
+
+    def joined_at_many(self, user_id, channels):
+        return {c.key: self._joined for c in channels}
+
+
+def test_a_member_who_never_opened_the_channel_counts_from_when_they_joined():
+    alice, bob = uuid4(), uuid4()
+    members = [Member(alice, "Alice"), Member(bob, "Bob")]
+    joined = NOW - timedelta(days=2)
+    reads = SinceRecordingReads()
+    directory = JoiningDirectory(members, joined)
+    notifier = ChatPushNotifier(
+        dispatcher=PushDispatcher(
+            devices=StubDevices({m.id for m in members}), sender=RecordingSender(), locale="en", run_async=False
+        ),
+        directory=directory,
+        markers=InMemoryMarkers(),
+        reads=reads,
+        messages=reads,
+        names=directory,
+        window_seconds=60,
+    )
+    notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="Hi", sent_at=NOW)
+    assert reads.since == [joined]
