@@ -331,6 +331,8 @@ def delete_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
+    except DevisLockedByFactureError as exc:
+        return jsonify({"error": "Conflict", "reason": "devis_locked_by_facture", "message": str(exc)}), 409
 
     return "", 204
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from app.application.billing._helpers import _assert_billing_doc_write_access
+from app.application.billing._helpers import _assert_billing_doc_write_access, _assert_devis_not_locked
 from app.application.billing.ports import (
     BillingDocumentRepositoryPort,
     FundsReleasePort,
@@ -24,6 +24,9 @@ class DeleteBillingDocumentUseCase:
     expense. It is removed before the facture, like the paid → cancelled
     transition does; otherwise the FK's ON DELETE SET NULL would leave a
     release that belongs to nothing and still counts in the project's funds.
+
+    A devis locked by a live facture (see _assert_devis_not_locked) cannot be
+    deleted until that facture is cancelled.
     """
 
     def __init__(
@@ -46,6 +49,9 @@ class DeleteBillingDocumentUseCase:
         if doc is None:
             raise BillingDocumentNotFoundError(doc_id)
         _assert_billing_doc_write_access(doc, user_id, self._access_repo)
+        # A devis turned into a live facture is the signed basis of that facture:
+        # deleting it would silently drop the facture's link to it.
+        _assert_devis_not_locked(self._doc_repo, doc)
         if self._funds_release is not None and doc.kind == BillingDocumentKind.FACTURE:
             self._funds_release.delete_funds_release(doc.id)
         self._doc_repo.delete(doc_id)
