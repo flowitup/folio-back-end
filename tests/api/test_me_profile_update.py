@@ -94,3 +94,60 @@ def test_phone_taken_by_another_user_is_refused_too(inv_client, superadmin_token
     resp = inv_client.patch("/api/v1/auth/me", json={"phone": "+33600000097"}, headers=_auth(superadmin_token))
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "PhoneChangeNotAllowed"
+
+
+# --- QA3 auth-onboarding-19 / -20 -------------------------------------------------
+
+
+def test_display_name_limit_is_80_and_it_cannot_be_emptied(inv_client, superadmin_token):
+    ok = inv_client.patch("/api/v1/auth/me", json={"display_name": "é" * 80}, headers=_auth(superadmin_token))
+    assert ok.status_code == 200
+    too_long = inv_client.patch("/api/v1/auth/me", json={"display_name": "é" * 81}, headers=_auth(superadmin_token))
+    assert too_long.status_code == 400
+    for empty in ("   ", "", None):
+        resp = inv_client.patch("/api/v1/auth/me", json={"display_name": empty}, headers=_auth(superadmin_token))
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "DisplayNameRequired"
+    again = inv_client.get("/api/v1/auth/me", headers=_auth(superadmin_token)).get_json()
+    assert again["display_name"] == "é" * 80
+
+
+def _link_person(me: dict, name: str):
+    from datetime import datetime, timezone
+    from uuid import UUID, uuid4
+
+    from app.domain.entities.person import Person
+    from wiring import get_container
+
+    repo = get_container().person_repo
+    existing = repo.find_by_user_id(UUID(me["id"]))
+    if existing is not None:  # the app fixture is shared by the module
+        return repo.rename(existing.id, name), repo
+    person = Person(
+        id=uuid4(),
+        name=name,
+        normalized_name=Person.normalize(name),
+        created_by_user_id=UUID(me["id"]),
+        created_at=datetime.now(timezone.utc),
+        user_id=UUID(me["id"]),
+    )
+    return repo.create(person), repo
+
+
+def test_rename_updates_the_directory_entry_that_mirrored_the_old_name(inv_client, superadmin_token, me):
+    inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 Đặng Văn Lâm"}, headers=_auth(superadmin_token))
+    person, repo = _link_person(me, "QA3 Đặng Văn Lâm")
+
+    resp = inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 Lâm Bùi"}, headers=_auth(superadmin_token))
+
+    assert resp.status_code == 200
+    assert repo.find_by_id(person.id).name == "QA3 Lâm Bùi"
+
+
+def test_rename_keeps_a_name_an_admin_chose(inv_client, superadmin_token, me):
+    inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 Sign-up name"}, headers=_auth(superadmin_token))
+    person, repo = _link_person(me, "QA3 Chef d'équipe (admin label)")
+
+    inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 New name"}, headers=_auth(superadmin_token))
+
+    assert repo.find_by_id(person.id).name == "QA3 Chef d'équipe (admin label)"

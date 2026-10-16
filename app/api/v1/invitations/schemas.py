@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.api._helpers.profile_fields import DISPLAY_NAME_MAX_LENGTH
+
 
 class CreateInviteRequest(BaseModel):
     """POST /invitations request body."""
@@ -59,7 +61,7 @@ class AcceptInviteRequest(BaseModel):
     """POST /invitations/accept request body."""
 
     token: str = Field(min_length=10, max_length=200)
-    name: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
 

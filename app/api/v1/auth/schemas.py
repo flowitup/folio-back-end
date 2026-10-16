@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
 
+from app.api._helpers.profile_fields import DISPLAY_NAME_MAX_LENGTH
+
 
 class OtpRequestBody(BaseModel):
     """POST /auth/otp/request — ask for a 6-digit code by SMS."""
@@ -47,7 +49,9 @@ class SignupVerifyBody(BaseModel):
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
     # Trimmed before the length check: a name of spaces only is refused here (400), not deep in the use case.
-    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    display_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)
+    ]
 
 
 class PhoneChangeRequestBody(BaseModel):
@@ -105,7 +109,7 @@ class UpdateMeRequest(BaseModel):
     ``/auth/me/phone/request-code`` + ``/auth/me/phone/confirm`` flow. At least one field must be provided.
     """
 
-    display_name: Optional[str] = Field(default=None, max_length=255)
+    display_name: Optional[str] = Field(default=None, max_length=DISPLAY_NAME_MAX_LENGTH)
     phone: Optional[str] = Field(default=None, max_length=32)
 
 
