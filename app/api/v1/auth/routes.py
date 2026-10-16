@@ -99,6 +99,7 @@ def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
                     legal_name=company.legal_name,
                     role=access.role,
                     is_primary=access.is_primary,
+                    hidden_sections=list(getattr(company, "hidden_sections", ()) or ()),
                 )
             )
     return companies

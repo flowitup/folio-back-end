@@ -76,6 +76,8 @@ class UserCompanySummary(BaseModel):
     legal_name: str
     role: str  # "admin" | "manager" | "member" — see app.domain.companies.roles.CompanyRole
     is_primary: bool
+    # Sections the company hides from every member's navigation (see domain.companies.sections).
+    hidden_sections: List[str] = []
 
 
 class UserResponse(BaseModel):
