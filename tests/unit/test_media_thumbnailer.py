@@ -80,6 +80,11 @@ needs_ffmpeg = pytest.mark.skipif(
 )
 
 
+def _command(args):
+    """The ffprobe / ffmpeg argv without the prlimit wrapper in front of it."""
+    return args[args.index("--") + 1 :] if "--" in args and args[0].endswith("prlimit") else args
+
+
 def _clip(
     size: str, suffix: str = ".mp4", codec: tuple[str, ...] = ("-c:v", "libx264", "-preset", "ultrafast")
 ) -> bytes:
@@ -146,7 +151,7 @@ class TestFfmpegHardening:
         clip = _clip("320x240")
         calls = []
         real_run = subprocess.run
-        monkeypatch.setattr(subprocess, "run", lambda args, **kw: calls.append(args) or real_run(args, **kw))
+        monkeypatch.setattr(subprocess, "run", lambda args, **kw: calls.append(_command(args)) or real_run(args, **kw))
         FfmpegVideoThumbnailer().generate(clip, "video/mp4")
         ffmpeg_args = next(a for a in calls if a[0] == "ffmpeg")
         assert ffmpeg_args[ffmpeg_args.index("-map") + 1] == "0:v:0"
@@ -196,29 +201,37 @@ class TestFfmpegHardening:
         monkeypatch.setattr(subprocess, "run", spy)
         FfmpegVideoThumbnailer().generate(clip, "video/mp4")
 
-        names = [c[0][0] for c in calls]
+        names = [_command(c[0])[0] for c in calls]
         assert names[0] == "ffprobe" and set(names[1:]) == {"ffmpeg"}  # the header check comes before any decode
         for args, kwargs in calls:
-            assert args[args.index("-protocol_whitelist") + 1] == "file"
-            assert kwargs["preexec_fn"] is not None and kwargs["timeout"] > 0
-        ffmpeg_args = next(a for a, _ in calls if a[0] == "ffmpeg")
+            # Limits through prlimit, never a preexec_fn (unsafe under gunicorn's gthread workers).
+            assert "preexec_fn" not in kwargs and kwargs["timeout"] > 0
+            assert args[0].endswith("prlimit") and "--" in args
+            command = _command(args)
+            assert command[command.index("-protocol_whitelist") + 1] == "file"
+        ffmpeg_args = next(_command(a) for a, _ in calls if _command(a)[0] == "ffmpeg")
         assert ffmpeg_args.count("-threads") == 2 and ffmpeg_args[ffmpeg_args.index("-threads") + 1] == "1"
         assert ffmpeg_args[ffmpeg_args.index("-f") + 1] == "mov"
 
     def test_the_child_limits_are_applied(self):
         import resource
+        import sys
 
         from app.infrastructure.adapters import ffmpeg_video_thumbnailer as mod
 
         script = (
-            "import resource, sys\n"
-            "from app.infrastructure.adapters.ffmpeg_video_thumbnailer import _limit_resources\n"
-            "_limit_resources()\n"
+            "import resource\n"
             "print(resource.getrlimit(resource.RLIMIT_AS)[0], resource.getrlimit(resource.RLIMIT_CPU)[0],"
             " resource.getrlimit(resource.RLIMIT_FSIZE)[0])\n"
         )
-        import sys
-
-        out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True).stdout.split()
+        out = subprocess.run(
+            mod.limited_command([sys.executable, "-c", script]), capture_output=True, text=True, check=True
+        ).stdout.split()
         assert [int(v) for v in out] == [mod._RLIMIT_AS_BYTES, mod._RLIMIT_CPU_SECONDS, mod._RLIMIT_FSIZE_BYTES]
         assert resource.getrlimit(resource.RLIMIT_AS)[0] != mod._RLIMIT_AS_BYTES  # the parent keeps its own limits
+
+    def test_without_prlimit_the_command_runs_as_is(self, monkeypatch):
+        from app.infrastructure.adapters import ffmpeg_video_thumbnailer as mod
+
+        monkeypatch.setattr(shutil, "which", lambda name: None if name == "prlimit" else f"/usr/bin/{name}")
+        assert mod.limited_command(["ffprobe", "x"]) == ["ffprobe", "x"]

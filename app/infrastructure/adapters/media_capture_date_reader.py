@@ -27,7 +27,7 @@ from typing import Optional
 from PIL import Image
 
 from app.domain.time import BUSINESS_TZ
-from app.infrastructure.adapters.ffmpeg_video_thumbnailer import _limit_resources
+from app.infrastructure.adapters.ffmpeg_video_thumbnailer import limited_command
 
 _log = logging.getLogger(__name__)
 
@@ -116,22 +116,23 @@ class MediaCaptureDateReader:
             with open(in_path, "wb") as fh:
                 fh.write(data)
             result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-protocol_whitelist",
-                    "file",
-                    "-show_entries",
-                    "format_tags=creation_time:stream_tags=creation_time",
-                    "-of",
-                    "json",
-                    in_path,
-                ],
+                limited_command(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-protocol_whitelist",
+                        "file",
+                        "-show_entries",
+                        "format_tags=creation_time:stream_tags=creation_time",
+                        "-of",
+                        "json",
+                        in_path,
+                    ]
+                ),
                 capture_output=True,
                 timeout=_FFPROBE_TIMEOUT_SECONDS,
                 check=False,
-                preexec_fn=_limit_resources,
             )
         if result.returncode != 0:
             return None

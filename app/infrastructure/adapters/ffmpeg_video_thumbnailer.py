@@ -12,6 +12,12 @@ header first (size, container, with its own timeout) and a clip over the caps is
 refused before anything is decoded; ffmpeg itself then runs on one thread, with
 network protocols off, forced to the demuxer ffprobe identified, under address
 space / CPU / file-size limits.
+
+The limits are applied by running the binary through util-linux ``prlimit`` (part of the
+Debian base image), not by a ``preexec_fn``: gunicorn runs gthread workers, and a
+``preexec_fn`` runs Python between fork and exec, where a lock another thread held at fork
+time (logging, malloc, import) can deadlock the child until the worker is killed. Where
+``prlimit`` is missing (a macOS dev machine) the wall-clock timeouts still bound the child.
 """
 
 from __future__ import annotations
@@ -19,7 +25,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import resource
 import shutil
 import subprocess
 import tempfile
@@ -53,14 +58,23 @@ _DEMUXERS = {
 }
 
 
-def _limit_resources() -> None:
-    """preexec_fn of the child: cap what a hostile clip can make ffprobe / ffmpeg use."""
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (_RLIMIT_AS_BYTES, _RLIMIT_AS_BYTES))
-    except (ValueError, OSError):  # not supported on every OS (macOS dev machines); Linux production has it
-        pass
-    resource.setrlimit(resource.RLIMIT_CPU, (_RLIMIT_CPU_SECONDS, _RLIMIT_CPU_SECONDS))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (_RLIMIT_FSIZE_BYTES, _RLIMIT_FSIZE_BYTES))
+def limited_command(args: list[str]) -> list[str]:
+    """``args`` run under the address-space / CPU / file-size caps, through ``prlimit``.
+
+    Thread-safe (nothing runs between fork and exec, unlike a ``preexec_fn``). Without
+    ``prlimit`` on the PATH the command runs as is, still bounded by the callers' timeouts.
+    """
+    prlimit = shutil.which("prlimit")
+    if prlimit is None:
+        return list(args)
+    return [
+        prlimit,
+        f"--as={_RLIMIT_AS_BYTES}",
+        f"--cpu={_RLIMIT_CPU_SECONDS}",
+        f"--fsize={_RLIMIT_FSIZE_BYTES}",
+        "--",
+        *args,
+    ]
 
 
 class FfmpegVideoThumbnailer:
@@ -108,11 +122,10 @@ class FfmpegVideoThumbnailer:
         ]
         try:
             result = subprocess.run(
-                args,
+                limited_command(args),
                 capture_output=True,
                 timeout=_FFPROBE_TIMEOUT_SECONDS,
                 check=False,
-                preexec_fn=_limit_resources,
             )
         except subprocess.TimeoutExpired as exc:
             raise ThumbnailGenerationError("Video header could not be read in time") from exc
@@ -174,11 +187,10 @@ class FfmpegVideoThumbnailer:
         ]
         try:
             result = subprocess.run(
-                args,
+                limited_command(args),
                 capture_output=True,
                 timeout=_FFMPEG_TIMEOUT_SECONDS,
                 check=False,
-                preexec_fn=_limit_resources,
             )
         except subprocess.TimeoutExpired:
             _log.warning("ffmpeg poster extraction timed out (seek=%s)", seek)

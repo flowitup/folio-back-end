@@ -78,3 +78,23 @@ def test_video_creation_time(tmp_path):
     )  # fmt: skip
     found = MediaCaptureDateReader().read(path.read_bytes(), "video/mp4")
     assert found == datetime(2026, 9, 1, 8, 30, tzinfo=timezone.utc)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_video_probe_runs_under_prlimit_not_a_preexec_fn(tmp_path, monkeypatch):
+    """Regression review #5: no preexec_fn under gunicorn's gthread workers."""
+    path = tmp_path / f"{uuid4()}.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=32x32:d=0.2", str(path)], check=True)
+    calls = []
+    real_run = subprocess.run
+
+    def spy(args, **kwargs):
+        calls.append((args, kwargs))
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    MediaCaptureDateReader().read(path.read_bytes(), "video/mp4")
+    (args, kwargs), *_ = calls
+    assert "preexec_fn" not in kwargs and kwargs["timeout"] > 0
+    if shutil.which("prlimit"):
+        assert args[0].endswith("prlimit") and args[args.index("--") + 1] == "ffprobe"

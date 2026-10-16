@@ -35,8 +35,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ffmpeg: extract poster frames from uploaded project videos
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# ffmpeg: extract poster frames from uploaded project videos.
+# util-linux (already in the Debian base, named so it stays): prlimit caps ffprobe/ffmpeg's
+# memory, CPU and output size without a preexec_fn, which is unsafe under gthread workers.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
