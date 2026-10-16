@@ -777,3 +777,56 @@ class TestUpdateMemberPayDefaults:
             assert resp.status_code == 200, resp.get_data(as_text=True)
             assert resp.get_json()["default_daily_rate"] == stored
             assert float(_read_profile(members_app, company_id, person_id).default_daily_rate) == stored
+
+
+class TestDirectoryNamesAndPendingInvitations:
+    """Linked members are listed under their own name; pending rows carry their role and expiry."""
+
+    def test_attached_member_shows_own_name_and_pending_row_shows_role_and_expiry(self, members_client, members_app):
+        admin_id = _make_user(members_app, "dir_admin_names@test.com")
+        target_id = _make_user(
+            members_app, "dir_target_names@test.com", phone="+33611110061", display_name="Phúc Nguyễn"
+        )
+        company_id = _make_company(members_app, admin_id, name="DIR Co names")
+        token = _login(members_client, "dir_admin_names@test.com")
+
+        # Added without a name: the shared Person is stored under the phone (never echoed back).
+        added = members_client.post(
+            f"/api/v1/companies/{company_id}/members", json={"phone": "0611110061"}, headers=_auth(token)
+        )
+        assert added.status_code == 201
+        assert added.get_json()["name"] == "+33611110061"
+        pending = members_client.post(
+            f"/api/v1/companies/{company_id}/members",
+            json={"phone": "0611110062", "name": "Future Chef", "role": "manager"},
+            headers=_auth(token),
+        )
+        assert pending.status_code == 201
+
+        items = members_client.get(f"/api/v1/companies/{company_id}/persons", headers=_auth(token)).get_json()["items"]
+        by_user = {i["linked_user_id"]: i for i in items if i["linked_user_id"]}
+        assert by_user[str(target_id)]["name"] == "Phúc Nguyễn"
+        assert by_user[str(target_id)]["pending_role"] is None
+        invitee = next(i for i in items if i["name"] == "Future Chef")
+        assert invitee["pending"] is True
+        assert invitee["pending_role"] == "manager"
+        assert invitee["pending_expires_at"]
+
+    def test_renaming_yourself_renames_your_person_everywhere(self, members_client, members_app):
+        from app import db
+
+        admin_id = _make_user(members_app, "dir_admin_rename@test.com")
+        target_id = _make_user(members_app, "dir_target_rename@test.com", phone="+33611110063", display_name="Old Name")
+        company_id = _make_company(members_app, admin_id, name="DIR Co rename")
+        token = _login(members_client, "dir_admin_rename@test.com")
+        added = members_client.post(
+            f"/api/v1/companies/{company_id}/members", json={"phone": "0611110063"}, headers=_auth(token)
+        )
+        person_id = UUID(added.get_json()["person_id"])
+
+        target_token = _login(members_client, "dir_target_rename@test.com")
+        resp = members_client.patch("/api/v1/auth/me", json={"display_name": "Long Phạm"}, headers=_auth(target_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        with members_app.app_context():
+            assert db.session.get(PersonModel, person_id).name == "Long Phạm"
+        assert target_id

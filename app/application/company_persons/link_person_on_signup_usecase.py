@@ -69,7 +69,7 @@ class LinkPersonOnSignupUseCase:
         self._company_persons = company_person_repo
         self._access = access_repo
 
-    def execute(self, user_id: UUID, phone_normalized: str) -> List[UUID]:
+    def execute(self, user_id: UUID, phone_normalized: str, display_name: "str | None" = None) -> List[UUID]:
         """Link every non-expired pending profile for `phone_normalized` to `user_id`.
 
         Returns the list of company ids the user was newly attached to.
@@ -112,6 +112,12 @@ class LinkPersonOnSignupUseCase:
 
         if survivor.user_id is None:
             self._persons.set_user_id(survivor.id, user_id, commit=False)
+
+        # From now on the person is listed under the name they chose at sign-up, not the
+        # label (often just the phone) an admin typed when adding the number.
+        own_name = (display_name or "").strip()
+        if own_name and survivor.name != own_name:
+            self._persons.rename(survivor.id, own_name, commit=False)
 
         linked_company_ids: List[UUID] = []
         duplicate_person_ids: set = set()
