@@ -18,6 +18,7 @@ session, never a key acting on its own behalf.
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -25,7 +26,7 @@ from flask import Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
 
-from app.api._helpers.api_key_request_auth import reject_api_key_callers
+from app.api._helpers.api_key_request_auth import _key_may_sign_in, reject_api_key_callers
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api._helpers.validation_error import safe_validation_fields
 from app.api.openapi import openapi_doc
@@ -48,14 +49,19 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
     return jsonify({"error": error, "message": message}), code
 
 
-def _serialize_key(dto: ApiKeyDto) -> dict[str, Any]:
-    """Serialize an ApiKeyDto to a JSON-safe dict. Never includes the token or its hash."""
+def _serialize_key(dto: ApiKeyDto, valid: bool = True) -> dict[str, Any]:
+    """Serialize an ApiKeyDto to a JSON-safe dict. Never includes the token or its hash.
+
+    ``valid`` is False for a key made before its owner's sign-out-everywhere cut-off (a verified
+    phone change): it is refused from then on and must be re-created.
+    """
     return {
         "id": str(dto.id),
         "name": dto.name,
         "prefix": dto.prefix,
         "created_at": dto.created_at.isoformat(),
         "last_used_at": dto.last_used_at.isoformat() if dto.last_used_at else None,
+        "valid": valid,
     }
 
 
@@ -81,7 +87,19 @@ def list_api_keys() -> Any:
         raise RuntimeError("list_api_keys_usecase not wired in container")
 
     dtos = container.list_api_keys_usecase.execute(user_id=actor_id)
-    return jsonify({"api_keys": [_serialize_key(d) for d in dtos]}), 200
+    return (
+        jsonify(
+            {
+                "api_keys": [
+                    _serialize_key(
+                        d, _key_may_sign_in(container, SimpleNamespace(user_id=actor_id, created_at=d.created_at))
+                    )
+                    for d in dtos
+                ]
+            }
+        ),
+        200,
+    )
 
 
 # ---------------------------------------------------------------------------

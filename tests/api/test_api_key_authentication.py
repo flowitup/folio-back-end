@@ -260,6 +260,10 @@ class TestApiKeyHonoursTheSessionCutoff:
             assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 200
             self._set_cutoff_and_key_age(invitation_app, user_id, created["id"], cutoff_ago_h=1, key_age_h=2)
             assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 401
+            # company-settings-members-08: the list says so instead of showing it as a working key.
+            listed = inv_client.get("/api/v1/api-keys", headers={"Authorization": f"Bearer {member_token}"})
+            row = next(k for k in listed.get_json()["api_keys"] if k["id"] == created["id"])
+            assert row["valid"] is False
         finally:
             self._clear_cutoff(invitation_app, user_id)
 
@@ -269,6 +273,8 @@ class TestApiKeyHonoursTheSessionCutoff:
         try:
             self._set_cutoff_and_key_age(invitation_app, user_id, created["id"], cutoff_ago_h=2, key_age_h=1)
             assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 200
+            listed = inv_client.get("/api/v1/api-keys", headers={"Authorization": f"Bearer {member_token}"})
+            assert next(k for k in listed.get_json()["api_keys"] if k["id"] == created["id"])["valid"] is True
         finally:
             self._clear_cutoff(invitation_app, user_id)
 
