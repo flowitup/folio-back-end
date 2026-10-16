@@ -26,6 +26,7 @@ def normalize_phone(raw: str, default_region: str = "FR") -> str:
 
     * ``06 12 34 56 78`` / ``0612345678`` (FR default) → ``+33612345678``
     * ``+84 912 345 678`` / ``0084912345678`` → ``+84912345678``; ``0912345678`` with ``VN`` → ``+84912345678``
+    * ``+33 (0)6 12 34 56 78`` / ``0033 (0)6…`` → ``+33612345678``
     """
     text = raw.strip()
     if not text:
@@ -33,6 +34,10 @@ def normalize_phone(raw: str, default_region: str = "FR") -> str:
     digits = re.sub(r"[\s().-]", "", text)
     if digits.startswith("00"):
         digits = "+" + digits[2:]
+    if digits.startswith("+330"):
+        # "+33 (0)6 12 34 56 78": the French trunk 0 kept in brackets, as business cards and
+        # email signatures write it internationally. A French number never has a 0 there.
+        digits = "+33" + digits[4:]
     if digits.startswith("+"):
         candidate = digits
     elif digits.startswith("0"):
