@@ -24,3 +24,8 @@ class TokenIssuerPort(Protocol):
         """Add token to blacklist by JTI. token_type selects the TTL ("access" or "refresh");
         ``persistent`` keeps the entry forever (never-expiring refresh tokens)."""
         ...
+
+    def retire_rotated_token(self, jti: str, successor_jti: Optional[str] = None, grace_seconds: int = 60) -> None:
+        """Revoke a rotated refresh token once a short grace window (from its first rotation)
+        ends; a ``revoke_token`` of it or of ``successor_jti`` still revokes it at once."""
+        ...

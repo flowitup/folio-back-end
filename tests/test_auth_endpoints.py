@@ -209,9 +209,12 @@ class TestRefreshEndpoint:
             me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access}"})
             assert me.status_code == 200
 
-    def test_a_browser_refresh_revokes_the_old_refresh_cookie(self, client):
-        """The web always stores the rotated cookie: the presented one must die with the rotation,
-        or a copy of it would outlive the user's logout (regression review #2)."""
+    def test_a_browser_refresh_revokes_the_old_refresh_cookie(self, client, monkeypatch):
+        """The web always stores the rotated cookie: the presented one must die after the
+        rotation's grace window, or a copy of it would outlive the user's logout (regression
+        review #2)."""
+        from app.infrastructure.adapters import jwt_issuer
+
         old_cookie = mint_tokens(client, "active@example.com")["refresh_token"]
         rotated = _refresh_with_cookie(client, old_cookie)
         assert rotated.status_code == 200, rotated.get_json()
@@ -219,8 +222,30 @@ class TestRefreshEndpoint:
         assert new_token != old_cookie
         assert "refresh_token_cookie=" in " ".join(rotated.headers.getlist("Set-Cookie"))
 
+        later = jwt_issuer._now() + jwt_issuer.ROTATION_GRACE_SECONDS + 1
+        monkeypatch.setattr(jwt_issuer, "_now", lambda: later)
         assert _refresh_with_cookie(client, old_cookie).status_code == 401
         assert _refresh_with_cookie(client, new_token).status_code == 200
+
+    def test_tabs_refreshing_together_with_the_same_cookie_all_succeed(self, client, monkeypatch):
+        """Each open tab's middleware refreshes at half-life, often at the same moment with the
+        same cookie: within the grace window every one succeeds and is rotated again, and the
+        deadline runs from the first rotation, not the last reuse."""
+        from app.infrastructure.adapters import jwt_issuer
+
+        cookie = mint_tokens(client, "active@example.com")["refresh_token"]
+        first = _refresh_with_cookie(client, cookie)
+        assert first.status_code == 200
+        start = jwt_issuer._now()
+        monkeypatch.setattr(jwt_issuer, "_now", lambda: start + 30)
+        second = _refresh_with_cookie(client, cookie)
+        assert second.status_code == 200, second.get_json()
+        assert second.get_json()["refresh_token"] not in (cookie, first.get_json()["refresh_token"])
+
+        monkeypatch.setattr(jwt_issuer, "_now", lambda: start + jwt_issuer.ROTATION_GRACE_SECONDS + 1)
+        assert _refresh_with_cookie(client, cookie).status_code == 401
+        for rotated in (first, second):
+            assert _refresh_with_cookie(client, rotated.get_json()["refresh_token"]).status_code == 200
 
     def test_a_header_refresh_keeps_the_presented_token_working(self, client):
         """Mobile presents its refresh token in the Authorization header; 0.5.27 ignores the
@@ -231,6 +256,7 @@ class TestRefreshEndpoint:
         assert client.post("/api/v1/auth/refresh", headers=header).status_code == 200
 
     def test_logout_after_a_browser_rotation_ends_the_session(self, client):
+        """Logging out with the rotated cookie revokes the old one at once, grace window or not."""
         original = mint_tokens(client, "active@example.com")["refresh_token"]
         rotated = _refresh_with_cookie(client, original)
         assert rotated.status_code == 200

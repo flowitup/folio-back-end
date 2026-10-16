@@ -8,6 +8,7 @@ from uuid import UUID
 
 from flask import current_app, jsonify, request, make_response
 from flask_jwt_extended import (
+    decode_token,
     jwt_required,
     get_jwt_identity,
     get_jwt,
@@ -308,8 +309,6 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
         if not refresh_token:
             continue
         try:
-            from flask_jwt_extended import decode_token
-
             refresh_claims = decode_token(refresh_token, allow_expired=True)
             refresh_jti = refresh_claims.get("jti") if refresh_claims else None
             if refresh_jti:
@@ -337,9 +336,11 @@ def refresh():
     issued at sign-in expires. A persistent refresh token never expires and is not rotated.
 
     What happens to the presented token depends on where it came from:
-    - the refresh COOKIE (a browser): it is revoked once the new one is issued. The browser
+    - the refresh COOKIE (a browser): it is revoked 60 s after its first rotation. The browser
       always stores the new cookie, and leaving the old one alive would let a copy of it outlive
-      a logout (logout only revokes the token it is shown).
+      a logout. The grace lets several tabs that refresh together with the same cookie all
+      succeed (each reuse is rotated again; the deadline does not move); a logout with the new
+      cookie revokes the old one at once.
     - the Authorization header (mobile): it stays valid until it expires, as before rotation
       existed: mobile 0.5.27 ignores the new field and keeps presenting the token it has.
     """
@@ -356,7 +357,9 @@ def refresh():
     if new_refresh_token and get_jwt_request_location() == "cookies":
         presented_jti = get_jwt().get("jti")
         if presented_jti:
-            container.token_issuer.revoke_token(presented_jti, token_type="refresh")
+            container.token_issuer.retire_rotated_token(
+                presented_jti, successor_jti=decode_token(new_refresh_token).get("jti")
+            )
 
     response_data = RefreshResponse(
         access_token=new_access_token, expires_in=access_token_expires_in(), refresh_token=new_refresh_token
