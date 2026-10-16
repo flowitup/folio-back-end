@@ -472,9 +472,12 @@ def test_other_admins_hear_about_an_edit_or_delete_but_not_the_one_who_did_it(cl
     assert r.status_code == 200, r.get_json()
     assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(boss_tok, "attendance_edited")]
     assert "Linked" in recorder.sent[0].body
+    # The day rides along so the apps open the calendar on it.
+    assert recorder.sent[0].data["date"] == day
     recorder.sent.clear()
     assert client.delete(f"/api/v1/projects/{ids['project']}/labor-entries/{entry}", headers=chef_h).status_code == 204
     assert [(m.token, m.data["kind"]) for m in recorder.sent] == [(boss_tok, "attendance_deleted")]
+    assert recorder.sent[0].data["date"] == day
     # An admin acting alone is not told about their own action.
     recorder.sent.clear()
     boss_day = (datetime.now(timezone.utc).date() - timedelta(days=11)).isoformat()
