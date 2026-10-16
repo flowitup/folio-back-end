@@ -64,7 +64,7 @@ from reportlab.platypus.doctemplate import LayoutError
 
 from app.domain.billing.sections import section_headings
 from app.domain.billing.document import BillingDocument
-from app.domain.billing.document_wording import intro_sentence
+from app.domain.billing.document_wording import LATE_PAYMENT_NOTE, format_iban, intro_sentence
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingDocumentRenderError
 from app.domain.entities.project import Project
@@ -722,22 +722,22 @@ def _build_items_table(
 ) -> list:
     """Items table mirroring the source ANN ECO CONSTRUCTION layout exactly.
 
-    7 visible columns: Libelle / U / Qte / PU (HT) en EUR / Avancement / Montant (HT) en EUR / TVA.
+    5 visible columns: Libellé / Qté / PU (HT) en € / Montant (HT) en € / TVA. (The source
+    template's 'U' and 'Avancement' columns are left out: lines carry no unit and there
+    is no progress billing, so they only ever printed '' and '100%'.)
     Header row uses ORANGE background (#F18728), bold, centered with thin black grid.
     When the document belongs to a project, a "project repeat row" (bold dark grey)
     is inserted right after the header.
     Section header rows (centered bold) interleave with line-item rows.
     """
-    header_lines = [["U"], ["Qté"], ["PU", "(HT) en €"], ["Avancement"], ["Montant", "(HT) en €"], ["TVA"]]
+    header_lines = [["Qté"], ["PU", "(HT) en €"], ["Montant", "(HT) en €"], ["TVA"]]
     headers = [Paragraph("Libellé", styles["label_white"])] + [
         Paragraph("<br/>".join(_xml_escape(line) for line in lines), styles["label_white"]) for lines in header_lines
     ]
     figures = [
         (
-            "",
             format_decimal_fr(item.quantity),
             format_unit_price_eur_fr(item.unit_price),
-            "100%",
             format_eur_fr(item.total_ht),
             f"{_fmt_pct(item.vat_rate)}\u00a0%",
         )
@@ -752,21 +752,19 @@ def _build_items_table(
     project_row_idx = None
     if project_label:
         project_row_idx = len(table_data)
-        table_data.append([Paragraph(_pdf_text(project_label), styles["h3"]), "", "", "", "", "", ""])
+        table_data.append([Paragraph(_pdf_text(project_label), styles["h3"]), "", "", "", ""])
 
     headings = section_headings(item.category for item in doc.items)
-    for item, heading, (unit, qty, unit_price, progress, total_ht, vat) in zip(doc.items, headings, figures):
+    for item, heading, (qty, unit_price, total_ht, vat) in zip(doc.items, headings, figures):
         if heading is not None:
             section_row_idxs.append(len(table_data))
-            table_data.append([Paragraph(_pdf_text(heading), styles["section_title"]), "", "", "", "", "", ""])
+            table_data.append([Paragraph(_pdf_text(heading), styles["section_title"]), "", "", "", ""])
 
         table_data.append(
             [
                 Paragraph(_pdf_text(item.description), styles["body_small"]),
-                Paragraph(unit, styles["body_small_center"]),
                 Paragraph(qty, styles["body_small_center"]),
                 Paragraph(unit_price, styles["body_small_right"]),
-                Paragraph(progress, styles["body_small_center"]),
                 Paragraph(total_ht, styles["body_small_right"]),
                 Paragraph(vat, styles["body_small_center"]),
             ]
@@ -834,9 +832,10 @@ def _build_totals_block(doc: BillingDocument, styles: dict, usable_width: float)
         ]
     )
 
-    # VAT per rate (sorted descending by rate)
+    # VAT per rate (sorted descending by rate), with the taxable base it applies to
+    # so a reader can check each amount (CGI art. 242 nonies A).
     for rate, base_ht, tva_amt in doc.vat_breakdown:
-        label = f"TVA {_fmt_pct(rate)}\u00a0%"
+        label = f"TVA {_fmt_pct(rate)}\u00a0% (base HT {format_eur_fr(base_ht)})"
         rows.append(
             [
                 Paragraph(label, styles["body_small_right"]),
@@ -912,7 +911,7 @@ def _build_bank_coords_block(doc: BillingDocument, styles: dict, usable_width: f
         rows.append(
             [
                 Paragraph("IBAN", styles["label"]),
-                Paragraph(_xml_escape(doc.issuer_iban), styles["body_small"]),
+                Paragraph(_xml_escape(format_iban(doc.issuer_iban)), styles["body_small"]),
             ]
         )
     if doc.issuer_bic:
@@ -974,15 +973,10 @@ def _build_signature_block(doc: BillingDocument, styles: dict, usable_width: flo
 
 def _build_legal_footer_note(styles: dict) -> list:
     """Standard French construction-invoice late-payment legal note."""
-    text = (
-        "Indemnité forfaitaire de retard de paiement : 40 € "
-        "(conformément à l'article 121-II de la loi n° 2012-387 du 22 Mars 2012 "
-        "et au décret n° 2012-1115 du 2 Oct. 2012)."
-    )
-    return [Paragraph(_xml_escape(text), styles["body_grey"])]
+    return [Paragraph(_xml_escape(LATE_PAYMENT_NOTE), styles["body_grey"])]
 
 
-def _build_greeting_block(doc: BillingDocument, styles: dict) -> list:
+def _build_greeting_block(doc: BillingDocument, styles: dict, has_object: bool = True) -> list:
     """Render the standard French opening: 'Madame, Monsieur,' + 2 short paragraphs.
 
     Mirrors the source layout (rows 19-21 in the xlsx).
@@ -990,7 +984,7 @@ def _build_greeting_block(doc: BillingDocument, styles: dict) -> list:
     return [
         Paragraph("Madame, Monsieur,", styles["body"]),
         Spacer(1, 1 * mm),
-        Paragraph(intro_sentence(doc.kind), styles["body"]),
+        Paragraph(intro_sentence(doc.kind, has_object), styles["body"]),
         Paragraph(
             "Je reste à votre disposition pour toute précision ou complément d'information.",
             styles["body"],
@@ -1093,7 +1087,7 @@ class ReportLabBillingDocumentPdfRenderer:
 
         # 3b. "Objet : <project>" + greeting block — "Madame, Monsieur," + 2 short paragraphs
         story.extend(_build_object_line(project, s))
-        story.extend(_build_greeting_block(doc, s))
+        story.extend(_build_greeting_block(doc, s, has_object=_project_label(project) is not None))
         story.append(Spacer(1, 4 * mm))
 
         # 4. Items table

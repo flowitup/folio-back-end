@@ -6,7 +6,7 @@ before. Every locale carries the same keys (a unit test checks the parity).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 SUPPORTED_LOCALES = ("en", "fr", "vi")
 DEFAULT_LOCALE = "en"
@@ -14,6 +14,8 @@ DEFAULT_LOCALE = "en"
 _LABELS: dict[str, dict[str, str]] = {
     "en": {
         "title": "Folio · Labor Export",
+        # File names stay ASCII (slug-safe on every OS); the words follow the locale.
+        "file_prefix": "labor",
         "project": "Project: {name}",
         "month": "Month: {month}",
         "range": "Range: {start} → {end}",
@@ -44,6 +46,13 @@ _LABELS: dict[str, dict[str, str]] = {
         "shift": "Shift",
         "supplement_hrs": "Extra hrs (banked into bonus days)",
         "override": "Custom rate",
+        "bonus_rule": "Bonus: extra hours are counted per worker and per month — 8 h = 1 paid day, 4 h = ½ day.",
+        "by_month": "By month",
+        "col_month": "Month",
+        "worker_rate_periods": "Worker: {name}    Rate: {periods}",
+        "rate_until": "{rate}/day until {date}",
+        "rate_then": "then {rate}/day",
+        "rate_then_until": "then {rate}/day until {date}",
         "effective_cost": "Effective cost",
         "note": "Note",
         "activity": "Activity",
@@ -54,6 +63,7 @@ _LABELS: dict[str, dict[str, str]] = {
     },
     "fr": {
         "title": "Folio · Export main-d'œuvre",
+        "file_prefix": "main-oeuvre",
         "project": "Projet : {name}",
         "month": "Mois : {month}",
         "range": "Période : {start} → {end}",
@@ -84,6 +94,13 @@ _LABELS: dict[str, dict[str, str]] = {
         "shift": "Type de journée",
         "supplement_hrs": "Heures en banque (cumulées en jours bonus)",
         "override": "Tarif personnalisé",
+        "bonus_rule": "Primes : heures en plus comptées par ouvrier et par mois — 8 h = 1 jour payé, 4 h = ½ jour.",
+        "by_month": "Par mois",
+        "col_month": "Mois",
+        "worker_rate_periods": "Ouvrier : {name}    Tarif : {periods}",
+        "rate_until": "{rate}/jour jusqu'au {date}",
+        "rate_then": "puis {rate}/jour",
+        "rate_then_until": "puis {rate}/jour jusqu'au {date}",
         "effective_cost": "Coût retenu",
         "note": "Note",
         "activity": "Activité",
@@ -94,6 +111,7 @@ _LABELS: dict[str, dict[str, str]] = {
     },
     "vi": {
         "title": "Folio · Xuất nhân công",
+        "file_prefix": "nhan-cong",
         "project": "Dự án: {name}",
         "month": "Tháng: {month}",
         "range": "Khoảng thời gian: {start} → {end}",
@@ -123,6 +141,13 @@ _LABELS: dict[str, dict[str, str]] = {
         "date": "Ngày",
         "shift": "Ca",
         "supplement_hrs": "Giờ thêm (cộng dồn thành ngày công thưởng)",
+        "bonus_rule": "Thưởng: giờ thêm được tính theo từng nhân công và từng tháng — 8 giờ = 1 ngày công, 4 giờ = ½ ngày.",
+        "by_month": "Theo tháng",
+        "col_month": "Tháng",
+        "worker_rate_periods": "Nhân công: {name}    Đơn giá: {periods}",
+        "rate_until": "{rate}/ngày đến {date}",
+        "rate_then": "sau đó {rate}/ngày",
+        "rate_then_until": "sau đó {rate}/ngày đến {date}",
         "override": "Số tiền ghi đè",
         "effective_cost": "Chi phí thực tế",
         "note": "Ghi chú",
@@ -172,3 +197,25 @@ def range_label(start: date, end: date, locale: str = DEFAULT_LOCALE) -> str:
     n = (end.year - start.year) * 12 + (end.month - start.month) + 1
     key = "range_months_one" if n == 1 else "range_months_other"
     return t(locale, key, start=month_label(start, locale), end=month_label(end, locale), n=n)
+
+
+def worker_rate_line(name: str, rate, periods, locale: str = DEFAULT_LOCALE) -> str:
+    """ "Worker: X    Rate: 120,50 €/day", or each rate with its dates when it changed in the range.
+
+    ``periods`` is ((first day, daily rate), ...) in date order; one period or none
+    prints the single ``rate``.
+    """
+    from .format import format_eur_fr
+
+    periods = tuple(periods or ())
+    if len(periods) <= 1:
+        return t(locale, "worker_rate", name=name, rate=format_eur_fr(rate) if rate is not None else "—")
+    parts = []
+    for i, (_start, period_rate) in enumerate(periods):
+        rate_str = format_eur_fr(period_rate)
+        if i + 1 < len(periods):
+            until = (periods[i + 1][0] - timedelta(days=1)).strftime("%d/%m/%Y")
+            parts.append(t(locale, "rate_until" if i == 0 else "rate_then_until", rate=rate_str, date=until))
+        else:
+            parts.append(t(locale, "rate_then", rate=rate_str))
+    return t(locale, "worker_rate_periods", name=name, periods=", ".join(parts))

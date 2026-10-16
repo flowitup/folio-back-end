@@ -30,7 +30,7 @@ from app.application.admin.exceptions import (
 )
 from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.infrastructure.rate_limiter import limiter
+from app.infrastructure.rate_limiter import limiter, remote_address_bucket
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def _require_platform_ops():
 )
 @jwt_required()
 @limiter.limit("5 per hour", key_func=jwt_user_key)
-@limiter.limit("10 per hour")
+@limiter.limit("10 per hour", key_func=remote_address_bucket)
 def bulk_add_memberships(user_id: UUID):
     """Assign an existing user to multiple projects at once.
 

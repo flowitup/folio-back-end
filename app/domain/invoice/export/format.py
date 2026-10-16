@@ -45,8 +45,23 @@ def invoice_type_label(inv, locale: str = DEFAULT_LOCALE) -> str:
 
 
 def subtotal_type_label(sub, locale: str = DEFAULT_LOCALE) -> str:
-    """Label of a subtotal row, flagged the same way when it sums cash advances."""
-    return _flagged_type_label(sub.type, sub.is_cash_advance, locale)
+    """Label of a subtotal row, flagged the same way when it sums cash advances.
+
+    Funding rows (released funds, cash advances) say they are left out of the
+    expenses total, so the expense rows visibly add up to it.
+    """
+    label = _flagged_type_label(sub.type, sub.is_cash_advance, locale)
+    return t(locale, "not_in_total", label=label) if is_funding_subtotal(sub) else label
+
+
+def is_funding(inv) -> bool:
+    """Money released to the project, or a cash advance: listed apart, outside the expenses total."""
+    return inv.type == InvoiceType.RELEASED_FUNDS
+
+
+def is_funding_subtotal(sub) -> bool:
+    """A subtotal row of funding (released funds or cash advances)."""
+    return sub.type == InvoiceType.RELEASED_FUNDS or sub.is_cash_advance
 
 
 def invoice_item_label(inv, description: str, locale: str = DEFAULT_LOCALE) -> str:

@@ -33,6 +33,8 @@ from app.domain.labor.export.xlsx_builder import EUR_FR_FORMAT  # noqa: F401
 from app.domain.invoice.export.format import (
     format_generated_at,
     invoice_type_label,
+    is_funding,
+    is_funding_subtotal,
     month_label,
     round_cents,
     subtotal_type_label,
@@ -46,16 +48,41 @@ from app.domain.services.xlsx_safe_cell import safe_cell
 # Column definitions
 # ---------------------------------------------------------------------------
 
-_INVOICE_HEADERS = ["#", "col_date", "col_type", "col_recipient", "col_items", "col_total"]
-_INVOICE_COL_WIDTHS = [6, 14, 12, 30, 8, 18]
+# The invoice number (not a 1, 2, 3 counter) identifies each row, and the payment
+# method says which purse paid it.
+_INVOICE_HEADERS = [
+    "col_invoice_number",
+    "col_date",
+    "col_type",
+    "col_recipient",
+    "col_payment_method",
+    "col_items",
+    "col_total",
+]
+_INVOICE_COL_WIDTHS = [18, 12, 24, 30, 20, 8, 16]
 
-_TYPE_SHEET_HEADERS = ["#", "col_date", "col_recipient", "col_items", "col_total"]
-_TYPE_SHEET_COL_WIDTHS = [6, 14, 30, 8, 18]
+_TYPE_SHEET_HEADERS = [
+    "col_invoice_number",
+    "col_date",
+    "col_recipient",
+    "col_payment_method",
+    "col_items",
+    "col_total",
+]
+_TYPE_SHEET_COL_WIDTHS = [18, 12, 30, 20, 8, 16]
 
 # Labor sheet gets an extra "Payment month" column so payroll periods are visible
 # alongside the invoice issue date.
-_LABOR_TYPE_SHEET_HEADERS = ["#", "col_date", "col_recipient", "col_items", "col_payment_month", "col_total"]
-_LABOR_TYPE_SHEET_COL_WIDTHS = [6, 14, 30, 8, 16, 18]
+_LABOR_TYPE_SHEET_HEADERS = [
+    "col_invoice_number",
+    "col_date",
+    "col_recipient",
+    "col_payment_method",
+    "col_items",
+    "col_payment_month",
+    "col_total",
+]
+_LABOR_TYPE_SHEET_COL_WIDTHS = [18, 12, 30, 20, 8, 16, 16]
 
 _SUBTYPE_HEADERS = ["col_type", "col_invoice_count", "col_total"]
 _SUBTYPE_COL_WIDTHS = [16, 16, 18]
@@ -218,9 +245,11 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
         cell.fill = fill
         cell.alignment = Alignment(horizontal="center")
 
-    # Data rows
+    # Data rows: the expenses first, right above the total they add up to (in the
+    # KPI table and the invoices section), then the funding rows marked as left out.
+    ordered = [s for s in subtotals if not is_funding_subtotal(s)] + [s for s in subtotals if is_funding_subtotal(s)]
     data_row = hdr_row + 1
-    for sub in subtotals:
+    for sub in ordered:
         cells_data = [subtotal_type_label(sub, locale), sub.invoice_count, sub.total_amount]
         for col_idx, val in enumerate(cells_data):
             cell = safe_cell(ws, data_row, col_idx + 1, val)
@@ -236,74 +265,96 @@ def _write_subtotals_section(ws: Worksheet, start_row: int, subtotals: List[Type
     return data_row + 1  # blank spacer
 
 
-def _write_invoices_section(
-    ws: Worksheet, start_row: int, invoices: List[Invoice], grand_total: Decimal, locale: str
-) -> int:
-    """Write 'Invoices' heading + header + data rows + GRAND TOTAL band. Returns next_row."""
+def _write_invoice_rows(ws: Worksheet, first_row: int, invoices: List[Invoice], locale: str) -> int:
+    """Write one row per invoice from `first_row`. Returns the next free row."""
     thin = _thin_border()
-    thick = _thick_top_border()
-    fill = _header_fill()
-    grand_fill = _grand_total_fill()
-
-    # Section heading
-    heading_cell = safe_cell(ws, start_row, 1, t(locale, "invoices"))
-    heading_cell.font = _bold_font(11)
-
-    # Header row
-    hdr_row = start_row + 1
-    for i, label in enumerate(_INVOICE_HEADERS):
-        cell = safe_cell(ws, hdr_row, i + 1, _header(locale, label))
-        cell.font = _bold_font()
-        cell.border = thin
-        cell.fill = fill
-        cell.alignment = Alignment(horizontal="center")
-
-    # Data rows — sorted by (issue_date, type, invoice_number)
-    sorted_invoices = sorted(invoices, key=_invoice_sort_key)
-    data_row = hdr_row + 1
-    for idx, inv in enumerate(sorted_invoices, start=1):
-        item_count = len(inv.items)
+    total_col = len(_INVOICE_HEADERS) - 1
+    data_row = first_row
+    for inv in sorted(invoices, key=_invoice_sort_key):
         values = [
-            idx,
+            inv.invoice_number,
             inv.issue_date,
             invoice_type_label(inv, locale),
             inv.recipient_name,
-            item_count,
+            inv.payment_method_label or "",
+            len(inv.items),
             _money(inv.total_amount),
         ]
         for col_idx, val in enumerate(values):
             cell = safe_cell(ws, data_row, col_idx + 1, val)
             cell.border = thin
-            if col_idx == 5:  # Total column — currency
+            if col_idx == total_col:  # Total column — currency
                 cell.number_format = EUR_FR_FORMAT
                 cell.alignment = Alignment(horizontal="right")
-            elif col_idx in (0, 4):
+            elif col_idx == total_col - 1:
                 cell.alignment = Alignment(horizontal="center")
             elif col_idx == 1:
                 cell.number_format = "YYYY-MM-DD"
         data_row += 1
+    return data_row
 
-    # GRAND TOTAL band
-    # The same total as the KPI table: expenses only, released funds left out.
-    grand_row = data_row
+
+def _write_total_band(ws: Worksheet, row: int, label: str, amount: Decimal) -> None:
+    """A bold total row with a thick top border: label in column A, amount in the Total column."""
+    thick = _thick_top_border()
+    grand_fill = _grand_total_fill()
     for col in range(1, len(_INVOICE_HEADERS) + 1):
-        cell = ws.cell(row=grand_row, column=col)
+        cell = ws.cell(row=row, column=col)
         cell.border = thick
         cell.fill = grand_fill
         cell.font = _bold_font()
-
-    safe_cell(ws, grand_row, 1, t(locale, "grand_total_row")).font = _bold_font()
-    ws.cell(row=grand_row, column=1).border = thick
-    ws.cell(row=grand_row, column=1).fill = grand_fill
-
-    total_cell = ws.cell(row=grand_row, column=len(_INVOICE_HEADERS), value=_money(grand_total))
+    safe_cell(ws, row, 1, label).font = _bold_font()
+    total_cell = ws.cell(row=row, column=len(_INVOICE_HEADERS), value=_money(amount))
     total_cell.number_format = EUR_FR_FORMAT
     total_cell.font = _bold_font()
     total_cell.border = thick
     total_cell.fill = grand_fill
     total_cell.alignment = Alignment(horizontal="right")
 
-    return grand_row + 1
+
+def _write_invoices_section(ws: Worksheet, start_row: int, bundle: InvoiceBundle, locale: str) -> int:
+    """'Invoices' heading + header + the expense rows and their total, then the
+    funding rows (released funds, cash advances) in a section of their own with
+    their totals, so each total is the sum of the rows right above it. Returns next_row.
+    """
+    thin = _thin_border()
+    fill = _header_fill()
+
+    expenses = [inv for inv in bundle.invoices if not is_funding(inv)]
+    funding = [inv for inv in bundle.invoices if is_funding(inv)]
+
+    def header(row: int) -> None:
+        for i, label in enumerate(_INVOICE_HEADERS):
+            cell = safe_cell(ws, row, i + 1, _header(locale, label))
+            cell.font = _bold_font()
+            cell.border = thin
+            cell.fill = fill
+            cell.alignment = Alignment(horizontal="center")
+
+    row = start_row
+    if expenses:
+        safe_cell(ws, row, 1, t(locale, "invoices")).font = _bold_font(11)
+        header(row + 1)
+        row = _write_invoice_rows(ws, row + 2, expenses, locale)
+        # The same total as the KPI table: the expense rows above, released funds left out.
+        _write_total_band(ws, row, t(locale, "grand_total_row"), bundle.grand_total)
+        row += 2
+
+    if funding:
+        safe_cell(ws, row, 1, t(locale, "financing")).font = _bold_font(11)
+        header(row + 1)
+        row = _write_invoice_rows(ws, row + 2, funding, locale)
+        released = [inv for inv in funding if not inv.is_cash_advance]
+        advances = [inv for inv in funding if inv.is_cash_advance]
+        if released:
+            _write_total_band(ws, row, t(locale, "released_total_row"), bundle.released_total)
+            row += 1
+        if advances:
+            advance_total = sum((round_cents(inv.total_amount) for inv in advances), Decimal("0"))
+            _write_total_band(ws, row, t(locale, "cash_advance_total_row"), advance_total)
+            row += 1
+
+    return row + 1
 
 
 # ---------------------------------------------------------------------------
@@ -357,9 +408,9 @@ def _write_type_sheet(
     # Data rows
     sorted_invoices = sorted(invoices, key=_invoice_sort_key)
     data_row = hdr_row + 1
-    for idx, inv in enumerate(sorted_invoices, start=1):
+    for inv in sorted_invoices:
         item_count = len(inv.items)
-        values = [idx, inv.issue_date, inv.recipient_name, item_count]
+        values = [inv.invoice_number, inv.issue_date, inv.recipient_name, inv.payment_method_label or "", item_count]
         if is_labor:
             values.append(inv.service_month)
         values.append(_money(inv.total_amount))
@@ -369,11 +420,11 @@ def _write_type_sheet(
             if col_idx == total_col_idx:  # Total
                 cell.number_format = EUR_FR_FORMAT
                 cell.alignment = Alignment(horizontal="right")
-            elif col_idx in (0, 3):
+            elif col_idx == 4:
                 cell.alignment = Alignment(horizontal="center")
             elif col_idx == 1:
                 cell.number_format = "YYYY-MM-DD"
-            elif is_labor and col_idx == 4:
+            elif is_labor and col_idx == 5:
                 # Payment month is month-granular; render as MM/YYYY to match the PDF export.
                 cell.number_format = "MM/YYYY"
         data_row += 1
@@ -444,13 +495,7 @@ def build_xlsx(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     )
 
     # Invoices table + grand total
-    _write_invoices_section(
-        ws_summary,
-        start_row=next_row,
-        invoices=bundle.invoices,
-        grand_total=bundle.grand_total,
-        locale=context.locale,
-    )
+    _write_invoices_section(ws_summary, start_row=next_row, bundle=bundle, locale=context.locale)
 
     _set_col_widths(ws_summary, _INVOICE_COL_WIDTHS)
 

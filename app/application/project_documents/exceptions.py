@@ -23,6 +23,12 @@ class UnsupportedDocumentTypeError(Exception):
     pass
 
 
+class FilenameTooLongError(ValueError):
+    """Raised when a document name is longer than MAX_DISPLAY_FILENAME_LENGTH characters (422)."""
+
+    pass
+
+
 class DocumentPermissionDeniedError(Exception):
     """Raised when a user lacks permission to perform an action on a document."""
 

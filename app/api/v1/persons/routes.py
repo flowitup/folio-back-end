@@ -158,7 +158,7 @@ def _company_scope_for_search(caller_id: UUID) -> "Optional[list[UUID]]":
 
 @persons_bp.route("/persons", methods=["GET"])
 @jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 def search_persons():
     """Typeahead search over Persons, scoped to the caller's companies (Phase 2).
 
@@ -227,7 +227,7 @@ def search_persons():
 
 @persons_bp.route("/persons", methods=["POST"])
 @jwt_required()
-@limiter.limit("20 per minute")
+@limiter.limit("20 per minute", key_func=jwt_user_key)
 def create_person():
     """Create a new Person scoped to the authenticated caller as creator."""
     try:

@@ -54,7 +54,8 @@ from app.domain.exceptions.labor_exceptions import (
     LaborEntryNotFoundError,
     DuplicateEntryError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
 
 
@@ -222,7 +223,7 @@ def _conflicts_response(e: ConflictsNotAcknowledgedError):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def log_attendance(project_id: str):
@@ -345,7 +346,7 @@ def get_cross_project_conflicts(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def bulk_log_attendance(project_id: str):
@@ -415,7 +416,7 @@ def bulk_log_attendance(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def update_attendance(project_id: str, entry_id: str):
@@ -479,7 +480,7 @@ def update_attendance(project_id: str, entry_id: str):
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>", methods=["DELETE"])
 @openapi_doc(summary="Delete a labor entry", tags=["labor"])
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def delete_attendance(project_id: str, entry_id: str):

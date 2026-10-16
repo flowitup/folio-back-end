@@ -32,7 +32,7 @@ labor_export_bp = Blueprint("labor_export", __name__)
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
 @require_project_access()
 @require_full_project_view
@@ -99,7 +99,7 @@ def export_labor(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.limit("30 per minute", key_func=jwt_user_key)
 @require_permission("project:read")
 @require_project_access()
 def export_worker_labor(project_id: str, worker_id: str):

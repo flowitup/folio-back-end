@@ -736,10 +736,13 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         from app.infrastructure.database.models.company import CompanyModel
         from app.infrastructure.database.models.project import ProjectModel
 
+        from app.infrastructure.adapters.project_label_sql import project_label_expr
+
+        # Name first, site address second (project_label); the address also goes out on its own.
         query = (
             self._session.query(
                 InvoiceModel,
-                ProjectModel.name.label("project_name"),
+                project_label_expr(ProjectModel).label("project_name"),
                 ProjectModel.company_id.label("company_id"),
                 CompanyModel.legal_name.label("company_name"),
                 ProjectModel.address.label("project_address"),

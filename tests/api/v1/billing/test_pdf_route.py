@@ -171,7 +171,7 @@ class TestPdfContent:
 
 
 # ---------------------------------------------------------------------------
-# Rate limit: 5/min — requires a separate app with limits enabled
+# Rate limit: 60/min — requires a separate app with limits enabled
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +206,7 @@ def rate_limit_app():
         JWT_TOKEN_LOCATION = ["headers", "cookies"]
         RATELIMIT_ENABLED = True
         RATELIMIT_STORAGE_URI = "memory://"
-        RATELIMIT_DEFAULT = "1000 per hour"  # high default; pdf endpoint has its own 5/min
+        RATELIMIT_DEFAULT = "1000 per hour"  # high default; pdf endpoint has its own 60/min
 
     test_app = create_app(RateLimitTestConfig)
 
@@ -418,17 +418,18 @@ def rl_doc(rl_client, rl_token, rate_limit_app):
     return resp.get_json()
 
 
-def test_pdf_route_rate_limit_5_per_min(rl_client, rl_token, rl_doc):
-    """Spec #12: 5th request succeeds, 6th is rate-limited (429)."""
+def test_pdf_route_rate_limit_60_per_min(rl_client, rl_token, rl_doc):
+    """Opening and re-opening quotes is normal use: 60 renders a minute per user, then a 429 that says
+    how long to wait (it was 5 a minute, which users hit while browsing their quotes)."""
     doc_id = rl_doc["id"]
     url = f"/api/v1/billing-documents/{doc_id}/pdf"
     headers = _auth(rl_token)
 
-    # First 5 should succeed
-    for i in range(5):
+    for i in range(60):
         resp = rl_client.get(url, headers=headers)
         assert resp.status_code == 200, f"Request {i+1} failed with {resp.status_code}"
 
-    # 6th should be rate-limited
     resp = rl_client.get(url, headers=headers)
     assert resp.status_code == 429
+    assert 0 < int(resp.headers["Retry-After"]) <= 60
+    assert resp.get_json()["retry_after"] == int(resp.headers["Retry-After"])

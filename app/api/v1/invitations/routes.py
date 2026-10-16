@@ -51,7 +51,13 @@ from app.domain.exceptions.invitation_exceptions import (
 from app.domain.entities.invitation import InvalidInvitationEmailError
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.infrastructure.rate_limiter import code_request_answered, limiter, sms_send_ip_limits
+from app.infrastructure.rate_limiter import (
+    code_request_answered,
+    limiter,
+    request_succeeded,
+    remote_address_bucket,
+    sms_send_ip_limits,
+)
 from wiring import get_container
 
 
@@ -122,7 +128,7 @@ def _validation_err(e: ValidationError):
     tags=["invitations"],
 )
 @jwt_required()
-@limiter.limit("10 per hour", key_func=jwt_user_key)
+@limiter.limit("50 per hour", key_func=jwt_user_key, deduct_when=request_succeeded)
 def create_invitation():
     """Create an invitation (or directly add existing user) to a project."""
     try:
@@ -318,8 +324,10 @@ def verify_invitation(token: str):
     tags=["invitations"],
     auth=False,
 )
-@limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 def request_invite_code():
     """Text a sign-up code to the phone being claimed. Public: the invitation token is the authorisation."""
     try:
@@ -377,7 +385,7 @@ def request_invite_code():
     tags=["invitations"],
     auth=False,
 )
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
 def accept_invitation():
     """Accept an invitation: create the account and membership, then sign the invitee in."""
     try:

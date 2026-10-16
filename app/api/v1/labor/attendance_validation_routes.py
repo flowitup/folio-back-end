@@ -42,9 +42,8 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerNotFoundError,
     WorkerNotLinkedError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
-
 
 # Workers may catch up on missed days for about a month; every such day stays pending
 # until a manager validates it, so a wide window costs nothing in trust.
@@ -69,7 +68,7 @@ def _max_backdate_days() -> int:
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:log_own_attendance")
 @require_project_access(write=False)
 def submit_own_attendance(project_id: str):
@@ -128,7 +127,7 @@ def _notify(call) -> None:
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def validate_attendance(project_id: str, entry_id: str):
@@ -160,7 +159,7 @@ def validate_attendance(project_id: str, entry_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def reject_attendance(project_id: str, entry_id: str):
@@ -204,7 +203,7 @@ def reject_attendance(project_id: str, entry_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("20 per minute", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:log_own_attendance")
 @require_project_access(write=False)
 def edit_own_attendance(project_id: str, entry_id: str):
@@ -277,7 +276,7 @@ def _decide_change(project_id: str, entry_id: str, approve: bool):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def validate_attendance_change(project_id: str, entry_id: str):
@@ -291,7 +290,7 @@ def validate_attendance_change(project_id: str, entry_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("30 per minute", key_func=jwt_user_key)
+@limiter.limit("120 per minute", key_func=jwt_user_key)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def reject_attendance_change(project_id: str, entry_id: str):

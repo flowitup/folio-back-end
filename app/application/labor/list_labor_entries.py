@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from uuid import UUID
 
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
-from app.domain.entities.worker import Worker
+from app.domain.entities.worker import Worker, worker_display_name
 from app.domain.entities.worker_rate_change import WorkerRateChange
 
 
@@ -118,7 +118,7 @@ class ListLaborEntriesUseCase:
                 LaborEntryDetail(
                     id=str(entry.id),
                     worker_id=str(entry.worker_id),
-                    worker_name=worker.person_name or worker.name,
+                    worker_name=worker_display_name(worker.person_name, worker.name),
                     date=entry.date.isoformat(),
                     amount_override=float(entry.amount_override) if entry.amount_override is not None else None,
                     effective_cost=effective_cost,

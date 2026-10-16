@@ -32,7 +32,6 @@ from app.domain.invoice.export.models import (
 from app.domain.invoice.export.xlsx_builder import EUR_FR_FORMAT, build_xlsx
 from app.domain.value_objects.invoice_item import InvoiceItem
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -159,8 +158,8 @@ def test_grand_total_row_present():
     """Summary sheet has a 'TOTAL EXPENSES' row in the invoices section."""
     ctx = _make_context()
     invoices = [
-        _make_invoice(invoice_number="INV-001", amount=Decimal("100.00")),
-        _make_invoice(invoice_number="INV-002", amount=Decimal("200.00")),
+        _make_invoice(invoice_type=InvoiceType.LABOR, invoice_number="INV-001", amount=Decimal("100.00")),
+        _make_invoice(invoice_type=InvoiceType.LABOR, invoice_number="INV-002", amount=Decimal("200.00")),
     ]
     bundle = _make_bundle(invoices)
     wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, bundle)))
@@ -168,6 +167,8 @@ def test_grand_total_row_present():
 
     all_values = [cell.value for row in ws.iter_rows() for cell in row]
     assert "TOTAL EXPENSES" in all_values, "Expected 'TOTAL EXPENSES' text in Summary sheet"
+    # The invoice number identifies each row (no 1, 2, 3 counter).
+    assert "INV-001" in all_values and "INV-002" in all_values
 
 
 def test_empty_range_only_summary_sheet():
@@ -207,17 +208,18 @@ def test_labor_sheet_has_payment_month_column_and_shifted_total():
     wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, bundle)))
     ws = wb["Labor invoices"]
 
-    header = [ws.cell(row=4, column=c).value for c in range(1, 7)]
-    assert header == ["#", "Date", "Recipient", "Items", "Payment month", "Total"]
+    header = [ws.cell(row=4, column=c).value for c in range(1, 8)]
+    assert header == ["No.", "Date", "Recipient", "Payment method", "Items", "Payment month", "Total"]
+    assert {ws.cell(row=r, column=1).value for r in (5, 6)} == {"INV-L1", "INV-L2"}
 
     # Rows are sorted by issue date: INV-L2 (Feb, no month) first, INV-L1 (June month) second.
     # openpyxl round-trips DATE cells as datetime at midnight.
-    month_cells = {ws.cell(row=r, column=5).value: ws.cell(row=r, column=5) for r in (5, 6)}
+    month_cells = {ws.cell(row=r, column=6).value: ws.cell(row=r, column=6) for r in (5, 6)}
     assert None in month_cells and datetime(2026, 6, 1) in month_cells
     assert month_cells[datetime(2026, 6, 1)].number_format == "MM/YYYY"
 
     for r in (5, 6):
-        total_cell = ws.cell(row=r, column=6)
+        total_cell = ws.cell(row=r, column=7)
         # openpyxl reads integral floats back as int.
         assert isinstance(total_cell.value, (int, float))
         assert total_cell.number_format == EUR_FR_FORMAT

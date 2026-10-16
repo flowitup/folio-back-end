@@ -48,7 +48,7 @@ from app.application.company_persons import (
 )
 from app.application.company_persons.exceptions import PhoneAlreadyInCompanyError
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
-from app.infrastructure.rate_limiter import limiter
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -92,8 +92,8 @@ def _company_uuid_or_404(company_id: str):
     tags=["companies"],
 )
 @jwt_required()
-@limiter.limit("20 per minute", key_func=jwt_user_key)
-@limiter.limit("20 per hour", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
+@limiter.limit("100 per hour", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_company_role("admin")
 def add_member_by_phone(company_id: str):
     """Onboard a person by phone (match order: existing account → un-linked

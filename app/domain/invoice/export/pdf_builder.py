@@ -75,6 +75,8 @@ from app.domain.invoice.export.format import (
     format_generated_at,
     invoice_item_label,
     invoice_type_label,
+    is_funding,
+    is_funding_subtotal,
     month_label,
     round_cents,
     subtotal_type_label,
@@ -363,7 +365,16 @@ def _render_subtotals_table(bundle: InvoiceBundle, styles: dict, usable_width: f
 
     header_row = [t(locale, "col_type"), t(locale, "col_count"), t(locale, "col_total")]
     table_data = [header_row]
-    for sub in bundle.subtotals_by_type:
+    # The expenses first, then their total, then the funding rows marked as left out.
+    expense_subs = [sub for sub in bundle.subtotals_by_type if not is_funding_subtotal(sub)]
+    funding_subs = [sub for sub in bundle.subtotals_by_type if is_funding_subtotal(sub)]
+    for sub in expense_subs:
+        table_data.append([subtotal_type_label(sub, locale), str(sub.invoice_count), format_eur_fr(sub.total_amount)])
+    total_row_index = None
+    if expense_subs:
+        total_row_index = len(table_data)
+        table_data.append([t(locale, "grand_total_row"), "", format_eur_fr(bundle.grand_total)])
+    for sub in funding_subs:
         table_data.append([subtotal_type_label(sub, locale), str(sub.invoice_count), format_eur_fr(sub.total_amount)])
 
     style_cmds = [
@@ -382,33 +393,56 @@ def _render_subtotals_table(bundle: InvoiceBundle, styles: dict, usable_width: f
         ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
         ("ALIGN", (1, 0), (-1, 0), "CENTER"),
     ]
+    if total_row_index is not None:
+        style_cmds += [
+            ("FONTNAME", (0, total_row_index), (-1, total_row_index), "DejaVu-Bold"),
+            ("LINEABOVE", (0, total_row_index), (-1, total_row_index), 1, colors.black),
+            ("BACKGROUND", (0, total_row_index), (-1, total_row_index), colors.HexColor("#E8EEF7")),
+        ]
 
     table = Table(table_data, colWidths=col_widths)
     table.setStyle(TableStyle(style_cmds))
     return [Paragraph(t(locale, "subtotals_by_type"), styles["section_heading"]), table]
 
 
-def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: float, locale: str) -> list:
-    """'Invoices' heading + table (# | Date | Type | Recipient | Total)."""
-    # The type column fits "Matériaux et services" on one line; longer labels and
-    # recipients wrap inside their cell.
-    col_weights = [0.05, 0.12, 0.20, 0.45, 0.18]
+def _invoice_rows_table(
+    invoices: List[Invoice],
+    totals: list[tuple[str, Decimal]],
+    styles: dict,
+    usable_width: float,
+    locale: str,
+) -> Table:
+    """Table (No. | Date | Type | Recipient | Payment method | Total) closed by `totals` rows."""
+    # The invoice number identifies each row (not a 1, 2, 3 counter); long types,
+    # recipients and methods wrap inside their cell.
+    col_weights = [0.15, 0.10, 0.17, 0.26, 0.16, 0.16]
     col_widths = [usable_width * w for w in col_weights]
 
-    header_row = ["#", t(locale, "col_date"), t(locale, "col_type"), t(locale, "col_recipient"), t(locale, "col_total")]
-    table_data = [header_row]
+    header_row = [
+        t(locale, "col_invoice_number"),
+        t(locale, "col_date"),
+        t(locale, "col_type"),
+        t(locale, "col_recipient"),
+        t(locale, "col_payment_method"),
+        t(locale, "col_total"),
+    ]
+    table_data: list = [header_row]
 
     sorted_invoices = sorted(invoices, key=_invoice_sort_key)
-    for idx, inv in enumerate(sorted_invoices, start=1):
+    for inv in sorted_invoices:
         table_data.append(
             [
-                str(idx),
+                _cell(inv.invoice_number, styles["cell"]),
                 inv.issue_date.strftime("%d/%m/%Y"),
                 _cell(invoice_type_label(inv, locale), styles["cell_center"]),
                 _cell(inv.recipient_name, styles["cell"]),
+                _cell(inv.payment_method_label or "", styles["cell"]),
                 format_eur_fr(inv.total_amount),
             ]
         )
+    first_total = len(table_data)
+    for label, amount in totals:
+        table_data.append([label, "", "", "", "", format_eur_fr(amount)])
 
     style_cmds = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
@@ -422,11 +456,9 @@ def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: 
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (1, 0), (2, -1), "CENTER"),
-        ("ALIGN", (3, 0), (3, -1), "LEFT"),
-        ("ALIGN", (4, 0), (4, -1), "RIGHT"),
-        ("ALIGN", (1, 0), (4, 0), "CENTER"),
+        ("ALIGN", (5, 0), (5, -1), "RIGHT"),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]
 
@@ -434,10 +466,53 @@ def _render_invoices_table(invoices: List[Invoice], styles: dict, usable_width: 
     for i in range(len(sorted_invoices)):
         if i % 2 == 1:
             style_cmds.append(("BACKGROUND", (0, i + 1), (-1, i + 1), colors.HexColor("#F7F9FC")))
+    for r in range(first_total, len(table_data)):
+        style_cmds += [
+            ("SPAN", (0, r), (4, r)),
+            ("ALIGN", (0, r), (4, r), "RIGHT"),
+            ("FONTNAME", (0, r), (-1, r), "DejaVu-Bold"),
+            ("BACKGROUND", (0, r), (-1, r), colors.HexColor("#E8EEF7")),
+        ]
+    if totals:
+        style_cmds.append(("LINEABOVE", (0, first_total), (-1, first_total), 1, colors.black))
 
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
     table.setStyle(TableStyle(style_cmds))
-    return [Paragraph(t(locale, "invoices"), styles["section_heading"]), table]
+    return table
+
+
+def _render_invoices_table(bundle: InvoiceBundle, styles: dict, usable_width: float, locale: str) -> list:
+    """The expense rows closed by their total, then the funding rows (released
+    funds, cash advances) in a section of their own: every total is the sum of
+    the rows right above it.
+    """
+    expenses = [inv for inv in bundle.invoices if not is_funding(inv)]
+    funding = [inv for inv in bundle.invoices if is_funding(inv)]
+    story: list = []
+    if expenses:
+        story.append(Paragraph(t(locale, "invoices"), styles["section_heading"]))
+        story.append(
+            _invoice_rows_table(
+                expenses, [(t(locale, "grand_total_row"), bundle.grand_total)], styles, usable_width, locale
+            )
+        )
+    if funding:
+        totals: list[tuple[str, Decimal]] = []
+        if any(not inv.is_cash_advance for inv in funding):
+            totals.append((t(locale, "released_total_row"), bundle.released_total))
+        advances = [inv for inv in funding if inv.is_cash_advance]
+        if advances:
+            totals.append(
+                (
+                    t(locale, "cash_advance_total_row"),
+                    sum((round_cents(inv.total_amount) for inv in advances), Decimal("0")),
+                )
+            )
+        if story:
+            story.append(Spacer(1, 4 * mm))
+        story.append(Paragraph(t(locale, "financing"), styles["section_heading"]))
+        story.append(_invoice_rows_table(funding, totals, styles, usable_width, locale))
+    return story
 
 
 # ---------------------------------------------------------------------------
@@ -685,7 +760,7 @@ def build_pdf(context: InvoiceExportContext, bundle: InvoiceBundle) -> bytes:
     story.append(Spacer(1, 4 * mm))
     story.extend(_render_subtotals_table(bundle, styles, usable_width, context.locale))
     story.append(Spacer(1, 4 * mm))
-    story.extend(_render_invoices_table(bundle.invoices, styles, usable_width, context.locale))
+    story.extend(_render_invoices_table(bundle, styles, usable_width, context.locale))
 
     # --- Pages 2..N+1: one per invoice ---
     sorted_invoices = sorted(bundle.invoices, key=_invoice_sort_key)

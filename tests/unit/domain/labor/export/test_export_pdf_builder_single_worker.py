@@ -24,7 +24,6 @@ from app.application.labor.list_labor_entries import LaborEntryDetail
 from app.domain.labor.export.models import ExportContext, ExportRange, MonthBucket
 from app.domain.labor.export.pdf_builder import build_pdf
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -467,3 +466,34 @@ class TestDayLogSection:
         text = _extract_text(build_pdf(ctx, [bucket]))
         assert "MorningTaskAlpha" in text, f"First activity title missing.\nExtracted: {text[:1000]}"
         assert "AfternoonTaskBeta" in text, f"Second activity title missing.\nExtracted: {text[:1000]}"
+
+
+class TestRatePeriodsMonthTotalsAndBonusRule:
+    """labor-09 / sweep-numbers-consistency-17."""
+
+    def test_header_lists_each_rate_with_its_dates(self):
+        import dataclasses
+
+        ctx, buckets = _default_single_worker_fixture()
+        ctx = dataclasses.replace(
+            ctx,
+            locale="fr",
+            worker_rate_periods=((date(2026, 4, 1), Decimal("120.50")), (date(2026, 4, 15), Decimal("130.00"))),
+        )
+        text = _extract_text(build_pdf(ctx, buckets))
+        assert "jusqu'au 14/04/2026" in text
+        assert "puis 130,00" in text
+
+    def test_by_month_table_with_total_when_range_spans_months(self):
+        ctx = _make_worker_context(from_month=date(2026, 3, 1))
+        b1 = _make_bucket(date(2026, 3, 1), _make_worker_summary(days_worked=4, total_cost=800.0))
+        b2 = _make_bucket(date(2026, 4, 1), _make_worker_summary(days_worked=6, total_cost=1200.0))
+        text = _extract_text(build_pdf(ctx, [b1, b2]))
+        assert "By month" in text
+        assert "TOTAL" in text
+        assert "2 000,00" in text.replace(" ", " ").replace("\xa0", " ")
+
+    def test_bonus_rule_is_stated(self):
+        ctx, buckets = _default_single_worker_fixture()
+        text = _extract_text(build_pdf(ctx, buckets))
+        assert "8 h = 1 paid day" in text

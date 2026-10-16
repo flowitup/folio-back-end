@@ -751,6 +751,23 @@ class TestDocumentFilenameControlCharacters:
         dl = doc_client.get(_download_url(doc_app._doc_project_id, doc_id), headers=_auth(owner_token))
         assert dl.status_code == 200
 
+    def test_422_rename_with_a_name_over_255_characters(self, doc_client, owner_token, doc_app):
+        """documents-photos-analyses-15: a 20,000-character name broke the download header."""
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
+        resp = doc_client.patch(
+            f"{_docs_url(doc_app._doc_project_id)}/{doc_id}/rename",
+            json={"filename": "a" * 300 + ".pdf"},
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "FILENAME_TOO_LONG"
+        ok = doc_client.patch(
+            f"{_docs_url(doc_app._doc_project_id)}/{doc_id}/rename",
+            json={"filename": "a" * 251 + ".pdf"},
+            headers=_auth(owner_token),
+        )
+        assert ok.status_code == 200, ok.get_data(as_text=True)
+
     def test_201_upload_drops_control_characters_from_the_name(self, doc_client, owner_token, doc_app):
         # A crafted part can carry a line break through RFC 2231 percent-encoding
         boundary = "qa-boundary"

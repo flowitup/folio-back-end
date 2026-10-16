@@ -517,7 +517,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
 @billing_documents_bp.route("/billing-documents/<doc_id>/pdf", methods=["GET"])
 @openapi_doc(summary="Render billing document as PDF and stream as attachment", tags=["billing"])
 @jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
 def render_billing_document_pdf(doc_id: str, billing_doc):
     """Render billing document as PDF and stream as attachment.
@@ -560,7 +560,7 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
 @billing_documents_bp.route("/billing-documents/<doc_id>/xlsx", methods=["GET"])
 @openapi_doc(summary="Render billing document as XLSX and stream as attachment", tags=["billing"])
 @jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
 def render_billing_document_xlsx(doc_id: str, billing_doc):
     """Render billing document as XLSX (Open Office XML) and stream as attachment.

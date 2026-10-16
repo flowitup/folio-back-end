@@ -37,9 +37,9 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.domain.labor.export.format import format_eur_fr, format_generated_at
+from app.domain.labor.export.format import format_generated_at
 from app.domain.labor.export.labels import month_label as month_name
-from app.domain.labor.export.labels import shift_label, t
+from app.domain.labor.export.labels import shift_label, t, worker_rate_line
 from app.domain.labor.export.models import ExportContext, MonthBucket
 from app.domain.services.xlsx_safe_cell import safe_cell, strip_formula_lead
 
@@ -402,10 +402,10 @@ def _build_xlsx_single_worker(
     next_row = _write_header_block(ws, context, month_label=None)
 
     # Add worker-specific sub-header (row 5 used by blank; write into row 5)
-    rate = context.worker_daily_rate
-    rate_str = format_eur_fr(rate)  # "100,56 €" as in the PDF; "—" when unknown
     locale = context.locale
-    safe_cell(ws, next_row, 1, t(locale, "worker_rate", name=worker_name, rate=rate_str)).font = Font(italic=True)
+    # "100,56 €" as in the PDF; each rate with its dates when it changed in the range.
+    line = worker_rate_line(worker_name, context.worker_daily_rate, context.worker_rate_periods, locale)
+    safe_cell(ws, next_row, 1, line).font = Font(italic=True)
     next_row += 1  # advance past worker sub-header (row 6 is now available for data)
 
     all_empty = all(not bucket.summary.rows and not bucket.daily_entries for bucket in buckets) if buckets else True

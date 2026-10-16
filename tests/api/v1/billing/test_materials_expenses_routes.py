@@ -301,6 +301,24 @@ class TestListAggregation:
             assert "project_name" in item
             assert item["project_name"] is not None
 
+    def test_project_name_is_the_site_address_when_set(self, mat_client, admin_tok, mat_exp_app):
+        """dashboard-projects-10: projects are shown by their address, as everywhere else."""
+        from app import db
+        from app.infrastructure.database.models.project import ProjectModel
+
+        with mat_exp_app.app_context():
+            project = db.session.get(ProjectModel, mat_exp_app._project_a1_id)
+            project.address = "12 Rue des Lilas, 69003 Lyon"
+            db.session.commit()
+            _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+
+        items = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true", headers=_auth(admin_tok)
+        ).get_json()["items"]
+        names = {i["project_name"] for i in items}
+        assert "12 Rue des Lilas, 69003 Lyon" in names
+        assert "Project A1" not in names
+
 
 # ---------------------------------------------------------------------------
 # Refundable filter

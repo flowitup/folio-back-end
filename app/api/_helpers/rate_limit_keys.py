@@ -9,7 +9,7 @@ from flask import current_app, request
 from flask_jwt_extended import get_jwt_identity
 
 from app.domain.value_objects.phone_number import normalize_french_phone
-from app.infrastructure.rate_limiter import client_ip_bucket
+from app.infrastructure.rate_limiter import client_ip_bucket, request_user_id
 
 
 def _caller_bucket() -> str:
@@ -49,6 +49,7 @@ def jwt_user_key() -> str:  # pragma: no cover
     """
     try:
         uid = get_jwt_identity()
-        return f"user:{uid}" if uid else _caller_bucket()
     except Exception:
-        return _caller_bucket()
+        uid = None
+    uid = uid or request_user_id()
+    return f"user:{uid}" if uid else _caller_bucket()
