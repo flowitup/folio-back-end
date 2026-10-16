@@ -277,6 +277,7 @@ class SendMessageUseCase:
                 sender_id=actor_id,
                 preview=message.body,
                 sent_at=message.created_at,
+                attachment_type=stored.content_type if stored is not None else None,
             )
         names = self._directory.display_names([actor_id])
         return MessageDto.from_entity(message, names.get(actor_id, "?"))
@@ -347,16 +348,23 @@ class MarkChannelReadUseCase:
         directory: ChatDirectoryPort,
         read_repo: ChatReadRepositoryPort,
         db_session: TransactionalSessionPort,
+        bell: Any = None,
     ) -> None:
         self._directory = directory
         self._reads = read_repo
         self._db = db_session
+        # Public, attached after the push stack exists: ``channel_read(channel_key, user_id,
+        # read_at)`` clears the bell's chat entries of the channel just read.
+        self.bell = bell
 
     def execute(self, *, actor_id: UUID, channel_key: str) -> None:
         channel = _parse_channel(channel_key)
         _require_member(self._directory, actor_id, channel)
-        self._reads.mark_read(actor_id, channel, datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        self._reads.mark_read(actor_id, channel, now)
         self._db.commit()
+        if self.bell is not None:
+            self.bell.channel_read(channel_key=channel.key, user_id=actor_id, read_at=now)
 
 
 class GetAttachmentUseCase:

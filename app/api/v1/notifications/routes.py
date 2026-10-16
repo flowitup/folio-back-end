@@ -42,9 +42,11 @@ def list_notifications() -> Any:
 
     ``items`` keeps its note-only shape (existing clients index ``item.note``);
     worker-submitted attendance awaiting this user's validation ships in the
-    separate ``attendance_pending`` list. ``count`` covers both — NOT
-    ``company_events`` (Phase 2 onboarding, finding 12: no client has shipped
-    UI for this feed yet, so it must not bump the notification badge).
+    separate ``attendance_pending`` list. ``count`` covers everything waiting:
+    reminders, attendance to validate, members who joined with no project yet
+    (``company_events``: both apps list them, and they are the admin's only
+    sign that someone joined) and unread activity. ``events_unread`` is the
+    unread activity on its own (the ``events`` page is capped at 50).
     """
     user_id = UUID(get_jwt_identity())
     container = get_container()
@@ -127,8 +129,7 @@ def list_notifications() -> Any:
             # In-app activity feed (chat, tasks, billing, membership, attendance decisions).
             "events": events_json,
             "events_unread": events_unread,
-            # NOT company_events — see docstring above (finding 12).
-            "count": len(items) + len(attendance_pending) + events_unread,
+            "count": len(items) + len(attendance_pending) + len(company_events_json) + events_unread,
         }
     )
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -140,13 +141,37 @@ def _feed_locale() -> str:
     return value if value in ("vi", "fr", "en") else "vi"
 
 
+def _closed_scopes(repo: Any, user_id: UUID) -> tuple[list[str], list[str]]:
+    """Projects and companies named by the caller's unread entries that they can no longer open
+    (removed from them, or deleted): those entries would only lead to 'page not found'."""
+    from types import SimpleNamespace
+
+    from app.api.v1.projects.decorators import can_read_project
+
+    project_ids, company_ids = repo.unread_scopes(user_id)
+    closed_projects = []
+    for raw in project_ids:
+        try:
+            if not can_read_project(SimpleNamespace(id=UUID(raw)), user_id):
+                closed_projects.append(raw)
+        except ValueError:
+            continue
+    closed_companies: list[str] = []
+    access = get_container().user_company_access_repo
+    if access is not None and company_ids:
+        mine = {str(a.company_id) for a in access.list_for_user(user_id)}
+        closed_companies = [c for c in company_ids if c not in mine]
+    return closed_projects, closed_companies
+
+
 def _events_feed(user_id: UUID, locale: str) -> tuple[list[dict[str, Any]], int]:
     repo = get_container().notification_event_repository
     if repo is None:
         return [], 0
     try:
-        rows = repo.list_for_user(user_id)
-        unread = repo.unread_count(user_id)
+        closed_projects, closed_companies = _closed_scopes(repo, user_id)
+        rows = repo.list_for_user(user_id, hidden_projects=closed_projects, hidden_companies=closed_companies)
+        unread = repo.unread_count(user_id, hidden_projects=closed_projects, hidden_companies=closed_companies)
     except Exception:
         # The feed is additive: a failure here must not blank the reminders and attendance.
         logger.exception("notification events failed user_id=%s", user_id)

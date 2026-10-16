@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Tuple
 from uuid import UUID
 
@@ -27,6 +28,8 @@ from app.application.task import (
 from app.domain.entities.task import TaskPriority, TaskStatus
 from wiring import get_container
 
+logger = logging.getLogger(__name__)
+
 
 def _error_response(error: str, message: str, status_code: int) -> Tuple[Response, int]:
     return jsonify(ErrorResponse(error=error, message=message, status_code=status_code).model_dump()), status_code
@@ -45,6 +48,19 @@ def _notify_task(event: str, task, actor_id: UUID) -> None:
         notifier.task_assigned(task=task, actor_id=actor_id)
     else:
         notifier.task_moved(task=task, actor_id=actor_id)
+
+
+def _retire_task_events(task_id: str, user_ids=None) -> None:
+    """Mark the bell's task entries about ``task_id`` read (for ``user_ids``, else everyone). Never raises."""
+    repo = get_container().notification_event_repository
+    if repo is None:
+        return
+    try:
+        repo.mark_read_matching(
+            kinds=("task_assigned", "task_moved"), match={"task_id": str(task_id)}, user_ids=user_ids
+        )
+    except Exception:
+        logger.exception("task bell cleanup failed task_id=%s", task_id)
 
 
 def _serialize(task) -> dict:
@@ -150,7 +166,7 @@ def update_task(task_id: str):
 
     # Captured before the write so a no-op re-save does not re-notify the assignee.
     previous_assignee = None
-    if data.assignee_id is not None:
+    if data.assignee_id is not None or "assignee_id" in data.model_fields_set:
         try:
             previous_assignee = get_container().get_task_usecase.execute(UUID(task_id)).assignee_id
         except TaskNotFoundError:
@@ -176,6 +192,9 @@ def update_task(task_id: str):
         return _error_response("ValidationError", str(e), 400)
     if data.assignee_id is not None and data.assignee_id != previous_assignee:
         _notify_task("assigned", result, UUID(get_jwt()["sub"]))
+    if previous_assignee is not None and result.assignee_id != previous_assignee:
+        # The task is no longer theirs: its "new task" entry leaves their bell.
+        _retire_task_events(task_id, user_ids=[previous_assignee])
     return jsonify(_serialize(result))
 
 
@@ -217,4 +236,5 @@ def delete_task(task_id: str):
         get_container().delete_task_usecase.execute(UUID(task_id))
     except TaskNotFoundError as e:
         return _error_response("NotFound", str(e), 404)
+    _retire_task_events(task_id)
     return "", 204

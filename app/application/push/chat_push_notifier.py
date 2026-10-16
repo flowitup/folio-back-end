@@ -31,6 +31,12 @@ _TEXT: Dict[str, tuple] = {
     "fr": ("{sender} · {channel}", "{preview}"),
     "en": ("{sender} · {channel}", "{preview}"),
 }
+# "(+N unread)": French needs the singular for one ("+1 message non lu").
+_MORE_ONE = {
+    "vi": "{preview} (+1 tin nhắn chưa đọc)",
+    "fr": "{preview} (+1 message non lu)",
+    "en": "{preview} (+1 unread)",
+}
 _MORE = {
     "vi": "{preview} (+{count} tin nhắn chưa đọc)",
     "fr": "{preview} (+{count} messages non lus)",
@@ -38,6 +44,22 @@ _MORE = {
 }
 _ADMIN_LABEL = {"vi": "Quản trị", "fr": "Administration", "en": "Admin"}
 _IMAGE_ONLY = {"vi": "Đã gửi một ảnh", "fr": "A envoyé une image", "en": "Sent an image"}
+_VOICE_ONLY = {"vi": "Đã gửi một tin nhắn thoại", "fr": "A envoyé un message vocal", "en": "Sent a voice message"}
+_FILE_ONLY = {"vi": "Đã gửi một tệp", "fr": "A envoyé un fichier", "en": "Sent a file"}
+
+
+def _attachment_text(attachment_type: Optional[str], locale: str) -> str:
+    """What a message without text sent: a voice note, a photo or another file."""
+    kind = (attachment_type or "").lower()
+    if kind.startswith("audio/"):
+        return _VOICE_ONLY[locale]
+    if kind.startswith("image/") or not kind:
+        return _IMAGE_ONLY[locale]
+    return _FILE_ONLY[locale]
+
+
+class ChatEventMarker(Protocol):
+    def mark_read_matching(self, *, kinds, match, user_ids=None, before=None) -> int: ...
 
 
 class ChatPushMarkerPort(Protocol):
@@ -72,6 +94,7 @@ class ChatPushNotifier:
         names: ChannelNameReader,
         window_seconds: int = QUIET_WINDOW_SECONDS,
         blocks: Any = None,
+        events: Optional[ChatEventMarker] = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._directory = directory
@@ -82,9 +105,47 @@ class ChatPushNotifier:
         self._window = window_seconds
         # Optional ``blocker_ids_of(user_id)``: people who blocked the sender are not pushed.
         self._blocks = blocks
+        # Optional bell store: chat entries of a channel are read once the channel is read.
+        self._events = events
 
-    def message_sent(self, *, channel: ChannelRef, sender_id: UUID, preview: str | None, sent_at: datetime) -> None:
-        """Notify the channel's other members, at most once per window each."""
+    def channel_read(self, *, channel_key: str, user_id: UUID, read_at: datetime) -> None:
+        """``user_id`` has seen ``channel_key`` up to ``read_at``: its bell chat entries are read too,
+        so the bell does not count again what the chat button already cleared. Never raises."""
+        if self._events is None:
+            return
+        try:
+            self._events.mark_read_matching(
+                kinds=("chat_message",), match={"channel_key": channel_key}, user_ids=[user_id], before=read_at
+            )
+        except Exception:
+            logger.exception("chat bell mark-read failed channel=%s", channel_key)
+
+    def _unread_since(self, channel: ChannelRef, user_id: UUID, last_read: Optional[datetime]) -> int:
+        """Unread count for one member; with no read marker, count from when they joined (when known)."""
+        if last_read is None:
+            joined_at = getattr(self._directory, "joined_at", None)
+            if joined_at is not None:
+                try:
+                    last_read = joined_at(user_id, channel)
+                except Exception:
+                    last_read = None
+        return self._messages.count_since(channel, last_read, user_id)
+
+    def message_sent(
+        self,
+        *,
+        channel: ChannelRef,
+        sender_id: UUID,
+        preview: str | None,
+        sent_at: datetime,
+        attachment_type: Optional[str] = None,
+    ) -> None:
+        """Notify the channel's other members, at most once per window each.
+
+        ``attachment_type`` (the attachment's content type) names what a message without text
+        sent: a voice note says so instead of "sent an image"."""
+        # Sending means the sender has seen the channel: their own chat entries are read.
+        self.channel_read(channel_key=channel.key, user_id=sender_id, read_at=sent_at)
         try:
             blockers = self._blocks.blocker_ids_of(sender_id) if self._blocks is not None else set()
             members = [
@@ -102,15 +163,23 @@ class ChatPushNotifier:
 
             # A per-user unread count means a per-user body, so dispatch one group at a time.
             last_reads = self._reads.last_reads_for_channel(channel)
+            data = {"kind": "chat_message", "channel_key": channel.key, "actor_id": str(sender_id)}
+            if channel.kind == "project":
+                # Lets the bell hide the entry once the reader is no longer on the project.
+                data["project_id"] = str(channel.id)
+            elif channel.kind == "company":
+                data["company_id"] = str(channel.id)
             for user_id in due:
-                unread = self._messages.count_since(channel, last_reads.get(user_id), user_id)
+                unread = self._unread_since(channel, user_id, last_reads.get(user_id))
 
                 def render(locale: str, unread: int = unread) -> tuple[str, str]:
-                    text = preview_text or _IMAGE_ONLY[locale]
+                    text = preview_text or _attachment_text(attachment_type, locale)
                     # The admin channel shares its company's name; say which one this is.
                     name = f"{_ADMIN_LABEL[locale]} · {channel_name}" if channel.kind == "admin" else channel_name
                     title = _TEXT[locale][0].format(sender=sender_name, channel=name)
-                    if unread > 1:
+                    if unread == 2:
+                        return title, _MORE_ONE[locale].format(preview=text)
+                    if unread > 2:
                         return title, _MORE[locale].format(preview=text, count=unread - 1)
                     return title, _TEXT[locale][1].format(preview=text)
 
@@ -118,7 +187,7 @@ class ChatPushNotifier:
                     category=NotificationCategory.CHAT.value,
                     recipients=[user_id],
                     render=render,
-                    data={"kind": "chat_message", "channel_key": channel.key},
+                    data=dict(data),
                 )
             self._markers.mark_notified(due, channel.key, sent_at)
         except Exception:  # a chat push must never break sending the message

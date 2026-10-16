@@ -532,12 +532,31 @@ def get_labor_payments_summary(project_id: str):
 
 
 def _invoice_subject(invoice) -> str:
-    """ "Number · recipient · amount" for the admins' bell; best effort, never raises."""
+    """ "Number · recipient" for the admins' bell; the amount is added per reader's locale. Never raises."""
     try:
-        amount = f"{float(invoice.total_amount):,.2f} €".replace(",", " ")
-        return " · ".join(p for p in (invoice.invoice_number, invoice.recipient_name, amount) if p)
+        return " · ".join(p for p in (invoice.invoice_number, invoice.recipient_name) if p)
     except Exception:
         return ""
+
+
+def _invoice_activity(invoice) -> dict:
+    """Details the admins' bell needs for an expense: amount, kind of entry and the invoice id."""
+    try:
+        kind = getattr(invoice, "type", None)
+        kind = getattr(kind, "value", kind)
+        if kind == "released_funds" and getattr(invoice, "is_cash_advance", False):
+            variant = "cash_advance"
+        elif kind in ("released_funds", "return"):
+            variant = kind
+        else:
+            variant = None
+        return {
+            "amount": invoice.total_amount,
+            "variant": variant,
+            "extra_data": {"invoice_id": str(invoice.id)},
+        }
+    except Exception:
+        return {}
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])
@@ -629,7 +648,7 @@ def create_invoice(project_id: str):
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
-    notify_admins("invoice_created", _invoice_subject(result), project_id=project_id)
+    notify_admins("invoice_created", _invoice_subject(result), project_id=project_id, **_invoice_activity(result))
     return jsonify(d), 201
 
 
@@ -801,7 +820,7 @@ def update_invoice(project_id: str, invoice_id: str):
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
-    notify_admins("invoice_updated", _invoice_subject(result), project_id=project_id)
+    notify_admins("invoice_updated", _invoice_subject(result), project_id=project_id, **_invoice_activity(result))
     return jsonify(d)
 
 
@@ -834,5 +853,5 @@ def delete_invoice(project_id: str, invoice_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    notify_admins("invoice_deleted", _invoice_subject(existing), project_id=project_id)
+    notify_admins("invoice_deleted", _invoice_subject(existing), project_id=project_id, **_invoice_activity(existing))
     return "", 204

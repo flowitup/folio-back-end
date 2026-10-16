@@ -366,6 +366,8 @@ def detach_company(company_id: str):
             409,
         )
 
+    # The remaining admins are told who left (the caller is the actor, so they are not).
+    notify_admins("member_left", "", company_id=company_id)
     return "", 204
 
 
@@ -459,9 +461,8 @@ def attach_user_to_company(company_id: str, target_user_id: str):
     D1: guarded by @require_company_role("admin") on the PATH company, so an
     admin may only attach people to companies they administer. Idempotent:
     already attached is a success, not a conflict — the existing row and its
-    role come back untouched, never duplicated or changed. Silent like every
-    other admin bulk-attach path (import, add-by-phone): no
-    `company_member_added` push kind exists.
+    role come back untouched, never duplicated or changed. The attached person
+    is told (`company_member_added`, push + bell); bulk import stays silent.
     """
     try:
         company_uuid = UUID(company_id)
@@ -490,6 +491,9 @@ def attach_user_to_company(company_id: str, target_user_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
+    _notify_company_membership(
+        "company_member_added", user_id=target_uuid, actor_id=caller_id, company_id=company_uuid
+    )
     return jsonify(dataclasses.asdict(result)), 200
 
 
@@ -552,9 +556,10 @@ def set_member_role(company_id: str, target_user_id: str):
     )
     notify_admins(
         "member_role_changed",
-        f"→ {getattr(result, 'role', '')}",
+        "",
         company_id=company_id,
         about_user_id=target_uuid,
+        role=getattr(result, "role", None),
     )
     return jsonify(dataclasses.asdict(result))
 
@@ -644,6 +649,14 @@ def join_company_by_code():
             ),
             409,
         )
+    # The admins learn about the newcomer by push; the bell already lists them under
+    # "New members" (company_events), so no activity entry is recorded for it.
+    notify_admins(
+        "member_joined",
+        getattr(result, "name", "") or "",
+        company_id=str(getattr(result, "id", "") or "") or None,
+        record=False,
+    )
     return jsonify(_company_to_dict(result, caller_id)), 200
 
 

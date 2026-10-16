@@ -152,7 +152,9 @@ def test_payload_routes_to_the_channel():
     alice, bob = uuid4(), uuid4()
     notifier, sender = _build([Member(alice, "Alice"), Member(bob, "Bob")])
     notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="x", sent_at=NOW)
-    assert sender.sent[0].data == {"kind": "chat_message", "channel_key": CHANNEL.key}
+    data = sender.sent[0].data
+    assert data["kind"] == "chat_message" and data["channel_key"] == CHANNEL.key
+    assert data["actor_id"] == str(alice)
 
 
 def test_lone_member_channel_sends_nothing():
@@ -193,3 +195,66 @@ def test_admin_channel_push_says_it_is_the_admin_channel():
     notifier, sender = _build([Member(alice, "Alice"), Member(bob, "Bob")])
     notifier.message_sent(channel=ChannelRef(kind="admin", id=uuid4()), sender_id=alice, preview="x", sent_at=NOW)
     assert "Admin" in sender.sent[0].title and "Chantier Arcueil" in sender.sent[0].title
+
+
+def _build_fr(members, unread=None, events=None):
+    sender = RecordingSender()
+    dispatcher = PushDispatcher(
+        devices=StubDevices({m.id for m in members}), sender=sender, locale="fr", run_async=False
+    )
+    directory = StubDirectory(members)
+    reads = StubReads(unread)
+    notifier = ChatPushNotifier(
+        dispatcher=dispatcher,
+        directory=directory,
+        markers=InMemoryMarkers(),
+        reads=reads,
+        messages=reads,
+        names=directory,
+        window_seconds=60,
+        events=events,
+    )
+    return notifier, sender
+
+
+def test_french_count_is_singular_for_one_more_message():
+    alice, bob = uuid4(), uuid4()
+    notifier, sender = _build_fr([Member(alice, "Alice"), Member(bob, "Bob")], unread={bob: 2})
+    notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="Salut", sent_at=NOW)
+    assert sender.sent[0].body == "Salut (+1 message non lu)"
+    notifier, sender = _build_fr([Member(alice, "Alice"), Member(bob, "Bob")], unread={bob: 3})
+    notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="Salut", sent_at=NOW)
+    assert sender.sent[0].body == "Salut (+2 messages non lus)"
+
+
+def test_a_voice_note_is_announced_as_a_voice_message():
+    alice, bob = uuid4(), uuid4()
+    notifier, sender = _build_fr([Member(alice, "Alice"), Member(bob, "Bob")], unread={bob: 1})
+    notifier.message_sent(channel=CHANNEL, sender_id=alice, preview=None, sent_at=NOW, attachment_type="audio/x-m4a")
+    assert sender.sent[0].body == "A envoyé un message vocal"
+
+
+def test_a_project_channel_entry_names_its_project():
+    alice, bob = uuid4(), uuid4()
+    notifier, sender = _build([Member(alice, "Alice"), Member(bob, "Bob")])
+    notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="x", sent_at=NOW)
+    assert sender.sent[0].data["project_id"] == str(CHANNEL.id)
+
+
+class RecordingMarker:
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def mark_read_matching(self, *, kinds, match, user_ids=None, before=None):
+        self.calls.append((tuple(kinds), dict(match), list(user_ids or []), before))
+        return 1
+
+
+def test_reading_or_writing_in_a_channel_clears_its_bell_entries():
+    alice, bob = uuid4(), uuid4()
+    marker = RecordingMarker()
+    notifier, _ = _build_fr([Member(alice, "Alice"), Member(bob, "Bob")], events=marker)
+    notifier.channel_read(channel_key=CHANNEL.key, user_id=bob, read_at=NOW)
+    assert marker.calls[-1] == (("chat_message",), {"channel_key": CHANNEL.key}, [bob], NOW)
+    notifier.message_sent(channel=CHANNEL, sender_id=alice, preview="x", sent_at=NOW)
+    assert marker.calls[-1][2] == [alice]

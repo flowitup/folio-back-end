@@ -588,6 +588,7 @@ def _configure_di_container() -> None:
             run_async=not _cfg.get("TESTING", False),
             preferences=_c.notification_preference_repository,
             events=_c.notification_event_repository,
+            names=_chat_repo,
         )
     # Chat pushes are coalesced per (user, channel); the notifier is attached to the
     # already-constructed send use case because the push stack is wired later than chat.
@@ -609,8 +610,11 @@ def _configure_di_container() -> None:
             messages=_chat_repo,
             names=_chat_repo,
             blocks=_chat_repo,
+            events=_c.notification_event_repository,
         )
         _c.send_chat_message_usecase.notifier = _chat_push_notifier
+        if _c.mark_chat_channel_read_usecase is not None:
+            _c.mark_chat_channel_read_usecase.bell = _chat_push_notifier
 
     if _c.project_repository is not None:
         _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)
@@ -759,6 +763,7 @@ def _configure_di_container() -> None:
             dispatcher=_c.push_dispatcher,
             project_repo=_c.project_repository,
             company_repo=_company_repo,
+            names=_chat_repo,
         )
         if _c.attendance_push_notifier is not None:
             _c.attendance_push_notifier.set_access_repo(_access_repo)  # no decision pushes to a removed member

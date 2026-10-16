@@ -391,6 +391,8 @@ def test_bell_feed_keeps_the_decisions_and_reads_in_the_viewers_language(client,
     assert [e["created_at"] for e in feed["events"]] == sorted((e["created_at"] for e in feed["events"]), reverse=True)
     owner_kinds = {e["kind"] for e in client.get("/api/v1/notifications", headers=owner_h).get_json()["events"]}
     assert "validated" not in owner_kinds
+    # A day waiting for validation is listed (and counted) once, in attendance_pending.
+    assert "submitted" not in owner_kinds
 
 
 def test_marking_events_read_is_scoped_to_the_caller(client, linked_h, owner_h):
