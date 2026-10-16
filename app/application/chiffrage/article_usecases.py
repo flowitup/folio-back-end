@@ -92,7 +92,13 @@ class UpdateArticleUseCase:
                 else clean_name(None if name is None else str(name), field="Article name", max_length=MAX_ARTICLE_NAME)
             ),
             quantity=(U if quantity is U else validate_quantity(Decimal(str(quantity)))),
-            unit=(U if unit is U else validate_unit(self._repo, project_id, None if unit is None else str(unit))),
+            # Resending the article's current unit is always fine, even when that
+            # custom unit was removed since: an unrelated edit must not fail.
+            unit=(
+                U
+                if unit is U or (unit is not None and str(unit).strip() == (article.unit or ""))
+                else validate_unit(self._repo, project_id, None if unit is None else str(unit))
+            ),
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
             room_id=(U if room_id is U else (None if room_id is None else UUID(str(room_id)))),
         )

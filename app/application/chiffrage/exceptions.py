@@ -71,6 +71,10 @@ class UnitAlreadyExistsError(Exception):
     """Raised when adding a unit symbol the project (or the preset list) already has."""
 
 
+class UnitInUseError(Exception):
+    """Raised when deleting a custom unit that articles still use."""
+
+
 class ChiffragePermissionDeniedError(Exception):
     """Raised when the acting user may read the project but not modify its chiffrage."""
 

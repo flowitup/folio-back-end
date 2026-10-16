@@ -163,6 +163,10 @@ class ChiffrageRepositoryPort(Protocol):
         """Delete a store."""
         ...
 
+    def rename_store_on_quotes(self, store_id: UUID, old_name: str, new_name: str) -> None:
+        """Update the supplier_name snapshot of the shop's prices that still carry its old name."""
+        ...
+
     def clear_store_from_quotes(self, store_id: UUID, snapshot_name: str) -> None:
         """Detach every quote recorded at this store, keeping the prices.
 
@@ -194,6 +198,10 @@ class ChiffrageRepositoryPort(Protocol):
 
     def unit_exists(self, project_id: UUID, symbol: str) -> bool:
         """Return True if the project already has that custom unit symbol."""
+        ...
+
+    def count_articles_with_unit(self, project_id: UUID, symbol: str) -> int:
+        """Return how many of the project's articles use that unit symbol."""
         ...
 
     def add_unit(self, unit: ChiffrageUnit) -> None:
