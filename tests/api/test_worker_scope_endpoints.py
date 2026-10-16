@@ -213,7 +213,50 @@ def test_invoices_list_only_own_labor_payments_with_zeroed_aggregates(
     body = client.get(url, headers=linked_h).get_json()
     assert [i["id"] for i in body["invoices"]] == [seeded["own"]]
     assert body["funds_released_total"] == 0 and body["company_spent_total"] == 0 and body["company_name"] is None
+    assert body["restricted"] is True
     assert client.get(url, headers=unlinked_h).get_json()["invoices"] == []
+    assert client.get(url, headers=owner_h).get_json()["restricted"] is False
+
+
+def test_restricted_member_with_view_budget_gets_the_release_figures(
+    ws_app, client, ids, seeded, linked_h, unlinked_h, monkeypatch
+):
+    """A view_budget grant must show the real financing, never a made-up 0 % released."""
+    from datetime import date
+    from uuid import UUID
+
+    from app import db
+    from app.api.v1.invoices import invoice_routes
+    from app.infrastructure.database.models.invoice import InvoiceModel
+
+    with ws_app.app_context():
+        release = InvoiceModel(
+            project_id=UUID(ids["project"]),
+            invoice_number="WS-REL-1",
+            type="released_funds",
+            issue_date=date(2026, 3, 1),
+            recipient_name="Banque",
+            items=[{"description": "Tranche 1", "quantity": "1", "unit_price": "500", "vat_rate": 0}],
+        )
+        db.session.add(release)
+        db.session.commit()
+        release_id = release.id
+    try:
+        url = f"/api/v1/projects/{ids['project']}/invoices"
+        # Without the grant the financing stays hidden.
+        assert client.get(url, headers=linked_h).get_json()["funds_released_total"] == 0
+        monkeypatch.setattr(invoice_routes, "caller_sees_budget", lambda project_id: True)
+        for headers in (linked_h, unlinked_h):
+            body = client.get(url, headers=headers).get_json()
+            assert body["restricted"] is True
+            assert body["funds_released_total"] == 500
+            assert body["funds_released_company_total"] + body["funds_released_personal_total"] == 500
+            # Spend stays hidden: the grant is about the budget, not what was spent.
+            assert body["company_spent_total"] == 0 and body["personal_spent_total"] == 0
+    finally:
+        with ws_app.app_context():
+            db.session.query(InvoiceModel).filter(InvoiceModel.id == release_id).delete()
+            db.session.commit()
 
 
 def test_invoice_detail_of_another_worker_is_hidden(client, ids, seeded, linked_h):
