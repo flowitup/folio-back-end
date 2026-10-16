@@ -86,6 +86,17 @@ class TestLineTotals:
         assert article.total_ht == 142.80
         assert article.total_ttc == expected_ttc
 
+    def test_ttc_shelf_price_totals_quantity_times_that_price(self):
+        """9,99 € TTC at 20 % is stored as 8,3250 HT: 3 of them cost 29,97 € TTC, rounded once."""
+        _, article = _world("3", [lambda a: _quote(a, "8.3250")])
+        assert article.total_ht == 24.98
+        assert article.total_ttc == 29.97
+
+    def test_line_ttc_is_rounded_once_from_the_exact_amount(self):
+        # 6,5 × 20,75 × 1,055 = 142,294... → 142,29 (rounding HT first gave 142,30).
+        _, article = _world("6.5", [lambda a: _quote(a, "20.75", tva="5.5")])
+        assert article.total_ttc == 142.29
+
     def test_unpriced_article_contributes_nothing_and_is_counted(self):
         tree, article = _world("3", [])
         assert article.effective_source == SOURCE_NONE

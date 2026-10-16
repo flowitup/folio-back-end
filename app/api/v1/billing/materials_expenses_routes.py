@@ -91,6 +91,7 @@ def list_materials_expenses():
       company_id  : optional UUID — restrict to one company
       limit       : int (default 50, max 200)
       offset      : int (default 0)
+      status      : optional refundable_status filter (refundable | refund_pending | refunded)
       q           : optional search (invoice number, recipient or project name;
                     case-insensitive substring, first 100 characters)
       channel     : optional 'company' | 'bank' — what that refund channel still owes
@@ -136,6 +137,10 @@ def list_materials_expenses():
             project_id = UUID(project_id_str)
         except ValueError:
             return _err("ValidationError", "Invalid project_id", 400)
+    # Optional filter for the refundable list: one refund status.
+    status_filter = (request.args.get("status") or "").strip() or None
+    if status_filter is not None and status_filter not in {st.value for st in RefundableStatus}:
+        return _err("ValidationError", "Invalid status", 400)
 
     user_id = UUID(get_jwt_identity())
     is_superadmin = is_platform_ops()
@@ -150,6 +155,7 @@ def list_materials_expenses():
             offset=offset,
             search=(request.args.get("q") or "")[:100],
             channel=channel,
+            refundable_status=status_filter,
             project_id=project_id,
         )
     except ForbiddenCompanyBillingError:

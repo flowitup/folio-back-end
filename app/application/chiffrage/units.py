@@ -28,6 +28,19 @@ PRESET_UNITS: tuple[str, ...] = (
     "forfait",
 )
 
+
+def unit_key(symbol: str) -> str:
+    """Comparison key for unit symbols: case-insensitive, 'm2'/'m3' read as 'm²'/'m³'.
+
+    'U' is the preset 'u', 'Sac' is 'sac', 'M2' is 'm²': two symbols with the
+    same key are the same unit and must not both be offered.
+    """
+    key = symbol.strip().casefold()
+    return key.replace("2", "²").replace("3", "³") if key in ("m2", "m3") else key
+
+
+PRESET_BY_KEY: dict[str, str] = {unit_key(u): u for u in PRESET_UNITS}
+
 # Ordering step for postes/articles, mirroring app.application.task.use_cases.
 # Large gaps let a drop between two neighbours land on a free integer without
 # renumbering the rest of the list.

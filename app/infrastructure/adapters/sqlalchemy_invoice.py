@@ -30,6 +30,7 @@ from app.infrastructure.database.models.invoice_number_counter import InvoiceNum
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
+from app.infrastructure.database.text_fold import folded, folded_like_pattern
 
 
 def _items_to_jsonb(items: list) -> list:
@@ -717,6 +718,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         all_companies: bool = False,
         search: Optional[str] = None,
         channel: Optional[str] = None,
+        refundable_status: Optional[str] = None,
         project_id: Optional[UUID] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across all projects of given companies.
@@ -740,6 +742,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 ProjectModel.name.label("project_name"),
                 ProjectModel.company_id.label("company_id"),
                 CompanyModel.legal_name.label("company_name"),
+                ProjectModel.address.label("project_address"),
             )
             .join(ProjectModel, InvoiceModel.project_id == ProjectModel.id)
             .outerjoin(CompanyModel, CompanyModel.id == ProjectModel.company_id)
@@ -779,15 +782,21 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 or_(PaymentMethodModel.id.is_(None), PaymentMethodModel.is_company_payment.isnot(True)),
             )
 
+        if refundable_status:
+            query = query.filter(InvoiceModel.refundable_status == refundable_status)
+
         if search:
-            # Before count and paging, so a search reaches expenses past the loaded page.
-            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            # Before count and paging, so a search reaches expenses past the loaded
+            # page. Accent- and case-insensitive, and also matches the project's
+            # address and who paid (the payment method).
+            pattern = folded_like_pattern(search)
             query = query.filter(
                 or_(
-                    InvoiceModel.invoice_number.ilike(pattern, escape="\\"),
-                    InvoiceModel.recipient_name.ilike(pattern, escape="\\"),
-                    ProjectModel.name.ilike(pattern, escape="\\"),
+                    folded(InvoiceModel.invoice_number).like(pattern, escape="\\"),
+                    folded(InvoiceModel.recipient_name).like(pattern, escape="\\"),
+                    folded(ProjectModel.name).like(pattern, escape="\\"),
+                    folded(ProjectModel.address).like(pattern, escape="\\"),
+                    folded(InvoiceModel.payment_method_label).like(pattern, escape="\\"),
                 )
             )
 
@@ -832,7 +841,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 )
 
         result = []
-        for inv_model, project_name, company_id, company_name in rows:
+        for inv_model, project_name, company_id, company_name, project_address in rows:
             entity = _model_to_entity(inv_model)
             result.append(
                 {
@@ -841,6 +850,9 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                     "project_name": project_name,
                     "company_id": str(company_id) if company_id else None,
                     "company_name": company_name,
+                    "project_address": project_address,
+                    "payment_method_id": str(entity.payment_method_id) if entity.payment_method_id else None,
+                    "payment_method_label": entity.payment_method_label,
                     "invoice_number": entity.invoice_number,
                     "recipient_name": entity.recipient_name,
                     "issue_date": entity.issue_date.isoformat(),

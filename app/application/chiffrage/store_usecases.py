@@ -106,6 +106,10 @@ class UpdateStoreUseCase:
             ),
         )
         self._repo.save_store(updated)
+        if updated.name != store.name:
+            # A price recorded here shows the shop's current name, also after the
+            # shop is later deleted.
+            self._repo.rename_store_on_quotes(store_id, store_name_snapshot(store), store_name_snapshot(updated))
         self._db.commit()
         return updated
 

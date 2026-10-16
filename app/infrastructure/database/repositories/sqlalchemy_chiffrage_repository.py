@@ -389,6 +389,19 @@ class SqlAlchemyChiffrageRepository:
         orm.updated_at = store.updated_at
         self._session.flush()
 
+    def rename_store_on_quotes(self, store_id: UUID, old_name: str, new_name: str) -> None:
+        """Keep the readable shop name of this shop's prices in step with a rename.
+
+        Only prices whose snapshot is still the old shop name follow; a price
+        that names its own supplier keeps it.
+        """
+        self._session.execute(
+            update(ChiffrageQuoteModel)
+            .where(ChiffrageQuoteModel.store_id == store_id, ChiffrageQuoteModel.supplier_name == old_name)
+            .values(supplier_name=new_name)
+        )
+        self._session.flush()
+
     def clear_store_from_quotes(self, store_id: UUID, snapshot_name: str) -> None:
         """Detach every price recorded at this shop, keeping the price itself.
 
@@ -456,6 +469,16 @@ class SqlAlchemyChiffrageRepository:
             )
         ).first()
         return found is not None
+
+    def count_articles_with_unit(self, project_id: UUID, symbol: str) -> int:
+        return int(
+            self._session.execute(
+                select(func.count())
+                .select_from(ChiffrageArticleModel)
+                .join(ChiffragePosteModel, ChiffrageArticleModel.poste_id == ChiffragePosteModel.id)
+                .where(ChiffragePosteModel.project_id == project_id, ChiffrageArticleModel.unit == symbol)
+            ).scalar_one()
+        )
 
     def add_unit(self, unit: ChiffrageUnit) -> None:
         self._flush_unique(

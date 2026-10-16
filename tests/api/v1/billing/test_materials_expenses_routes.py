@@ -1332,3 +1332,50 @@ class TestSearch:
         assert searched["total"] == 0
         assert searched["summary"] == full["summary"]
         assert full["summary"]["refundable_amount"] == pytest.approx(1000.0)
+
+
+class TestPayerAndFilters:
+    """QA round 3 expenses-invoices-07: payer on each row, status and project filters."""
+
+    def test_rows_carry_payer_and_project_address_and_filter(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(
+                mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refund_pending"
+            )
+            inv.payment_method_label = "QA3 Carte perso Hélène"
+            db.session.commit()
+            other = _make_invoice(
+                mat_exp_app._project_a2_id, mat_exp_app._admin_user_id, refundable_status="refundable"
+            )
+            inv_id, other_id = str(inv.id), str(other.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true&status=refund_pending"
+            f"&project_id={mat_exp_app._project_a1_id}",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        items = resp.get_json()["items"]
+        ids = {i["id"] for i in items}
+        assert inv_id in ids and other_id not in ids
+        assert all(i["refundable_status"] == "refund_pending" for i in items)
+        row = next(i for i in items if i["id"] == inv_id)
+        assert row["payment_method_label"] == "QA3 Carte perso Hélène"
+        assert "project_address" in row
+
+    def test_search_matches_payer_label(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv.payment_method_label = "QA3 Carte perso Zoé"
+            db.session.commit()
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true&q=perso%20zo", headers=_auth(admin_tok)
+        )
+        assert resp.status_code == 200
+        assert inv_id in {i["id"] for i in resp.get_json()["items"]}
+
+    def test_invalid_status_filter_is_400(self, mat_client, admin_tok):
+        resp = mat_client.get("/api/v1/billing/materials-expenses?status=bogus", headers=_auth(admin_tok))
+        assert resp.status_code == 400

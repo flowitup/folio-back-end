@@ -26,5 +26,6 @@ class ListSuppliersUseCase:
     def execute(self, *, requester_id: UUID, company_id: UUID) -> list[SupplierResponse]:
         if not self._membership.is_member(requester_id, company_id):
             raise CompanyAccessDeniedError(f"User {requester_id} is not a member of company {company_id}.")
-        suppliers = self._supplier_repo.list_by_company(company_id)
+        # A supplier left with no product (all deleted) is noise in the filter.
+        suppliers = self._supplier_repo.list_by_company(company_id, only_with_products=True)
         return [SupplierResponse.from_entity(s) for s in suppliers]

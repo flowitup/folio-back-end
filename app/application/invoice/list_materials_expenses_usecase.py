@@ -46,6 +46,12 @@ class MaterialsExpenseItem:
     # The company of the expense's project (an admin of several companies sees them all).
     company_id: Optional[str] = None
     company_name: Optional[str] = None
+    # Who paid (the payment method's label at the time), so the refundable
+    # list can say whom to pay back; the project's address, which the apps use
+    # to name a project.
+    payment_method_id: Optional[str] = None
+    payment_method_label: Optional[str] = None
+    project_address: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,7 @@ class ListMaterialsExpensesUseCase:
         offset: int = 0,
         search: Optional[str] = None,
         channel: Optional[str] = None,
+        refundable_status: Optional[str] = None,
         project_id: Optional[UUID] = None,
     ) -> MaterialsExpensesResult:
         if is_superadmin:
@@ -142,6 +149,7 @@ class ListMaterialsExpensesUseCase:
             all_companies=is_superadmin and company_id is None,
             search=(search or "").strip() or None,
             channel=channel if refundable is True else None,
+            refundable_status=refundable_status,
             project_id=project_id,
         )
 
@@ -179,6 +187,9 @@ class ListMaterialsExpensesUseCase:
                     )
                     for a in r.get("attachments", [])
                 ],
+                payment_method_id=r.get("payment_method_id"),
+                payment_method_label=r.get("payment_method_label"),
+                project_address=r.get("project_address"),
             )
             for r in rows
         ]

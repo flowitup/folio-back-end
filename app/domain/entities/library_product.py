@@ -9,6 +9,14 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 
+# Largest total the Numeric(18, 4) total_quantity column holds.
+MAX_TOTAL_QUANTITY = Decimal("99999999999999.9999")
+
+
+class LibraryQuantityOverflowError(ValueError):
+    """Raised when a purchase would push a product's total quantity past what can be stored."""
+
+
 @dataclass(frozen=True)
 class LibraryProduct:
     """Immutable product entity for the bibliotheque bounded context.
@@ -100,7 +108,13 @@ class LibraryProduct:
         first_at = self.first_purchased_at
         if first_at is not None and first_at.tzinfo is None:
             first_at = first_at.replace(tzinfo=timezone.utc)
-        new_first = first_at if first_at else purchased_at
+        # The earliest purchase, whatever order the purchases are imported in.
+        new_first = min(first_at, purchased_at) if first_at else purchased_at
+        new_total = self.total_quantity + qty
+        if new_total > MAX_TOTAL_QUANTITY:
+            raise LibraryQuantityOverflowError(
+                f"The total quantity bought of '{self.name}' would exceed {MAX_TOTAL_QUANTITY}."
+            )
         is_latest = last_at is None or purchased_at > last_at
         new_last = purchased_at if is_latest else last_at
         # Only update last_unit_price when this purchase is actually the newest;
@@ -110,7 +124,7 @@ class LibraryProduct:
         return replace(
             self,
             purchase_count=self.purchase_count + 1,
-            total_quantity=self.total_quantity + qty,
+            total_quantity=new_total,
             last_unit_price=new_last_price,
             first_purchased_at=new_first,
             last_purchased_at=new_last,

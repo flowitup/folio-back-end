@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.entities.supplier import Supplier
+from app.domain.value_objects.supplier_slug import slugify
+from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
 
 
@@ -31,6 +33,12 @@ class SqlAlchemyBibliothequeSupplierRepository:
         existing = self.find_by_slug(supplier.company_id, supplier.slug)
         if existing is not None:
             return existing
+        # Same shop under another slug: a manual 'Brico Dépôt' (slug from the
+        # name) and an imported one (slug sent by the browser extension) must
+        # be one supplier, not two half-filled ones.
+        same_name = self._find_by_folded_name(supplier.company_id, supplier.name)
+        if same_name is not None:
+            return same_name
         orm = BibliothequeSupplierModel.from_entity(supplier)
         try:
             with self._session.begin_nested():
@@ -42,17 +50,24 @@ class SqlAlchemyBibliothequeSupplierRepository:
             return existing
         return orm.to_entity()
 
-    def list_by_company(self, company_id: UUID) -> list[Supplier]:
-        """Return all suppliers for a company ordered by name."""
-        rows = (
-            self._session.execute(
-                select(BibliothequeSupplierModel)
-                .where(BibliothequeSupplierModel.company_id == company_id)
-                .order_by(BibliothequeSupplierModel.name)
-            )
-            .scalars()
-            .all()
-        )
+    def _find_by_folded_name(self, company_id: UUID, name: str) -> Optional[Supplier]:
+        """Return the company's supplier whose name matches ignoring case, accents and spacing."""
+        key = slugify(name)
+        for candidate in self.list_by_company(company_id):
+            if slugify(candidate.name) == key:
+                return candidate
+        return None
+
+    def list_by_company(self, company_id: UUID, only_with_products: bool = False) -> list[Supplier]:
+        """Return the company's suppliers ordered by name.
+
+        ``only_with_products`` leaves out suppliers whose products were all
+        deleted, which would otherwise stay in the library filter for good.
+        """
+        stmt = select(BibliothequeSupplierModel).where(BibliothequeSupplierModel.company_id == company_id)
+        if only_with_products:
+            stmt = stmt.where(exists().where(BibliothequeProductModel.supplier_id == BibliothequeSupplierModel.id))
+        rows = self._session.execute(stmt.order_by(BibliothequeSupplierModel.name)).scalars().all()
         return [r.to_entity() for r in rows]
 
     def find_by_id(self, supplier_id: UUID) -> Optional[Supplier]:

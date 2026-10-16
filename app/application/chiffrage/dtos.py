@@ -246,6 +246,16 @@ def _resolve_image_ref(
     return None
 
 
+def _line_ttc(quantity: Decimal, quote: ChiffrageQuote) -> Decimal:
+    """A line's TTC, rounded once from the exact quantity × HT × (1 + TVA).
+
+    Rounding the HT line first and then adding the TVA rounds twice: 3 × a
+    9,99 € TTC shelf price (stored as 8,3250 HT) would total 29,98 € instead of
+    29,97 €.
+    """
+    return _quantize(quantity * quote.unit_price_ht * (Decimal("1") + quote.tva_rate / _HUNDRED))
+
+
 def _build_article(
     article: ChiffrageArticle,
     quotes: list[ChiffrageQuote],
@@ -259,7 +269,7 @@ def _build_article(
         line_ttc = Decimal("0")
     else:
         line_ht = _quantize(article.quantity * effective.unit_price_ht)
-        line_ttc = _quantize(line_ht * (Decimal("1") + effective.tva_rate / _HUNDRED))
+        line_ttc = _line_ttc(article.quantity, effective)
 
     response = ArticleResponse(
         id=str(article.id),
@@ -334,7 +344,7 @@ def _build_store_baskets(
             best = min(at_store, key=lambda q: (q.unit_price_ht, q.created_at))
             line_ht = _quantize(article.quantity * best.unit_price_ht)
             basket_ht += line_ht
-            basket_ttc += _quantize(line_ht * (Decimal("1") + best.tva_rate / _HUNDRED))
+            basket_ttc += _line_ttc(article.quantity, best)
             priced += 1
 
         baskets.append(

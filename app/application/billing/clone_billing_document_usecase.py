@@ -112,8 +112,15 @@ class CloneBillingDocumentUseCase:
         # 7. Build new doc — dates reset, issuer from current company.
         # H2: When changing kind, zero out incompatible fields to avoid DB CHECK constraint.
         source_payment_terms = source.payment_terms
+        signature_block_text = source.signature_block_text
         if target_kind == BillingDocumentKind.DEVIS and source.kind != BillingDocumentKind.DEVIS:
             source_payment_terms = None
+        if target_kind == BillingDocumentKind.FACTURE and source.kind == BillingDocumentKind.DEVIS:
+            # A facture needs payment terms (a mandatory mention): take the
+            # company's default, as create and convert do. The devis 'Bon pour
+            # accord / signature du client' block has no place on a facture.
+            source_payment_terms = source_payment_terms or company.default_payment_terms
+            signature_block_text = None
 
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
@@ -136,7 +143,7 @@ class CloneBillingDocumentUseCase:
             recipient_siret=source.recipient_siret,
             notes=source.notes,
             terms=source.terms,
-            signature_block_text=source.signature_block_text,
+            signature_block_text=signature_block_text,
             payment_terms=source_payment_terms,
             source_devis_id=None,  # plain clone — no audit trail link
         )

@@ -61,6 +61,11 @@ MATRIX = [
     (D, EXPIRED,  SENT,      False),
     (D, EXPIRED,  ACCEPTED,  False),
     (D, EXPIRED,  PAID,      False),
+    # A devis wrongly imported as paid/cancelled can be put back on the devis track.
+    (D, PAID,      SENT,     True),
+    (D, PAID,      ACCEPTED, True),
+    (D, CANCELLED, DRAFT,    True),
+    (D, CANCELLED, PAID,     False),
 
     # ── FACTURE allowed transitions ────────────────────────────────────────
     (F, DRAFT,    SENT,      True),

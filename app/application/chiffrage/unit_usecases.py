@@ -12,10 +12,11 @@ from app.application.chiffrage.dtos import UnitResponse
 from app.application.chiffrage.exceptions import (
     InvalidChiffrageInputError,
     UnitAlreadyExistsError,
+    UnitInUseError,
     UnitNotFoundError,
 )
 from app.application.chiffrage.ports import ChiffrageRepositoryPort, TransactionalSessionPort
-from app.application.chiffrage.units import PRESET_UNITS
+from app.application.chiffrage.units import PRESET_BY_KEY, PRESET_UNITS, unit_key
 from app.application.chiffrage.validation import MAX_UNIT_SYMBOL
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 
@@ -49,16 +50,18 @@ class CreateUnitUseCase:
 
         Rejecting a preset duplicate matters as much as rejecting a custom one:
         the select merges both lists, so allowing it would render the same
-        symbol twice.
+        symbol twice. The comparison ignores case and reads 'm2' as 'm²', so
+        'U', 'Sac' or 'M2' cannot shadow 'u', 'sac' or 'm²'.
         """
         cleaned = (symbol or "").strip()
         if not cleaned:
             raise InvalidChiffrageInputError("Unit symbol cannot be empty.")
         if len(cleaned) > MAX_UNIT_SYMBOL:
             raise InvalidChiffrageInputError(f"Unit cannot exceed {MAX_UNIT_SYMBOL} characters.")
-        if cleaned in PRESET_UNITS:
-            raise UnitAlreadyExistsError(f"'{cleaned}' is already a built-in unit.")
-        if self._repo.unit_exists(project_id, cleaned):
+        key = unit_key(cleaned)
+        if key in PRESET_BY_KEY:
+            raise UnitAlreadyExistsError(f"'{cleaned}' is already a built-in unit ('{PRESET_BY_KEY[key]}').")
+        if any(unit_key(u.symbol) == key for u in self._repo.list_units(project_id)):
             raise UnitAlreadyExistsError(f"'{cleaned}' is already a unit of this project.")
 
         unit = ChiffrageUnit.create(project_id=project_id, symbol=cleaned)
@@ -68,10 +71,10 @@ class CreateUnitUseCase:
 
 
 class DeleteUnitUseCase:
-    """Remove a custom unit.
+    """Remove a custom unit that no article uses.
 
-    Articles keep their snapshot symbol, so an existing line never breaks; the
-    symbol simply stops being offered for new ones.
+    A unit still used by articles is refused (409): the articles would keep a
+    symbol the project no longer offers, and could not be saved unchanged.
     """
 
     def __init__(self, repo: ChiffrageRepositoryPort, db_session: TransactionalSessionPort) -> None:
@@ -82,5 +85,8 @@ class DeleteUnitUseCase:
         unit = self._repo.find_unit(unit_id)
         if unit is None or unit.project_id != project_id:
             raise UnitNotFoundError(f"Unit {unit_id} not found in project {project_id}.")
+        in_use = self._repo.count_articles_with_unit(project_id, unit.symbol)
+        if in_use:
+            raise UnitInUseError(f"Unit '{unit.symbol}' is used by {in_use} article(s).")
         self._repo.delete_unit(unit_id)
         self._db.commit()
