@@ -1979,3 +1979,159 @@ class TestSchemaLengthLimits:
         }
         resp = self._create(bib_client, manager_token, payload)
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# QA round 3: suppliers, purchase dates, blank fields, overflow, image removal
+# ---------------------------------------------------------------------------
+
+
+def _one_record(sku: str, **overrides) -> dict:
+    record = {
+        "supplier_reference": sku,
+        "product_name": f"Produit {sku}",
+        "quantity": "1",
+        "unit_price": "8.40",
+        "purchased_at": datetime.now(timezone.utc).isoformat(),
+        "source_document_ref": f"DOC-{sku}",
+        "source_document_type": "ticket",
+        "line_index": 0,
+    }
+    record.update(overrides)
+    return record
+
+
+class TestQaRound3Library:
+    def _suppliers(self, client, token, cid):
+        resp = client.get(f"/api/v1/bibliotheque/suppliers?company_id={cid}", headers=_auth(token))
+        assert resp.status_code == 200
+        return resp.get_json()["items"]
+
+    def test_manual_product_reuses_the_imported_supplier_of_the_same_name(
+        self, bib_client, manager_token, bibliotheque_app
+    ):
+        cid = bibliotheque_app._test_company_id
+        imported = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json={
+                "company_id": cid,
+                "supplier_name": "QA3 Brico Dépôt",
+                "supplier_slug": "qa3-bricodepot",
+                "records": [_one_record("QA3-BD-1")],
+            },
+            headers=_auth(manager_token),
+        )
+        assert imported.status_code == 200
+        created = bib_client.post(
+            "/api/v1/bibliotheque/products",
+            json={"company_id": cid, "name": "QA3 Vis", "supplier_name": "qa3 brico depot"},
+            headers=_auth(manager_token),
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        names = [s["name"] for s in self._suppliers(bib_client, manager_token, cid)]
+        assert names.count("QA3 Brico Dépôt") == 1
+        assert "qa3 brico depot" not in names
+
+    def test_supplier_with_no_product_left_is_not_listed(self, bib_client, manager_token, bibliotheque_app):
+        cid = bibliotheque_app._test_company_id
+        created = bib_client.post(
+            "/api/v1/bibliotheque/products",
+            json={"company_id": cid, "name": "QA3 Seul", "supplier_name": "QA3 Fournisseur éphémère"},
+            headers=_auth(manager_token),
+        )
+        assert created.status_code == 201
+        assert any(s["name"] == "QA3 Fournisseur éphémère" for s in self._suppliers(bib_client, manager_token, cid))
+        deleted = bib_client.delete(
+            f"/api/v1/bibliotheque/products/{created.get_json()['id']}", headers=_auth(manager_token)
+        )
+        assert deleted.status_code == 204
+        assert not any(s["name"] == "QA3 Fournisseur éphémère" for s in self._suppliers(bib_client, manager_token, cid))
+
+    @pytest.mark.parametrize("purchased_at", ["2062-09-01T00:00:00+00:00", "0001-01-01T00:00:00+00:00"])
+    def test_implausible_purchase_date_is_refused(self, bib_client, manager_token, bibliotheque_app, purchased_at):
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json={
+                "company_id": bibliotheque_app._test_company_id,
+                "supplier_name": "QA3 Point P",
+                "supplier_slug": "qa3-pointp",
+                "records": [_one_record("QA3-DATE", purchased_at=purchased_at)],
+            },
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422
+
+    def test_overflowing_total_quantity_is_a_422_not_a_500(self, bib_client, manager_token, bibliotheque_app):
+        big = "99999999999999"
+        resp = bib_client.post(
+            "/api/v1/bibliotheque/import",
+            json={
+                "company_id": bibliotheque_app._test_company_id,
+                "supplier_name": "QA3 Gros",
+                "supplier_slug": "qa3-gros",
+                "records": [
+                    _one_record("QA3-BIG", quantity=big),
+                    _one_record("QA3-BIG", quantity=big, source_document_ref="DOC-2", line_index=1),
+                ],
+            },
+            headers=_auth(manager_token),
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+
+    def test_blank_optional_text_is_stored_as_null_and_blank_url_clears(
+        self, bib_client, manager_token, bibliotheque_app
+    ):
+        cid = bibliotheque_app._test_company_id
+        created = bib_client.post(
+            "/api/v1/bibliotheque/products",
+            json={
+                "company_id": cid,
+                "name": "QA3 Blank probe",
+                "supplier_name": "QA3 Point P",
+                "description": "   ",
+                "size": "  ",
+                "product_url": "https://example.com/p",
+            },
+            headers=_auth(manager_token),
+        )
+        assert created.status_code == 201, created.get_data(as_text=True)
+        body = created.get_json()
+        assert body["description"] is None and body["size"] is None
+        patched = bib_client.patch(
+            f"/api/v1/bibliotheque/products/{body['id']}", json={"product_url": "   "}, headers=_auth(manager_token)
+        )
+        assert patched.status_code == 200, patched.get_data(as_text=True)
+        assert patched.get_json()["product_url"] is None
+
+    def test_image_can_be_removed(self, bib_client, manager_token, bibliotheque_app):
+        import io
+
+        pid = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="QA3-IMG-DEL"
+        )
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4"
+            b"\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        up = bib_client.post(
+            f"/api/v1/bibliotheque/products/{pid}/image",
+            data={"image": (io.BytesIO(png), "p.png", "image/png")},
+            headers=_auth(manager_token),
+            content_type="multipart/form-data",
+        )
+        assert up.status_code == 200, up.get_data(as_text=True)
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid}/image", headers=_auth(manager_token))
+        assert resp.status_code == 204
+        product = bib_client.get(f"/api/v1/bibliotheque/products/{pid}", headers=_auth(manager_token)).get_json()
+        assert product.get("image_storage_key") is None
+        assert (
+            bib_client.get(f"/api/v1/bibliotheque/products/{pid}/image", headers=_auth(manager_token)).status_code
+            == 404
+        )
+
+    def test_member_cannot_remove_an_image(self, bib_client, manager_token, member_token, bibliotheque_app):
+        pid = _create_product_via_import(
+            bib_client, manager_token, bibliotheque_app._test_company_id, sku="QA3-IMG-DEL-2"
+        )
+        resp = bib_client.delete(f"/api/v1/bibliotheque/products/{pid}/image", headers=_auth(member_token))
+        assert resp.status_code == 403

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Literal, Optional
 from uuid import UUID
@@ -33,6 +33,34 @@ def _http_url_or_none(max_length: int):
     return validate
 
 
+def _blank_to_none(v: object) -> object:
+    """Optional free text: trimmed, and whitespace-only becomes None (cleared), as the apps already do."""
+    if isinstance(v, str):
+        v = v.strip()
+        return v or None
+    return v
+
+
+# A purchase is dated between the year 2000 and tomorrow (time zones): a typo
+# such as 2062 would otherwise freeze the product's 'last price' for good.
+_MIN_PURCHASE_AT = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def _check_purchased_at(v: datetime) -> datetime:
+    aware = v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+    if aware < _MIN_PURCHASE_AT or aware > datetime.now(timezone.utc) + timedelta(days=1):
+        raise ValueError("purchased_at must be between 2000-01-01 and today")
+    return v
+
+
+def _http_scheme_or_blank(v: object) -> object:
+    """Blank clears the URL; anything else must start with http:// or https://."""
+    v = _blank_to_none(v)
+    if v and not str(v).lower().startswith(("http://", "https://")):
+        raise ValueError("URL must start with http:// or https://")
+    return v
+
+
 def _strip_required(v: object) -> object:
     """Same as _strip for an optional PATCH name: omitted keeps it, but an explicit null is refused."""
     if v is None:
@@ -61,6 +89,8 @@ class ImportRecordSchema(BaseModel):
 
     _strip_name = field_validator("product_name", mode="before")(_strip)
     _http_only = field_validator("product_url", mode="before")(_http_url_or_none(500))
+    _blank_optional = field_validator("size", "category", "description", mode="before")(_blank_to_none)
+    _purchase_date = field_validator("purchased_at")(_check_purchased_at)
 
 
 class ImportRequestSchema(BaseModel):
@@ -111,14 +141,8 @@ class UpdateProductSchema(BaseModel):
     product_url: Optional[str] = Field(default=None, max_length=500)
 
     _strip_name = field_validator("name", mode="before")(_strip_required)
-
-    @field_validator("product_url", mode="before")
-    @classmethod
-    def _http_scheme_only(cls, v: object) -> object:
-        """Reject non-null URL values that do not start with http:// or https://."""
-        if v and not str(v).lower().startswith(("http://", "https://")):
-            raise ValueError("URL must start with http:// or https://")
-        return v
+    _blank_optional = field_validator("description", "size", mode="before")(_blank_to_none)
+    _http_scheme_only = field_validator("product_url", mode="before")(_http_scheme_or_blank)
 
     @field_validator("category", mode="before")
     @classmethod
@@ -155,14 +179,8 @@ class CreateProductSchema(BaseModel):
     product_url: Optional[str] = Field(default=None, max_length=500)
 
     _strip_names = field_validator("name", "supplier_name", mode="before")(_strip)
-
-    @field_validator("product_url", "supplier_website_url", mode="before")
-    @classmethod
-    def _http_scheme_only(cls, v: object) -> object:
-        """Reject non-null URL values that do not start with http:// or https://."""
-        if v and not str(v).lower().startswith(("http://", "https://")):
-            raise ValueError("URL must start with http:// or https://")
-        return v
+    _blank_optional = field_validator("description", "size", "supplier_reference", mode="before")(_blank_to_none)
+    _http_scheme_only = field_validator("product_url", "supplier_website_url", mode="before")(_http_scheme_or_blank)
 
     @model_validator(mode="after")
     def _exactly_one_supplier(self) -> "CreateProductSchema":
