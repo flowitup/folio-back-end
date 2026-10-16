@@ -91,12 +91,40 @@ class TestLinkPersonOnSignupHappyPath:
         assert saved_access.user_id == user_id
         assert saved_access.company_id == company_id
         assert saved_access.role == "member"
-        assert saved_access.is_primary is False  # never the company the admin chose for them
+        # Their first (only) company is primary, as for create-company and join-by-code.
+        assert saved_access.is_primary is True
         # Pending window cleared regardless of outcome.
         company_person_repo.save.assert_called_once()
         cleared = company_person_repo.save.call_args.args[0]
         assert cleared.pending_expires_at is None
         assert cleared.person_id == person_id  # sole match — no repoint needed
+
+    def test_first_company_is_primary_only_when_the_account_has_none(self):
+        from app.domain.companies.user_company_access import UserCompanyAccess
+
+        user_id, person_id = uuid4(), uuid4()
+        company_a, company_b = uuid4(), uuid4()
+        person_repo = MagicMock()
+        person_repo.find_by_id.return_value = _person(person_id, user_id=None)
+        person_repo.find_by_user_id.return_value = None
+        company_person_repo = MagicMock()
+        company_person_repo.list_pending_by_phone.return_value = [
+            _company_person(company_a, person_id),
+            _company_person(company_b, person_id),
+        ]
+        usecase = _usecase(person_repo=person_repo, company_person_repo=company_person_repo)
+
+        usecase.execute(user_id, "+33612345678")
+        assert [c.args[0].is_primary for c in usecase._access.save.call_args_list] == [True, False]
+
+        usecase._access.save.reset_mock()
+        usecase._access.list_for_user.return_value = [
+            UserCompanyAccess(
+                user_id=user_id, company_id=uuid4(), is_primary=True, attached_at=datetime.now(timezone.utc)
+            )
+        ]
+        usecase.execute(user_id, "+33612345678")
+        assert [c.args[0].is_primary for c in usecase._access.save.call_args_list] == [False, False]
 
     def test_multiple_pending_profiles_link_every_company(self):
         user_id = uuid4()

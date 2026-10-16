@@ -115,6 +115,8 @@ class LinkPersonOnSignupUseCase:
 
         linked_company_ids: List[UUID] = []
         duplicate_person_ids: set = set()
+        # A first company becomes the primary one, as for create-company and join-by-code.
+        has_primary = any(a.is_primary for a in self._access.list_for_user(user_id))
 
         for profile, person in eligible:
             if person.id != survivor.id:
@@ -133,13 +135,14 @@ class LinkPersonOnSignupUseCase:
                     UserCompanyAccess(
                         user_id=user_id,
                         company_id=profile.company_id,
-                        # Never primary: the account did not choose this company.
-                        is_primary=False,
+                        # Primary only when the account has none yet (its first company).
+                        is_primary=not has_primary,
                         attached_at=now,
                         # The role the admin chose when adding them by phone.
                         role=_signup_role(profile.pending_company_role),
                     )
                 )
+                has_primary = True
                 linked_company_ids.append(profile.company_id)
                 _log.info(
                     "link_person_on_signup: user=%s linked to company=%s via pending profile=%s",

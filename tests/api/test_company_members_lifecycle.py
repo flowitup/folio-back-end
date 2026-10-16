@@ -280,6 +280,42 @@ class TestImportPendingPerson:
         directory = lc_client.get(f"/api/v1/companies/{admin['a']}/persons", headers=_auth(admin["token"])).get_json()
         assert next(e for e in directory["items"] if e["person_id"] == person_id)["pending"] is True
 
+    def test_a_person_without_phone_is_imported_as_a_plain_directory_person(self, lc_client, lc_app, admin):
+        """No phone means no sign-up ever: the copy is not an invitation that would expire."""
+        from app import db
+        from app.infrastructure.database.models.person import PersonModel
+
+        now = datetime.now(timezone.utc)
+        person_id = uuid4()
+        with lc_app.app_context():
+            db.session.add(
+                PersonModel(
+                    id=person_id,
+                    name="Thợ sans téléphone",
+                    normalized_name="tho sans telephone",
+                    created_by_user_id=admin["id"],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.session.add(
+                CompanyPersonModel(
+                    id=uuid4(), company_id=admin["c"], person_id=person_id, is_active=True, created_at=now
+                )
+            )
+            db.session.commit()
+
+        imported = lc_client.post(
+            f"/api/v1/companies/{admin['a']}/members/import",
+            json={"from_company_id": str(admin["c"]), "person_ids": [str(person_id)]},
+            headers=_auth(admin["token"]),
+        )
+        assert imported.status_code == 201, imported.get_data(as_text=True)
+        db.session.rollback()
+        with lc_app.app_context():
+            target = db.session.query(CompanyPersonModel).filter_by(company_id=admin["a"], person_id=person_id).one()
+            assert target.pending_expires_at is None
+
 
 class TestDeleteCompanyRepromotesPrimary:
     def test_members_of_a_deleted_primary_company_get_another_primary(self, lc_client, lc_app):
