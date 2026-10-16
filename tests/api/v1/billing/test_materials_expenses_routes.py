@@ -372,6 +372,52 @@ class TestRefundableFilter:
         assert inv_set_id in ids
 
 
+class TestRefundChannelAndProjectFilters:
+    """Drill-down from the dashboard pills / summary cards: one channel, one project."""
+
+    def test_channel_and_project_filters(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            uid = mat_exp_app._admin_user_id
+            pending = _make_invoice(mat_exp_app._project_a2_id, uid, refundable_status="refund_pending")
+            bank_only = _make_invoice(mat_exp_app._project_a2_id, uid, refundable_status="refunded", refunded_by="bank")
+            company_only = _make_invoice(
+                mat_exp_app._project_a2_id, uid, refundable_status="refunded", refunded_by="company"
+            )
+            both = _make_invoice(mat_exp_app._project_a2_id, uid, refundable_status="refunded", refunded_by="both")
+            other_project = _make_invoice(mat_exp_app._project_a1_id, uid, refundable_status="refundable")
+            ids = {k: str(v.id) for k, v in locals().items() if isinstance(v, InvoiceModel)}
+
+        base = f"/api/v1/billing/materials-expenses?refundable=true&limit=200&project_id={mat_exp_app._project_a2_id}"
+
+        def listed(url):
+            resp = mat_client.get(url, headers=_auth(admin_tok))
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            return {i["id"] for i in resp.get_json()["items"]}, resp.get_json()["summary"]
+
+        everything, summary = listed(base)
+        assert ids["other_project"] not in everything
+        assert {ids["pending"], ids["bank_only"], ids["company_only"], ids["both"]} <= everything
+
+        company, _ = listed(base + "&channel=company")
+        assert ids["pending"] in company and ids["bank_only"] in company
+        assert ids["company_only"] not in company and ids["both"] not in company
+
+        bank, _ = listed(base + "&channel=bank")
+        assert ids["pending"] in bank and ids["company_only"] in bank
+        assert ids["bank_only"] not in bank and ids["both"] not in bank
+
+        # The summary follows the project and carries the bank channel's balance.
+        bank_total = sum(
+            i["total_amount"]
+            for i in mat_client.get(base + "&channel=bank", headers=_auth(admin_tok)).get_json()["items"]
+        )
+        assert summary["bank_outstanding"] == pytest.approx(bank_total)
+
+    def test_unknown_channel_is_400(self, mat_client, admin_tok):
+        resp = mat_client.get("/api/v1/billing/materials-expenses?channel=cash", headers=_auth(admin_tok))
+        assert resp.status_code == 400
+
+
 class TestMoneyIsRoundedToCents:
     def test_list_and_summary_amounts_are_cents(self, mat_client, admin_tok, mat_exp_app):
         """10 x 12.50 + 3 x 33.33 at 20 % is 269.988 unrounded; the ledger shows 269.99, so must this."""
@@ -1178,6 +1224,7 @@ class TestRefundSummary:
             "refunded_by_company": 0.0,
             "refunded_by_bank": 0.0,
             "refunded_by_both": 0.0,
+            "bank_outstanding": 0.0,
         }
 
 
