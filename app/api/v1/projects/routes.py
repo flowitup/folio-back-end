@@ -98,6 +98,8 @@ def _spend_fields(rollup: ProjectSpent) -> dict:
         "labor_paid": money(rollup.labor_paid),
         "labor_unpaid": money(rollup.labor_unpaid),
         "personal_by_type": {k: money(v) for k, v in rollup.personal_by_type.items()},
+        "spent_unassigned": money(rollup.unassigned),
+        "unassigned_by_type": {k: money(v) for k, v in rollup.unassigned_by_type.items()},
     }
 
 

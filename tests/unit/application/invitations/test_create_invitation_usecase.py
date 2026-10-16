@@ -330,6 +330,8 @@ class TestExistingUserPath:
 
         renderer.render.assert_called_once()
         assert renderer.render.call_args[0][0] == "added_to_project"
+        # The link opens the project the e-mail is about, not the last-selected dashboard.
+        assert renderer.render.call_args[0][2]["accept_url"].endswith(f"/projects/{project.id}/planning")
 
     def test_existing_assignment_is_an_idempotent_noop(self):
         """Already assigned → already_member (nothing was added), no second email (H2)."""
@@ -463,7 +465,7 @@ class TestEmailLanguageAndProjectLabel:
     def test_vietnamese_added_to_project(self):
         mail = self._render("vi", existing=True)
         assert mail["subject"] == "Bạn đã được thêm vào Internal name trên Folio"
-        assert "http://localhost:3000/vi/dashboard" in mail["body"]
+        assert "http://localhost:3000/vi/projects/" in mail["body"] and "/planning" in mail["body"]
         assert "với vai trò thành viên" in mail["body"]
 
     def test_english_stays_the_default(self):

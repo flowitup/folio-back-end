@@ -69,8 +69,12 @@ class ProjectResponse(BaseModel):
     # Share of spend funded with company money (the credit line). Same rule as the
     # Expense page's "spent by company" KPI, so the two always agree.
     spent_by_credits: float = 0
-    # Share funded out of pocket. spent_by_credits + spent_personal + labor_unpaid == spent.
+    # The personal purse: paid with a personal-flagged method, not reimbursed by the company
+    # (the Expense page's rule). spent_by_credits + spent_personal + spent_unassigned
+    # + labor_unpaid == spent.
     spent_personal: float = 0
+    # Spend in no purse: no payment method, or one flagged neither company nor personal.
+    spent_unassigned: float = 0
     # Labor accrued from attendance entries, settled by labor-type invoices.
     # labor_unpaid is owed to workers — not spent by anyone yet, so it sits outside
     # both spent_by_credits and spent_personal. It reconciles per worker (the sum of
@@ -81,6 +85,8 @@ class ProjectResponse(BaseModel):
     labor_unpaid: float = 0
     # Personal spend broken down by invoice type; values sum to spent_personal.
     personal_by_type: Dict[str, float] = {}
+    # Unassigned spend broken down by invoice type; values sum to spent_unassigned.
+    unassigned_by_type: Dict[str, float] = {}
 
 
 class ProjectListResponse(BaseModel):

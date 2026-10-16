@@ -58,6 +58,9 @@ class MaterialsExpensesSummary:
     refunded_by_bank: float
     # Overlap: rows refunded by 'both' (already included in company AND bank).
     refunded_by_both: float
+    # What the bank still owes (refunded_by neither 'bank' nor 'both'); overlaps
+    # refundable_amount, which is the company channel.
+    bank_outstanding: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,8 @@ class ListMaterialsExpensesUseCase:
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        channel: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> MaterialsExpensesResult:
         if is_superadmin:
             # Superadmin: pass company_id as single-element list or None to signal "all"
@@ -136,6 +141,8 @@ class ListMaterialsExpensesUseCase:
             offset=offset,
             all_companies=is_superadmin and company_id is None,
             search=(search or "").strip() or None,
+            channel=channel if refundable is True else None,
+            project_id=project_id,
         )
 
         row_ids = [UUID(r["id"]) for r in rows]
@@ -182,6 +189,7 @@ class ListMaterialsExpensesUseCase:
             agg = self._invoice_repo.materials_services_refund_summary(
                 company_ids=effective_ids or [],
                 all_companies=is_superadmin and company_id is None,
+                project_id=project_id,
             )
             summary = MaterialsExpensesSummary(
                 refundable_amount=agg["refundable_amount"],
@@ -189,6 +197,7 @@ class ListMaterialsExpensesUseCase:
                 refunded_by_company=agg["refunded_by_company"],
                 refunded_by_bank=agg["refunded_by_bank"],
                 refunded_by_both=agg["refunded_by_both"],
+                bank_outstanding=agg.get("bank_outstanding", 0.0),
             )
 
         return MaterialsExpensesResult(items=items, total=total, limit=limit, offset=offset, summary=summary)

@@ -93,9 +93,12 @@ def list_materials_expenses():
       offset      : int (default 0)
       q           : optional search (invoice number, recipient or project name;
                     case-insensitive substring, first 100 characters)
+      channel     : optional 'company' | 'bank' — what that refund channel still owes
+      project_id  : optional UUID — one project (also narrows the summary)
 
     Response: { items: [...], total, limit, offset, summary }
-    summary is { refundable_amount, refunded_total, refunded_by_company, refunded_by_bank }
+    summary is { refundable_amount, refunded_total, refunded_by_company, refunded_by_bank,
+    refunded_by_both, bank_outstanding }
     (aggregated over the full filter set, not just the page, and regardless of q)
     when refundable=true, else null.
     """
@@ -121,6 +124,19 @@ def list_materials_expenses():
     except ValueError as exc:
         return _err("ValidationError", str(exc), 400)
 
+    # Drill-down filters (dashboard refund pills, summary cards): which channel still owes
+    # the expense, and one project. The summary follows project_id, not channel.
+    channel = request.args.get("channel") or None
+    if channel not in (None, "company", "bank"):
+        return _err("ValidationError", "channel must be 'company' or 'bank'", 400)
+    project_id: Optional[UUID] = None
+    project_id_str = request.args.get("project_id")
+    if project_id_str:
+        try:
+            project_id = UUID(project_id_str)
+        except ValueError:
+            return _err("ValidationError", "Invalid project_id", 400)
+
     user_id = UUID(get_jwt_identity())
     is_superadmin = is_platform_ops()
 
@@ -133,6 +149,8 @@ def list_materials_expenses():
             limit=limit,
             offset=offset,
             search=(request.args.get("q") or "")[:100],
+            channel=channel,
+            project_id=project_id,
         )
     except ForbiddenCompanyBillingError:
         return _err("Forbidden", "You do not have admin access to the requested company", 403)

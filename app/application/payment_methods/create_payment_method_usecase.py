@@ -76,6 +76,8 @@ class CreatePaymentMethodUseCase:
             label=label,
             is_builtin=False,
             is_active=True,
+            is_company_payment=inp.is_company_payment,
+            is_personal_payment=inp.is_personal_payment,
             created_by=inp.requester_id,
             created_at=now,
             updated_at=now,

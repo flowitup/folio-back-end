@@ -28,7 +28,7 @@ def test_every_locale_has_the_same_label_keys():
 
 
 def test_unknown_locale_falls_back_to_english():
-    assert t("de", "invoices") == "Invoices"
+    assert t("de", "invoices") == "Expenses"
 
 
 @pytest.mark.parametrize(

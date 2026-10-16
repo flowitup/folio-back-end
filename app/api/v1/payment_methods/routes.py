@@ -110,6 +110,8 @@ def create_payment_method(company_id: str):
         requester_id=requester_id,
         company_id=company_uuid,
         label=body.label,
+        is_company_payment=body.is_company_payment,
+        is_personal_payment=body.is_personal_payment,
     )
 
     from app import db

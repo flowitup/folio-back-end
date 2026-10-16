@@ -112,6 +112,23 @@ def _model_to_entity(m: InvoiceModel) -> Invoice:
     )
 
 
+def _refund_channel_clause(channel: str):
+    """SQL filter for the expenses one refund channel still owes (see the list docstring)."""
+    if channel == "company":
+        return or_(
+            InvoiceModel.refundable_status.in_(
+                [RefundableStatus.REFUNDABLE.value, RefundableStatus.REFUND_PENDING.value]
+            ),
+            and_(
+                InvoiceModel.refundable_status == RefundableStatus.REFUNDED.value,
+                InvoiceModel.refunded_by == "bank",
+            ),
+        )
+    if channel == "bank":
+        return or_(InvoiceModel.refunded_by.is_(None), InvoiceModel.refunded_by.notin_(["bank", "both"]))
+    raise ValueError(f"Unknown refund channel {channel!r}")
+
+
 class SQLAlchemyInvoiceRepository(IInvoiceRepository):
     """SQLAlchemy adapter for invoice persistence."""
 
@@ -699,8 +716,15 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         offset: int,
         all_companies: bool = False,
         search: Optional[str] = None,
+        channel: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across all projects of given companies.
+
+        ``channel`` (refundable=True only) narrows to what one refund channel still owes:
+        'company' = status refundable/refund_pending, or refunded by the bank alone;
+        'bank' = refunded_by neither 'bank' nor 'both' (the dashboard's "remboursable ·
+        banque"). ``project_id`` narrows to one project.
 
         Single JOIN to projects avoids N+1 for project_name. Filters by company ownership
         and invoice type; optionally filters by refundable_status presence.
@@ -730,8 +754,13 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         if not all_companies:
             query = query.filter(ProjectModel.company_id.in_(company_ids))
 
+        if project_id is not None:
+            query = query.filter(InvoiceModel.project_id == project_id)
+
         if refundable is True:
             query = query.filter(InvoiceModel.refundable_status.isnot(None))
+            if channel is not None:
+                query = query.filter(_refund_channel_clause(channel))
         elif refundable is False:
             # Candidates for "Add refundable expense": not tracked yet, and not
             # paid with a company payment method of the project's company — the
@@ -827,6 +856,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         self,
         company_ids: list[UUID],
         all_companies: bool = False,
+        project_id: Optional[UUID] = None,
     ) -> dict:
         """Aggregate refund totals over the FULL materials_services filter set.
 
@@ -853,6 +883,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                                  exclusive figures.
           refunded_by_bank     — refunded AND bank involved ('bank' or 'both')
           refunded_by_both     — refunded AND refunded_by == 'both' (the overlap)
+          bank_outstanding     — what the bank still owes: any tracked status whose
+                                 refunded_by is neither 'bank' nor 'both' (the
+                                 dashboard's "remboursable · banque"). Overlaps
+                                 refundable_amount; never add the two.
+        ``project_id`` narrows every figure to one project.
         """
         from app.infrastructure.database.models.project import ProjectModel
 
@@ -871,8 +906,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         )
         if not all_companies:
             query = query.filter(ProjectModel.company_id.in_(company_ids))
+        if project_id is not None:
+            query = query.filter(InvoiceModel.project_id == project_id)
 
         refundable_amount = Decimal("0")
+        bank_outstanding = Decimal("0")
         refunded_total = Decimal("0")
         refunded_by_company = Decimal("0")
         refunded_by_bank = Decimal("0")
@@ -880,6 +918,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         for status, refunded_by, items in query.all():
             row_total = _items_total(items)
+            if refunded_by not in ("bank", "both"):
+                bank_outstanding += row_total
 
             if status in (RefundableStatus.REFUNDABLE.value, RefundableStatus.REFUND_PENDING.value):
                 refundable_amount += row_total
@@ -903,6 +943,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
             "refunded_by_company": money(refunded_by_company),
             "refunded_by_bank": money(refunded_by_bank),
             "refunded_by_both": money(refunded_by_both),
+            "bank_outstanding": money(bank_outstanding),
         }
 
     def next_invoice_number(self, project_id: UUID) -> str:

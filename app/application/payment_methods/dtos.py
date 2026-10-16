@@ -15,7 +15,6 @@ from uuid import UUID
 
 from app.domain.payment_methods.payment_method import PaymentMethod
 
-
 # ---------------------------------------------------------------------------
 # Input DTOs
 # ---------------------------------------------------------------------------
@@ -28,6 +27,8 @@ class CreatePaymentMethodInput:
     requester_id: UUID
     company_id: UUID
     label: str
+    is_company_payment: bool = False
+    is_personal_payment: bool = False
 
 
 @dataclass(frozen=True)

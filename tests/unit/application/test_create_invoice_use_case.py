@@ -478,6 +478,7 @@ class TestDeleteInvoiceRefundedLock:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -491,6 +492,7 @@ class TestDeleteInvoiceRefundedLock:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -504,6 +506,7 @@ class TestDeleteInvoiceRefundedLock:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -524,6 +527,21 @@ class TestDeleteInvoiceRefundedLock:
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="returns first"):
+            use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_not_called()
+
+    def test_delete_target_of_applied_avoir_raises(self):
+        """An expense an avoir is applied to cannot be deleted: the avoir would be orphaned."""
+        invoice = _make_ms_invoice()
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("-6")
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        with pytest.raises(InvalidInvoiceDataError, match="Unlink the avoirs applied"):
             use_case.execute(invoice.id)
 
         inv_repo.delete.assert_not_called()

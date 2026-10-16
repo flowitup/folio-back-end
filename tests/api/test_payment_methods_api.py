@@ -21,7 +21,6 @@ from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
 from tests.auth_login_helper import mint_access_token
 
-
 # ---------------------------------------------------------------------------
 # App fixture — isolated Flask test app with in-memory SQLite
 # ---------------------------------------------------------------------------
@@ -430,6 +429,29 @@ def test_create_201_admin(pm_client, pm_app, admin_token):
     assert data["label"] == "Unique API Create Label"
     assert data["is_active"] is True
     assert data["is_builtin"] is False
+    # No purse unless one is chosen.
+    assert data["is_company_payment"] is False
+    assert data["is_personal_payment"] is False
+
+
+@pytest.mark.parametrize("flag", ["is_personal_payment", "is_company_payment"])
+def test_create_with_a_purse(pm_client, pm_app, admin_token, flag):
+    resp = pm_client.post(
+        _list_url(pm_app._test_company_id),
+        json={"label": f"Purse at create {flag}", flag: True},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    assert resp.get_json()[flag] is True
+
+
+def test_create_with_both_purses_is_refused(pm_client, pm_app, admin_token):
+    resp = pm_client.post(
+        _list_url(pm_app._test_company_id),
+        json={"label": "Both purses", "is_personal_payment": True, "is_company_payment": True},
+        headers=_auth(admin_token),
+    )
+    assert resp.status_code == 422
 
 
 def test_create_403_non_admin(pm_client, pm_app, member_token):

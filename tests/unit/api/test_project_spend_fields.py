@@ -16,6 +16,8 @@ def test_spend_fields_are_rounded_half_up_to_cents():
         labor_paid=Decimal("100"),
         labor_unpaid=Decimal("50.375"),
         personal_by_type={"materials_services": Decimal("395.388"), "labor": Decimal("0.005")},
+        unassigned=Decimal("12.345"),
+        unassigned_by_type={"others": Decimal("12.345")},
     )
 
     fields = _spend_fields(rollup)
@@ -29,4 +31,6 @@ def test_spend_fields_are_rounded_half_up_to_cents():
         "labor_paid": 100.0,
         "labor_unpaid": 50.38,
         "personal_by_type": {"materials_services": 395.39, "labor": 0.01},
+        "spent_unassigned": 12.35,
+        "unassigned_by_type": {"others": 12.35},
     }
