@@ -151,3 +151,12 @@ def test_rename_keeps_a_name_an_admin_chose(inv_client, superadmin_token, me):
     inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 New name"}, headers=_auth(superadmin_token))
 
     assert repo.find_by_id(person.id).name == "QA3 Chef d'équipe (admin label)"
+
+
+def test_rename_replaces_a_directory_entry_named_after_the_phone(inv_client, superadmin_token, me):
+    inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 Before"}, headers=_auth(superadmin_token))
+    person, repo = _link_person(me, "+33 6 11 11 00 99")
+
+    inv_client.patch("/api/v1/auth/me", json={"display_name": "QA3 After"}, headers=_auth(superadmin_token))
+
+    assert repo.find_by_id(person.id).name == "QA3 After"

@@ -1,6 +1,7 @@
 """Auth API routes."""
 
 import logging
+import re
 from typing import Any
 from uuid import UUID
 
@@ -376,15 +377,6 @@ def update_current_user():
     _sync_person_name(container, user, previous_name)
     from app import db
 
-    # The person linked to this account (shared by every company they work for) follows the
-    # name they chose, so member lists and pickers stop showing an old label or the phone.
-    new_name = (user.display_name or "").strip()
-    person_repo = getattr(container, "person_repo", None)
-    if "display_name" in provided and new_name and person_repo is not None:
-        person = person_repo.find_by_user_id(user.id)
-        if person is not None and person.name != new_name:
-            person_repo.rename(person.id, new_name, commit=False)
-
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())
 
@@ -392,8 +384,10 @@ def update_current_user():
 def _sync_person_name(container: Any, user: Any, previous_name: "str | None") -> None:
     """Carry a self-service rename to the user's directory entry (persons.name, workers.name).
 
-    Only when that entry still shows the account's previous name: a different name there was
-    chosen by an admin (e.g. when adding the person by phone) and is kept.
+    The person is shared by every company they work for, so member lists and pickers follow the
+    name they chose. Only when that entry still shows the account's previous name, is blank, or
+    is just a phone number: a different name there was chosen by an admin (e.g. when adding the
+    person by phone) and is kept.
     """
     person_repo = getattr(container, "person_repo", None)
     new_name = user.display_name
@@ -402,9 +396,16 @@ def _sync_person_name(container: Any, user: Any, previous_name: "str | None") ->
     person = person_repo.find_by_user_id(user.id)
     if person is None:
         return
-    if (person.name or "").strip().lower() != (previous_name or "").strip().lower():
+    current = (person.name or "").strip()
+    placeholder = not current or _PHONE_LIKE.fullmatch(current) is not None
+    if not placeholder and current.lower() != (previous_name or "").strip().lower():
         return
-    person_repo.rename(person.id, new_name, commit=False)
+    if current != new_name:
+        person_repo.rename(person.id, new_name, commit=False)
+
+
+# A directory entry named after the phone it was added by (digits, +, spaces, dots, dashes).
+_PHONE_LIKE = re.compile(r"\+?[\d\s.\-()]{6,}")
 
 
 _PHONE_TAKEN = "This phone number is already used by another account."
