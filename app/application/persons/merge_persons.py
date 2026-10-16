@@ -71,6 +71,16 @@ class MergePersonsUseCase:
         self._repo = person_repo
         self._db = db_session
 
+    def _find_target(self, source, target_id: UUID):
+        """The target person, refused before anything moves when it has another account."""
+        target = self._repo.find_by_id(target_id)
+        if target is not None and source.user_id is not None and target.user_id is not None:
+            if source.user_id != target.user_id:
+                raise MergeConflictError(
+                    "Both persons are linked to different accounts; they cannot be the same person"
+                )
+        return target
+
     def execute(self, request: MergePersonsRequest) -> MergePersonsResponse:
         if request.source_person_id == request.target_person_id:
             raise InvalidMergeError("source and target must differ")
@@ -79,12 +89,9 @@ class MergePersonsUseCase:
         if source is None:
             raise PersonNotFoundError(f"source person {request.source_person_id} not found")
 
-        target = self._repo.find_by_id(request.target_person_id)
+        target = self._find_target(source, request.target_person_id)
         if target is None:
             raise PersonNotFoundError(f"target person {request.target_person_id} not found")
-
-        if source.user_id is not None and target.user_id is not None and source.user_id != target.user_id:
-            raise MergeConflictError("Both persons are linked to different accounts; they cannot be the same person")
 
         # Reassign all Worker rows in one UPDATE — much cheaper than
         # loading entities and rewriting them one at a time.
