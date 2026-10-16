@@ -59,6 +59,13 @@ class _ProjectLabel:
         self.address = address
 
 
+def _email_handle(email: Optional[str]) -> str:
+    """``jean.dupont`` for ``jean.dupont@example.com``; the whole value when it has no ``@``."""
+    value = (email or "").strip()
+    handle = value.split("@", 1)[0].strip()
+    return handle or value or UNNAMED_ACCOUNT_NAME
+
+
 def _chunks(items: list[Any], size: int = 200) -> Iterable[list[Any]]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
@@ -649,7 +656,9 @@ class SqlAlchemyChatRepository:
         UUID to everyone else in the channel. Messages are deliberately kept when
         an account is deleted, so the sender needs a name that is neither the
         person nor their id. The same goes for a phone sign-up's placeholder address,
-        which spells the phone number.
+        which spells the phone number. A person without a display name is shown by
+        the part of their address before the "@": co-workers recognise them without
+        the chat handing everyone in the channel their full email address.
         """
         if not user_ids:
             return {}
@@ -662,7 +671,8 @@ class SqlAlchemyChatRepository:
             uid: (
                 DELETED_ACCOUNT_NAME
                 if deleted_at is not None
-                else (display_name or "").strip() or (UNNAMED_ACCOUNT_NAME if is_placeholder_email(email) else email)
+                else (display_name or "").strip()
+                or (UNNAMED_ACCOUNT_NAME if is_placeholder_email(email) else _email_handle(email))
             )
             for uid, display_name, email, deleted_at in rows
         }

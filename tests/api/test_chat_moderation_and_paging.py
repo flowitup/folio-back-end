@@ -101,14 +101,14 @@ class TestReactionsAsTheReaderSeesThem:
 
         put = inv_client.put(url, json={"emoji": "❤️"}, headers=_auth(member_token)).get_json()
         assert [r["user_id"] for r in put["reactions"]] == [invitation_app._test_member_user_id]
-        assert put["reactions"][0]["user_name"] == "member@invite-test.com"
+        assert put["reactions"][0]["user_name"] == "member"
         removed = inv_client.delete(url, headers=_auth(member_token)).get_json()
         assert removed["reactions"] == []
 
         # The other direction is untouched and names the reactor.
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token)).get_json()
         mine = next(m for m in page["items"] if m["id"] == msg["id"])
-        assert [(r["user_name"], r["emoji"]) for r in mine["reactions"]] == [("admin@invite-test.com", "\U0001f44d")]
+        assert [(r["user_name"], r["emoji"]) for r in mine["reactions"]] == [("admin", "\U0001f44d")]
 
     def test_changing_a_reaction_keeps_one_row(self, inv_client, member_token, admin_token, invitation_app):
         key = _project_key(invitation_app)
@@ -167,7 +167,7 @@ class TestReportsReachTheAdmins:
         title, body = call["render"]("fr")
         assert title == "Message signalé"
         assert body == (
-            "member@invite-test.com a signalé un message de Target User · Invite Test Project : "
+            "member a signalé un message de Target User · Invite Test Project : "
             "« propos déplacés » — Motif : insulte"
         )
         assert call["data"]["kind"] == "chat_report"
@@ -183,7 +183,7 @@ class TestReportsReachTheAdmins:
         assert len(listed) == 1
         report = listed[0]
         assert report["message"]["body"] == "propos déplacés"
-        assert report["reporter_name"] == "member@invite-test.com"
+        assert report["reporter_name"] == "member"
         assert report["reason"] == "insulte"
         assert report["channel_name"] == "Invite Test Project"
 
@@ -339,3 +339,11 @@ class TestDeletedSenderState:
                 user = db.session.get(UserModel, uuid.UUID(invitation_app._test_target_user_id))
                 user.deleted_at = None
                 db.session.commit()
+
+
+def test_a_person_without_a_display_name_is_shown_by_their_email_handle():
+    from app.infrastructure.database.repositories.sqlalchemy_chat_repository import _email_handle
+
+    assert _email_handle("jean.dupont@example.com") == "jean.dupont"
+    assert _email_handle("  no-at-sign ") == "no-at-sign"
+    assert _email_handle(None) == "Unnamed member"
