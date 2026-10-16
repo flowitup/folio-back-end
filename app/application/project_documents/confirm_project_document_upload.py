@@ -126,7 +126,7 @@ class ConfirmProjectDocumentUploadUseCase:
             project_id=project_id,
             uploader_user_id=uploader_user_id,
             filename=strip_control_chars(filename),
-            content_type=stored_content_type(content_type),
+            content_type=stored_content_type(sanitized, content_type),
             size_bytes=actual_size,
             storage_key=storage_key,
             created_at=datetime.now(timezone.utc),

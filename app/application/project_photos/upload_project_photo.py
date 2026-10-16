@@ -15,6 +15,7 @@ from app.application.project_photos.exceptions import (
     UnsupportedImageTypeError,
 )
 from app.application.project_photos.ports import (
+    ICaptureDateReader,
     IDocumentStorage,
     IFilenameSanitizer,
     IImageThumbnailer,
@@ -34,6 +35,13 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "imag
 
 ALLOWED_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".webm", ".mov"})
 ALLOWED_VIDEO_MIME_TYPES: frozenset[str] = frozenset({"video/mp4", "video/webm", "video/quicktime"})
+
+# Human-readable list for error messages (a frozenset repr is random-ordered
+# Python syntax that API clients would show as is).
+ALLOWED_EXTENSIONS_TEXT = ", ".join(
+    sorted(ALLOWED_EXTENSIONS, key=lambda e: (e != ".jpg", e))
+    + sorted(ALLOWED_VIDEO_EXTENSIONS, key=lambda e: (e != ".mp4", e))
+)
 
 # The concrete type of each allowed extension, used when a client sends the
 # generic octet-stream: the thumbnailer picks image or video by MIME type, and
@@ -75,8 +83,7 @@ def validate_media_type(filename: str, mime_type: str) -> str:
             return "video"
         raise UnsupportedImageTypeError(f"MIME type '{mime_type}' is not allowed for video uploads")
 
-    allowed = ALLOWED_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
-    raise UnsupportedImageTypeError(f"Extension '{ext}' is not allowed — must be one of {allowed}")
+    raise UnsupportedImageTypeError(f"Extension '{ext}' is not allowed — must be one of {ALLOWED_EXTENSIONS_TEXT}")
 
 
 class UploadProjectPhotoUseCase:
@@ -89,7 +96,9 @@ class UploadProjectPhotoUseCase:
         thumbnailer: IImageThumbnailer,
         db_session: ITransactionalSession,
         filename_sanitizer: IFilenameSanitizer,
+        capture_date_reader: ICaptureDateReader | None = None,
     ) -> None:
+        self._capture_date_reader = capture_date_reader
         self._repo = repo
         self._storage = storage
         self._thumbnailer = thumbnailer
@@ -126,7 +135,8 @@ class UploadProjectPhotoUseCase:
             data: Raw image bytes.
             uploader_user_id: Authenticated user performing the upload.
             caption: Optional progress description.
-            captured_at: Optional date/time the photo was taken; defaults to now.
+            captured_at: Optional date/time the photo was taken; defaults to the
+                file's EXIF / container date, then to now.
 
         Returns:
             The saved ProjectPhoto entity.
@@ -168,8 +178,8 @@ class UploadProjectPhotoUseCase:
         self._storage.put(original_key, BytesIO(data), content_type)
         self._storage.put(thumb_key, BytesIO(thumb_bytes), "image/jpeg")
 
-        # --- Default captured_at to now if not provided ---
-        effective_captured_at = captured_at or datetime.now(timezone.utc)
+        # --- captured_at: the user's choice, else the file's own date, else now ---
+        effective_captured_at = captured_at or self._file_capture_date(data, content_type) or datetime.now(timezone.utc)
 
         photo = ProjectPhoto(
             id=photo_id,
@@ -202,3 +212,13 @@ class UploadProjectPhotoUseCase:
                         key,
                     )
             raise
+
+    def _file_capture_date(self, data: bytes, content_type: str) -> datetime | None:
+        """EXIF DateTimeOriginal / video creation_time, so a batch uploaded later is grouped by shooting day."""
+        if self._capture_date_reader is None:
+            return None
+        try:
+            return self._capture_date_reader.read(data, content_type)
+        except Exception:
+            _log.info("Capture date reader failed; using the upload time", exc_info=True)
+            return None

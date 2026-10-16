@@ -19,7 +19,7 @@ from app.application.project_documents.ports import (
     IProjectDocumentRepository,
     ITransactionalSession,
 )
-from app.domain.project_document import ProjectDocument, kind_for_extension
+from app.domain.project_document import ProjectDocument, canonical_content_type, kind_for_extension
 from app.domain.value_objects.display_filename import strip_control_chars
 
 _log = logging.getLogger(__name__)
@@ -51,6 +51,8 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset(
     }
 )
 
+ALLOWED_EXTENSIONS_TEXT = ".pdf, .jpg, .jpeg, .png, .webp, .docx, .xlsx, .dwg, .txt"
+
 
 def validate_file_type(filename: str, mime_type: str) -> str:
     """Validate extension and MIME type; return the kind tag on success.
@@ -69,7 +71,9 @@ def validate_file_type(filename: str, mime_type: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
 
     if ext not in ALLOWED_EXTENSIONS:
-        raise UnsupportedDocumentTypeError(f"Extension '{ext}' is not allowed")
+        raise UnsupportedDocumentTypeError(
+            f"Extension '{ext}' is not allowed — must be one of {ALLOWED_EXTENSIONS_TEXT}"
+        )
 
     # DWG MIME types are unstable across clients — accept by extension alone.
     if ext == ".dwg":
@@ -84,14 +88,17 @@ def validate_file_type(filename: str, mime_type: str) -> str:
     return kind_for_extension(ext)
 
 
-def stored_content_type(mime_type: str) -> str:
+def stored_content_type(filename: str, mime_type: str) -> str:
     """The MIME type to store for an upload that passed validate_file_type.
 
-    DWG is accepted by extension alone, so its client MIME is free text of any
-    length (the column holds 255 characters): an unlisted value is stored as
-    the generic type instead.
+    The validated extension decides (a .txt declared as application/pdf is
+    stored as text/plain, a .webp sent as octet-stream as image/webp). DWG has
+    no canonical type and is accepted by extension alone, so its client MIME is
+    free text of any length (the column holds 255 characters): an unlisted
+    value is stored as the generic type instead.
     """
-    return mime_type if mime_type in ALLOWED_MIME_TYPES else "application/octet-stream"
+    fallback = mime_type if mime_type in ALLOWED_MIME_TYPES else "application/octet-stream"
+    return canonical_content_type(filename, fallback)
 
 
 class UploadProjectDocumentUseCase:
@@ -151,7 +158,7 @@ class UploadProjectDocumentUseCase:
 
         # --- Type validation (uses sanitized name; raises on disallowed type) ---
         validate_file_type(sanitized, content_type)
-        content_type = stored_content_type(content_type)
+        content_type = stored_content_type(sanitized, content_type)
 
         # --- Build storage key using sanitized name to prevent path-traversal in key ---
         doc_id = uuid4()

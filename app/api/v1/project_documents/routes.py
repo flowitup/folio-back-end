@@ -73,7 +73,7 @@ def _serialize(doc) -> dict:
         "id": str(doc.id),
         "project_id": str(doc.project_id),
         "filename": doc.filename,
-        "content_type": doc.content_type,
+        "content_type": doc.effective_content_type,
         "size_bytes": doc.size_bytes,
         "kind": doc.compute_kind(),
         "uploaded_at": doc.created_at.isoformat(),
@@ -339,7 +339,8 @@ def get_document_preview_url(project_id: str, document_id: str):
         return _error_response("NOT_FOUND", "Document not found", 404)
 
     # Only serve presigned URLs for inline-safe types (PDF + images)
-    inline_safe = doc.content_type == "application/pdf" or doc.content_type.startswith("image/")
+    content_type = doc.effective_content_type
+    inline_safe = content_type == "application/pdf" or content_type.startswith("image/")
     if not inline_safe:
         return _error_response("NOT_PREVIEWABLE", "Document type does not support preview", 400)
 
@@ -352,7 +353,7 @@ def get_document_preview_url(project_id: str, document_id: str):
     except RuntimeError as exc:
         return _error_response("NOT_AVAILABLE", str(exc), 501)
 
-    return jsonify({"url": url, "content_type": doc.content_type, "filename": doc.filename}), 200
+    return jsonify({"url": url, "content_type": content_type, "filename": doc.filename}), 200
 
 
 @project_documents_bp.route("/projects/<project_id>/documents/<document_id>/download", methods=["GET"])
@@ -377,10 +378,11 @@ def download_project_document(project_id: str, document_id: str):
     # Inline preview only for PDF + images; everything else forced to download.
     # nosniff prevents browsers from MIME-sniffing user-controlled bytes into
     # a renderable type (defense against stored-XSS via spoofed mime).
-    inline_safe = doc.content_type == "application/pdf" or doc.content_type.startswith("image/")
+    content_type = doc.effective_content_type
+    inline_safe = content_type == "application/pdf" or content_type.startswith("image/")
     response = send_file(
         stream,
-        mimetype=doc.content_type,
+        mimetype=content_type,
         # Rows stored before control characters were refused: werkzeug 500s on CR/LF in the header
         download_name=strip_control_chars(doc.filename) or "document",
         as_attachment=not inline_safe,
