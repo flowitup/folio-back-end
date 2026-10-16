@@ -493,9 +493,7 @@ def attach_user_to_company(company_id: str, target_user_id: str):
     except ForbiddenCompanyError:
         return _err("Forbidden", "Admin permission required", 403)
 
-    _notify_company_membership(
-        "company_member_added", user_id=target_uuid, actor_id=caller_id, company_id=company_uuid
-    )
+    _notify_company_membership("company_member_added", user_id=target_uuid, actor_id=caller_id, company_id=company_uuid)
     return jsonify(dataclasses.asdict(result)), 200
 
 
