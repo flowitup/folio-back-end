@@ -135,6 +135,28 @@ class TestSingleLogChecksOtherSites:
         entries.find_cross_project_conflicts.assert_not_called()
 
 
+class TestSingleLogCheckIsOptIn:
+    """POST /labor-entries only refuses a cross-site day when the client asks for the check:
+    installed apps (mobile 0.5.27) cannot acknowledge a 409 and keep logging as before."""
+
+    @staticmethod
+    def _body(**extra):
+        from app.api.v1.labor.schemas import LogAttendanceRequest as LogAttendanceBody
+
+        return LogAttendanceBody.model_validate(
+            {"worker_id": str(uuid4()), "date": "2026-03-02", "shift_type": "full", **extra}
+        )
+
+    def test_an_older_client_without_the_flag_is_not_blocked(self):
+        assert self._body().conflicts_acknowledged is True
+
+    def test_a_client_that_opts_in_is_checked(self):
+        assert self._body(check_conflicts=True).conflicts_acknowledged is False
+
+    def test_the_user_acknowledging_after_the_check_logs(self):
+        assert self._body(check_conflicts=True, acknowledge_conflicts=True).conflicts_acknowledged is True
+
+
 def _person_model(session, name, phone=None, phone_normalized=None):
     from app.infrastructure.database.models import PersonModel
 

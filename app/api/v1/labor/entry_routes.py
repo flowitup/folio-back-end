@@ -239,7 +239,7 @@ def log_attendance(project_id: str):
                 note=data.note,
                 shift_type=data.shift_type,
                 supplement_hours=data.supplement_hours,
-                acknowledge_conflicts=data.acknowledge_conflicts,
+                acknowledge_conflicts=data.conflicts_acknowledged,
             )
         )
     except ValueError as e:

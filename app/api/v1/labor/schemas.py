@@ -87,6 +87,14 @@ class LogAttendanceRequest(BaseModel):
     # Same rule as the bulk endpoint: a day already logged for this person on another site
     # of the company that date is refused (409 with the conflicts) unless acknowledged.
     acknowledge_conflicts: bool = False
+    # Opt-in for that check. Installed apps (mobile 0.5.27) post without it and cannot
+    # acknowledge a 409, so a request without `check_conflicts: true` logs as before.
+    check_conflicts: bool = False
+
+    @property
+    def conflicts_acknowledged(self) -> bool:
+        """True when the cross-site check must not block: acknowledged, or not asked for."""
+        return self.acknowledge_conflicts or not self.check_conflicts
 
     @model_validator(mode="after")
     def _validate_non_empty_and_override_consistency(self) -> "LogAttendanceRequest":
