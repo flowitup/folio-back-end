@@ -73,3 +73,18 @@ def test_dry_run_touches_nothing():
 def test_zero_retention_is_refused():
     with pytest.raises(ValueError):
         PurgeSoftDeletedFilesUseCase([], MagicMock(), MagicMock()).execute(retention_days=0)
+
+
+def test_sweep_deletes_only_unowned_old_objects():
+    """QA3 documents-photos-analyses-28: abandoned presigned uploads are removed."""
+    from app.application.storage_janitor.sweep_orphaned_uploads import SweepOrphanedUploadsUseCase
+
+    storage = MagicMock()
+    storage.list_keys_older_than.return_value = iter(["project-documents/p/a/x.pdf", "project-documents/p/b/y.pdf"])
+    known = lambda keys: {"project-documents/p/a/x.pdf"}  # noqa: E731
+
+    found, deleted = SweepOrphanedUploadsUseCase(storage, known).execute(now=NOW)
+
+    assert (found, deleted) == (1, 1)
+    storage.delete.assert_called_once_with("project-documents/p/b/y.pdf")
+    assert storage.list_keys_older_than.call_args.args[1] == NOW - timedelta(days=1)

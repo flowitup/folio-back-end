@@ -59,3 +59,16 @@ class SoftDeletedPhotoSource(_SoftDeletedSource):
 class SoftDeletedAnalysisSource(_SoftDeletedSource):
     name = "analyses"
     _model = ProjectAnalysisModel
+
+
+def known_document_keys(session: Session):
+    """Callable returning which of the given storage keys a project_documents row (live or deleted) owns."""
+
+    def known(keys) -> set[str]:
+        keys = list(keys)
+        if not keys:
+            return set()
+        stmt = select(ProjectDocumentModel.storage_key).where(ProjectDocumentModel.storage_key.in_(keys))
+        return set(session.execute(stmt).scalars().all())
+
+    return known

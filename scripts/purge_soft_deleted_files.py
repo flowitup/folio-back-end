@@ -1,7 +1,9 @@
 """Janitor: erase soft-deleted documents, photos/videos and analyses past retention.
 
 Deleting a file in the app hides it at once (soft delete); its stored objects
-are erased by this job once ``--retention-days`` (default 30) have passed.
+are erased by this job once ``--retention-days`` (default 30) have passed. It
+also deletes presigned document uploads that were never confirmed (no row
+owns the object) once they are a day old.
 Scheduled daily by the deploy repo (scripts/backup/install-backup-cron.sh in
 flowitup/folio), which runs it inside the API container:
 
@@ -25,10 +27,12 @@ import sys
 from app import create_app, db
 from app.application.storage_janitor import PurgeSoftDeletedFilesUseCase
 from app.application.storage_janitor.purge_soft_deleted_files import DEFAULT_RETENTION_DAYS
+from app.application.storage_janitor.sweep_orphaned_uploads import SweepOrphanedUploadsUseCase
 from app.infrastructure.database.repositories.soft_deleted_file_sources import (
     SoftDeletedAnalysisSource,
     SoftDeletedDocumentSource,
     SoftDeletedPhotoSource,
+    known_document_keys,
 )
 from wiring import get_container
 
@@ -66,6 +70,13 @@ def main() -> int:
             "Starting: retention_days=%d batch_size=%d dry_run=%s", args.retention_days, args.batch_size, args.dry_run
         )
         results = usecase.execute(retention_days=args.retention_days, batch_size=args.batch_size, dry_run=args.dry_run)
+
+        # Presigned document uploads that were never confirmed (tab closed, confirm failed).
+        if hasattr(storage, "list_keys_older_than"):
+            found, deleted = SweepOrphanedUploadsUseCase(storage, known_document_keys(session)).execute(
+                dry_run=args.dry_run
+            )
+            log.info("unconfirmed uploads: orphans=%d deleted=%d", found, deleted)
 
     alert = False
     for name, result in results.items():
