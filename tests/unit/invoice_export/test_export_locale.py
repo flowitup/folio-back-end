@@ -8,6 +8,7 @@ from io import BytesIO
 import openpyxl
 import pytest
 
+from app.domain.entities.invoice import InvoiceType
 from app.domain.invoice.export.labels import SUPPORTED_LOCALES, _LABELS, _TYPE_LABELS, t
 from app.domain.invoice.export.pdf_builder import build_pdf
 from app.domain.invoice.export.xlsx_builder import build_xlsx
@@ -37,7 +38,9 @@ def test_unknown_locale_falls_back_to_english():
 )
 def test_xlsx_labels_follow_the_locale(locale, summary, total_row):
     ctx = dataclasses.replace(_make_context(), locale=locale)
-    wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, _make_bundle([_make_invoice()]))))
+    # An expense (not released funds), so the expenses total row is written.
+    expense = _make_invoice().with_updates(type=InvoiceType.LABOR)
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(ctx, _make_bundle([expense]))))
     assert wb.sheetnames[0] == summary
     values = {c.value for row in wb[summary].iter_rows() for c in row}
     assert total_row in values

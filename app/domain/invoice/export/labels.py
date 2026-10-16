@@ -52,6 +52,13 @@ _LABELS: dict[str, dict[str, str]] = {
         "total_ht": "Subtotal (excl. VAT)",
         "total_vat": "VAT",
         "total_ttc": "Total (incl. VAT)",
+        "col_invoice_number": "No.",
+        "col_payment_method": "Payment method",
+        "not_in_total": "{label} (not in total)",
+        "financing": "Funding (not in the expenses total)",
+        "released_total_row": "TOTAL RELEASED FUNDS",
+        "cash_advance_total_row": "TOTAL CASH ADVANCES",
+        "file_prefix": "invoices",
     },
     "fr": {
         "export_title": "EXPORT DES DÉPENSES",
@@ -95,6 +102,13 @@ _LABELS: dict[str, dict[str, str]] = {
         "total_ht": "Total HT",
         "total_vat": "TVA",
         "total_ttc": "Total TTC",
+        "col_invoice_number": "N°",
+        "col_payment_method": "Moyen de paiement",
+        "not_in_total": "{label} (hors total)",
+        "financing": "Financement (hors total des dépenses)",
+        "released_total_row": "TOTAL FONDS DÉBLOQUÉS",
+        "cash_advance_total_row": "TOTAL AVANCES DE TRÉSORERIE",
+        "file_prefix": "depenses",
     },
     "vi": {
         "export_title": "XUẤT CHI PHÍ",
@@ -138,6 +152,13 @@ _LABELS: dict[str, dict[str, str]] = {
         "total_ht": "Tổng chưa thuế",
         "total_vat": "VAT",
         "total_ttc": "Tổng gồm thuế",
+        "col_invoice_number": "Số HĐ",
+        "col_payment_method": "Phương thức thanh toán",
+        "not_in_total": "{label} (không tính vào tổng)",
+        "financing": "Nguồn vốn (không tính vào tổng chi phí)",
+        "released_total_row": "TỔNG VỐN GIẢI NGÂN",
+        "cash_advance_total_row": "TỔNG TẠM ỨNG",
+        "file_prefix": "chi-phi",
     },
 }
 
@@ -152,9 +173,10 @@ _TYPE_LABELS: dict[str, dict[str, str]] = {
     "fr": {
         "released_funds": "Fonds débloqués",
         "labor": "Main-d'œuvre",
-        "materials_services": "Matériaux et services",
+        # The app's own words (web, mobile): one glossary term per type.
+        "materials_services": "Matériaux & services",
         "others": "Autres",
-        "return": "Retour",
+        "return": "Avoir",
     },
     "vi": {
         "released_funds": "Vốn giải ngân",

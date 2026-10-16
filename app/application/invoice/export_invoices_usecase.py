@@ -12,6 +12,7 @@ from uuid import UUID
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.entities.project import project_display_label
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.invoice.export.format import round_cents
 from app.domain.invoice.export.models import (
@@ -22,16 +23,17 @@ from app.domain.invoice.export.models import (
     TypeSubtotal,
 )
 
-# Subtotal rows in order, as (ledger type, cash advance). A cash advance is listed
-# under Others but counts in no total (see grand_total below), so it gets a row of
-# its own: the expense rows then add up to the total, as the app's Others does.
+# Subtotal rows in order, as (ledger type, cash advance). The expense rows come
+# first, so they sit right above the expenses total they add up to; the funding
+# rows (released funds, and cash advances, which are listed under Others but count
+# in no total — see grand_total below) follow, marked as left out of it.
 _SUBTOTAL_ROWS = (
-    (InvoiceType.RELEASED_FUNDS, False),
     (InvoiceType.LABOR, False),
     (InvoiceType.MATERIALS_SERVICES, False),
     (InvoiceType.OTHERS, False),
-    (InvoiceType.OTHERS, True),
     (InvoiceType.RETURN, False),
+    (InvoiceType.RELEASED_FUNDS, False),
+    (InvoiceType.OTHERS, True),
 )
 
 
@@ -180,8 +182,11 @@ class ExportInvoicesUseCase:
             invoice_count=len(invoices),
             released_total=released_total,
         )
+        # Projects are shown by their site address everywhere else; the stored name
+        # is only the fallback (project_display_label), here as in the file name.
+        project_label = project_display_label(project)
         context = InvoiceExportContext(
-            project_name=project.name,
+            project_name=project_label,
             project_id=req.project_id,
             range=InvoiceExportRange(
                 from_month=from_d.replace(day=1),
@@ -195,6 +200,7 @@ class ExportInvoicesUseCase:
 
         # 7. Dispatch to builder
         from app.domain.invoice.export.format import slugify_project_name
+        from app.domain.invoice.export.labels import t as label
 
         if req.format == "xlsx":
             from app.domain.invoice.export.xlsx_builder import build_xlsx
@@ -212,8 +218,9 @@ class ExportInvoicesUseCase:
             raise ValueError(f"Unsupported export format: {req.format!r}")
 
         # 8. Generate filename
-        slug = slugify_project_name(project.name, str(project.id))
+        slug = slugify_project_name(project_label, str(project.id))
         type_suffix = f"-{req.type_filter.value}" if req.type_filter else ""
-        filename = f"invoices-{slug}-{req.from_month}-to-{req.to_month}{type_suffix}.{ext}"
+        prefix = label(req.locale, "file_prefix")
+        filename = f"{prefix}-{slug}-{req.from_month}-to-{req.to_month}{type_suffix}.{ext}"
 
         return ExportInvoicesResult(content=content, filename=filename, mime_type=mime_type)
