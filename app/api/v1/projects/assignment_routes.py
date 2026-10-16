@@ -27,6 +27,7 @@ from app.application.projects.assignments import (
     AssignProjectMemberInput,
     ProjectCompanyUnresolvedError,
     TargetInactiveError,
+    TargetIsCompanyAdminError,
     TargetNotCompanyMemberError,
 )
 from app.domain.companies.exceptions import UserCompanyAccessNotFoundError
@@ -155,6 +156,12 @@ def unassign_project_member(project_id: str, user_id: str):
         return _err("Forbidden", str(exc), 403)
     except TargetNotCompanyMemberError:
         return _err("NotFound", f"User {user_id} is not a member of this project's company", 404)
+    except TargetIsCompanyAdminError:
+        return _err(
+            "CompanyAdmin",
+            "A company admin has access to every project of the company and cannot be removed from one",
+            409,
+        )
 
     from app import db
 

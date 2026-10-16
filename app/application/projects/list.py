@@ -1,6 +1,6 @@
 """List projects use case."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from uuid import UUID
 
@@ -14,6 +14,8 @@ class ProjectSummary:
     address: Optional[str]
     owner_id: str
     user_count: int
+    # Assigned user ids, so the route can add the company's admins without counting anyone twice.
+    user_ids: List[str] = field(default_factory=list)
 
 
 class ListProjectsUseCase:
@@ -49,6 +51,7 @@ class ListProjectsUseCase:
                 address=p.address,
                 owner_id=str(p.owner_id),
                 user_count=len(p.user_ids) if p.user_ids else 0,
+                user_ids=[str(u) for u in (p.user_ids or [])],
             )
             for p in projects
         ]
