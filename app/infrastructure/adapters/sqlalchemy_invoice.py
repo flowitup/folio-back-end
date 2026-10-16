@@ -30,6 +30,7 @@ from app.infrastructure.database.models.invoice_number_counter import InvoiceNum
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.worker import WorkerModel
+from app.infrastructure.database.text_fold import folded, folded_like_pattern
 
 
 def _items_to_jsonb(items: list) -> list:
@@ -699,6 +700,8 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         offset: int,
         all_companies: bool = False,
         search: Optional[str] = None,
+        refundable_status: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across all projects of given companies.
 
@@ -710,7 +713,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         from app.infrastructure.database.models.project import ProjectModel
 
         query = (
-            self._session.query(InvoiceModel, ProjectModel.name.label("project_name"))
+            self._session.query(
+                InvoiceModel,
+                ProjectModel.name.label("project_name"),
+                ProjectModel.address.label("project_address"),
+            )
             .join(ProjectModel, InvoiceModel.project_id == ProjectModel.id)
             .filter(
                 InvoiceModel.type == InvoiceType.MATERIALS_SERVICES.value,
@@ -743,15 +750,23 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 or_(PaymentMethodModel.id.is_(None), PaymentMethodModel.is_company_payment.isnot(True)),
             )
 
+        if refundable_status:
+            query = query.filter(InvoiceModel.refundable_status == refundable_status)
+        if project_id is not None:
+            query = query.filter(InvoiceModel.project_id == project_id)
+
         if search:
-            # Before count and paging, so a search reaches expenses past the loaded page.
-            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            # Before count and paging, so a search reaches expenses past the loaded
+            # page. Accent- and case-insensitive, and also matches the project's
+            # address and who paid (the payment method).
+            pattern = folded_like_pattern(search)
             query = query.filter(
                 or_(
-                    InvoiceModel.invoice_number.ilike(pattern, escape="\\"),
-                    InvoiceModel.recipient_name.ilike(pattern, escape="\\"),
-                    ProjectModel.name.ilike(pattern, escape="\\"),
+                    folded(InvoiceModel.invoice_number).like(pattern, escape="\\"),
+                    folded(InvoiceModel.recipient_name).like(pattern, escape="\\"),
+                    folded(ProjectModel.name).like(pattern, escape="\\"),
+                    folded(ProjectModel.address).like(pattern, escape="\\"),
+                    folded(InvoiceModel.payment_method_label).like(pattern, escape="\\"),
                 )
             )
 
@@ -766,7 +781,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
 
         # Collect invoice ids from this page so we can batch-load their attachments
         # in a single query, avoiding N+1 round-trips.
-        page_invoice_ids = [inv_model.id for inv_model, _ in rows]
+        page_invoice_ids = [inv_model.id for inv_model, _, _ in rows]
 
         # Build a {invoice_id -> [attachment dict, ...]} map. Newest-first with an
         # id tiebreaker — mirrors the per-invoice attachments endpoint so the same
@@ -796,13 +811,16 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                 )
 
         result = []
-        for inv_model, project_name in rows:
+        for inv_model, project_name, project_address in rows:
             entity = _model_to_entity(inv_model)
             result.append(
                 {
                     "id": str(entity.id),
                     "project_id": str(entity.project_id),
                     "project_name": project_name,
+                    "project_address": project_address,
+                    "payment_method_id": str(entity.payment_method_id) if entity.payment_method_id else None,
+                    "payment_method_label": entity.payment_method_label,
                     "invoice_number": entity.invoice_number,
                     "recipient_name": entity.recipient_name,
                     "issue_date": entity.issue_date.isoformat(),

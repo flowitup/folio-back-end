@@ -324,6 +324,8 @@ class IInvoiceRepository(ABC):
         offset: int,
         all_companies: bool = False,
         search: Optional[str] = None,
+        refundable_status: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across projects of company_ids.
 

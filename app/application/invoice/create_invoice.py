@@ -106,6 +106,10 @@ class CreateInvoiceUseCase:
         # A return nets spend down: its lines may mix signs, but never add up to more than zero.
         if request.type == InvoiceType.RETURN and sum((i.total for i in invoice_items), Decimal("0")) > 0:
             raise InvalidInvoiceDataError("A return's total must be zero or negative")
+        # A purchase may carry discount lines, but a negative purchase is an avoir:
+        # it would silently lower spend and 'À rembourser'.
+        if request.type == InvoiceType.MATERIALS_SERVICES and sum((i.total for i in invoice_items), Decimal("0")) < 0:
+            raise InvalidInvoiceDataError("A purchase's total cannot be negative; record a return (avoir) instead")
 
         # Resolve payment method if provided
         payment_method_id: Optional[UUID] = None

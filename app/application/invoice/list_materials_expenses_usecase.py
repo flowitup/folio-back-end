@@ -43,6 +43,12 @@ class MaterialsExpenseItem:
     # one exists (bank-refund reconciliation). None otherwise.
     funds_release_number: Optional[str]
     attachments: list[MaterialsExpenseAttachment]
+    # Who paid (the payment method's label at the time), so the refundable
+    # list can say whom to pay back; the project's address, which the apps use
+    # to name a project.
+    payment_method_id: Optional[str] = None
+    payment_method_label: Optional[str] = None
+    project_address: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,8 @@ class ListMaterialsExpensesUseCase:
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        refundable_status: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> MaterialsExpensesResult:
         if is_superadmin:
             # Superadmin: pass company_id as single-element list or None to signal "all"
@@ -133,6 +141,8 @@ class ListMaterialsExpensesUseCase:
             offset=offset,
             all_companies=is_superadmin and company_id is None,
             search=(search or "").strip() or None,
+            refundable_status=refundable_status,
+            project_id=project_id,
         )
 
         row_ids = [UUID(r["id"]) for r in rows]
@@ -167,6 +177,9 @@ class ListMaterialsExpensesUseCase:
                     )
                     for a in r.get("attachments", [])
                 ],
+                payment_method_id=r.get("payment_method_id"),
+                payment_method_label=r.get("payment_method_label"),
+                project_address=r.get("project_address"),
             )
             for r in rows
         ]

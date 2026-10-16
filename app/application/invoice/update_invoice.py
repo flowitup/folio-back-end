@@ -218,6 +218,12 @@ class UpdateInvoiceUseCase:
             items = updates.get("items", invoice.items)
             if sum((i.total for i in items), Decimal("0")) > 0:
                 raise InvalidInvoiceDataError("A return's total must be zero or negative")
+        if effective_type == InvoiceType.MATERIALS_SERVICES and (
+            request.items is not None or invoice.type != InvoiceType.MATERIALS_SERVICES
+        ):
+            items = updates.get("items", invoice.items)
+            if sum((i.total for i in items), Decimal("0")) < 0:
+                raise InvalidInvoiceDataError("A purchase's total cannot be negative; record a return (avoir) instead")
 
         # Payment method: only process if the key was explicitly provided.
         if request.payment_method_id is not _UNSET:

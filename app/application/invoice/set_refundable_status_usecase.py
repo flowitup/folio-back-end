@@ -124,6 +124,12 @@ class SetInvoiceRefundableStatusUseCase:
             if self._is_company_payment_method(invoice.payment_method_id, invoice.project_id):
                 raise InvalidInvoiceDataError("Expense already paid by the company — refund tracking does not apply")
 
+        # Starting to track a refund needs someone to be owed a positive amount:
+        # a zero or negative expense would only lower 'À rembourser'. Rows
+        # already tracked keep moving (and can always be cleared).
+        if refundable_status is not None and invoice.refundable_status is None and invoice.total_amount <= 0:
+            raise InvalidInvoiceDataError("Only an expense with a positive total can be tracked as refundable")
+
         # refunded_by is only meaningful when transitioning to 'refunded'. Any other
         # status (including null) forces it to NULL, silently dropping whatever the
         # caller sent — it is not a valid state outside of 'refunded'.
