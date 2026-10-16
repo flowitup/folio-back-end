@@ -84,6 +84,9 @@ class LogAttendanceRequest(BaseModel):
     note: Optional[str] = Field(None, max_length=500)
     shift_type: Optional[ShiftTypeLiteral] = None
     supplement_hours: int = Field(default=0, ge=0, le=12)
+    # Same rule as the bulk endpoint: a day already logged for this person on another site
+    # of the company that date is refused (409 with the conflicts) unless acknowledged.
+    acknowledge_conflicts: bool = False
 
     @model_validator(mode="after")
     def _validate_non_empty_and_override_consistency(self) -> "LogAttendanceRequest":
