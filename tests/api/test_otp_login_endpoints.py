@@ -131,6 +131,17 @@ class TestOtpLogin:
         assert inv_client.post("/api/v1/auth/otp/request", json={"phone": "abc"}).status_code == 400
         assert inv_client.post("/api/v1/auth/otp/verify", json={"phone": "0900000123", "code": "12"}).status_code == 400
 
+    def test_validation_messages_name_only_the_failing_field(self, inv_client):
+        """auth-onboarding-23: 'Invalid input: phone, code, display_name' whatever field was wrong."""
+        resp = inv_client.post("/api/v1/auth/otp/verify", json={"phone": "0900000123", "code": "12345"})
+        assert resp.get_json()["message"] == "Invalid input: code: 6 digits"
+        resp = inv_client.post(
+            "/api/v1/auth/signup/verify", json={"phone": "0900000123", "code": "123456", "display_name": "x" * 81}
+        )
+        assert resp.get_json()["message"] == "Invalid input: display_name: 80 characters max"
+        resp = inv_client.post("/api/v1/auth/signup/verify", json={"phone": "0900000123", "code": "123456"})
+        assert resp.get_json()["message"] == "Invalid input: display_name: required"
+
     def test_non_ascii_digits_are_refused(self, inv_client):
         """Unicode digits are not a second spelling of a number or of a code."""
         spelled = "+336\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18"

@@ -18,6 +18,7 @@ from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import body_phone, jwt_user_key, phone_and_caller_key
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
+from app.api._helpers.validation_error import field_rule_message
 from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
@@ -95,6 +96,15 @@ def access_token_expires_in() -> int:
     return int(expires.total_seconds()) if isinstance(expires, timedelta) else 7 * 24 * 3600
 
 
+# The SMS code's rule is a regex; say it in words.
+_FIELD_RULES = {"code": "6 digits"}
+
+
+def _invalid(exc: ValidationError):
+    """400 naming only the fields that failed and the rule each broke."""
+    return _error(400, "ValidationError", field_rule_message(exc, _FIELD_RULES))
+
+
 def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
 
@@ -160,8 +170,8 @@ def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
         data = OtpRequestBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.request_otp_usecase is None:
         return _error(500, "ServerError", "SMS sign-in not configured")
@@ -193,8 +203,8 @@ def request_otp():
 def verify_otp():
     try:
         data = OtpVerifyBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone, code")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.verify_otp_usecase is None:
         return _error(500, "ServerError", "SMS sign-in not configured")
@@ -377,8 +387,8 @@ def update_current_user():
     """
     try:
         data = UpdateMeRequest.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: display_name, phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     provided = data.model_dump(exclude_unset=True)
     if not provided:
         return _error(400, "BadRequest", "No fields to update")
@@ -424,8 +434,8 @@ def request_phone_change_code():
     """
     try:
         data = PhoneChangeRequestBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     usecase = container.request_phone_change_code_usecase
     if usecase is None:
@@ -475,8 +485,8 @@ def confirm_phone_change():
     """
     try:
         data = PhoneChangeConfirmBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone, code")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     usecase = container.confirm_phone_change_usecase
     if usecase is None:
@@ -593,8 +603,8 @@ def delete_current_user():
 def request_signup_otp():
     try:
         data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.request_signup_otp_usecase is None:
         return _error(500, "ServerError", "Sign-up not configured")
@@ -628,8 +638,8 @@ def request_signup_otp():
 def verify_signup_otp():
     try:
         data = SignupVerifyBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone, code, display_name")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.verify_signup_otp_usecase is None:
         return _error(500, "ServerError", "Sign-up not configured")

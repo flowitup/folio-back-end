@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
-from app.api._helpers.validation_error import safe_validation_fields
+from app.api._helpers.validation_error import field_rule_message
 
 from app.api.openapi import openapi_doc
 from app.api.v1.invitations import invitations_bp
@@ -106,8 +106,7 @@ def _unprocessable(reason: str, message: str):
 
 
 def _validation_err(e: ValidationError):
-    fields = safe_validation_fields(e)
-    return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+    return _err(422, "ValidationError", field_rule_message(e, {"code": "6 digits"}))
 
 
 # ---------------------------------------------------------------------------
