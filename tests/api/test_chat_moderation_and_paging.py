@@ -289,20 +289,24 @@ class TestAttachmentBytes:
 
 @pytest.mark.usefixtures("chat_tables_clean")
 class TestProjectChannelLabel:
-    def test_project_channel_is_named_by_its_address_like_the_rest_of_the_app(
-        self, inv_client, member_token, invitation_app
-    ):
+    def test_project_channel_uses_the_shared_project_label(self, inv_client, member_token, invitation_app):
+        """The channel name follows project_label, like the bell, pushes and the apps."""
         from app import db
+        from app.application.push.project_label import project_label
         from app.infrastructure.database.models import ProjectModel
 
         with invitation_app.app_context():
             project = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id))
             project.address = "8 avenue Foch, 94110 Arcueil"
             db.session.commit()
+            expected = project_label(project)
         try:
-            assert _channels(inv_client, member_token)[_project_key(invitation_app)]["name"] == (
-                "8 avenue Foch, 94110 Arcueil"
+            channel = _channels(inv_client, member_token)[_project_key(invitation_app)]
+            assert channel["name"] == expected
+            page = inv_client.get(
+                f"/api/v1/chat/channels/{_project_key(invitation_app)}/messages", headers=_auth(member_token)
             )
+            assert page.status_code == 200
         finally:
             with invitation_app.app_context():
                 project = db.session.get(ProjectModel, uuid.UUID(invitation_app._test_project_id))
