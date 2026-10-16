@@ -38,6 +38,7 @@ from app.infrastructure.database.models.notification_preference import (
 )
 from app.infrastructure.database.models.person import PersonModel
 from app.infrastructure.database.models.push_device import PushDeviceOrm
+from app.infrastructure.database.models.task import TaskModel
 from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.worker import WorkerModel
 from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
@@ -82,6 +83,10 @@ class SQLAlchemyPersonalDataEraser:
             delete(CompanyMemberGrantModel).where(CompanyMemberGrantModel.user_id == user_id),
             delete(UserCompanyAccessModel).where(UserCompanyAccessModel.user_id == user_id),
             user_projects.delete().where(user_projects.c.user_id == user_id),
+            # The tasks stay (company work); their owner does not. Left assigned,
+            # the board showed them as unassigned while the drawer offered a
+            # ghost "person outside the project team" (planning-notes-01).
+            update(TaskModel).where(TaskModel.assignee_id == user_id).values(assignee_id=None),
             # Cleared here rather than through the user entity: the repository does
             # not persist is_platform_ops (ops set it out of band, and writing it
             # back from every caller's entity would wipe it for real ops accounts).

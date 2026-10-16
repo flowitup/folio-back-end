@@ -40,10 +40,13 @@ class Project:
 
 
 def project_display_label(project: Project) -> str:
-    """The label a project is shown under: its site address, or its name when it has none.
+    """The label a project is shown under: its name first, its site address when the name is blank.
 
-    Mirrors the clients' `projectDisplayName`, so someone invited to a project reads the
-    same label in the invitation as in the app once they have joined.
+    Mirrors the clients' `projectDisplayName` (name first, address second), so someone invited
+    to a project reads the same label in the invitation, the bell, chat and documents as in the
+    app once they have joined. A project created without a name is named after its address.
     """
-    address = project.address.strip() if isinstance(project.address, str) else ""
-    return address or project.name
+    name = project.name.strip() if isinstance(project.name, str) else ""
+    if name:
+        return name
+    return project.address.strip() if isinstance(project.address, str) else ""

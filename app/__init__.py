@@ -25,6 +25,30 @@ migrate = Migrate()
 jwt = JWTManager()
 
 
+def _cors_origins() -> list[str]:
+    """The browser origins allowed to call the API (CORS_ORIGINS, comma-separated)."""
+    raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _no_store_for_authenticated_api(response):
+    """Private API answers must never be cached by a proxy or CDN (Cloudflare sits in front).
+
+    Applies to /api/ responses of a request carrying credentials (bearer token or session
+    cookie) that did not choose their own Cache-Control (downloads and thumbnails do).
+    """
+    from flask import request
+
+    if not request.path.startswith("/api/"):
+        return response
+    has_credentials = bool(request.headers.get("Authorization")) or bool(request.cookies)
+    if has_credentials and "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"] = "no-store"
+    if has_credentials:
+        response.vary.update(("Authorization", "Cookie"))
+    return response
+
+
 def create_app(config_class: type = Config) -> Flask:
     """
     Application factory function.
@@ -96,7 +120,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Initialize extensions
-    cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
+    cors_origins = _cors_origins()
     # expose_headers is critical for binary download endpoints (e.g. labor-export):
     # cross-origin browser fetches cannot read non-default-safelisted headers without
     # explicit exposure. Without this, fetchLaborExport's filename parsing falls back
@@ -108,6 +132,7 @@ def create_app(config_class: type = Config) -> Flask:
         expose_headers=["Content-Disposition", "X-Content-Type-Options"],
     )
     db.init_app(app)
+    app.after_request(_no_store_for_authenticated_api)
     jwt.init_app(app)
 
     # Recognize an API-key credential (Authorization: Bearer folio_sk_... or
@@ -300,9 +325,10 @@ def _configure_di_container() -> None:
     if Config.S3_PUBLIC_ENDPOINT_URL:
         import logging as _cors_log
 
-        _cors_origin = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")[0].strip()
+        # Every allowed browser origin, as for the API's own CORS: only the first one used
+        # to be written, so a second origin (www, staging) could not upload directly.
         try:
-            storage.ensure_cors([_cors_origin])
+            storage.ensure_cors(_cors_origins())
         except Exception as exc:
             _cors_log.getLogger(__name__).warning("S3 CORS setup failed: %s", exc)
 
@@ -583,7 +609,7 @@ def _configure_di_container() -> None:
     _c.notification_event_repository = SQLAlchemyNotificationEventRepository(db.session)
     _c.push_sender = (
         ExpoPushSender(_cfg.get("EXPO_ACCESS_TOKEN", ""))
-        if _cfg.get("PUSH_PROVIDER") == "expo"
+        if str(_cfg.get("PUSH_PROVIDER") or "").strip().lower() == "expo"
         else LoggingPushSender()
     )
     if _c.worker_repository is not None and _c.project_repository is not None:

@@ -444,6 +444,33 @@ class TestWhatSurvivesErasure:
             assert kept is not None and kept.name == "Jean Dupont"
             assert kept.user_id is None, "the erased account must not stay linkable"
 
+    def test_tasks_assigned_to_the_account_stay_but_become_unassigned(self, inv_client, invitation_app):
+        """planning-notes-01: the work stays with the company; the erased person stops owning it."""
+        from app import db
+        from app.infrastructure.database.models.task import TaskModel
+
+        user = _make_user(invitation_app, "tiler@example.com", "+33600009034")
+        token = mint_access_token(inv_client, "tiler@example.com")
+        with invitation_app.app_context():
+            task = TaskModel(
+                id=uuid4(),
+                project_id=UUID(invitation_app._test_project_2_id),
+                title="Pose carrelage",
+                status="todo",
+                assignee_id=user.id,
+                created_by=user.id,
+            )
+            db.session.add(task)
+            db.session.commit()
+            task_id = task.id
+
+        assert inv_client.delete("/api/v1/auth/me", headers=_auth(token)).status_code == 204
+
+        with invitation_app.app_context():
+            kept = db.session.get(TaskModel, task_id)
+            assert kept is not None and kept.title == "Pose carrelage"
+            assert kept.assignee_id is None
+
 
 class TestRequestHandling:
     def test_a_malformed_body_does_not_break_the_erasure(self, inv_client, invitation_app):

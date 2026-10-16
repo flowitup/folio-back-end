@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timezone
 from typing import Tuple
 from uuid import UUID
 
@@ -60,9 +61,17 @@ def _serialize(task) -> dict:
         "position": task.position,
         "labels": list(task.labels),
         "created_by": str(task.created_by) if task.created_by else None,
-        "created_at": task.created_at.isoformat(),
-        "updated_at": task.updated_at.isoformat(),
+        "created_at": _utc_iso(task.created_at),
+        "updated_at": _utc_iso(task.updated_at),
     }
+
+
+def _utc_iso(value) -> str:
+    """ISO 8601 with its offset. The columns store UTC without a time zone, so a
+    naive value is UTC; written bare it read as local time (notes say +00:00)."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 # ---------------------------------------------------------------------------
