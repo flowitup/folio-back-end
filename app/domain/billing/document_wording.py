@@ -12,10 +12,31 @@ from typing import Optional
 from app.domain.billing.enums import BillingDocumentKind
 
 
-def intro_sentence(kind: BillingDocumentKind) -> str:
-    """Opening line under 'Madame, Monsieur,' — 'facture' is feminine, 'devis' masculine."""
+def intro_sentence(kind: BillingDocumentKind, has_object: bool = True) -> str:
+    """Opening line under 'Madame, Monsieur,' — 'facture' is feminine, 'devis' masculine.
+
+    It refers to "la mission citée en objet" only when an 'Objet' line (the
+    linked project) is printed; otherwise the sentence is neutral.
+    """
+    if not has_object:
+        noun = "notre facture" if kind == BillingDocumentKind.FACTURE else "notre devis"
+        return f"Veuillez trouver ci-après {noun}."
     subject = "la facture relative" if kind == BillingDocumentKind.FACTURE else "le devis relatif"
     return f"Veuillez trouver ci-après {subject} à la mission citée en objet."
+
+
+# Late-payment mention printed on factures (same wording on the PDF and the XLSX).
+LATE_PAYMENT_NOTE = (
+    "Indemnité forfaitaire de retard de paiement : 40 € "
+    "(conformément à l'article 121-II de la loi n° 2012-387 du 22 Mars 2012 "
+    "et au décret n° 2012-1115 du 2 Oct. 2012)."
+)
+
+
+def format_iban(iban: Optional[str]) -> str:
+    """IBAN in groups of four ('FR76 3000 6000 …'), the way it is printed on paper."""
+    compact = "".join((iban or "").split())
+    return " ".join(compact[i : i + 4] for i in range(0, len(compact), 4))
 
 
 _POSTCODE_CITY = re.compile(r"\b\d{5}\s+(\D.*)$")
