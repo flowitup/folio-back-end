@@ -74,11 +74,13 @@ class MergePersonsUseCase:
     def _find_target(self, source, target_id: UUID):
         """The target person, refused before anything moves when it has another account."""
         target = self._repo.find_by_id(target_id)
-        if target is not None and source.user_id is not None and target.user_id is not None:
-            if source.user_id != target.user_id:
-                raise MergeConflictError(
-                    "Both persons are linked to different accounts; they cannot be the same person"
-                )
+        if (
+            target is not None
+            and source.user_id is not None
+            and target.user_id is not None
+            and source.user_id != target.user_id
+        ):
+            raise MergeConflictError("Both persons are linked to different accounts; they cannot be the same person")
         return target
 
     def execute(self, request: MergePersonsRequest) -> MergePersonsResponse:

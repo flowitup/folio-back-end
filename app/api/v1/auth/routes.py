@@ -1,7 +1,7 @@
 """Auth API routes."""
 
 import logging
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from flask import current_app, jsonify, request, make_response
@@ -379,7 +379,7 @@ def update_current_user():
     return jsonify(_me_payload(container, user).model_dump())
 
 
-def _sync_person_name(container: Any, user: Any, previous_name: Optional[str]) -> None:
+def _sync_person_name(container: Any, user: Any, previous_name: "str | None") -> None:
     """Carry a self-service rename to the user's directory entry (persons.name, workers.name).
 
     Only when that entry still shows the account's previous name: a different name there was
