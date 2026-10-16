@@ -709,8 +709,11 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
         """
         from app.infrastructure.database.models.project import ProjectModel
 
+        # Projects are shown by their site address everywhere (project_display_label):
+        # the address when set, else the internal name.
+        project_label = func.coalesce(func.nullif(func.trim(ProjectModel.address), ""), ProjectModel.name)
         query = (
-            self._session.query(InvoiceModel, ProjectModel.name.label("project_name"))
+            self._session.query(InvoiceModel, project_label.label("project_name"))
             .join(ProjectModel, InvoiceModel.project_id == ProjectModel.id)
             .filter(
                 InvoiceModel.type == InvoiceType.MATERIALS_SERVICES.value,
@@ -752,6 +755,7 @@ class SQLAlchemyInvoiceRepository(IInvoiceRepository):
                     InvoiceModel.invoice_number.ilike(pattern, escape="\\"),
                     InvoiceModel.recipient_name.ilike(pattern, escape="\\"),
                     ProjectModel.name.ilike(pattern, escape="\\"),
+                    ProjectModel.address.ilike(pattern, escape="\\"),
                 )
             )
 

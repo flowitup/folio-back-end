@@ -496,7 +496,10 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 PersonModel.id.label("person_id"),
                 PersonModel.name.label("person_name"),
                 OtherProject.id.label("other_project_id"),
-                OtherProject.name.label("other_project_name"),
+                # Shown by its site address, like everywhere else (project_display_label).
+                func.coalesce(func.nullif(func.trim(OtherProject.address), ""), OtherProject.name).label(
+                    "other_project_name"
+                ),
                 LaborEntryModel.id.label("entry_id"),
                 LaborEntryModel.shift_type.label("shift_type"),
                 LaborEntryModel.supplement_hours.label("supplement_hours"),
