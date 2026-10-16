@@ -27,6 +27,8 @@ class MemberDto:
     name: str
     # When the member last read the channel; None until they open it. Drives "seen" avatars.
     last_read_at: datetime | None = None
+    # "deleted" / "unnamed" when ``name`` is a placeholder the apps should translate.
+    state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,8 @@ class ReactionDto:
     user_id: UUID
     emoji: str
     created_at: datetime
+    # Resolved like sender_name, so a former member's reaction keeps their name.
+    user_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,8 @@ class MessageDto:
     payload: dict[str, Any] | None = None
     reply_to_id: UUID | None = None
     reactions: tuple[ReactionDto, ...] = ()
+    # "deleted" / "unnamed" when sender_name is a placeholder the apps should translate.
+    sender_state: str | None = None
 
     @classmethod
     def from_entity(cls, message: ChatMessage, sender_name: str) -> MessageDto:
@@ -100,3 +106,16 @@ class AttachmentStreamDto:
     content_length: int
     content_type: str
     filename: str
+
+
+@dataclass(frozen=True)
+class ReportDto:
+    """An open report as a company admin reviews it."""
+
+    id: UUID
+    message: MessageDto
+    channel_name: str
+    reporter_id: UUID
+    reporter_name: str
+    reason: str | None
+    created_at: datetime

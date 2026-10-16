@@ -485,7 +485,9 @@ def _configure_di_container() -> None:
         SendMessageUseCase as _SendChatMessageUseCase,
         BlockUserUseCase as _BlockChatUserUseCase,
         ListBlockedUsersUseCase as _ListBlockedChatUsersUseCase,
+        ListReportsUseCase as _ListChatReportsUseCase,
         RemoveMessageReactionUseCase as _RemoveChatReactionUseCase,
+        ResolveReportUseCase as _ResolveChatReportUseCase,
         ReportMessageUseCase as _ReportChatMessageUseCase,
         SetMessageReactionUseCase as _SetChatReactionUseCase,
         UnblockUserUseCase as _UnblockChatUserUseCase,
@@ -499,8 +501,14 @@ def _configure_di_container() -> None:
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
     _c.report_chat_message_usecase = _ReportChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
-    _c.set_chat_reaction_usecase = _SetChatReactionUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
-    _c.remove_chat_reaction_usecase = _RemoveChatReactionUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
+    _c.set_chat_reaction_usecase = _SetChatReactionUseCase(
+        _chat_repo, _chat_repo, _chat_repo, db.session, safety_repo=_chat_repo
+    )
+    _c.remove_chat_reaction_usecase = _RemoveChatReactionUseCase(
+        _chat_repo, _chat_repo, _chat_repo, db.session, safety_repo=_chat_repo
+    )
+    _c.list_chat_reports_usecase = _ListChatReportsUseCase(_chat_repo, _chat_repo)
+    _c.resolve_chat_report_usecase = _ResolveChatReportUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.block_chat_user_usecase = _BlockChatUserUseCase(_chat_repo, _chat_repo, db.session)
     _c.unblock_chat_user_usecase = _UnblockChatUserUseCase(_chat_repo, db.session)
     _c.list_blocked_chat_users_usecase = _ListBlockedChatUsersUseCase(_chat_repo, _chat_repo)
@@ -611,6 +619,12 @@ def _configure_di_container() -> None:
             blocks=_chat_repo,
         )
         _c.send_chat_message_usecase.notifier = _chat_push_notifier
+    if _c.report_chat_message_usecase is not None:
+        from app.application.push.chat_report_notifier import ChatReportNotifier
+
+        _c.report_chat_message_usecase.notifier = ChatReportNotifier(
+            dispatcher=_c.push_dispatcher, directory=_chat_repo
+        )
 
     if _c.project_repository is not None:
         _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)
