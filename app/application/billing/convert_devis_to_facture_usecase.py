@@ -150,7 +150,9 @@ class ConvertDevisToFactureUseCase:
             recipient_siret=source.recipient_siret,
             notes=source.notes,
             terms=source.terms,
-            signature_block_text=source.signature_block_text,
+            # The devis acceptance block ('Bon pour accord / signature du
+            # client') does not belong on the facture.
+            signature_block_text=None,
             payment_due_date=inp.payment_due_date,
             payment_terms=payment_terms,
             source_devis_id=source.id,  # audit trail

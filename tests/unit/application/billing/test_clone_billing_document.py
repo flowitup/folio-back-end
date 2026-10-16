@@ -84,3 +84,48 @@ class TestCloneBillingDocumentErrors:
         inp = CloneBillingDocumentInput(source_id=doc.id, user_id=user_id)
         with pytest.raises(MissingCompanyProfileError):
             usecase.execute(inp, fake_session)
+
+
+class TestCloneDevisToFactureWording:
+    """A devis duplicated as a facture gets facture wording (QA round 3 billing-11)."""
+
+    def test_devis_to_facture_takes_company_payment_terms_and_drops_signature_block(
+        self, doc_repo, counter_repo, company_repo, access_repo, fake_session, user_id, company_id
+    ):
+        from dataclasses import replace
+
+        from tests.unit.application.billing.conftest import make_access, make_company
+
+        company = replace(make_company(owner_id=user_id, company_id=company_id), default_payment_terms="30 jours net")
+        company_repo.save(company)
+        access_repo.save(make_access(user_id=user_id, company_id=company_id, is_primary=True))
+        devis = make_doc(
+            user_id=user_id,
+            company_id=company_id,
+            signature_block_text="Bon pour accord\nDate et signature du client",
+        )
+        doc_repo.save(devis)
+        uc = CloneBillingDocumentUseCase(
+            doc_repo=doc_repo,
+            counter_repo=counter_repo,
+            project_repo=None,
+            company_repo=company_repo,
+            access_repo=access_repo,
+        )
+
+        result = uc.execute(
+            CloneBillingDocumentInput(source_id=devis.id, user_id=user_id, override_kind=BillingDocumentKind.FACTURE),
+            fake_session,
+        )
+
+        assert result.kind == "facture"
+        assert result.payment_terms == "30 jours net"
+        assert result.signature_block_text is None
+
+    def test_devis_to_devis_keeps_signature_block(
+        self, usecase, doc_repo, fake_session, user_id, company_id, seeded_company
+    ):
+        devis = make_doc(user_id=user_id, company_id=company_id, signature_block_text="Bon pour accord")
+        doc_repo.save(devis)
+        result = usecase.execute(CloneBillingDocumentInput(source_id=devis.id, user_id=user_id), fake_session)
+        assert result.signature_block_text == "Bon pour accord"
