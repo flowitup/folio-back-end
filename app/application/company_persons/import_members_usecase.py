@@ -81,6 +81,12 @@ class ImportMembersUseCase:
                 )
 
             target_profile = self._company_persons.find(inp.company_id, person_id)
+            if target_profile is None and self._phone_taken(inp.company_id, person_id, source_profile.phone_normalized):
+                # The target already lists someone else with this number: the same human under
+                # another profile. Inserting a second one hit the unique (company, phone) index
+                # and rolled the whole batch back with a 500.
+                already_member_person_ids.append(person_id)
+                continue
             added = target_profile is None
             if target_profile is None:
                 target_profile = self._company_persons.save(
@@ -140,3 +146,10 @@ class ImportMembersUseCase:
             skipped_person_ids=skipped_person_ids,
             already_member_person_ids=already_member_person_ids,
         )
+
+    def _phone_taken(self, company_id, person_id, phone: Optional[str]) -> bool:
+        """Whether another person's profile in ``company_id`` already holds ``phone``."""
+        if not phone:
+            return False
+        holder = self._company_persons.find_by_phone(company_id, phone)
+        return holder is not None and holder.person_id != person_id

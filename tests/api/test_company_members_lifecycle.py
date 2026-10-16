@@ -309,3 +309,126 @@ class TestDeleteCompanyRepromotesPrimary:
         assert companies[str(company_d)]["is_primary"] is False
         products = lc_client.get("/api/v1/bibliotheque/products", headers=_auth(charlie_token))
         assert products.status_code == 200, products.get_data(as_text=True)
+
+
+class TestReAddingAStaleProfile:
+    """company-settings-members-01 / auth-onboarding-03: a stale profile never blocks re-adding."""
+
+    def _add(self, client, admin, phone, name="Stale Profile", role="member"):
+        return client.post(
+            f"/api/v1/companies/{admin['a']}/members",
+            json={"phone": phone, "name": name, "role": role},
+            headers=_auth(admin["token"]),
+        )
+
+    def _entry(self, client, admin, person_id):
+        from app import db
+
+        db.session.rollback()
+        items = client.get(f"/api/v1/companies/{admin['a']}/persons", headers=_auth(admin["token"])).get_json()
+        return next((e for e in items["items"] if e["person_id"] == person_id), None)
+
+    def test_readding_an_expired_invitation_renews_it(self, lc_client, lc_app, admin):
+        from app import db
+
+        person_id = self._add(lc_client, admin, "0620350071").get_json()["person_id"]
+        with lc_app.app_context():
+            db.session.query(CompanyPersonModel).filter_by(company_id=admin["a"], person_id=UUID(person_id)).update(
+                {"pending_expires_at": datetime.now(timezone.utc) - timedelta(days=1)}
+            )
+            db.session.commit()
+
+        assert self._add(lc_client, admin, "0620350071", role="manager").status_code == 201
+        entry = self._entry(lc_client, admin, person_id)
+        assert entry["is_active"] is True and entry["pending"] is True
+
+        signed_up = _signup(lc_client, lc_app, "0620350071", "Renewed")
+        assert _companies_of(lc_client, signed_up["access_token"])[str(admin["a"])]["role"] == "manager"
+
+    def test_an_expired_invitation_is_taken_over_once_the_person_has_an_account(self, lc_client, lc_app, admin):
+        from app import db
+
+        person_id = self._add(lc_client, admin, "0620350072").get_json()["person_id"]
+        with lc_app.app_context():
+            db.session.query(CompanyPersonModel).filter_by(company_id=admin["a"], person_id=UUID(person_id)).update(
+                {"pending_expires_at": datetime.now(timezone.utc) - timedelta(days=1)}
+            )
+            db.session.commit()
+        signed_up = _signup(lc_client, lc_app, "0620350072", "Signed Up Late")
+        assert _companies_of(lc_client, signed_up["access_token"]) == {}
+
+        added = self._add(lc_client, admin, "0620350072")
+        assert added.status_code == 201, added.get_json()
+        assert str(admin["a"]) in _companies_of(lc_client, signed_up["access_token"])
+        entry = self._entry(lc_client, admin, person_id)
+        assert entry["is_active"] is True and entry["pending"] is False
+
+    def test_a_cancelled_invitation_does_not_block_adding_the_account(self, lc_client, lc_app, admin):
+        person_id = self._add(lc_client, admin, "0620350073").get_json()["person_id"]
+        lc_client.delete(f"/api/v1/companies/{admin['a']}/members/{person_id}", headers=_auth(admin["token"]))
+        signed_up = _signup(lc_client, lc_app, "0620350073", "Came Later")
+
+        added = self._add(lc_client, admin, "0620350073")
+        assert added.status_code == 201, added.get_json()
+        assert str(admin["a"]) in _companies_of(lc_client, signed_up["access_token"])
+
+    def test_a_member_who_deleted_their_account_can_be_added_back(self, lc_client, lc_app, admin):
+        first = _signup(lc_client, lc_app, "0620350074", "Came Back")
+        assert self._add(lc_client, admin, "0620350074").status_code == 201
+        assert lc_client.delete("/api/v1/auth/me", headers=_auth(first["access_token"])).status_code == 204
+
+        again = _signup(lc_client, lc_app, "0620350074", "Came Back")
+        added = self._add(lc_client, admin, "0620350074")
+        assert added.status_code == 201, added.get_json()
+        assert str(admin["a"]) in _companies_of(lc_client, again["access_token"])
+
+
+class TestImportSamePhoneDifferentPerson:
+    def test_a_number_already_in_the_target_is_reported_not_a_500(self, lc_client, lc_app, admin):
+        """company-settings-members-03: the unique (company, phone) index rolled the batch back."""
+        from app import db
+        from app.infrastructure.database.models.person import PersonModel
+
+        assert (
+            lc_client.post(
+                f"/api/v1/companies/{admin['a']}/members",
+                json={"phone": "0620350061", "name": "Khoa (A)"},
+                headers=_auth(admin["token"]),
+            ).status_code
+            == 201
+        )
+        # Another admin of C added the same human as a separate person.
+        other = uuid4()
+        with lc_app.app_context():
+            db.session.add(
+                PersonModel(
+                    id=other,
+                    name="Khoa (C)",
+                    normalized_name="khoa (c)",
+                    phone="+33620350061",
+                    phone_normalized="+33620350061",
+                    created_by_user_id=admin["id"],
+                )
+            )
+            db.session.flush()
+            db.session.add(
+                CompanyPersonModel(
+                    id=uuid4(),
+                    company_id=admin["c"],
+                    person_id=other,
+                    phone_normalized="+33620350061",
+                    pending_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            db.session.commit()
+
+        imported = lc_client.post(
+            f"/api/v1/companies/{admin['a']}/members/import",
+            json={"from_company_id": str(admin["c"]), "person_ids": [str(other)]},
+            headers=_auth(admin["token"]),
+        )
+        assert imported.status_code == 201, imported.get_data(as_text=True)
+        body = imported.get_json()
+        assert body["items"] == []
+        assert body["already_member_person_ids"] == [str(other)]

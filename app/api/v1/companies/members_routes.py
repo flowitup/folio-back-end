@@ -221,6 +221,10 @@ def import_members(company_id: str):
         return _err("Forbidden", "Admin permission required", 403)
     except SourceCompanyNotAccessibleError:
         return _err("Forbidden", "Admin permission required in the source company", 403)
+    except IntegrityError:
+        # A concurrent add took one of these numbers in the meantime: nothing was imported.
+        db.session.rollback()
+        return _err("Conflict", "Someone in this company already uses one of these phone numbers.", 409)
 
     return (
         jsonify(
