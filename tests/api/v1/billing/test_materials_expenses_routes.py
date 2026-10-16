@@ -301,8 +301,8 @@ class TestListAggregation:
             assert "project_name" in item
             assert item["project_name"] is not None
 
-    def test_project_name_is_the_site_address_when_set(self, mat_client, admin_tok, mat_exp_app):
-        """dashboard-projects-10: projects are shown by their address, as everywhere else."""
+    def test_project_is_named_first_and_its_address_goes_alongside(self, mat_client, admin_tok, mat_exp_app):
+        """Projects are shown name first (project_label), as everywhere else; the address comes alongside."""
         from app import db
         from app.infrastructure.database.models.project import ProjectModel
 
@@ -315,9 +315,8 @@ class TestListAggregation:
         items = mat_client.get(
             "/api/v1/billing/materials-expenses?refundable=true", headers=_auth(admin_tok)
         ).get_json()["items"]
-        names = {i["project_name"] for i in items}
-        assert "12 Rue des Lilas, 69003 Lyon" in names
-        assert "Project A1" not in names
+        rows = {(i["project_name"], i["project_address"]) for i in items}
+        assert ("Project A1", "12 Rue des Lilas, 69003 Lyon") in rows
 
 
 # ---------------------------------------------------------------------------

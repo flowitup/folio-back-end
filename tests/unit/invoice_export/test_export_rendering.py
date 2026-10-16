@@ -281,7 +281,7 @@ def test_french_type_names_match_the_app_glossary():
     assert type_labels("fr") == {
         "released_funds": "Fonds débloqués",
         "labor": "Main-d'œuvre",
-        "materials_services": "Matériaux & services",
+        "materials_services": "Achats & prestations",
         "others": "Autres",
         "return": "Avoir",
     }

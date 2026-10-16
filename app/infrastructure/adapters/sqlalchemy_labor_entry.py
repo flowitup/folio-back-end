@@ -20,6 +20,7 @@ from app.application.labor.ports import (
 )
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
+from app.infrastructure.adapters.project_label_sql import project_label_expr
 from app.infrastructure.database.models import (
     LaborEntryModel,
     PersonModel,
@@ -496,10 +497,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 PersonModel.id.label("person_id"),
                 PersonModel.name.label("person_name"),
                 OtherProject.id.label("other_project_id"),
-                # Shown by its site address, like everywhere else (project_display_label).
-                func.coalesce(func.nullif(func.trim(OtherProject.address), ""), OtherProject.name).label(
-                    "other_project_name"
-                ),
+                # Name first, site address second, as the apps show projects (project_label).
+                project_label_expr(OtherProject).label("other_project_name"),
                 LaborEntryModel.id.label("entry_id"),
                 LaborEntryModel.shift_type.label("shift_type"),
                 LaborEntryModel.supplement_hours.label("supplement_hours"),

@@ -758,8 +758,8 @@ class TestWorkerIdHappyPath:
         assert "nguyen-van-an" in result.filename
         assert "33621500003" not in result.filename
 
-    def test_filename_names_the_site_address(self):
-        """Projects are shown by their address: the file name too."""
+    def test_filename_names_the_project_first(self):
+        """Projects are shown name first (project_label): the file name too."""
         pid = uuid4()
         project = _make_project("QA3 interne", project_id=pid)
         project.address = "12 rue des Lilas"
@@ -772,7 +772,7 @@ class TestWorkerIdHappyPath:
             acting_user_email="user@example.com",
         )
         result = uc.execute(req)
-        assert result.filename.startswith("labor-12-rue-des-lilas-")
+        assert result.filename.startswith("labor-qa3-interne-")
 
     def test_filename_includes_project_slug_and_range(self):
         """Filename format: labor-{project-slug}-{worker-slug}-{from}-to-{to}.xlsx"""

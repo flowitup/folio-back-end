@@ -17,7 +17,7 @@ from app.application.labor.labor_day_description_usecases import (
 from app.application.labor.list_labor_entries import ListLaborEntriesUseCase, ListLaborEntriesRequest
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository, IWorkerRateChangeRepository
 from app.application.projects.ports import IProjectRepository
-from app.domain.entities.project import project_display_label
+from app.domain.entities.project import project_display_label, project_export_heading
 from app.domain.entities.worker import worker_display_name
 from app.domain.exceptions.labor_exceptions import WorkerNotFoundError
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
@@ -252,10 +252,11 @@ class ExportLaborUseCase:
             )
 
         # 5. Build export context
-        # Projects are shown by their site address everywhere else (project_display_label).
+        # Name first, as the apps show projects (project_display_label); the heading adds the
+        # site address. The file name uses the label alone.
         project_label = project_display_label(project)
         context = ExportContext(
-            project_name=project_label,
+            project_name=project_export_heading(project),
             project_id=req.project_id,
             range=ExportRange(from_month=from_d, to_month=to_d),
             generated_at=datetime.now(timezone.utc),

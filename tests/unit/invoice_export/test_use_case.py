@@ -413,15 +413,30 @@ def test_filename_with_no_type_filter():
     assert "-supplier" not in result.filename
 
 
-def test_filename_is_localised_and_names_the_site_address():
-    """French file name prefix, and the project's address (the label the app shows), not its internal name."""
+def test_filename_is_localised_and_names_the_project_first():
+    """French file name prefix and the project's label (name first, as the apps show it); the heading adds the address."""
     import dataclasses
 
     project = dataclasses.replace(_make_project("QA3 Rénovation Lilas"), address="12 rue des Lilas")
     uc = _build_usecase(project, invoices=[])
     request = dataclasses.replace(_base_request(project.id, format="xlsx"), locale="fr")
     result = uc.execute(request)
-    assert result.filename == "depenses-12-rue-des-lilas-2026-01-to-2026-03.xlsx"
+    assert result.filename == "depenses-qa3-renovation-lilas-2026-01-to-2026-03.xlsx"
+
+
+def test_heading_shows_the_name_then_the_address():
+    import dataclasses
+
+    from app.domain.entities.project import project_export_heading
+
+    project = _make_project("QA3 Rénovation Lilas")
+    assert project_export_heading(dataclasses.replace(project, address="12 rue des Lilas")) == (
+        "QA3 Rénovation Lilas · 12 rue des Lilas"
+    )
+    assert project_export_heading(dataclasses.replace(project, address="")) == "QA3 Rénovation Lilas"
+    assert project_export_heading(dataclasses.replace(project, name=" ", address="12 rue des Lilas")) == (
+        "12 rue des Lilas"
+    )
 
 
 def test_filename_with_type_filter():

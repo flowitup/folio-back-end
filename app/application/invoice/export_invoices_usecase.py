@@ -12,7 +12,7 @@ from uuid import UUID
 from app.application.invoice.ports import IInvoiceRepository
 from app.application.projects.ports import IProjectRepository
 from app.domain.entities.invoice import Invoice, InvoiceType
-from app.domain.entities.project import project_display_label
+from app.domain.entities.project import project_display_label, project_export_heading
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.invoice.export.format import round_cents
 from app.domain.invoice.export.models import (
@@ -182,11 +182,11 @@ class ExportInvoicesUseCase:
             invoice_count=len(invoices),
             released_total=released_total,
         )
-        # Projects are shown by their site address everywhere else; the stored name
-        # is only the fallback (project_display_label), here as in the file name.
+        # Name first, as the apps show projects (project_display_label); the heading adds the
+        # site address. The file name uses the label alone.
         project_label = project_display_label(project)
         context = InvoiceExportContext(
-            project_name=project_label,
+            project_name=project_export_heading(project),
             project_id=req.project_id,
             range=InvoiceExportRange(
                 from_month=from_d.replace(day=1),

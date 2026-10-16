@@ -146,7 +146,7 @@ class TestCrossProjectConflicts:
         assert result[0].person_id == hugo.id
         assert result[0].person_name == "Hugo Martin"
         assert len(result[0].entries) == 1
-        assert result[0].entries[0].project_name == "Beta addr"  # shown by its address (project_display_label)
+        assert result[0].entries[0].project_name == "Beta"  # name first, as the apps show it (project_label)
         assert result[0].entries[0].shift_type == "half"
 
     def test_ignores_inactive_other_worker(self, session, owner, company):
@@ -214,4 +214,4 @@ class TestCrossProjectConflicts:
 
         result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
         assert len(result) == 1
-        assert [(e.project_name, e.shift_type) for e in result[0].entries] == [("B addr", "half")]
+        assert [(e.project_name, e.shift_type) for e in result[0].entries] == [("B", "half")]

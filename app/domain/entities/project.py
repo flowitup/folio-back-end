@@ -50,3 +50,16 @@ def project_display_label(project: Project) -> str:
     if name:
         return name
     return project.address.strip() if isinstance(project.address, str) else ""
+
+
+def project_export_heading(project: Project) -> str:
+    """The project line of an export: its label (name first), then the site address when it adds something.
+
+    "Villa Martin · 12 rue des Lilas" for a named project with an address; just the label otherwise.
+    File names keep the label alone (project_display_label).
+    """
+    label = project_display_label(project)
+    address = project.address.strip() if isinstance(project.address, str) else ""
+    if address and address.casefold() != label.casefold():
+        return f"{label} · {address}" if label else address
+    return label
