@@ -33,7 +33,6 @@ from tests.unit.application.billing.conftest import (
     make_access,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -366,3 +365,34 @@ def test_parse_year_seq_is_linear_on_hostile_input(hostile):
     started = time.perf_counter()
     assert _parse_year_seq(hostile) is None
     assert time.perf_counter() - started < 0.05
+
+
+class TestQa3ImportIssueDateYear:
+    """QA3 billing-04: the issue date of an import stays in the number's year."""
+
+    @pytest.fixture
+    def setup(self):
+        user_id, company_id = uuid4(), uuid4()
+        company_repo, access_repo = InMemoryCompanyRepository(), InMemoryUserCompanyAccessRepository()
+        company_repo.save(make_company(owner_id=user_id, company_id=company_id))
+        access_repo.save(make_access(user_id, company_id))
+        uc = _make_usecase(
+            InMemoryBillingDocumentRepository(), InMemoryBillingNumberCounterRepository(), company_repo, access_repo
+        )
+        return dict(user_id=user_id, company_id=company_id, uc=uc, session=_FakeSession())
+
+    def test_missing_issue_date_defaults_into_a_past_number_year(self, setup):
+        inp = _minimal_input(setup["user_id"], setup["company_id"], doc_number="QA3-FAC-2024-050")
+        result = setup["uc"].execute(inp, setup["session"])
+        assert str(result.issue_date) == "2024-12-31"
+
+    def test_issue_date_in_another_year_is_refused(self, setup):
+        import dataclasses
+        from datetime import date
+
+        inp = dataclasses.replace(
+            _minimal_input(setup["user_id"], setup["company_id"], doc_number="QA3-FAC-2024-051"),
+            issue_date=date(2026, 3, 1),
+        )
+        with pytest.raises(ValueError, match="2024"):
+            setup["uc"].execute(inp, setup["session"])
