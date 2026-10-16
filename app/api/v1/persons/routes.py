@@ -26,6 +26,7 @@ from app.application.persons import (
     CreatePersonRequest,
     CreatePersonUseCase,
     InvalidMergeError,
+    MergeConflictError,
     MergePersonsRequest,
     MergePersonsUseCase,
     PersonNotFoundError,
@@ -83,6 +84,9 @@ class MergePersonsRequestSchema(BaseModel):
 class MergePersonsResponseSchema(BaseModel):
     target_person_id: str
     workers_reassigned: int
+    profiles_moved: int = 0
+    profiles_merged: int = 0
+    account_linked: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +279,8 @@ def merge_persons(source_person_id: str):
                 target_person_id=target_uuid,
             )
         )
+    except MergeConflictError as e:
+        return _error("Conflict", str(e), 409)
     except InvalidMergeError as e:
         return _error("ValidationError", str(e), 400)
     except PersonNotFoundError as e:
@@ -284,5 +290,8 @@ def merge_persons(source_person_id: str):
         MergePersonsResponseSchema(
             target_person_id=result.target_person_id,
             workers_reassigned=result.workers_reassigned,
+            profiles_moved=result.profiles_moved,
+            profiles_merged=result.profiles_merged,
+            account_linked=result.account_linked,
         ).model_dump()
     )
