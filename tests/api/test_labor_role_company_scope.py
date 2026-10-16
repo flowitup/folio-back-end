@@ -192,6 +192,17 @@ class TestListWithoutPrimary:
         resp = client.post("/api/v1/labor/roles", json={"name": "Orphan", "color": "#3B82F6"}, headers=loner_h)
         assert resp.status_code == 400
 
+    def test_no_company_given_creates_in_the_default_company(self, client, manager_h, scope_app):
+        # Installed mobile builds (0.5.27) create roles from Settings with no company at all:
+        # the role lands in the same default company GET lists (oldest attachment here).
+        resp = client.post("/api/v1/labor/roles", json={"name": "LS Old build", "color": "#3B82F6"}, headers=manager_h)
+        assert resp.status_code == 201, resp.get_json()
+        role_id = resp.get_json()["id"]
+        assert role_id in _role_ids(client.get("/api/v1/labor/roles", headers=manager_h))
+        assert role_id in _role_ids(
+            client.get(f"/api/v1/labor/roles?company_id={scope_app._ids['a']}", headers=manager_h)
+        )
+
 
 class TestCreateInTheRequestedCompany:
     def test_manager_creates_in_the_company_named(self, client, manager_h, scope_app):
