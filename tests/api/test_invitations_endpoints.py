@@ -504,6 +504,8 @@ class TestAcceptInvitation:
         assert body["access_token"], "acceptance must return an access token in the body"
         assert body["refresh_token"], "acceptance must return a refresh token in the body"
         assert body["user"]["id"]
+        # Clients open the project just joined, not the last one they viewed.
+        assert body["project_id"]
 
     def test_expired_returns_410(self, inv_client, admin_token, invitation_app):
         """Test that an expired invitation returns 410."""

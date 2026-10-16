@@ -443,6 +443,7 @@ def accept_invitation():
             email=result.user.email,
             display_name=result.user.display_name,
         ),
+        project_id=result.project_id,
     )
     response = make_response(jsonify(body.model_dump(mode="json")), 200)
     set_auth_cookies(response, result.access_token, result.refresh_token)

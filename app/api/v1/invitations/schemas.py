@@ -117,3 +117,5 @@ class AcceptInviteResponse(BaseModel):
     access_token: str
     refresh_token: str
     user: AcceptedUserResponse
+    # The project just joined, so clients can open it rather than the last one viewed.
+    project_id: Optional[UUID] = None
