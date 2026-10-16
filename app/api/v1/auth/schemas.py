@@ -127,16 +127,24 @@ class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "Bearer"
-    expires_in: int = 1800  # 30 minutes in seconds
+    # Seconds the access token lives: filled from JWT_ACCESS_TOKEN_EXPIRES by the routes.
+    expires_in: int = 604800
     user: UserResponse
 
 
 class RefreshResponse(BaseModel):
-    """Refresh token response."""
+    """Refresh token response.
+
+    ``refresh_token`` is a rotated refresh token (absent for a persistent session, whose token
+    never expires): storing it in place of the old one lets an active session slide instead of
+    ending when the first refresh token expires. The old one stays valid until its own expiry,
+    so a client that ignores this field keeps working as before.
+    """
 
     access_token: str
     token_type: str = "Bearer"
-    expires_in: int = 1800
+    expires_in: int = 604800
+    refresh_token: Optional[str] = None
 
 
 class LogoutResponse(BaseModel):

@@ -1,6 +1,7 @@
 """Auth API routes."""
 
 import logging
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
@@ -84,6 +85,16 @@ def auth_config():
     )
 
 
+def access_token_expires_in() -> int:
+    """Seconds an access token lives: the issuer's own lifetime, else JWT_ACCESS_TOKEN_EXPIRES."""
+    container = get_container()
+    seconds = getattr(getattr(container, "token_issuer", None), "access_expires_seconds", None)
+    if isinstance(seconds, int):
+        return seconds
+    expires = current_app.config.get("JWT_ACCESS_TOKEN_EXPIRES")
+    return int(expires.total_seconds()) if isinstance(expires, timedelta) else 7 * 24 * 3600
+
+
 def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
 
@@ -110,6 +121,7 @@ def _login_response(container, result: LoginResult):
     response_data = LoginResponse(
         access_token=result.access_token,
         refresh_token=result.refresh_token,
+        expires_in=access_token_expires_in(),
         user=UserResponse(
             id=user.id,
             email=user.email,
@@ -282,17 +294,29 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
 )
 @jwt_required(refresh=True)
 def refresh():
-    """Refresh access token using refresh token."""
+    """Refresh access token using refresh token.
+
+    An expiring refresh token is rotated: a fresh one comes back in the body and in the refresh
+    cookie, so a session that keeps refreshing slides instead of ending when the refresh token
+    issued at sign-in expires. The presented one is NOT revoked: an older mobile build that
+    ignores the new field keeps using it until it expires, exactly as before. A persistent
+    refresh token never expires and is not rotated.
+    """
     user_id = get_jwt_identity()
     container = get_container()
 
     # Identity only: the token carries no permissions, so a role or grant
     # change applies on the next request without a refresh.
     new_access_token = container.token_issuer.create_access_token(UUID(user_id))
+    new_refresh_token = None
+    if not get_jwt().get("persistent"):
+        new_refresh_token = container.token_issuer.create_refresh_token(UUID(user_id))
 
-    response_data = RefreshResponse(access_token=new_access_token)
-    response = make_response(jsonify(response_data.model_dump()))
-    set_auth_cookies(response, new_access_token)
+    response_data = RefreshResponse(
+        access_token=new_access_token, expires_in=access_token_expires_in(), refresh_token=new_refresh_token
+    )
+    response = make_response(jsonify(response_data.model_dump(exclude_none=True)))
+    set_auth_cookies(response, new_access_token, new_refresh_token)
 
     return response
 

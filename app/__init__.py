@@ -318,7 +318,12 @@ def _configure_di_container() -> None:
         attachment_storage=storage,
         invoice_attachment_repository=SQLAlchemyInvoiceAttachmentRepository(db.session),
         task_repository=SQLAlchemyTaskRepository(db.session),
-        token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
+        # One source for the lifetimes: the issuer, the cookies and `expires_in` all follow the config.
+        token_issuer=JWTTokenIssuer(
+            access_expires_minutes=int(Config.JWT_ACCESS_TOKEN_EXPIRES.total_seconds() // 60),
+            refresh_expires_days=Config.JWT_REFRESH_TOKEN_EXPIRES.days,
+            redis_url=Config.REDIS_URL,
+        ),
         session_manager=FlaskSessionManager(),
         invitation_repo=invitation_repo,
         project_membership_repo=membership_repo,

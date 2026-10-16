@@ -75,8 +75,12 @@ class Config:
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
     JWT_TOKEN_LOCATION: tuple = ("headers", "cookies")
     # JWT cookie security — secure-by-default everywhere.
-    #   Production (FLASK_ENV=production)        : Secure=True,  CSRF=True,  SameSite=Strict.
+    #   Production (FLASK_ENV=production)        : Secure=True,  CSRF=True,  SameSite=Lax.
     #   Non-prod default                         : Secure=True,  CSRF=True,  SameSite=Lax.
+    #   Lax, not Strict, in production: a Strict cookie is not sent on a top-level navigation from
+    #   another site, so every link in an e-mail, WhatsApp or Slack landed a signed-in user on
+    #   /login. Lax still withholds the cookies from cross-site POSTs, and the double-submit CSRF
+    #   tokens cover every state-changing request anyway.
     #   Non-prod with FLASK_DEV_INSECURE=1 opt-in: Secure=False, CSRF=False, SameSite=None
     #     (legacy localhost-over-HTTP dev only — production refuses to boot in this mode,
     #      see app/__init__.py).
@@ -84,7 +88,7 @@ class Config:
     _dev_insecure: bool = (not _is_production) and get_env("FLASK_DEV_INSECURE", default="0") == "1"
     JWT_COOKIE_SECURE: bool = not _dev_insecure
     JWT_COOKIE_CSRF_PROTECT: bool = not _dev_insecure
-    JWT_COOKIE_SAMESITE: str = "Strict" if _is_production else ("None" if _dev_insecure else "Lax")
+    JWT_COOKIE_SAMESITE: str = "None" if _dev_insecure else "Lax"
 
     # Rate Limiting (flask-limiter reads RATELIMIT_STORAGE_URI from app config)
     RATELIMIT_STORAGE_URI: str = get_env("REDIS_URL", default="redis://localhost:6379/1")
