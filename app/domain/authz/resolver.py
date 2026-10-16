@@ -33,6 +33,19 @@ if TYPE_CHECKING:
 _COMPANY_NAMESPACE = "company"
 
 
+# Managing labor shows every daily rate, day cost and payment: a deny on seeing pay
+# would have no effect while labor management stays allowed, so it removes that too
+# (a refusal always wins). The caller then sees labor like a restricted member.
+_IMPLIED_DENIES = {"project:view_pay": frozenset({"project:manage_labor"})}
+
+
+def _with_implied_denies(denies: "set[str]") -> "set[str]":
+    implied = set(denies)
+    for perm in denies:
+        implied |= _IMPLIED_DENIES.get(perm, frozenset())
+    return implied
+
+
 def requires_company(permission: str) -> bool:
     """Return True when `permission` can only be evaluated against a resolved company.
 
@@ -107,7 +120,7 @@ def effective_permissions(
     base = permissions_for(role, assigned)
     grant_rows = reader.grants_for(user_id, resolved_company_id, project_id)
     grants = {perm for perm, effect in grant_rows if effect == "grant"}
-    denies = {perm for perm, effect in grant_rows if effect == "deny"} - NON_DENIABLE
+    denies = _with_implied_denies({perm for perm, effect in grant_rows if effect == "deny"}) - NON_DENIABLE
     return frozenset((base | grants) - denies)
 
 
@@ -136,7 +149,7 @@ def permissions_in_company(
     base = permissions_for(role, assigned)
     grant_rows = reader.grants_for(user_id, company_id, None)
     grants = {perm for perm, effect in grant_rows if effect == "grant"}
-    denies = {perm for perm, effect in grant_rows if effect == "deny"} - NON_DENIABLE
+    denies = _with_implied_denies({perm for perm, effect in grant_rows if effect == "deny"}) - NON_DENIABLE
     return frozenset((base | grants) - denies)
 
 

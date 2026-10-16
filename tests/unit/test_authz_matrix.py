@@ -244,6 +244,16 @@ def test_deny_removes_a_customisable_permission():
     assert "project:manage_labor" in perms
 
 
+def test_a_view_pay_deny_also_removes_labor_management_which_shows_pay():
+    """Refusing pay to a manager must hide it: managing labor shows every rate and cost."""
+    reader = _FakeReader(role="manager", assigned=True, grants=[("project:view_pay", "deny")])
+    perms = effective_permissions(reader, uuid4(), project_id=reader.project_id)
+    assert "project:view_pay" not in perms
+    assert "project:manage_labor" not in perms
+    assert "project:read" in perms
+    assert "project:manage_labor" not in permissions_in_company(reader, uuid4(), reader.company_id)
+
+
 def test_grant_adds_a_permission_not_in_the_base_matrix():
     reader = _FakeReader(role="member", assigned=True, grants=[("project:manage_invoices", "grant")])
     perms = effective_permissions(reader, uuid4(), project_id=reader.project_id)
