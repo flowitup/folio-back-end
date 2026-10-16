@@ -45,6 +45,7 @@ from app.application.project_analyses.dtos import (
 from app.application.project_analyses.exceptions import (
     AnalysisNotFoundError,
     AnalysisTooLargeError,
+    InvalidAnalysisEncodingError,
     InvalidAnalysisFileError,
     NotProjectMemberError,
     PermissionDeniedError,
@@ -138,7 +139,8 @@ def list_analyses(project_id: UUID) -> Any:
             filters=ListAnalysesInput(
                 project_id=project_id,
                 q=params.q,
-                tags=tuple(params.tag),
+                # Stored tags are lower-case, so the filter is case-insensitive.
+                tags=tuple(t.strip().lower() for t in params.tag if t.strip()),
                 sort=params.sort,
                 order=params.order,
                 page=params.page,
@@ -257,6 +259,8 @@ def create_analysis(project_id: UUID) -> Any:
         return _err(403, "Forbidden", "Not a project member")
     except AnalysisTooLargeError as exc:
         return _err(413, "FileTooLarge", str(exc))
+    except InvalidAnalysisEncodingError as exc:
+        return _err(400, "InvalidEncoding", str(exc))
     except InvalidAnalysisFileError as exc:
         return _err(400, "InvalidFile", str(exc))
     except ValueError as exc:
@@ -379,7 +383,10 @@ def get_analysis_content(project_id: UUID, analysis_id: UUID) -> Any:
 @limiter.limit("30 per minute", key_func=jwt_user_key)
 def update_analysis(project_id: UUID, analysis_id: UUID) -> Any:
     """Update title/summary/source_url/tags. Omitted fields are left unchanged."""
-    raw = request.get_json(silent=True) or {}
+    raw = request.get_json(silent=True)
+    if not isinstance(raw, dict):
+        # A text/plain or malformed body used to answer 200 and change nothing.
+        return _err(400, "BadRequest", "Request body must be a JSON object")
     try:
         body = AnalysisUpdateBody.model_validate(raw)
     except ValidationError as exc:

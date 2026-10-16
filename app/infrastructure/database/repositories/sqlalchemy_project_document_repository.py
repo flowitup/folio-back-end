@@ -13,6 +13,7 @@ from app.application.project_documents.dtos import ListFiltersDTO, ListResultDTO
 from app.domain.project_document import ProjectDocument
 from app.infrastructure.database.models.project_document import ProjectDocumentModel, ProjectDocumentTagRow
 from app.infrastructure.database.models.user import UserModel
+from app.infrastructure.database.text_collation import fold_text, sortable
 
 # ---------------------------------------------------------------------------
 # Kind → file-extension mapping used for SQL-side filtering.
@@ -151,7 +152,7 @@ class SqlAlchemyProjectDocumentRepository:
         sort_key = filters.sort
         if sort_key == "name":
             order_by = [
-                order_fn(func.lower(ProjectDocumentModel.filename)),
+                order_fn(sortable(ProjectDocumentModel.filename, self._session)),
                 order_fn(ProjectDocumentModel.id),
             ]
         elif sort_key == "size":
@@ -160,9 +161,21 @@ class SqlAlchemyProjectDocumentRepository:
                 order_fn(ProjectDocumentModel.id),
             ]
         elif sort_key == "uploader":
-            # v1: sort by uploader_user_id cast to text — acceptable simple sort
+            # By the name the list shows (display name, else e-mail, else phone),
+            # not by the uploader's UUID; unknown uploaders go last.
+            uploader_name = (
+                select(
+                    sortable(
+                        func.coalesce(func.nullif(UserModel.display_name, ""), UserModel.email, UserModel.phone),
+                        self._session,
+                    )
+                )
+                .where(UserModel.id == ProjectDocumentModel.uploader_user_id)
+                .correlate(ProjectDocumentModel)
+                .scalar_subquery()
+            )
             order_by = [
-                order_fn(ProjectDocumentModel.uploader_user_id),
+                order_fn(uploader_name).nulls_last(),
                 order_fn(ProjectDocumentModel.id),
             ]
         else:
@@ -278,9 +291,9 @@ class SqlAlchemyProjectDocumentRepository:
                 ProjectDocumentModel.deleted_at.is_(None),
             )
             .distinct()
-            .order_by(UserModel.display_name, UserModel.email)
         )
-        return [(row[0], row[1], row[2], row[3], row[4]) for row in self._session.execute(stmt).all()]
+        rows = [(row[0], row[1], row[2], row[3], row[4]) for row in self._session.execute(stmt).all()]
+        return sorted(rows, key=lambda r: (r[1] is None, fold_text(r[1] or ""), r[2] or ""))
 
     def list_tags_for_project(self, project_id: UUID) -> list[str]:
         """Return all distinct tags used by active documents in a project."""
@@ -292,6 +305,6 @@ class SqlAlchemyProjectDocumentRepository:
                 ProjectDocumentModel.deleted_at.is_(None),
             )
             .distinct()
-            .order_by(ProjectDocumentTagRow.tag)
         )
-        return list(self._session.execute(stmt).scalars().all())
+        # Sorted here, accent-aware: byte order put 'électricité' after 'plans'.
+        return sorted(self._session.execute(stmt).scalars().all(), key=lambda tag: (fold_text(tag), tag))

@@ -27,6 +27,21 @@ def strip_control_chars(name: str) -> str:
     return _CONTROL_CHARS.sub("", name)
 
 
+_LINE_CONTROLS = re.compile(r"[\t\n\r\x0b\x0c]+")
+# Every control character except TAB and LF, which a multi-line text may keep.
+_NON_TEXT_CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def single_line_text(value: str) -> str:
+    """``value`` on one line: tabs and line breaks become a space, other controls are dropped."""
+    return strip_control_chars(_LINE_CONTROLS.sub(" ", value)).strip()
+
+
+def multi_line_text(value: str) -> str:
+    """``value`` without control characters other than TAB and LF (CRLF becomes LF)."""
+    return _NON_TEXT_CONTROLS.sub("", value.replace("\r\n", "\n").replace("\r", "\n"))
+
+
 def quoted_ascii_filename(name: str) -> str:
     """``name`` as the content of a quoted ``filename="..."`` parameter: ASCII, no control characters.
 

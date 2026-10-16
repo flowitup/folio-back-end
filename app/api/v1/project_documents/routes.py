@@ -52,7 +52,7 @@ from app.application.project_documents.confirm_project_document_upload import (
     StorageKeyMismatchError,
 )
 from app.application.usecases.otp_login import is_placeholder_email
-from app.domain.value_objects.display_filename import strip_control_chars
+from app.domain.value_objects.display_filename import single_line_text, strip_control_chars
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -503,7 +503,8 @@ def update_document_tags(project_id: str, document_id: str):
     if not isinstance(raw_tags, list) or not all(isinstance(t, str) for t in raw_tags):
         return _error_response("INVALID_TAGS", "tags must be an array of strings", 400)
 
-    tags = [t.strip().lower() for t in raw_tags if t.strip()]
+    # One line each: a tab or line break would split a chip and break CSV exports.
+    tags = list(dict.fromkeys(single_line_text(t).lower() for t in raw_tags if single_line_text(t)))
     if len(tags) > 20:
         return _error_response("TOO_MANY_TAGS", "Maximum 20 tags per document", 400)
     for tag in tags:

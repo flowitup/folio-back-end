@@ -26,7 +26,6 @@ from uuid import UUID, uuid4
 from werkzeug.datastructures import MultiDict
 from tests.auth_login_helper import mint_access_token
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1378,3 +1377,69 @@ class TestAuthorizeAnalysisMutation:
                 project_owner_id=None,
                 is_admin=False,
             )
+
+
+class TestQa3AnalysisInputHardening:
+    """QA3 documents-photos-analyses-09 / -27."""
+
+    def _post_bytes(self, client, project_id, token, body: bytes, mimetype: str = "text/html"):
+        return client.post(
+            _analyses_url(project_id),
+            data={"file": (io.BytesIO(body), "rapport.html", mimetype), "title": "QA3 encodage"},
+            content_type="multipart/form-data",
+            headers=_auth(token),
+        )
+
+    def _content(self, client, project_id, token, analysis_id) -> str:
+        resp = client.get(_content_url(project_id, analysis_id), headers=_auth(token))
+        assert resp.status_code == 200
+        return resp.get_data().decode("utf-8")
+
+    def test_windows_1252_report_is_transcoded(self, inv_client, member_token, analyses_app):
+        pid = analyses_app._analyses_project_id
+        body = '<html><head><meta charset="windows-1252"></head><body>Béton armé</body></html>'.encode("cp1252")
+        resp = self._post_bytes(inv_client, pid, member_token, body)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        html = self._content(inv_client, pid, member_token, resp.get_json()["id"])
+        assert "Béton armé" in html
+        assert 'charset="utf-8"' in html
+
+    def test_utf16_report_with_bom_is_transcoded(self, inv_client, member_token, analyses_app):
+        pid = analyses_app._analyses_project_id
+        body = "<html><body>Đà Nẵng béton</body></html>".encode("utf-16")
+        resp = self._post_bytes(inv_client, pid, member_token, body)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert "Đà Nẵng béton" in self._content(inv_client, pid, member_token, resp.get_json()["id"])
+
+    def test_undeclared_legacy_encoding_gets_a_dedicated_error(self, inv_client, member_token, analyses_app):
+        resp = self._post_bytes(
+            inv_client, analyses_app._analyses_project_id, member_token, "<p>Béton</p>".encode("latin-1")
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "InvalidEncoding"
+
+    def test_patch_without_json_object_is_refused(self, inv_client, member_token, analyses_app):
+        pid = analyses_app._analyses_project_id
+        analysis_id = _upload_analysis(inv_client, pid, member_token)
+        resp = inv_client.patch(
+            _analysis_url(pid, analysis_id),
+            data="x",
+            content_type="text/plain",
+            headers=_auth(member_token),
+        )
+        assert resp.status_code == 400
+
+    def test_control_characters_are_removed_from_title_and_tags(self, inv_client, member_token, analyses_app):
+        pid = analyses_app._analyses_project_id
+        resp = _upload(inv_client, pid, member_token, title="QA3 ctrl\ttitle\nnewline", tags=["a\nb", "Gros-Œuvre"])
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["title"] == "QA3 ctrl title newline"
+        assert sorted(data["tags"]) == ["a b", "gros-œuvre"]
+
+    def test_tag_filter_is_case_insensitive(self, inv_client, member_token, analyses_app):
+        pid = analyses_app._analyses_project_id
+        _upload_analysis(inv_client, pid, member_token, title="QA3 tagged", tags=["gros-œuvre"])
+        resp = inv_client.get(_analyses_url(pid), query_string={"tag": "Gros-Œuvre"}, headers=_auth(member_token))
+        assert resp.status_code == 200
+        assert [i["title"] for i in resp.get_json()["items"]] == ["QA3 tagged"]
