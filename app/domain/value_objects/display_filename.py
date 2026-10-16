@@ -17,6 +17,16 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _QUOTED_UNSAFE = re.compile(r'["\\?]')
 
 
+# Longest display name accepted (filesystems cap a name at 255). A longer one made the
+# download's Content-Disposition header so large that proxies cut the response.
+MAX_DISPLAY_FILENAME_LENGTH = 255
+
+
+def is_too_long(name: str) -> bool:
+    """True when ``name`` (stripped) is longer than MAX_DISPLAY_FILENAME_LENGTH characters."""
+    return len((name or "").strip()) > MAX_DISPLAY_FILENAME_LENGTH
+
+
 def has_control_chars(name: str) -> bool:
     """True when ``name`` holds a control character (line break, tab, NUL...)."""
     return _CONTROL_CHARS.search(name) is not None

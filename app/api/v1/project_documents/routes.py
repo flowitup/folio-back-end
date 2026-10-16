@@ -42,6 +42,7 @@ from app.application.project_documents import (
     DocumentFileTooLargeError,
     DocumentPermissionDeniedError,
     EmptyFileError,
+    FilenameTooLongError,
     ListFiltersDTO,
     ProjectDocumentNotFoundError,
     UnsupportedDocumentTypeError,
@@ -169,6 +170,8 @@ def upload_project_document(project_id: str):
         return _error_response("EMPTY_FILE", str(exc), 400)
     except DocumentFileTooLargeError as exc:
         return _error_response("FILE_TOO_LARGE", str(exc), 413)
+    except FilenameTooLongError as exc:
+        return _error_response("FILENAME_TOO_LONG", str(exc), 422)
     except UnsupportedDocumentTypeError as exc:
         return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
 
@@ -216,6 +219,8 @@ def presign_project_document(project_id: str):
         return _error_response("EMPTY_FILE", str(exc), 400)
     except DocumentFileTooLargeError as exc:
         return _error_response("FILE_TOO_LARGE", str(exc), 413)
+    except FilenameTooLongError as exc:
+        return _error_response("FILENAME_TOO_LONG", str(exc), 422)
     except UnsupportedDocumentTypeError as exc:
         return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
     except RuntimeError as exc:
@@ -310,6 +315,8 @@ def confirm_project_document_upload(project_id: str):
         return _error_response("EMPTY_FILE", str(exc), 400)
     except DocumentFileTooLargeError as exc:
         return _error_response("FILE_TOO_LARGE", str(exc), 413)
+    except FilenameTooLongError as exc:
+        return _error_response("FILENAME_TOO_LONG", str(exc), 422)
     except UnsupportedDocumentTypeError as exc:
         return _error_response("UNSUPPORTED_TYPE", str(exc), 415)
 
@@ -437,6 +444,8 @@ def rename_project_document(project_id: str, document_id: str):
         return _error_response("FORBIDDEN", "You are not permitted to rename this document", 403)
     except ProjectDocumentNotFoundError:
         return _error_response("NOT_FOUND", "Document not found", 404)
+    except FilenameTooLongError as exc:
+        return _error_response("FILENAME_TOO_LONG", str(exc), 422)
     except ValueError as exc:
         return _error_response("INVALID_FILENAME", str(exc), 400)
 

@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from app.application.project_documents.exceptions import (
+    FilenameTooLongError,
     DocumentFileTooLargeError,
     EmptyFileError,
     UnsupportedDocumentTypeError,
 )
+from app.domain.value_objects.display_filename import MAX_DISPLAY_FILENAME_LENGTH, is_too_long
 from app.application.project_documents.ports import IDocumentStorage, IFilenameSanitizer
 from app.application.project_documents.upload_project_document import (
     MAX_SIZE_BYTES,
@@ -54,6 +56,9 @@ class PresignProjectDocumentUploadUseCase:
             raise EmptyFileError("File has no content (size <= 0 bytes)")
         if size_bytes > MAX_SIZE_BYTES:
             raise DocumentFileTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
+
+        if is_too_long(filename):
+            raise FilenameTooLongError(f"File name is too long (max {MAX_DISPLAY_FILENAME_LENGTH} characters)")
 
         # --- Filename sanitation ---
         sanitized = self._sanitizer.sanitize(filename)

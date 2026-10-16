@@ -11,6 +11,7 @@ import pytest
 from app.application.project_documents.exceptions import (
     DocumentFileTooLargeError,
     EmptyFileError,
+    FilenameTooLongError,
     UnsupportedDocumentTypeError,
 )
 from app.application.project_documents.ports import IDocumentStorage, IProjectDocumentRepository
@@ -516,3 +517,19 @@ class TestValidateFileType:
 
         kind = validate_file_type("report.pdf", "application/pdf")
         assert kind == "pdf"
+
+
+class TestUploadFilenameLength:
+    def test_name_over_255_characters_is_refused(self):
+        """documents-photos-analyses-15: unbounded names broke the download header."""
+        uc, _, storage, _ = _make_use_case()
+        with pytest.raises(FilenameTooLongError):
+            uc.execute(
+                project_id=uuid4(),
+                filename="a" * 300 + ".pdf",
+                content_type="application/pdf",
+                size_bytes=5,
+                fileobj=_fileobj(),
+                uploader_user_id=uuid4(),
+            )
+        storage.put.assert_not_called()

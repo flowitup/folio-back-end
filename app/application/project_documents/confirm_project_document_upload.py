@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.application.project_documents.exceptions import (
+    FilenameTooLongError,
     DocumentFileTooLargeError,
     EmptyFileError,
     UnsupportedDocumentTypeError,
@@ -23,7 +24,7 @@ from app.application.project_documents.upload_project_document import (
     validate_file_type,
 )
 from app.domain.project_document import ProjectDocument
-from app.domain.value_objects.display_filename import strip_control_chars
+from app.domain.value_objects.display_filename import MAX_DISPLAY_FILENAME_LENGTH, is_too_long, strip_control_chars
 
 _log = logging.getLogger(__name__)
 
@@ -95,6 +96,8 @@ class ConfirmProjectDocumentUploadUseCase:
             EmptyFileError / DocumentFileTooLargeError: The stored object is
                 empty or over MAX_SIZE_BYTES (it is deleted).
         """
+        if is_too_long(filename):
+            raise FilenameTooLongError(f"File name is too long (max {MAX_DISPLAY_FILENAME_LENGTH} characters)")
         sanitized = self._sanitizer.sanitize(filename)
         if not sanitized:
             raise UnsupportedDocumentTypeError("Invalid filename after sanitation — no safe characters remain")

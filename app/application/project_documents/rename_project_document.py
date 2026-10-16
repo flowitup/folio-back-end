@@ -5,14 +5,14 @@ from __future__ import annotations
 import os
 from uuid import UUID
 
-from app.application.project_documents.exceptions import DocumentPermissionDeniedError
+from app.application.project_documents.exceptions import DocumentPermissionDeniedError, FilenameTooLongError
 from app.application.project_documents.ports import (
     IProjectDocumentRepository,
     ITransactionalSession,
 )
 from app.domain.exceptions.project_document_exceptions import ProjectDocumentNotFoundError
 from app.domain.project_document import ProjectDocument
-from app.domain.value_objects.display_filename import has_control_chars
+from app.domain.value_objects.display_filename import MAX_DISPLAY_FILENAME_LENGTH, has_control_chars, is_too_long
 
 
 class RenameProjectDocumentUseCase:
@@ -59,6 +59,8 @@ class RenameProjectDocumentUseCase:
         new_filename = new_filename.strip()
         if not new_filename:
             raise ValueError("Filename cannot be empty")
+        if is_too_long(new_filename):
+            raise FilenameTooLongError(f"File name is too long (max {MAX_DISPLAY_FILENAME_LENGTH} characters)")
         if has_control_chars(new_filename):
             # It would end up in the download's Content-Disposition header
             raise ValueError("Filename cannot contain line breaks or other control characters")

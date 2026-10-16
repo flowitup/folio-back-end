@@ -9,6 +9,7 @@ from typing import BinaryIO
 from uuid import UUID, uuid4
 
 from app.application.project_documents.exceptions import (
+    FilenameTooLongError,
     DocumentFileTooLargeError,
     EmptyFileError,
     UnsupportedDocumentTypeError,
@@ -20,7 +21,7 @@ from app.application.project_documents.ports import (
     ITransactionalSession,
 )
 from app.domain.project_document import ProjectDocument, kind_for_extension
-from app.domain.value_objects.display_filename import strip_control_chars
+from app.domain.value_objects.display_filename import MAX_DISPLAY_FILENAME_LENGTH, is_too_long, strip_control_chars
 
 _log = logging.getLogger(__name__)
 
@@ -143,6 +144,9 @@ class UploadProjectDocumentUseCase:
             raise EmptyFileError("Uploaded file has no content (size <= 0 bytes)")
         if size_bytes > MAX_SIZE_BYTES:
             raise DocumentFileTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
+
+        if is_too_long(filename):
+            raise FilenameTooLongError(f"File name is too long (max {MAX_DISPLAY_FILENAME_LENGTH} characters)")
 
         # --- Filename sanitation (strips path separators, null bytes, etc.) ---
         sanitized = self._filename_sanitizer.sanitize(filename)
