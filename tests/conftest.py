@@ -1186,7 +1186,9 @@ def invitation_app():
             SendMessageUseCase as _SendChatMessageUC,
             BlockUserUseCase as _BlockChatUserUC,
             ListBlockedUsersUseCase as _ListBlockedChatUsersUC,
+            ListReportsUseCase as _ListChatReportsUC,
             RemoveMessageReactionUseCase as _RemoveChatReactionUC,
+            ResolveReportUseCase as _ResolveChatReportUC,
             ReportMessageUseCase as _ReportChatMessageUC,
             SetMessageReactionUseCase as _SetChatReactionUC,
             UnblockUserUseCase as _UnblockChatUserUC,
@@ -1201,8 +1203,22 @@ def invitation_app():
         _c.mark_chat_channel_read_usecase = _MarkChatReadUC(_chat_repo, _chat_repo, db.session)
         _c.get_chat_attachment_usecase = _GetChatAttachmentUC(_chat_repo, _chat_repo, _chat_storage)
         _c.report_chat_message_usecase = _ReportChatMessageUC(_chat_repo, _chat_repo, _chat_repo, db.session)
-        _c.set_chat_reaction_usecase = _SetChatReactionUC(_chat_repo, _chat_repo, _chat_repo, db.session)
-        _c.remove_chat_reaction_usecase = _RemoveChatReactionUC(_chat_repo, _chat_repo, _chat_repo, db.session)
+        _c.set_chat_reaction_usecase = _SetChatReactionUC(
+            _chat_repo, _chat_repo, _chat_repo, db.session, safety_repo=_chat_repo
+        )
+        _c.remove_chat_reaction_usecase = _RemoveChatReactionUC(
+            _chat_repo, _chat_repo, _chat_repo, db.session, safety_repo=_chat_repo
+        )
+        _c.list_chat_reports_usecase = _ListChatReportsUC(_chat_repo, _chat_repo)
+        _c.resolve_chat_report_usecase = _ResolveChatReportUC(
+            _chat_repo, _chat_repo, _chat_repo, _chat_storage, db.session
+        )
+        if getattr(_c, "push_dispatcher", None) is not None:
+            from app.application.push.chat_report_notifier import ChatReportNotifier
+
+            _c.report_chat_message_usecase.notifier = ChatReportNotifier(
+                dispatcher=_c.push_dispatcher, directory=_chat_repo
+            )
         _c.block_chat_user_usecase = _BlockChatUserUC(_chat_repo, _chat_repo, db.session)
         _c.unblock_chat_user_usecase = _UnblockChatUserUC(_chat_repo, db.session)
         _c.list_blocked_chat_users_usecase = _ListBlockedChatUsersUC(_chat_repo, _chat_repo)

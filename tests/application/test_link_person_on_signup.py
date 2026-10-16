@@ -97,6 +97,21 @@ class TestLinkPersonOnSignupHappyPath:
         cleared = company_person_repo.save.call_args.args[0]
         assert cleared.pending_expires_at is None
         assert cleared.person_id == person_id  # sole match — no repoint needed
+        # No name given: the stored label is left alone.
+        person_repo.rename.assert_not_called()
+
+    def test_the_person_takes_the_name_chosen_at_sign_up(self):
+        user_id, person_id, company_id = uuid4(), uuid4(), uuid4()
+        person_repo = MagicMock()
+        person_repo.find_by_id.return_value = _person(person_id, user_id=None)
+        person_repo.find_by_user_id.return_value = None
+        company_person_repo = MagicMock()
+        company_person_repo.list_pending_by_phone.return_value = [_company_person(company_id, person_id)]
+        usecase = _usecase(person_repo=person_repo, company_person_repo=company_person_repo)
+
+        usecase.execute(user_id, "+33612345678", display_name="  Chloé Dupont ")
+
+        person_repo.rename.assert_called_once_with(person_id, "Chloé Dupont", commit=False)
 
     def test_multiple_pending_profiles_link_every_company(self):
         user_id = uuid4()

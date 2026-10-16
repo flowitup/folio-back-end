@@ -26,6 +26,7 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
     assert_project_link_access,
+    project_in_company,
     assert_user_company_access,
 )
 from app.domain.billing.enums import BillingDocumentKind
@@ -123,7 +124,13 @@ class CloneBillingDocumentUseCase:
             recipient_name=source.recipient_name,
             items=source.items,
             issue_date=today,
-            project_id=source.project_id,
+            # A copy issued by another company does not keep the source's project: a
+            # document stays on its own company's projects.
+            project_id=(
+                source.project_id
+                if project_in_company(self._project_repo, source.project_id, effective_company_id)
+                else None
+            ),
             recipient_address=source.recipient_address,
             recipient_email=source.recipient_email,
             recipient_siret=source.recipient_siret,

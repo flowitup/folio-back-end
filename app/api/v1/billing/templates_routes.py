@@ -119,10 +119,17 @@ def list_billing_templates():
     if error is not None:
         return error
 
+    # No company named and no administered primary (e.g. an admin of two companies who has
+    # no primary row): list every company the caller administers, not an empty list.
+    admin_company_ids: list = []
+    if company_id is None and request.args.get("company_id") is None:
+        authz_reader = getattr(get_container(), "authz_reader", None)
+        admin_company_ids = authz_reader.admin_company_ids(user_id) if authz_reader is not None else []
     templates = get_container().list_billing_templates_usecase.execute(
         user_id=user_id,
         kind=kind,
         company_id=company_id,
+        company_ids=admin_company_ids or None,
     )
     return jsonify({"items": [_tpl_to_json(t) for t in templates], "total": len(templates)})
 

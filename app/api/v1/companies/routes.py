@@ -57,6 +57,7 @@ from app.application.companies import (
 )
 from app.application.companies.join_code_usecases import JoinCodeNotFoundError
 from app.application.companies.update_company_usecase import CLEARABLE_FIELDS
+from app.application.labor.default_role_names import locale_from_accept_language, normalize_locale
 from app.application.usecases.otp_login import is_placeholder_email
 from app.domain.companies.roles import CompanyRole
 from app.infrastructure.rate_limiter import limiter
@@ -190,6 +191,7 @@ def create_company():
         logo_url=str(body.logo_url) if body.logo_url else None,
         default_payment_terms=body.default_payment_terms,
         prefix_override=body.prefix_override,
+        locale=normalize_locale(body.locale) or locale_from_accept_language(request.headers.get("Accept-Language")),
     )
 
     from app import db

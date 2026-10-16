@@ -40,8 +40,15 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         )
         return self._to_entity(model) if model else None
 
+    # Lists come back newest first, ties broken by id: without an ORDER BY the
+    # order followed Postgres heap order and reshuffled the project cards, the
+    # featured first card and the project selected by default between loads.
+    _LIST_ORDER = (ProjectModel.created_at.desc(), ProjectModel.id)
+
     def list_all(self) -> List[Project]:
-        models = self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).all()
+        models = (
+            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).order_by(*self._LIST_ORDER).all()
+        )
         return [self._to_entity(m) for m in models]
 
     def list_for_user_and_companies(self, user_id: UUID, company_ids: List[UUID]) -> List[Project]:
@@ -53,7 +60,11 @@ class SQLAlchemyProjectRepository(IProjectRepository):
         if company_ids:
             conditions.append(ProjectModel.company_id.in_(company_ids))
         models = (
-            self._session.query(ProjectModel).options(joinedload(ProjectModel.users)).filter(or_(*conditions)).all()
+            self._session.query(ProjectModel)
+            .options(joinedload(ProjectModel.users))
+            .filter(or_(*conditions))
+            .order_by(*self._LIST_ORDER)
+            .all()
         )
         return [self._to_entity(m) for m in models]
 

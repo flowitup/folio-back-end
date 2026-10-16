@@ -263,9 +263,12 @@ class TestUnassign:
             assert resp.status_code == 201, resp.get_data(as_text=True)
             task_ids[target_id] = resp.get_json()["id"]
 
-        for target_id in (member_id, coadmin_id):
-            resp = assign_client.delete(f"/api/v1/projects/{project_id}/assignments/{target_id}", headers=_auth(token))
-            assert resp.status_code == 204
+        resp = assign_client.delete(f"/api/v1/projects/{project_id}/assignments/{member_id}", headers=_auth(token))
+        assert resp.status_code == 204
+        # A company admin reaches every project anyway: removing them would change nothing.
+        resp = assign_client.delete(f"/api/v1/projects/{project_id}/assignments/{coadmin_id}", headers=_auth(token))
+        assert resp.status_code == 409, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "CompanyAdmin"
 
         member_task = assign_client.get(f"/api/v1/tasks/{task_ids[member_id]}", headers=_auth(token)).get_json()
         coadmin_task = assign_client.get(f"/api/v1/tasks/{task_ids[coadmin_id]}", headers=_auth(token)).get_json()
@@ -469,3 +472,35 @@ class TestAssignWithRole:
         # 422 is the repo-wide body-validation answer (format_validation_error).
         assert resp.status_code == 422
         assert not self._assignment_exists(assign_app, target_id, project_id)
+
+
+class TestCompanyAdminsAreImplicitMembers:
+    """Company admins open every project of the company, so the team list and count include them."""
+
+    def test_admin_attached_after_creation_is_listed_and_counted_and_cannot_be_removed(self, assign_client, assign_app):
+        admin_id = _make_user(assign_app, "asg_impl_admin@test.com")
+        late_admin_id = _make_user(assign_app, "asg_impl_late@test.com")
+        company_id, project_id = _make_company_and_project(assign_app, admin_id)
+        token = _login(assign_client, "asg_impl_admin@test.com")
+        # Attached as admin after the project exists: no user_projects row names either admin.
+        _attach(assign_app, late_admin_id, company_id, "admin")
+
+        members = assign_client.get(f"/api/v1/projects/{project_id}/members", headers=_auth(token)).get_json()
+        by_id = {m["user_id"]: m for m in members["members"]}
+        assert set(by_id) == {str(admin_id), str(late_admin_id)}
+        assert all(m["is_company_admin"] is True and m["role_name"] == "admin" for m in by_id.values())
+        assert members["total"] == 2
+
+        detail = assign_client.get(f"/api/v1/projects/{project_id}", headers=_auth(token)).get_json()
+        assert detail["user_count"] == 2
+        listed = assign_client.get("/api/v1/projects", headers=_auth(token)).get_json()
+        row = next(p for p in listed["projects"] if p["id"] == str(project_id))
+        assert row["user_count"] == 2
+
+        for path in (
+            f"/api/v1/projects/{project_id}/assignments/{late_admin_id}",
+            f"/api/v1/projects/{project_id}/users/{late_admin_id}",
+        ):
+            resp = assign_client.delete(path, headers=_auth(token))
+            assert resp.status_code == 409, resp.get_data(as_text=True)
+            assert resp.get_json()["error"] == "CompanyAdmin"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from uuid import UUID
 
-from app.domain.exceptions.labor_exceptions import InvalidWorkerDataError
+from app.domain.exceptions.labor_exceptions import InvalidLaborRoleError
 
 
 def assert_role_in_project_company(
@@ -26,4 +26,4 @@ def assert_role_in_project_company(
     role = labor_role_repo.find_by_id(role_id)
     company_id = authz_reader.project_company_id(project_id)
     if role is None or role.company_id is None or role.company_id != company_id:
-        raise InvalidWorkerDataError("Labor role not found")
+        raise InvalidLaborRoleError()

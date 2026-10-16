@@ -89,6 +89,16 @@ class ForbiddenProjectAccessError(BillingDomainError):
         super().__init__(f"User does not have project:read access on project {project_id}")
 
 
+class ProjectCompanyMismatchError(ValueError):
+    """The project a billing document is linked to belongs to another company than its issuer.
+
+    A ValueError so every billing route answers it like its other input errors (400).
+    """
+
+    def __init__(self) -> None:
+        super().__init__("The project belongs to another company than the document's issuer")
+
+
 class ForbiddenCompanyBillingError(BillingDomainError):
     """Raised when a non-admin company member attempts to manage company billing."""
 

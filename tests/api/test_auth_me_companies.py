@@ -71,7 +71,13 @@ def me_app():
             id=uuid4(), legal_name="Me Co A", address="1 rue A", created_by=multi.id, created_at=now, updated_at=now
         )
         company_b = CompanyModel(
-            id=uuid4(), legal_name="Me Co B", address="2 rue B", created_by=multi.id, created_at=now, updated_at=now
+            id=uuid4(),
+            legal_name="Me Co B",
+            address="2 rue B",
+            created_by=multi.id,
+            created_at=now,
+            updated_at=now,
+            hidden_sections=["photos", "library"],
         )
         db.session.add_all([company_a, company_b])
         db.session.flush()
@@ -157,6 +163,15 @@ def test_me_lists_all_attached_companies_with_role_and_primary_flag(client, me_a
     assert by_id[str(me_app._company_a_id)]["legal_name"] == "Me Co A"
     assert by_id[str(me_app._company_b_id)]["role"] == "member"
     assert by_id[str(me_app._company_b_id)]["is_primary"] is False
+
+
+def test_me_companies_carry_hidden_sections(client, me_app):
+    """Web hides a company's sections on its projects, so /auth/me carries them per company."""
+    h = _login(client, "me_multi@test.com")
+    body = client.get("/api/v1/auth/me", headers=h).get_json()
+    by_id = {c["id"]: c for c in body["companies"]}
+    assert by_id[str(me_app._company_a_id)]["hidden_sections"] == []
+    assert by_id[str(me_app._company_b_id)]["hidden_sections"] == ["photos", "library"]
 
 
 def test_me_companies_empty_for_user_with_no_company(client):

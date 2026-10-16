@@ -99,6 +99,7 @@ def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
                     legal_name=company.legal_name,
                     role=access.role,
                     is_primary=access.is_primary,
+                    hidden_sections=list(getattr(company, "hidden_sections", ()) or ()),
                 )
             )
     return companies
@@ -370,6 +371,15 @@ def update_current_user():
 
     container.user_repository.save(user)
     from app import db
+
+    # The person linked to this account (shared by every company they work for) follows the
+    # name they chose, so member lists and pickers stop showing an old label or the phone.
+    new_name = (user.display_name or "").strip()
+    person_repo = getattr(container, "person_repo", None)
+    if "display_name" in provided and new_name and person_repo is not None:
+        person = person_repo.find_by_user_id(user.id)
+        if person is not None and person.name != new_name:
+            person_repo.rename(person.id, new_name, commit=False)
 
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())

@@ -130,3 +130,30 @@ def test_a_malformed_project_or_task_id_is_a_400_not_a_missing_permission(inv_cl
     for url in ("/api/v1/projects/not-a-uuid/tasks", "/api/v1/tasks/not-a-uuid"):
         resp = inv_client.get(url, headers=_auth(admin_token))
         assert resp.status_code == 400, (url, resp.get_data(as_text=True))
+
+
+def test_put_refuses_status_and_unknown_fields_instead_of_a_silent_200(inv_client, admin_token, invitation_app):
+    """planning-notes-22: a misspelled or camelCase field, or a status, used to answer 200
+    while changing nothing."""
+    created = _create(inv_client, admin_token, invitation_app._test_project_id).get_json()
+    url = f"/api/v1/tasks/{created['id']}"
+
+    resp = inv_client.put(url, json={"status": "done"}, headers=_auth(admin_token))
+    assert resp.status_code == 400
+    assert resp.get_json()["message"].startswith("status: ")
+    assert "/move" in resp.get_json()["message"]
+
+    for body in ({"assigne_id": None}, {"dueDate": "2026-11-02"}):
+        resp = inv_client.put(url, json=body, headers=_auth(admin_token))
+        assert resp.status_code == 400, body
+        assert resp.get_json()["message"].startswith(next(iter(body)) + ": ")
+
+    unchanged = inv_client.get(f"/api/v1/projects/{invitation_app._test_project_id}/tasks", headers=_auth(admin_token))
+    task = next(t for t in unchanged.get_json()["tasks"] if t["id"] == created["id"])
+    assert task["status"] == created["status"]
+
+
+def test_task_timestamps_carry_their_utc_offset(inv_client, admin_token, invitation_app):
+    created = _create(inv_client, admin_token, invitation_app._test_project_id).get_json()
+    assert created["created_at"].endswith("+00:00")
+    assert created["updated_at"].endswith("+00:00")

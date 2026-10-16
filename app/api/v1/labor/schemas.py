@@ -247,6 +247,8 @@ class WorkerResponse(BaseModel):
     role_id: Optional[str] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+    # Slug of a default role ("tho_chinh" / "tho_phu"), for translating role_name.
+    role_slug: Optional[str] = None
 
     # Resolved current effective rate (latest rate change <= today, else base).
     # Always present on list responses; may fall back to daily_rate on create/update.

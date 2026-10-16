@@ -106,6 +106,9 @@ class CreateCompanyRequest(_StrictBase):
     logo_url: Optional[HttpUrl] = None
     default_payment_terms: Optional[str] = Field(None, max_length=500)
     prefix_override: Optional[str] = Field(None, pattern=r"^[A-Z0-9]{1,8}$")
+    # The creator's UI language (fr / en / vi, a tag like "fr-FR" is accepted): the
+    # default labor roles are named in it. Absent: the Accept-Language header decides.
+    locale: Optional[str] = Field(None, max_length=35)
 
     @field_validator("siret", "tva_number", mode="before")
     @classmethod

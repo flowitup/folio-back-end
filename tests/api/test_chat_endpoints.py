@@ -103,7 +103,7 @@ class TestMessages:
         assert data["body"] == "Sáng nay đổ xong sàn mái"
         assert data["mine"] is True
         assert data["attachment"] is None
-        assert data["sender_name"] == "member@invite-test.com"
+        assert data["sender_name"] == "member"
 
         # The owner (admin) sees one unread message, the sender none.
         admin_channels = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
@@ -116,7 +116,7 @@ class TestMessages:
         body = page.get_json()
         assert body["items"][-1]["body"] == "Sáng nay đổ xong sàn mái"
         assert body["items"][-1]["mine"] is False
-        assert {m["name"] for m in body["members"]} >= {"member@invite-test.com", "admin@invite-test.com"}
+        assert {m["name"] for m in body["members"]} >= {"member", "admin"}
 
         assert inv_client.post(f"/api/v1/chat/channels/{key}/read", headers=_auth(admin_token)).status_code == 204
         admin_channels = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
@@ -131,13 +131,13 @@ class TestMessages:
         # The sender's marker moved to the message time; the admin has not opened the channel yet.
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         by_name = {m["name"]: m["last_read_at"] for m in page["members"]}
-        assert by_name["member@invite-test.com"] >= sent.get_json()["created_at"]
+        assert by_name["member"] >= sent.get_json()["created_at"]
 
         assert inv_client.post(f"/api/v1/chat/channels/{key}/read", headers=_auth(admin_token)).status_code == 204
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token)).get_json()
         by_name = {m["name"]: m["last_read_at"] for m in page["members"]}
-        assert by_name["admin@invite-test.com"] is not None
-        assert by_name["admin@invite-test.com"] >= sent.get_json()["created_at"]
+        assert by_name["admin"] is not None
+        assert by_name["admin"] >= sent.get_json()["created_at"]
 
     def test_pagination_with_before(self, inv_client, member_token, invitation_app):
         key = _project_key(invitation_app)
@@ -249,7 +249,7 @@ class TestProjectChannelNeedsACompanyRole:
         assert next(c for c in items if c["key"] == key)["member_count"] == 2
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(member_token))
         assert page.status_code == 200
-        assert [m["name"] for m in page.get_json()["members"]] == ["admin@invite-test.com", "member@invite-test.com"]
+        assert [m["name"] for m in page.get_json()["members"]] == ["admin", "member"]
 
     def test_company_admin_is_in_project_channels_they_are_not_assigned_to(
         self, inv_client, admin_token, project_of_a_former_member
@@ -315,7 +315,7 @@ class TestProjectCreatorNeedsAnAssignment:
         items = inv_client.get("/api/v1/chat/channels", headers=_auth(admin_token)).get_json()["items"]
         assert next(c for c in items if c["key"] == key)["member_count"] == 2
         page = inv_client.get(f"/api/v1/chat/channels/{key}/messages", headers=_auth(admin_token))
-        assert [m["name"] for m in page.get_json()["members"]] == ["admin@invite-test.com", "Target User"]
+        assert [m["name"] for m in page.get_json()["members"]] == ["admin", "Target User"]
 
 
 class TestAttachments:

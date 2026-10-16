@@ -162,6 +162,7 @@ def search_persons():
       q     — search substring (matched against normalized_name or exact phone).
               Min length 2 to prevent enumeration via single-character prefixes.
       limit — max rows to return (default 20, capped 20)
+      company_id — optional: only that company (must be one of the caller's admin/manager companies)
 
     Scoping: results are limited to persons with an active company_persons
     row in a company where the caller is admin or manager. A caller who is
@@ -188,11 +189,33 @@ def search_persons():
     if company_ids is not None and len(company_ids) == 0:
         return _error("Forbidden", "Admin or manager role in at least one company is required.", 403)
 
+    # Optional `company_id`: only that company's directory (the add-worker dialog of a
+    # project passes the project's company, so people of the caller's other companies,
+    # whom the project's company cannot use, are not suggested).
+    raw_company_id = request.args.get("company_id")
+    if raw_company_id:
+        try:
+            requested_company_id = UUID(raw_company_id)
+        except ValueError:
+            return _error("ValidationError", "company_id must be a valid UUID", 400)
+        if company_ids is not None and requested_company_id not in company_ids:
+            return _error("Forbidden", "Admin or manager role in this company is required.", 403)
+        company_ids = [requested_company_id]
+
     result = _get_search_usecase().execute(SearchPersonsRequest(query=query, limit=limit, company_ids=company_ids))
+
+    # A person linked to an account is shown under the name that account chose.
+    from app import db
+    from app.infrastructure.database.user_names import own_display_names
+
+    own_names = own_display_names(db.session, [p.user_id for p in result.persons], company_ids=company_ids)
 
     return jsonify(
         SearchPersonsResponseSchema(
-            persons=[PersonSummarySchema(id=p.id, name=p.name, phone=p.phone) for p in result.persons],
+            persons=[
+                PersonSummarySchema(id=p.id, name=own_names.get(p.user_id or "", p.name), phone=p.phone)
+                for p in result.persons
+            ],
             total=result.total,
         ).model_dump()
     )

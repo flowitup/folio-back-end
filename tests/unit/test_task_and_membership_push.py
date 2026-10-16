@@ -266,7 +266,7 @@ def test_an_assignee_still_on_the_project_is_told_about_the_move():
     assert [m.token for m in sender.sent] == [f"tok-{assignee}"]
 
 
-# -- project label: the site address the apps show, else the name -------------
+# -- project label: the name the apps show first, else the site address --------
 
 
 @dataclass
@@ -283,23 +283,30 @@ class LocatedRepo:
         return Located("Chantier Arcueil", self._address)
 
 
-def test_task_push_names_the_project_by_its_address():
+def test_task_push_names_the_project_by_its_name_first():
     d, sender = _dispatcher()
     TaskPushNotifier(d, LocatedRepo(" 3 rue QA ")).task_assigned(task=_task(uuid4()), actor_id=uuid4())
-    assert sender.sent[0].body == "Poser les cloisons · 3 rue QA"
+    assert sender.sent[0].body == "Poser les cloisons · Chantier Arcueil"
 
 
-def test_task_push_falls_back_to_the_name_without_an_address():
+def test_task_push_names_the_project_without_an_address():
     d, sender = _dispatcher()
     TaskPushNotifier(d, LocatedRepo("  ")).task_assigned(task=_task(uuid4()), actor_id=uuid4())
     assert sender.sent[0].body == "Poser les cloisons · Chantier Arcueil"
 
 
-def test_project_membership_push_names_the_project_by_its_address():
+def test_project_label_falls_back_to_the_address_when_the_name_is_blank():
+    from app.application.push.project_label import project_label
+
+    assert project_label(Located("  ", " 3 rue QA ")) == "3 rue QA"
+    assert project_label(None) == ""
+
+
+def test_project_membership_push_names_the_project_by_its_name():
     d, sender = _dispatcher()
     notifier = MembershipPushNotifier(d, LocatedRepo("3 rue QA"), StubRepo("Flowitup SAS"))
     notifier.notify("project_member_added", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
-    assert sender.sent[0].body == "3 rue QA"
+    assert sender.sent[0].body == "Chantier Arcueil"
 
 
 class StubNames:

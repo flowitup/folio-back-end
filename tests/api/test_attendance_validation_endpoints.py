@@ -388,8 +388,8 @@ class TestNotificationsBell:
             assert body["attendance_pending"] == []
             assert body["count"] == 0
 
-    def test_pending_day_names_the_project_by_its_address(self, av_app, client, linked_h, owner_h, ids):
-        """Same label as the reminders and the rest of the app: the site address, else the name."""
+    def test_pending_day_names_the_project_by_its_name_first(self, av_app, client, linked_h, owner_h, ids):
+        """Same label as the reminders and the rest of the app: the name, else the site address."""
         from app import db
         from app.infrastructure.database.models.project import ProjectModel
 
@@ -399,7 +399,7 @@ class TestNotificationsBell:
         try:
             assert _submit(client, linked_h, ids).status_code == 201
             item = client.get("/api/v1/notifications", headers=owner_h).get_json()["attendance_pending"][0]
-            assert item["project_name"] == "12 rue de la Paix, Lyon"
+            assert item["project_name"] == "Chantier AV"
         finally:
             with av_app.app_context():
                 db.session.get(ProjectModel, UUID(ids["project"])).address = None

@@ -61,6 +61,11 @@ class TargetInactiveError(AssignmentError):
     """The named user's account is deactivated (or erased): they cannot be newly assigned."""
 
 
+class TargetIsCompanyAdminError(AssignmentError):
+    """The named user is an admin of the project's company: they reach every project of the
+    company without an assignment, so removing them from one project would change nothing."""
+
+
 @dataclass(frozen=True)
 class AssignProjectMemberInput:
     caller_id: UUID
@@ -206,6 +211,11 @@ class UnassignProjectMemberUseCase:
             raise TargetNotCompanyMemberError(f"user {target_user_id} is not a member of company {company_id}")
 
         _forbid_manager_on_a_non_member(self._authz, caller_role, target_user_id, company_id)
+
+        # A company admin opens and edits every project of the company with or without a row:
+        # "removing" them would report success and change nothing. Demote them first instead.
+        if self._authz.company_role_for(target_user_id, company_id) == "admin":
+            raise TargetIsCompanyAdminError(f"user {target_user_id} is an admin of company {company_id}")
 
         self._membership.remove(target_user_id, project_id)
 

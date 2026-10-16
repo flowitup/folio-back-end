@@ -82,7 +82,7 @@ def test_every_other_admin_is_told_and_the_actor_is_not():
     notifier.admin_acted("invoice_created", actor_id=a, subject="F-12 · ACME · 120.00 €", project_id=uuid4())
     assert sorted(m.token for m in sender.sent) == sorted([f"tok-{b}", f"tok-{c}"])
     assert sender.sent[0].title == "Expense added"
-    assert sender.sent[0].body.endswith("F-12 · ACME · 120.00 € · 12 rue Jean Jaurès")
+    assert sender.sent[0].body.endswith("F-12 · ACME · 120.00 € · Chantier")
     assert events.recorded[0][0] == {b, c} and events.recorded[0][1] == "billing"
     assert events.recorded[0][4]["kind"] == "invoice_created"
 
@@ -140,9 +140,9 @@ def test_expense_amount_is_written_in_each_readers_format_and_titled_by_kind():
     assert fr_amount.startswith("1") and "234,56" in fr_amount
     assert _texts(events, "fr") == [
         "Nouvelle dépense",
-        f"user-{str(a)[:4]} · INV-1 · ACME · {fr_amount} · 12 rue Jean Jaurès",
+        f"user-{str(a)[:4]} · INV-1 · ACME · {fr_amount} · Chantier",
     ]
-    assert _texts(events, "en")[1].endswith("· €1,234.56 · 12 rue Jean Jaurès")
+    assert _texts(events, "en")[1].endswith("· €1,234.56 · Chantier")
     assert fr_amount in _texts(events, "vi")[1]
     assert events.recorded[-1][4]["invoice_id"] == "abc"
 
