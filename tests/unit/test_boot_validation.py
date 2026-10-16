@@ -243,3 +243,24 @@ def test_an_empty_variable_counts_as_unset(monkeypatch):
 def test_a_minimum_version_needs_its_store_link():
     with pytest.raises(RuntimeError, match="APP_UPDATE_URL_ANDROID"):
         validate_boot_settings({"SMS_PROVIDER": "log", "APP_MIN_VERSION_ANDROID": "1.2.0"}, {})
+
+
+def test_a_missing_s3_public_endpoint_warns_and_still_boots(monkeypatch, caplog):
+    """A missing S3_PUBLIC_ENDPOINT_URL must never stop the API (or a deploy): files then go
+    through the API as before, and the startup log says why previews are not presigned."""
+    import logging
+
+    import config as config_module
+
+    monkeypatch.setattr(config_module.Config, "S3_PUBLIC_ENDPOINT_URL", "")
+    monkeypatch.setattr(config_module.Config, "S3_ENDPOINT_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("FLASK_ENV", raising=False)
+    saved_container = wiring.container
+    try:
+        with caplog.at_level(logging.WARNING, logger="app"):
+            create_app(TestingConfig)
+    finally:
+        wiring.container = saved_container
+    records = [r for r in caplog.records if "S3_PUBLIC_ENDPOINT_URL is not set" in r.getMessage()]
+    assert records, "expected a startup warning about S3_PUBLIC_ENDPOINT_URL"
+    assert all(r.levelno == logging.WARNING for r in records)

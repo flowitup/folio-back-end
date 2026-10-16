@@ -325,13 +325,15 @@ def _configure_di_container() -> None:
         logging.getLogger(__name__).warning("S3 bucket bootstrap failed: %s (uploads will fail until resolved)", exc)
 
     # Without a public endpoint, presigned previews and direct uploads are off (501) and
-    # every file goes through the API. Say so at startup instead of failing silently.
+    # every file goes through the API, as before. Say so at startup instead of failing
+    # silently, but never refuse to boot over it: a missing value must not block a deploy.
     if not Config.S3_PUBLIC_ENDPOINT_URL and Config.S3_ENDPOINT_URL:
         import logging as _s3_log
 
-        _s3_log.getLogger(__name__).error(
-            "S3_PUBLIC_ENDPOINT_URL is not set: presigned downloads and uploads are disabled. "
-            "Set it to the public S3 origin the web app's CSP allows (NEXT_PUBLIC_S3_PUBLIC_URL)."
+        _s3_log.getLogger(__name__).warning(
+            "S3_PUBLIC_ENDPOINT_URL is not set: presigned downloads and uploads are disabled and files "
+            "go through the API. Set it to the public S3 origin the web app's CSP allows "
+            "(NEXT_PUBLIC_S3_PUBLIC_URL)."
         )
 
     # Configure CORS for presigned-URL direct uploads
