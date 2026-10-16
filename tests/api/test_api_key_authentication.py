@@ -558,3 +558,20 @@ class TestApiKeyUseIsLogged:
             inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"]))
             inv_client.post(_PROJECTS_URL, json={"address": "3 rue Muette"}, headers=_auth(admin_token))
         assert [r for r in caplog.records if r.name == "folio.api_key_audit"] == []
+
+
+class TestApiKeyDefaultDenyMessage:
+    def test_a_chat_send_by_key_names_the_real_restriction(self, inv_client, member_token, invitation_app):
+        """The default deny covers every unlisted write, so its message must not talk about members only."""
+        created = _create_key(inv_client, member_token, name="chat probe")
+
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/project:{invitation_app._test_project_id}/messages",
+            json={"body": "from a key"},
+            headers=_api_key_header(created["token"]),
+        )
+
+        assert resp.status_code == 403
+        message = resp.get_json()["message"]
+        assert "members" not in message
+        assert message.startswith("API keys cannot perform this action")

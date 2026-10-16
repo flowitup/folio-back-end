@@ -45,6 +45,8 @@ class ReactionResponse(BaseModel):
     user_id: str
     emoji: str
     created_at: str
+    # The reactor's name, also for someone no longer in the channel.
+    user_name: str | None = None
 
 
 class SetReactionBody(BaseModel):
@@ -75,6 +77,8 @@ class MessageResponse(BaseModel):
     reply_to_id: str | None = None
     # One per person per message; the readers aggregate counts and look names up in `members`.
     reactions: list[ReactionResponse] = Field(default_factory=list)
+    # "deleted" / "unnamed" when sender_name is a placeholder the apps translate; else None.
+    sender_state: Literal["deleted", "unnamed"] | None = None
 
 
 class MemberResponse(BaseModel):
@@ -82,6 +86,8 @@ class MemberResponse(BaseModel):
     name: str
     # ISO timestamp of the member's read marker (None until they open the channel); drives "seen" avatars.
     last_read_at: str | None = None
+    # "deleted" / "unnamed" when name is a placeholder the apps translate; else None.
+    state: Literal["deleted", "unnamed"] | None = None
 
 
 class MessagePageResponse(BaseModel):
@@ -117,3 +123,31 @@ class ReportMessageBody(BaseModel):
 
 class BlockedUsersResponse(BaseModel):
     items: list[MemberResponse]
+
+
+class ListReportsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    company_id: UUID
+
+
+class ReportResponse(BaseModel):
+    id: str
+    message: MessageResponse
+    channel_name: str
+    reporter_id: str
+    reporter_name: str
+    reason: str | None
+    created_at: str
+
+
+class ReportListResponse(BaseModel):
+    items: list[ReportResponse]
+
+
+class ResolveReportBody(BaseModel):
+    """``dismiss`` keeps the message; ``delete_message`` removes it for everyone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["dismiss", "delete_message"]

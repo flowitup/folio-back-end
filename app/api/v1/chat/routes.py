@@ -26,19 +26,26 @@ from app.api.v1.chat.schemas import (
     ListMessagesQuery,
     MessagePageResponse,
     BlockedUsersResponse,
+    ListReportsQuery,
     MessageResponse,
+    ReportListResponse,
+    ResolveReportBody,
     ReactionsResponse,
     ReportMessageBody,
     SendMessageBody,
     SetReactionBody,
 )
-from app.application.chat.dtos import ChannelDto, MessageDto, ReactionDto
+from app.application.chat.dtos import ChannelDto, MemberDto, MessageDto, ReactionDto, ReportDto
 from app.application.chat.exceptions import (
+    AttachmentContentMismatchError,
     AttachmentTooLargeError,
     BlockTargetNotFoundError,
     CannotBlockSelfError,
+    CannotReportOwnMessageError,
     ChatChannelNotFoundError,
     ChatMessageNotFoundError,
+    ChatReportNotFoundError,
+    NotCompanyAdminError,
     EmptyMessageError,
     InvalidReactionError,
     NotChannelMemberError,
@@ -94,7 +101,31 @@ def _serialize_channel(dto: ChannelDto) -> dict[str, Any]:
 
 
 def _serialize_reactions(reactions: tuple[ReactionDto, ...]) -> list[dict[str, Any]]:
-    return [{"user_id": str(r.user_id), "emoji": r.emoji, "created_at": _iso(r.created_at)} for r in reactions]
+    return [
+        {"user_id": str(r.user_id), "emoji": r.emoji, "created_at": _iso(r.created_at), "user_name": r.user_name}
+        for r in reactions
+    ]
+
+
+def _serialize_member(m: MemberDto) -> dict[str, Any]:
+    return {
+        "id": str(m.id),
+        "name": m.name,
+        "last_read_at": _iso(m.last_read_at) if m.last_read_at else None,
+        "state": m.state,
+    }
+
+
+def _serialize_report(dto: ReportDto, actor_id: UUID) -> dict[str, Any]:
+    return {
+        "id": str(dto.id),
+        "message": _serialize_message(dto.message, actor_id),
+        "channel_name": dto.channel_name,
+        "reporter_id": str(dto.reporter_id),
+        "reporter_name": dto.reporter_name,
+        "reason": dto.reason,
+        "created_at": _iso(dto.created_at),
+    }
 
 
 def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
@@ -121,6 +152,7 @@ def _serialize_message(dto: MessageDto, actor_id: UUID) -> dict[str, Any]:
         "payload": dto.payload,
         "reply_to_id": str(dto.reply_to_id) if dto.reply_to_id is not None else None,
         "reactions": _serialize_reactions(dto.reactions),
+        "sender_state": dto.sender_state,
     }
 
 
@@ -203,14 +235,7 @@ def list_messages(channel_key: str) -> Any:
         jsonify(
             {
                 "items": [_serialize_message(m, actor_id) for m in page.items],
-                "members": [
-                    {
-                        "id": str(m.id),
-                        "name": m.name,
-                        "last_read_at": _iso(m.last_read_at) if m.last_read_at else None,
-                    }
-                    for m in page.members
-                ],
+                "members": [_serialize_member(m) for m in page.members],
             }
         ),
         200,
@@ -289,6 +314,8 @@ def send_message(channel_key: str) -> Any:
         return _err(400, "BadRequest", str(exc))
     except EmptyMessageError as exc:
         return _err(400, "BadRequest", str(exc))
+    except AttachmentContentMismatchError as exc:
+        return _err(415, "AttachmentContentMismatch", str(exc))
     except UnsupportedAttachmentTypeError as exc:
         return _err(415, "UnsupportedMediaType", str(exc))
     except AttachmentTooLargeError as exc:
@@ -357,6 +384,9 @@ def get_attachment(message_id: UUID) -> Any:
     response = send_file(dto.stream, mimetype=dto.content_type, download_name=download_name, as_attachment=False)
     response.headers["Content-Length"] = str(dto.content_length)
     response.headers["Cache-Control"] = "private, max-age=3600"
+    # User-supplied bytes: never let a browser sniff them into something executable.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
     return response
 
 
@@ -386,8 +416,74 @@ def report_message(message_id: UUID) -> Any:
         return _err(404, "NotFound", "Message not found")
     except NotChannelMemberError:
         return _err(403, "Forbidden", "Not a member of this channel")
+    except CannotReportOwnMessageError:
+        return _err(400, "CannotReportOwnMessage", "You cannot report your own message")
     except Exception:
         logger.exception("report_message unexpected error message=%s", message_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/chat/reports?company_id=…, POST /api/v1/chat/reports/<id>/resolve
+# ---------------------------------------------------------------------------
+
+
+@chat_bp.get("/chat/reports")
+@openapi_doc(
+    summary="Open reports on the company's chat messages (company admins only)",
+    query=ListReportsQuery,
+    responses={200: ReportListResponse},
+    tags=["chat"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("120 per minute", key_func=jwt_user_key)
+def list_reports() -> Any:
+    try:
+        query = ListReportsQuery.model_validate(request.args.to_dict())
+    except ValidationError as exc:
+        fields = safe_validation_fields(exc)
+        return _err(422, "ValidationError", f"Invalid query: {', '.join(str(f) for f in fields)}")
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.list_chat_reports_usecase is None:
+        raise RuntimeError("list_chat_reports_usecase not wired in container")
+    try:
+        reports = container.list_chat_reports_usecase.execute(actor_id=actor_id, company_id=query.company_id)
+    except NotCompanyAdminError:
+        return _err(403, "Forbidden", "Only the company's admins review chat reports")
+    except Exception:
+        logger.exception("list_reports unexpected error company=%s", query.company_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return jsonify({"items": [_serialize_report(r, actor_id) for r in reports]}), 200
+
+
+@chat_bp.post("/chat/reports/<uuid:report_id>/resolve")
+@openapi_doc(
+    summary="Close a report: dismiss it, or delete the reported message (company admins only)",
+    request=ResolveReportBody,
+    tags=["chat"],
+)
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_chat_feature
+@limiter.limit("60 per minute", key_func=jwt_user_key)
+def resolve_report(report_id: UUID) -> Any:
+    try:
+        parsed = ResolveReportBody.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        fields = safe_validation_fields(exc)
+        return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+    actor_id = UUID(get_jwt_identity())
+    container = get_container()
+    if container.resolve_chat_report_usecase is None:
+        raise RuntimeError("resolve_chat_report_usecase not wired in container")
+    try:
+        container.resolve_chat_report_usecase.execute(actor_id=actor_id, report_id=report_id, action=parsed.action)
+    except ChatReportNotFoundError:
+        return _err(404, "NotFound", "Report not found")
+    except Exception:
+        logger.exception("resolve_report unexpected error report=%s", report_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
     return "", 204
 
@@ -475,7 +571,7 @@ def list_blocks() -> Any:
     if container.list_blocked_chat_users_usecase is None:
         raise RuntimeError("list_blocked_chat_users_usecase not wired in container")
     members = container.list_blocked_chat_users_usecase.execute(actor_id=actor_id)
-    return jsonify({"items": [{"id": str(m.id), "name": m.name, "last_read_at": None} for m in members]})
+    return jsonify({"items": [_serialize_member(m) for m in members]})
 
 
 @chat_bp.put("/chat/blocks/<uuid:user_id>")

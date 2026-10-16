@@ -45,3 +45,19 @@ class BlockTargetNotFoundError(ChatError):
 
 class InvalidReactionError(ChatError):
     """The emoji is not one of the reactions a message accepts."""
+
+
+class CannotReportOwnMessageError(ChatError):
+    """A user tried to report a message they sent."""
+
+
+class ChatReportNotFoundError(ChatError):
+    """No report with that id (or it belongs to a company the actor does not administer)."""
+
+
+class NotCompanyAdminError(ChatError):
+    """Only the company's admins review chat reports."""
+
+
+class AttachmentContentMismatchError(UnsupportedAttachmentTypeError):
+    """The attachment's bytes are not the image / voice note its content type claims."""

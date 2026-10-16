@@ -449,6 +449,8 @@ class Container:
     block_chat_user_usecase: Optional[Any] = None
     unblock_chat_user_usecase: Optional[Any] = None
     list_blocked_chat_users_usecase: Optional[Any] = None
+    list_chat_reports_usecase: Optional[Any] = None
+    resolve_chat_report_usecase: Optional[Any] = None
 
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None

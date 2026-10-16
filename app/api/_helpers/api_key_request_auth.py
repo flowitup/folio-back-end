@@ -311,4 +311,4 @@ def enforce_api_key_route_policy():
         return None
     if request.blueprint in KEY_WRITE_BLUEPRINTS or endpoint in KEY_WRITE_ENDPOINTS:
         return None
-    return _forbidden("API keys cannot manage members, access or invitations")
+    return _forbidden("API keys cannot perform this action; sign in as a person to do it")
