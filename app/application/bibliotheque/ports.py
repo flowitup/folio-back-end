@@ -17,8 +17,8 @@ class ISupplierRepository(Protocol):
         """Return existing supplier for (company_id, slug), or insert and return new one."""
         ...
 
-    def list_by_company(self, company_id: UUID) -> list[Supplier]:
-        """Return all suppliers for a company ordered by name."""
+    def list_by_company(self, company_id: UUID, only_with_products: bool = False) -> list[Supplier]:
+        """Return the company's suppliers ordered by name (optionally only those with products)."""
         ...
 
     def find_by_id(self, supplier_id: UUID) -> Optional[Supplier]:

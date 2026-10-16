@@ -478,6 +478,7 @@ class TestDeleteInvoiceRefundedLock:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -491,6 +492,7 @@ class TestDeleteInvoiceRefundedLock:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -504,6 +506,7 @@ class TestDeleteInvoiceRefundedLock:
         inv_repo = MagicMock(spec=IInvoiceRepository)
         inv_repo.find_by_id.return_value = invoice
         inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("0")
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         use_case.execute(invoice.id)
@@ -524,6 +527,21 @@ class TestDeleteInvoiceRefundedLock:
         use_case = DeleteInvoiceUseCase(inv_repo)
 
         with pytest.raises(InvalidInvoiceDataError, match="returns first"):
+            use_case.execute(invoice.id)
+
+        inv_repo.delete.assert_not_called()
+
+    def test_delete_target_of_applied_avoir_raises(self):
+        """An expense an avoir is applied to cannot be deleted: the avoir would be orphaned."""
+        invoice = _make_ms_invoice()
+
+        inv_repo = MagicMock(spec=IInvoiceRepository)
+        inv_repo.find_by_id.return_value = invoice
+        inv_repo.sum_refunds_for_source.return_value = Decimal("0")
+        inv_repo.sum_applied_for_target.return_value = Decimal("-6")
+        use_case = DeleteInvoiceUseCase(inv_repo)
+
+        with pytest.raises(InvalidInvoiceDataError, match="Unlink the avoirs applied"):
             use_case.execute(invoice.id)
 
         inv_repo.delete.assert_not_called()
@@ -892,3 +910,27 @@ class TestUpdateInvoiceWorkerLink:
         assert result.type == "labor"
         assert result.worker_id == str(worker.id)
         assert result.recipient_name == "New Hire"
+
+
+class TestPurchaseTotalNotNegative:
+    """A purchase may hold discount lines, but never total below zero (QA round 3 expenses-invoices-06)."""
+
+    def test_negative_purchase_is_refused(self):
+        use_case = CreateInvoiceUseCase(make_mock_repo())
+        request = make_request(
+            type=InvoiceType.MATERIALS_SERVICES,
+            items=[{"description": "Avoir", "quantity": 1, "unit_price": -50}],
+        )
+        with pytest.raises(InvalidInvoiceDataError, match="purchase's total cannot be negative"):
+            use_case.execute(request)
+
+    def test_purchase_with_discount_line_is_accepted(self):
+        use_case = CreateInvoiceUseCase(make_mock_repo())
+        request = make_request(
+            type=InvoiceType.MATERIALS_SERVICES,
+            items=[
+                {"description": "Ciment", "quantity": 1, "unit_price": 80},
+                {"description": "Remise", "quantity": 1, "unit_price": -30},
+            ],
+        )
+        assert use_case.execute(request).total_amount == 50.0

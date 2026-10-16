@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.api._helpers.profile_fields import DISPLAY_NAME_MAX_LENGTH
+
 
 class CreateInviteRequest(BaseModel):
     """POST /invitations request body."""
@@ -53,13 +55,15 @@ class RequestInviteCodeRequest(BaseModel):
 
     token: str = Field(min_length=10, max_length=200)
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class AcceptInviteRequest(BaseModel):
     """POST /invitations/accept request body."""
 
     token: str = Field(min_length=10, max_length=200)
-    name: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
 
@@ -115,3 +119,5 @@ class AcceptInviteResponse(BaseModel):
     access_token: str
     refresh_token: str
     user: AcceptedUserResponse
+    # The project just joined, so clients can open it rather than the last one viewed.
+    project_id: Optional[UUID] = None

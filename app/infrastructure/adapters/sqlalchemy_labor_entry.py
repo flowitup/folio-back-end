@@ -20,6 +20,7 @@ from app.application.labor.ports import (
 )
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import DuplicateEntryError
+from app.infrastructure.adapters.project_label_sql import project_label_expr
 from app.infrastructure.database.models import (
     LaborEntryModel,
     PersonModel,
@@ -104,6 +105,20 @@ def month_start_rates_by_worker_month(session: Session, rows) -> dict:
                 break
         resolved[(row.worker_id, key)] = rate
     return resolved
+
+
+def _worker_display_name_expr():
+    """SQL twin of worker_display_name(): the Person's name, unless it is a phone
+    number (a Person made for a phone-only account) — then the worker row's name.
+    "Starts with + or a digit" stands for "is a phone number"; no one's name does.
+    """
+    first_char = func.substr(PersonModel.name, 1, 1)
+    looks_like_phone = first_char.in_(["+", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
+    return sa_case(
+        (PersonModel.name.is_(None), WorkerModel.name),
+        (looks_like_phone, WorkerModel.name),
+        else_=PersonModel.name,
+    )
 
 
 class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
@@ -263,7 +278,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             WorkerModel.daily_rate,
         )
 
-        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
+        display_name = _worker_display_name_expr()
         query = (
             self._session.query(
                 WorkerModel.id.label("worker_id"),
@@ -390,7 +405,7 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
 
         year_expr = func.extract("year", LaborEntryModel.date)
         month_expr = func.extract("month", LaborEntryModel.date)
-        display_name = func.coalesce(PersonModel.name, WorkerModel.name)
+        display_name = _worker_display_name_expr()
 
         query = (
             self._session.query(
@@ -482,7 +497,8 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
                 PersonModel.id.label("person_id"),
                 PersonModel.name.label("person_name"),
                 OtherProject.id.label("other_project_id"),
-                OtherProject.name.label("other_project_name"),
+                # Name first, site address second, as the apps show projects (project_label).
+                project_label_expr(OtherProject).label("other_project_name"),
                 LaborEntryModel.id.label("entry_id"),
                 LaborEntryModel.shift_type.label("shift_type"),
                 LaborEntryModel.supplement_hours.label("supplement_hours"),

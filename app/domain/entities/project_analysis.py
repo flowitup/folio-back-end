@@ -6,6 +6,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+from app.domain.value_objects.display_filename import multi_line_text, single_line_text
+
 _MAX_TITLE_LEN = 300
 _MAX_SUMMARY_LEN = 2000
 _MAX_TAG_LEN = 100
@@ -39,8 +41,8 @@ _UNSET: _Unset = _Unset()
 
 
 def _validate_title(title: str) -> str:
-    """Strip and validate title. Raises ValueError on failure."""
-    stripped = title.strip()
+    """Strip and validate title (one line, no control characters). Raises ValueError on failure."""
+    stripped = single_line_text(title)
     if not stripped:
         raise ValueError("Analysis title must not be empty.")
     if len(stripped) > _MAX_TITLE_LEN:
@@ -52,7 +54,7 @@ def _validate_summary(summary: str | None) -> str | None:
     """Validate summary length. Raises ValueError on failure."""
     if summary is None:
         return None
-    stripped = summary.strip()
+    stripped = multi_line_text(summary).strip()
     if not stripped:
         return None
     if len(stripped) > _MAX_SUMMARY_LEN:
@@ -73,8 +75,8 @@ def _validate_source_url(source_url: str | None) -> str | None:
 
 
 def _validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
-    """Normalize and validate tags: strip, lowercase, dedupe, cap count and length."""
-    normalized = [t.strip().lower() for t in tags if t.strip()]
+    """Normalize and validate tags: one line, strip, lowercase, dedupe, cap count and length."""
+    normalized = [single_line_text(t).lower() for t in tags if single_line_text(t)]
     deduped = tuple(dict.fromkeys(normalized))
     if len(deduped) > _MAX_TAGS:
         raise ValueError(f"An analysis may have at most {_MAX_TAGS} tags.")

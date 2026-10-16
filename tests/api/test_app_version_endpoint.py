@@ -22,7 +22,9 @@ def test_app_version_is_public_and_ungated_by_default(client):
     body = res.get_json()
     assert body["ios"]["min_version"] == ""
     assert body["android"]["min_version"] == ""
-    assert body["ios"]["update_url"].startswith("https://")
+    # No default link: the TestFlight / Play-testing pages sent customers to the betas.
+    assert body["ios"]["update_url"] == ""
+    assert body["android"]["update_url"] == ""
 
 
 def test_app_version_reflects_configured_minimums(client):

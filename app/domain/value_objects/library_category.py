@@ -178,6 +178,24 @@ _SYNONYMS: dict[str, str] = {
     "parpaing":                     "materiaux_construction",
     "materiaux de construction":    "materiaux_construction",
     "materiaux construction":       "materiaux_construction",      # idempotency: slug folded
+    # French trade names (rayons of Point P, Castorama, Brico Dépôt...)
+    "maconnerie":                   "materiaux_construction",
+    "gros oeuvre":                  "materiaux_construction",
+    "second oeuvre":                "materiaux_construction",
+    "platrerie":                    "materiaux_construction",
+    "placo":                        "materiaux_construction",
+    "placoplatre":                  "materiaux_construction",
+    "plaque de platre":             "materiaux_construction",
+    "cloison":                      "materiaux_construction",
+    "enduit":                       "materiaux_construction",
+    "mortier":                      "materiaux_construction",
+    "isolant":                      "materiaux_construction",
+    "bois":                         "materiaux_construction",
+    "toiture":                      "materiaux_construction",
+    "couverture":                   "materiaux_construction",
+    "tuile":                        "materiaux_construction",
+    "ardoise":                      "materiaux_construction",
+    "charpente":                    "materiaux_construction",
 
     # electricite_domotique
     "electricite":                  "electricite_domotique",
@@ -255,6 +273,8 @@ def _fold(s: str) -> str:
         "Revêtement sol"     → "revetement sol"
         "CHAUFFAGE, clim"    → "chauffage clim"
     """
+    # Ligatures have no NFKD decomposition: "Gros œuvre" must not fold to "gros uvre".
+    s = s.replace("œ", "oe").replace("Œ", "OE").replace("æ", "ae").replace("Æ", "AE")
     normalized = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     lower = normalized.lower()
     collapsed = _NON_ALNUM_RUN.sub(" ", lower)
@@ -304,8 +324,28 @@ def normalize_category(raw: Optional[str]) -> Optional[str]:
         if f" {keyword} " in padded:
             return slug
 
-    # Step 4: Fallback
+    # Step 4: the same with plurals folded ("Enduits", "Colles", "Luminaires", "Peintures").
+    singular = f" {_singular(folded)} "
+    if singular != padded:
+        exact = _SYNONYMS.get(singular.strip())
+        if exact is not None:
+            return exact
+        for keyword, slug in _SORTED_KEYWORDS:
+            if f" {keyword} " in singular:
+                return slug
+
+    # Step 5: Fallback
     return "autre"
+
+
+def _singular(folded: str) -> str:
+    """Drop a plural -s / -x from each token longer than 3 letters ('vis' and 'gros' stay)."""
+    tokens = []
+    for token in folded.split(" "):
+        if len(token) > 4 and token[-1] in "sx" and token not in _SYNONYMS:
+            token = token[:-1]
+        tokens.append(token)
+    return " ".join(tokens)
 
 
 def is_valid_category_slug(value: str) -> bool:

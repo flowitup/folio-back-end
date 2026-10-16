@@ -17,9 +17,21 @@ from app.application.billing.dtos import (
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.infrastructure.database.models.billing_document import BillingDocumentModel
+from app.infrastructure.database.models.project import ProjectModel
 from app.infrastructure.database.serializers.billing_serializers import (
     deserialize_orm_to_doc,
     serialize_doc_to_orm,
+)
+from app.infrastructure.database.text_fold import folded, folded_like_pattern
+
+
+# Newest documents first by their own date, then by number, so an imported or
+# back-dated document sits where its date puts it rather than where its
+# creation time does.
+_LIST_ORDER = (
+    BillingDocumentModel.issue_date.desc(),
+    BillingDocumentModel.document_number.desc(),
+    BillingDocumentModel.created_at.desc(),
 )
 
 
@@ -90,7 +102,7 @@ class SqlAlchemyBillingDocumentRepository:
         total: int = self._session.execute(count_stmt).scalar_one()
 
         # Paginated rows, newest first
-        rows_stmt = base.order_by(BillingDocumentModel.created_at.desc()).limit(limit).offset(offset)
+        rows_stmt = base.order_by(*_LIST_ORDER).limit(limit).offset(offset)
         rows = self._session.execute(rows_stmt).scalars().all()
         return ([deserialize_orm_to_doc(r) for r in rows], total)
 
@@ -144,21 +156,29 @@ class SqlAlchemyBillingDocumentRepository:
         if project_id is not None:
             base = base.where(BillingDocumentModel.project_id == project_id)
         if search:
-            # Case-insensitive substring on number or recipient, before count and
-            # paging, so a search reaches documents beyond the loaded pages.
-            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            pattern = f"%{escaped}%"
+            # Accent- and case-insensitive substring on the number, the recipient
+            # or the linked project's name/address ('lefevre' finds 'Lefèvre'),
+            # before count and paging so a search reaches documents beyond the
+            # loaded pages.
+            pattern = folded_like_pattern(search)
+            matching_projects = select(ProjectModel.id).where(
+                or_(
+                    folded(ProjectModel.name).like(pattern, escape="\\"),
+                    folded(ProjectModel.address).like(pattern, escape="\\"),
+                )
+            )
             base = base.where(
                 or_(
-                    BillingDocumentModel.document_number.ilike(pattern, escape="\\"),
-                    BillingDocumentModel.recipient_name.ilike(pattern, escape="\\"),
+                    folded(BillingDocumentModel.document_number).like(pattern, escape="\\"),
+                    folded(BillingDocumentModel.recipient_name).like(pattern, escape="\\"),
+                    BillingDocumentModel.project_id.in_(matching_projects),
                 )
             )
 
         count_stmt = select(func.count()).select_from(base.subquery())
         total: int = self._session.execute(count_stmt).scalar_one()
 
-        rows_stmt = base.order_by(BillingDocumentModel.created_at.desc()).limit(limit).offset(offset)
+        rows_stmt = base.order_by(*_LIST_ORDER).limit(limit).offset(offset)
         rows = self._session.execute(rows_stmt).scalars().all()
         return ([deserialize_orm_to_doc(r) for r in rows], total)
 

@@ -24,6 +24,8 @@ class PersonSummary:
     id: str
     name: str
     phone: Optional[str]
+    # The linked account, so the route can show the name that account chose.
+    user_id: Optional[str] = None
 
 
 @dataclass
@@ -60,6 +62,9 @@ class SearchPersonsUseCase:
         rows = self._repo.search(query=query, limit=limit, company_ids=request.company_ids)
 
         return SearchPersonsResponse(
-            persons=[PersonSummary(id=str(p.id), name=p.name, phone=p.phone) for p in rows],
+            persons=[
+                PersonSummary(id=str(p.id), name=p.name, phone=p.phone, user_id=str(p.user_id) if p.user_id else None)
+                for p in rows
+            ],
             total=len(rows),
         )

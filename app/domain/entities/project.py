@@ -40,10 +40,26 @@ class Project:
 
 
 def project_display_label(project: Project) -> str:
-    """The label a project is shown under: its site address, or its name when it has none.
+    """The label a project is shown under: its name first, its site address when the name is blank.
 
-    Mirrors the clients' `projectDisplayName`, so someone invited to a project reads the
-    same label in the invitation as in the app once they have joined.
+    Mirrors the clients' `projectDisplayName` (name first, address second), so someone invited
+    to a project reads the same label in the invitation, the bell, chat and documents as in the
+    app once they have joined. A project created without a name is named after its address.
     """
+    name = project.name.strip() if isinstance(project.name, str) else ""
+    if name:
+        return name
+    return project.address.strip() if isinstance(project.address, str) else ""
+
+
+def project_export_heading(project: Project) -> str:
+    """The project line of an export: its label (name first), then the site address when it adds something.
+
+    "Villa Martin · 12 rue des Lilas" for a named project with an address; just the label otherwise.
+    File names keep the label alone (project_display_label).
+    """
+    label = project_display_label(project)
     address = project.address.strip() if isinstance(project.address, str) else ""
-    return address or project.name
+    if address and address.casefold() != label.casefold():
+        return f"{label} · {address}" if label else address
+    return label

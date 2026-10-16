@@ -11,7 +11,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
+from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator, model_validator
 
 from app.api.v1.date_bounds import BusinessDate
 from app.domain.billing.value_objects import check_line_decimal
@@ -149,6 +149,19 @@ class ImportBillingDocumentRequest(_StrictBase):
     payment_terms: Optional[str] = Field(None, max_length=500)
     issue_date: Optional[BusinessDate] = None
     created_at: Optional[datetime] = None  # preserve historical timestamp
+
+    @model_validator(mode="after")
+    def _status_fits_kind(self) -> "ImportBillingDocumentRequest":
+        # A devis is never paid or cancelled: such a quote would show an unknown
+        # status and have no way out of it (no transition leaves those states).
+        if self.kind == "devis" and self.status not in _IMPORT_DEVIS_STATUSES:
+            raise ValueError(
+                f"status '{self.status}' is not valid for a devis; use one of: " + ", ".join(_IMPORT_DEVIS_STATUSES)
+            )
+        return self
+
+
+_IMPORT_DEVIS_STATUSES = ("draft", "sent")
 
 
 # ---------------------------------------------------------------------------

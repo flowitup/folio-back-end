@@ -103,13 +103,23 @@ class SQLAlchemyUserRepository:
         """
         from sqlalchemy import func, or_
 
+        from app.domain.value_objects.phone_number import normalize_phone
+
         pattern = f"%{_escape_like(query.lower())}%"
+        # Phone-only accounts are found by their number however it is typed ('0623100003',
+        # '+33 6 23 10 00 03'), not only through their synthetic e-mail.
+        phone_matches = [func.coalesce(UserModel.phone, "").like(pattern, escape="\\")]
+        try:
+            phone_matches.append(UserModel.phone == normalize_phone(query))
+        except ValueError:
+            pass
         users = (
             self._session.query(UserModel)
             .filter(
                 or_(
                     func.lower(UserModel.email).like(pattern, escape="\\"),
                     func.lower(func.coalesce(UserModel.display_name, "")).like(pattern, escape="\\"),
+                    *phone_matches,
                 )
             )
             .filter(UserModel.is_active.is_(True))

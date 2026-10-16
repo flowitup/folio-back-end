@@ -23,7 +23,7 @@ from app.application.chiffrage.exceptions import (
     StoreNotFoundError,
 )
 from app.application.chiffrage.ports import ChiffrageRepositoryPort
-from app.application.chiffrage.units import PRESET_UNITS
+from app.application.chiffrage.units import PRESET_BY_KEY, unit_key
 from app.domain.entities.chiffrage_store import ChiffrageStore
 
 MAX_POSTE_NAME = 120
@@ -58,11 +58,16 @@ def clean_optional_text(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def _no_negative_zero(value: Decimal) -> Decimal:
+    """'-0' is 0: the response must not echo -0.0 while 0 is stored."""
+    return Decimal(0).quantize(value) if value.is_zero() else value
+
+
 def validate_quantity(value: Decimal) -> Decimal:
     """Reject negative quantities — a costing line cannot need less than nothing."""
     if value < 0:
         raise InvalidChiffrageInputError("Quantity cannot be negative.")
-    return value
+    return _no_negative_zero(value)
 
 
 def validate_price(value: Decimal) -> Decimal:
@@ -73,14 +78,14 @@ def validate_price(value: Decimal) -> Decimal:
     """
     if value < 0:
         raise InvalidChiffrageInputError("Unit price cannot be negative.")
-    return value.quantize(PRICE_STEP, rounding=ROUND_HALF_UP)
+    return _no_negative_zero(value.quantize(PRICE_STEP, rounding=ROUND_HALF_UP))
 
 
 def validate_tva_rate(value: Decimal) -> Decimal:
     """Reject VAT rates outside 0-100; round to the column's 2 decimals (see validate_price)."""
     if value < 0 or value > MAX_TVA_RATE:
         raise InvalidChiffrageInputError("VAT rate must be between 0 and 100.")
-    return value.quantize(TVA_RATE_STEP, rounding=ROUND_HALF_UP)
+    return _no_negative_zero(value.quantize(TVA_RATE_STEP, rounding=ROUND_HALF_UP))
 
 
 def validate_unit(
@@ -101,10 +106,14 @@ def validate_unit(
         return None
     if len(cleaned) > MAX_UNIT_SYMBOL:
         raise InvalidChiffrageInputError(f"Unit cannot exceed {MAX_UNIT_SYMBOL} characters.")
-    if cleaned in PRESET_UNITS:
-        return cleaned
+    key = unit_key(cleaned)
+    if key in PRESET_BY_KEY:
+        return PRESET_BY_KEY[key]
     if repo.unit_exists(project_id, cleaned):
         return cleaned
+    for custom in repo.list_units(project_id):
+        if unit_key(custom.symbol) == key:
+            return custom.symbol
     raise InvalidChiffrageInputError(f"Unknown unit '{cleaned}' for this project.")
 
 

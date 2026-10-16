@@ -59,6 +59,14 @@ class DeleteInvoiceUseCase:
         if invoice.type == InvoiceType.MATERIALS_SERVICES and self._repo.sum_refunds_for_source(invoice_id) != 0:
             raise InvalidInvoiceDataError("Unlink or delete this invoice's returns first")
 
+        # Same for an expense an avoir is applied to (an avoir can target any type but a return or a release): the FK would set the avoir's
+        # applied_to_invoice_id to NULL and the orphaned credit note would keep lowering spend.
+        if (
+            invoice.type not in (InvoiceType.RETURN, InvoiceType.RELEASED_FUNDS)
+            and self._repo.sum_applied_for_target(invoice_id) != 0
+        ):
+            raise InvalidInvoiceDataError("Unlink the avoirs applied to this invoice before deleting it")
+
         # Snapshot attachment keys BEFORE the DB delete so we still have them after
         # FK CASCADE has dropped the rows. This lets us delete the row first
         # (consistency wins on row-delete failure: no metadata-without-files state)

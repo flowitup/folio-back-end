@@ -13,7 +13,7 @@ company's own data is left exactly as it was.
 """
 
 import logging
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 from uuid import UUID
 
 from app.application.companies.ports import (
@@ -75,8 +75,11 @@ class DeleteAccountUseCase:
         eraser: PersonalDataEraserPort,
         db_session: TransactionalSessionPort,
         clock: ClockPort,
+        company_person_repo: Optional[Any] = None,
     ) -> None:
         self._users = user_repo
+        # Pending directory profiles of a company this erasure leaves empty are retired with it.
+        self._company_persons = company_person_repo
         self._access = access_repo
         self._companies = company_repo
         self._eraser = eraser
@@ -102,12 +105,28 @@ class DeleteAccountUseCase:
         self._eraser.erase_for_user(user_id, phone=user.phone)
         if orphaned:
             # D2 lets a solo user leave, which can strand a company with records
-            # and no members. Nothing cleans that up, so leave ops a trail.
+            # and no members. Its records stay, but every way in is closed: a join
+            # code or a pending phone profile would otherwise attach new people to a
+            # company nobody can ever administer again.
+            for company_id in orphaned:
+                self._close_ways_in(company_id)
             logger.warning(
-                "account erased; company left with no members: company_ids=%s",
+                "account erased; company left with no members (join code and pending profiles retired): "
+                "company_ids=%s",
                 ",".join(str(c) for c in orphaned),
             )
         self._db.commit()
+
+    def _close_ways_in(self, company_id: UUID) -> None:
+        """Revoke the join code and deactivate the pending (not yet signed-up) profiles of ``company_id``."""
+        company = self._companies.find_by_id(company_id)
+        if company is not None and getattr(company, "join_code", None):
+            self._companies.save(company.with_updates(join_code=None, updated_at=self._clock.now()))
+        if self._company_persons is None:
+            return
+        for profile in self._company_persons.list_for_company(company_id):
+            if profile.is_active and profile.pending_expires_at is not None:
+                self._company_persons.deactivate(company_id, profile.person_id)
 
     def _reject_if_last_admin_of_a_shared_company(self, user_id: UUID, accesses: list) -> list:
         """Block the erasure when it would strand other members without an admin.

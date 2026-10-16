@@ -260,6 +260,10 @@ class TestApiKeyHonoursTheSessionCutoff:
             assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 200
             self._set_cutoff_and_key_age(invitation_app, user_id, created["id"], cutoff_ago_h=1, key_age_h=2)
             assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 401
+            # company-settings-members-08: the list says so instead of showing it as a working key.
+            listed = inv_client.get("/api/v1/api-keys", headers={"Authorization": f"Bearer {member_token}"})
+            row = next(k for k in listed.get_json()["api_keys"] if k["id"] == created["id"])
+            assert row["valid"] is False
         finally:
             self._clear_cutoff(invitation_app, user_id)
 
@@ -269,6 +273,8 @@ class TestApiKeyHonoursTheSessionCutoff:
         try:
             self._set_cutoff_and_key_age(invitation_app, user_id, created["id"], cutoff_ago_h=2, key_age_h=1)
             assert inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"])).status_code == 200
+            listed = inv_client.get("/api/v1/api-keys", headers={"Authorization": f"Bearer {member_token}"})
+            assert next(k for k in listed.get_json()["api_keys"] if k["id"] == created["id"])["valid"] is True
         finally:
             self._clear_cutoff(invitation_app, user_id)
 
@@ -558,3 +564,20 @@ class TestApiKeyUseIsLogged:
             inv_client.get(_PROJECTS_URL, headers=_api_key_header(created["token"]))
             inv_client.post(_PROJECTS_URL, json={"address": "3 rue Muette"}, headers=_auth(admin_token))
         assert [r for r in caplog.records if r.name == "folio.api_key_audit"] == []
+
+
+class TestApiKeyDefaultDenyMessage:
+    def test_a_chat_send_by_key_names_the_real_restriction(self, inv_client, member_token, invitation_app):
+        """The default deny covers every unlisted write, so its message must not talk about members only."""
+        created = _create_key(inv_client, member_token, name="chat probe")
+
+        resp = inv_client.post(
+            f"/api/v1/chat/channels/project:{invitation_app._test_project_id}/messages",
+            json={"body": "from a key"},
+            headers=_api_key_header(created["token"]),
+        )
+
+        assert resp.status_code == 403
+        message = resp.get_json()["message"]
+        assert "members" not in message
+        assert message.startswith("API keys cannot perform this action")

@@ -52,7 +52,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .format import format_eur_fr, format_generated_at
-from .labels import month_label, range_label, t
+from .labels import month_label, range_label, t, worker_rate_line
 from .models import ExportContext, MonthBucket
 
 
@@ -326,11 +326,10 @@ def _render_header(context: ExportContext, styles: dict) -> list:
     ]
 
     if context.worker_name is not None:
-        rate = context.worker_daily_rate
-        rate_str = format_eur_fr(rate) if rate is not None else "—"
-        elements.append(
-            Paragraph(_xml_escape(t(locale, "worker_rate", name=context.worker_name, rate=rate_str)), styles["h2"])
-        )
+        # When the rate changed during the range, each rate is printed with its dates
+        # so the header does not contradict the day costs priced from the timeline.
+        line = worker_rate_line(context.worker_name, context.worker_daily_rate, context.worker_rate_periods, locale)
+        elements.append(Paragraph(_xml_escape(line), styles["h2"]))
 
     return elements
 
@@ -406,6 +405,22 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
             ]
         )
 
+    # TOTAL row so the sums can be read straight off the table (and match the KPIs).
+    has_total = len(agg_rows) > 1
+    if has_total:
+        table_data.append(
+            [
+                Paragraph("<b>" + _xml_escape(t(locale, "total_row")) + "</b>", styles["cell"]),
+                _format_days(sum(a.days_worked for a in agg_rows)),
+                str(sum(a.banked_hours for a in agg_rows)),
+                str(sum(a.bonus_full_days for a in agg_rows)),
+                str(sum(a.bonus_half_days for a in agg_rows)),
+                format_eur_fr(sum((Decimal(str(a.priced_cost)) for a in agg_rows), Decimal("0"))),
+                format_eur_fr(sum((Decimal(str(a.bonus_cost)) for a in agg_rows), Decimal("0"))),
+                format_eur_fr(sum((Decimal(str(a.total_cost)) for a in agg_rows), Decimal("0"))),
+            ]
+        )
+
     style_cmds = [
         # Header row styling
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
@@ -434,9 +449,83 @@ def _render_breakdown_table(buckets: List[MonthBucket], styles: dict, usable_wid
         if i % 2 == 1:
             style_cmds.append(("BACKGROUND", (0, i + 1), (-1, i + 1), colors.HexColor("#F7F9FC")))
 
+    if has_total:
+        style_cmds += [
+            ("FONTNAME", (0, -1), (-1, -1), "DejaVu-Bold"),
+            ("LINEABOVE", (0, -1), (-1, -1), 0.75, colors.black),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F0F4FA")),
+        ]
+
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
     table.setStyle(TableStyle(style_cmds))
     return [table]
+
+
+_BY_MONTH_HEADERS = ["col_month", "days", "banked_hrs", "bonus_days", "bonus_cost", "total_cost"]
+_BY_MONTH_COL_WEIGHTS = [3, 1.5, 1.5, 1.5, 2.2, 2.4]
+
+
+def _render_by_month_table(buckets: List[MonthBucket], styles: dict, usable_width: float, locale: str = "en") -> list:
+    """One row per month (days, banked hours, bonus, total) with a TOTAL row.
+
+    The bonus is computed per month, so this is where a reader can check it.
+    """
+    total_weight = sum(_BY_MONTH_COL_WEIGHTS)
+    col_widths = [usable_width * (w / total_weight) for w in _BY_MONTH_COL_WEIGHTS]
+    table_data = [_header_cells(_BY_MONTH_HEADERS, styles, locale)]
+    tot_days = 0.0
+    tot_banked = 0
+    tot_bonus_days = 0.0
+    tot_bonus = Decimal("0")
+    tot_cost = Decimal("0")
+    for bucket in buckets:
+        s = bucket.summary
+        bonus = Decimal(str(s.total_bonus_cost))
+        cost = Decimal(str(s.total_cost))
+        tot_days += float(s.total_days)
+        tot_banked += s.total_banked_hours
+        tot_bonus_days += float(s.total_bonus_days)
+        tot_bonus += bonus
+        tot_cost += cost
+        table_data.append(
+            [
+                Paragraph(_xml_escape(month_label(bucket.month, locale)), styles["cell"]),
+                _format_days(float(s.total_days)),
+                str(s.total_banked_hours),
+                _format_days(float(s.total_bonus_days)),
+                format_eur_fr(bonus),
+                format_eur_fr(cost),
+            ]
+        )
+    table_data.append(
+        [
+            Paragraph("<b>" + _xml_escape(t(locale, "total_row")) + "</b>", styles["cell"]),
+            _format_days(tot_days),
+            str(tot_banked),
+            _format_days(tot_bonus_days),
+            format_eur_fr(tot_bonus),
+            format_eur_fr(tot_cost),
+        ]
+    )
+    table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("FONTNAME", (0, 1), (-1, -1), "DejaVu"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+                ("FONTNAME", (0, -1), (-1, -1), "DejaVu-Bold"),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.75, colors.black),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F0F4FA")),
+            ]
+        )
+    )
+    return [Paragraph(_xml_escape(t(locale, "by_month")), styles["h2"]), Spacer(1, 2 * mm), table]
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +750,11 @@ def build_pdf(context: ExportContext, buckets: List[MonthBucket]) -> bytes:
         story.extend(_render_kpi_table(buckets, styles, context.locale))
         story.append(Spacer(1, 6 * mm))
         story.extend(_render_breakdown_table(buckets, styles, usable_width, context.locale))
+        story.append(Spacer(1, 2 * mm))
+        story.append(Paragraph(_xml_escape(t(context.locale, "bonus_rule")), styles["body_italic"]))
+        if len(buckets) > 1:
+            story.append(Spacer(1, 6 * mm))
+            story.extend(_render_by_month_table(buckets, styles, usable_width, context.locale))
 
     # Render the day-log first so we can tell whether it actually produced rows.
     # In single-worker mode it is filtered to the worker's worked days, which can

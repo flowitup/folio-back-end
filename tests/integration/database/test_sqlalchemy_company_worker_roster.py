@@ -19,7 +19,17 @@ from app.infrastructure.database.models.user import UserModel
 from app.infrastructure.database.models.worker import WorkerModel
 
 
-_TABLES = ("users", "companies", "projects", "persons", "labor_roles", "company_persons", "workers")
+_TABLES = (
+    "users",
+    "companies",
+    "projects",
+    "persons",
+    "labor_roles",
+    "company_persons",
+    "workers",
+    "worker_rate_changes",
+    "user_company_access",
+)
 
 
 @pytest.fixture
@@ -263,3 +273,96 @@ def test_worker_row_wins_over_the_directory_profile(session, world):
 
     EnrollCompanyWorkersUseCase(SqlAlchemyCompanyWorkerRoster(session)).before_roster_listed(b.id)
     assert [r.daily_rate for r in _rows(session, b)] == [Decimal("130")]
+
+
+def test_copy_takes_the_rate_timeline_so_the_person_costs_the_same_everywhere(session, world):
+    from datetime import date
+
+    from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
+
+    owner, company, _, (a, b, c), _ = world
+    jean = _person(session, owner, "Jean")
+    row_a = _worker(session, a, jean, rate="120.50")
+    session.add(WorkerRateChangeModel(id=uuid4(), worker_id=row_a.id, effective_date=date(2026, 9, 15), daily_rate=130))
+    session.flush()
+
+    EnrollCompanyWorkersUseCase(SqlAlchemyCompanyWorkerRoster(session)).after_project_created(c.id)
+
+    (row_c,) = _rows(session, c)
+    assert row_c.daily_rate == Decimal("120.50")
+    changes = session.query(WorkerRateChangeModel).filter(WorkerRateChangeModel.worker_id == row_c.id).all()
+    assert [(ch.effective_date, ch.daily_rate) for ch in changes] == [(date(2026, 9, 15), Decimal("130.00"))]
+
+
+def test_person_stopped_everywhere_is_not_brought_back_by_their_directory_rate(session, world):
+    owner, company, _, (a, b, c), _ = world
+    lina = _person(session, owner, "Lina")
+    _profile(session, company, lina, rate=Decimal("120"))
+    usecase = EnrollCompanyWorkersUseCase(SqlAlchemyCompanyWorkerRoster(session))
+    assert usecase.before_roster_listed(a.id) == 1
+    usecase.after_worker_stopped(a.id, lina.id)
+    (row_a,) = _rows(session, a)
+    row_a.is_active = False
+    session.flush()
+
+    assert usecase.after_project_created(b.id) == 0
+    assert usecase.before_roster_listed(c.id) == 0
+    assert _rows(session, b) == [] and _rows(session, c) == []
+
+    # Restarting brings them back, including on the sites created while they were stopped.
+    usecase.after_worker_restarted(a.id, lina.id)
+    assert len(_rows(session, b)) == 1 and len(_rows(session, c)) == 1
+
+
+def test_stop_is_limited_to_the_sites_given(session, world):
+    owner, company, _, (a, b, c), _ = world
+    hoa = _person(session, owner, "Hương")
+    rows = [_worker(session, p, hoa) for p in (a, b, c)]
+    usecase = EnrollCompanyWorkersUseCase(SqlAlchemyCompanyWorkerRoster(session))
+
+    assert usecase.after_worker_stopped(a.id, hoa.id, [a.id, b.id]) == 2
+    for row in rows:
+        session.refresh(row)
+    assert [r.is_active for r in rows] == [False, False, True]
+
+
+def test_restart_relinks_the_person_account_when_it_is_still_in_the_company(session, world):
+    from app.infrastructure.database.models.user_company_access import UserCompanyAccessModel
+
+    owner, company, _, (a, b, c), _ = world
+    account = UserModel(id=uuid4(), email=f"{uuid4().hex[:8]}@x.fr", is_active=True)
+    session.add(account)
+    session.flush()
+    session.add(
+        UserCompanyAccessModel(
+            user_id=account.id, company_id=company.id, is_primary=True, attached_at=datetime.now(timezone.utc)
+        )
+    )
+    duc = _person(session, owner, "Đức")
+    duc.user_id = account.id
+    rows = [_worker(session, p, duc, active=False) for p in (a, b)]
+    session.flush()
+
+    EnrollCompanyWorkersUseCase(SqlAlchemyCompanyWorkerRoster(session)).after_worker_restarted(a.id, duc.id)
+    for row in rows:
+        session.refresh(row)
+        assert (row.is_active, row.user_id) == (True, account.id)
+
+
+def test_role_change_follows_the_person_and_new_sites_take_it(session, world):
+    owner, company, _, (a, b, c), _ = world
+    role = LaborRoleModel(id=uuid4(), company_id=company.id, name="Ouvrier principal", color="#000000")
+    session.add(role)
+    session.flush()
+    sau = _person(session, owner, "Sáu")
+    profile = _profile(session, company, sau, rate=None)
+    _worker(session, a, sau)
+    _worker(session, b, sau)
+    usecase = EnrollCompanyWorkersUseCase(SqlAlchemyCompanyWorkerRoster(session))
+
+    assert usecase.after_role_changed(a.id, sau.id, role.id) == 2
+    assert [r.role_id for p in (a, b) for r in _rows(session, p)] == [role.id, role.id]
+    session.refresh(profile)
+    assert profile.labor_role_id == role.id
+    usecase.after_project_created(c.id)
+    assert _rows(session, c)[0].role_id == role.id

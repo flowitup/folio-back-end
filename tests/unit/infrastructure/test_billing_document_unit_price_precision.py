@@ -55,7 +55,7 @@ def test_pdf_prints_unit_prices_with_their_own_decimals():
 
 def test_xlsx_unit_price_format_shows_more_than_two_decimals():
     ws = load_workbook(BytesIO(OpenpyxlBillingDocumentXlsxRenderer().render(_doc()))).active
-    prices = [c for row in ws.iter_rows(min_col=9, max_col=9) for c in row if c.value in (15.015, 1234.565, 100)]
+    prices = [c for row in ws.iter_rows(min_col=10, max_col=10) for c in row if c.value in (15.015, 1234.565, 100)]
     assert len(prices) == 3
     for cell in prices:
         assert cell.number_format == "#,##0.00####"

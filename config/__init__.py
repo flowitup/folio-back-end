@@ -5,7 +5,9 @@ This module reads and validates environment variables for the application.
 Configuration follows the 12-factor app methodology.
 """
 
+import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Mapping, Optional
@@ -32,7 +34,9 @@ def get_env(key: str, default: Optional[str] = None, required: bool = False) -> 
     Raises:
         ValueError: If required and not set
     """
-    value = os.getenv(key, default)
+    # An empty variable counts as unset, so a compose file can pass an optional key through
+    # as ``KEY=${KEY:-}`` without turning a numeric default into int("").
+    value = os.getenv(key) or default
     if required and value is None:
         raise ValueError(f"Required environment variable '{key}' is not set")
     return value or ""
@@ -52,13 +56,10 @@ class Config:
     REDIS_URL: str = get_env("REDIS_URL", default="redis://localhost:6379/0")
 
     # Email configuration
-    # EMAIL_PROVIDER: 'resend' | 'inmemory' | 'smtp'
-    EMAIL_PROVIDER: str = get_env("EMAIL_PROVIDER", default="smtp")
-    SMTP_HOST: str = get_env("SMTP_HOST", default="localhost")
-    SMTP_PORT: int = int(get_env("SMTP_PORT", default="587"))
-    SMTP_USER: str = get_env("SMTP_USER", default="")
-    SMTP_PASS: str = get_env("SMTP_PASS", default="")
-    SMTP_USE_TLS: bool = get_env("SMTP_USE_TLS", default="true").lower() == "true"
+    # EMAIL_PROVIDER: 'resend' (real delivery) | 'log' (writes each e-mail to the API log, dev)
+    # | 'inmemory' (tests). There is no SMTP adapter: 'smtp' (the old default, which silently
+    # dropped every invitation e-mail) is accepted as an alias of 'log'.
+    EMAIL_PROVIDER: str = get_env("EMAIL_PROVIDER", default="log").strip().lower()
     # Resend API settings (used when EMAIL_PROVIDER=resend)
     RESEND_API_KEY: str = get_env("RESEND_API_KEY", default="")
     FROM_EMAIL: str = get_env("FROM_EMAIL", default="")
@@ -75,8 +76,12 @@ class Config:
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=7)
     JWT_TOKEN_LOCATION: tuple = ("headers", "cookies")
     # JWT cookie security — secure-by-default everywhere.
-    #   Production (FLASK_ENV=production)        : Secure=True,  CSRF=True,  SameSite=Strict.
+    #   Production (FLASK_ENV=production)        : Secure=True,  CSRF=True,  SameSite=Lax.
     #   Non-prod default                         : Secure=True,  CSRF=True,  SameSite=Lax.
+    #   Lax, not Strict, in production: a Strict cookie is not sent on a top-level navigation from
+    #   another site, so every link in an e-mail, WhatsApp or Slack landed a signed-in user on
+    #   /login. Lax still withholds the cookies from cross-site POSTs, and the double-submit CSRF
+    #   tokens cover every state-changing request anyway.
     #   Non-prod with FLASK_DEV_INSECURE=1 opt-in: Secure=False, CSRF=False, SameSite=None
     #     (legacy localhost-over-HTTP dev only — production refuses to boot in this mode,
     #      see app/__init__.py).
@@ -84,7 +89,7 @@ class Config:
     _dev_insecure: bool = (not _is_production) and get_env("FLASK_DEV_INSECURE", default="0") == "1"
     JWT_COOKIE_SECURE: bool = not _dev_insecure
     JWT_COOKIE_CSRF_PROTECT: bool = not _dev_insecure
-    JWT_COOKIE_SAMESITE: str = "Strict" if _is_production else ("None" if _dev_insecure else "Lax")
+    JWT_COOKIE_SAMESITE: str = "None" if _dev_insecure else "Lax"
 
     # Rate Limiting (flask-limiter reads RATELIMIT_STORAGE_URI from app config)
     RATELIMIT_STORAGE_URI: str = get_env("REDIS_URL", default="redis://localhost:6379/1")
@@ -165,14 +170,15 @@ class Config:
     # blocking "please update" screen. Empty = no gate. Versions are the app's x.y.z.
     APP_MIN_VERSION_IOS: str = get_env("APP_MIN_VERSION_IOS", default="")
     APP_MIN_VERSION_ANDROID: str = get_env("APP_MIN_VERSION_ANDROID", default="")
-    APP_UPDATE_URL_IOS: str = get_env("APP_UPDATE_URL_IOS", default="https://testflight.apple.com/join/2Ee4zSMq")
-    APP_UPDATE_URL_ANDROID: str = get_env(
-        "APP_UPDATE_URL_ANDROID", default="https://play.google.com/apps/testing/com.flowitup.folio"
-    )
+    # Where the "please update" screen sends people. Empty by default: the app then opens its
+    # own store listing. The former defaults were the TestFlight / Play *testing* pages, which
+    # sent customers to the beta programmes.
+    APP_UPDATE_URL_IOS: str = get_env("APP_UPDATE_URL_IOS", default="")
+    APP_UPDATE_URL_ANDROID: str = get_env("APP_UPDATE_URL_ANDROID", default="")
 
     # Push notifications (attendance to validate / validated). "log" writes them to the API log;
     # "expo" relays through the Expo push service (APNs/FCM credentials live on the EAS project).
-    PUSH_PROVIDER: str = get_env("PUSH_PROVIDER", default="log")
+    PUSH_PROVIDER: str = get_env("PUSH_PROVIDER", default="log").strip().lower()
     EXPO_ACCESS_TOKEN: str = get_env("EXPO_ACCESS_TOKEN", default="")
     PUSH_LOCALE: str = get_env("PUSH_LOCALE", default="vi")  # vi | fr | en
 
@@ -180,33 +186,25 @@ class Config:
     # "persistent" (never expires; the session lasts until the user signs out).
     REFRESH_TOKEN_POLICY: str = get_env("REFRESH_TOKEN_POLICY", default="expiring")
 
-    def __post_init__(self):
-        if self.JWT_TOKEN_LOCATION is None:
-            self.JWT_TOKEN_LOCATION = ["headers", "cookies"]
-        if self.REFRESH_TOKEN_POLICY not in ("expiring", "persistent"):
-            raise ValueError("REFRESH_TOKEN_POLICY must be 'expiring' or 'persistent'")
-        if self.PUSH_PROVIDER not in ("log", "expo"):
-            raise ValueError("PUSH_PROVIDER must be 'log' or 'expo'")
-        if self.SMS_PROVIDER not in ("log", "twilio", "gateway"):
-            raise ValueError("SMS_PROVIDER must be 'log', 'twilio' or 'gateway'")
-        if bool(self.OTP_REVIEWER_PHONE) != bool(self.OTP_REVIEWER_CODE):
-            raise ValueError("OTP_REVIEWER_PHONE and OTP_REVIEWER_CODE must be set together")
-        if self.OTP_REVIEWER_CODE and not (self.OTP_REVIEWER_CODE.isdigit() and len(self.OTP_REVIEWER_CODE) == 6):
-            raise ValueError("OTP_REVIEWER_CODE must be a 6-digit string")
-
 
 ENVIRONMENTS = ("development", "testing", "production")
 SMS_PROVIDERS = ("log", "twilio", "gateway")
+PUSH_PROVIDERS = ("log", "expo")
+EMAIL_PROVIDERS = ("resend", "log", "inmemory", "smtp")
+REFRESH_TOKEN_POLICIES = ("expiring", "persistent")
+_APP_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def validate_boot_settings(settings: Mapping[str, Any], environ: Mapping[str, str] = os.environ) -> None:
     """Refuse to boot on a setting that would quietly turn a safeguard off (called by ``create_app``).
 
-    ``Config.__post_init__`` never runs (``create_app`` receives the class, not an instance), and the
+    ``create_app`` receives the Config class, not an instance, so every check lives here. The
     production-only guards compare FLASK_ENV with the exact word "production": a typo ("prod",
     "Production", "staging") would otherwise boot with the development defaults, and an unknown
     SMS_PROVIDER would fall back to the adapter that writes every sign-in code to the API log.
-    An unset FLASK_ENV still means development.
+    The same goes for PUSH_PROVIDER (a typo meant every push was only logged), EMAIL_PROVIDER,
+    REFRESH_TOKEN_POLICY, a half-set or malformed store-reviewer login, and a malformed minimum
+    app version (which silently disabled the update gate). An unset FLASK_ENV still means development.
     """
     flask_env = environ.get("FLASK_ENV")
     if flask_env is not None and flask_env not in ENVIRONMENTS:
@@ -218,6 +216,41 @@ def validate_boot_settings(settings: Mapping[str, Any], environ: Mapping[str, st
         raise RuntimeError(
             "CRITICAL: SMS_PROVIDER=log would write sign-in codes to the log; not permitted in production."
         )
+    push_provider = str(settings.get("PUSH_PROVIDER", "log")).strip().lower()
+    if push_provider not in PUSH_PROVIDERS:
+        raise RuntimeError(f"CRITICAL: PUSH_PROVIDER={push_provider!r} is not one of {', '.join(PUSH_PROVIDERS)}.")
+    email_provider = str(settings.get("EMAIL_PROVIDER", "log")).strip().lower()
+    if email_provider not in EMAIL_PROVIDERS:
+        raise RuntimeError(f"CRITICAL: EMAIL_PROVIDER={email_provider!r} is not one of {', '.join(EMAIL_PROVIDERS)}.")
+    if flask_env == "production":
+        # Warned, not refused: a deploy must not go down over it, but nobody would be told.
+        if push_provider == "log":
+            logging.getLogger(__name__).critical("PUSH_PROVIDER=log in production: push notifications are only logged.")
+        if email_provider != "resend":
+            logging.getLogger(__name__).critical(
+                "EMAIL_PROVIDER=%s in production: invitation e-mails are not delivered.", email_provider
+            )
+    policy = settings.get("REFRESH_TOKEN_POLICY", "expiring")
+    if policy not in REFRESH_TOKEN_POLICIES:
+        raise RuntimeError(
+            f"CRITICAL: REFRESH_TOKEN_POLICY={policy!r} is not one of {', '.join(REFRESH_TOKEN_POLICIES)}."
+        )
+    reviewer_phone = str(settings.get("OTP_REVIEWER_PHONE") or "")
+    reviewer_code = str(settings.get("OTP_REVIEWER_CODE") or "")
+    if bool(reviewer_phone) != bool(reviewer_code):
+        raise RuntimeError("CRITICAL: set both OTP_REVIEWER_PHONE and OTP_REVIEWER_CODE, or neither.")
+    if reviewer_code and not (reviewer_code.isdigit() and len(reviewer_code) == 6):
+        raise RuntimeError("CRITICAL: OTP_REVIEWER_CODE must be 6 digits (the sign-in code format).")
+    for platform in ("IOS", "ANDROID"):
+        name = f"APP_MIN_VERSION_{platform}"
+        version = str(settings.get(name) or "")
+        if version and not _APP_VERSION_RE.match(version):
+            raise RuntimeError(f"CRITICAL: {name}={version!r} must look like 1.2.3 (digits only), or be empty.")
+        # Builds already installed open update_url as is: a gate without a link is a dead end.
+        if version and not str(settings.get(f"APP_UPDATE_URL_{platform}") or "").startswith("https://"):
+            raise RuntimeError(
+                f"CRITICAL: {name} is set, so APP_UPDATE_URL_{platform} must be the store listing (https://...)."
+            )
     # The SMS abuse limits: flask-limiter parses its string on every request and the budget does int(),
     # so a typo would otherwise show up as a 500 on the sign-in routes instead of a stopped boot.
     for name in (

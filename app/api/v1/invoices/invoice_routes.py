@@ -327,7 +327,7 @@ def list_invoices(project_id: str):
     worker_filter = filters.worker_id
     if scope.restricted:
         if scope.worker_id is None:
-            return jsonify(_empty_invoice_list())
+            return jsonify(_restricted_invoice_list(project_id, []))
         worker_filter = scope.worker_id
 
     container = get_container()
@@ -456,7 +456,7 @@ def list_invoices(project_id: str):
         d["paid_with_returns"] = applied_summaries.get(UUID(r.id), [])
 
     if scope.restricted:
-        return jsonify({**_empty_invoice_list(), "invoices": invoice_dicts, "total": len(invoice_dicts)})
+        return jsonify(_restricted_invoice_list(project_id, invoice_dicts))
     return jsonify(
         {
             "invoices": invoice_dicts,
@@ -468,6 +468,7 @@ def list_invoices(project_id: str):
             "personal_spent_total": personal_spent_total,
             "company_cash_advanced_total": company_cash_advanced_total,
             "company_name": company_name,
+            "restricted": False,
         }
     )
 
@@ -476,6 +477,26 @@ def _invoice_visible_to_caller(project_id: str, worker_id) -> bool:
     """Restricted members see an invoice only when it is their own labor payment."""
     scope = labor_scope_for(project_id)
     return not scope.restricted or (worker_id is not None and scope.allows_worker(worker_id))
+
+
+def _restricted_invoice_list(project_id: str, invoice_dicts: list) -> dict:
+    """List body for a restricted member: their own rows, no spend aggregates.
+
+    ``restricted`` tells the client the list is the caller's own payments, not the
+    project's ledger. A member granted ``project:view_budget`` still gets the
+    financing figures (funds released, cash advanced): zeroing them presented
+    "0 % released" as a fact on the dashboard and the projects card.
+    """
+    body = {**_empty_invoice_list(), "invoices": invoice_dicts, "total": len(invoice_dicts), "restricted": True}
+    if caller_sees_budget(project_id):
+        company_raw, personal_raw, cash_raw = get_container().invoice_repository.sum_funds_released_split(
+            UUID(project_id)
+        )
+        body["funds_released_total"] = money(company_raw + personal_raw)
+        body["funds_released_company_total"] = money(company_raw)
+        body["funds_released_personal_total"] = money(personal_raw)
+        body["company_cash_advanced_total"] = money(cash_raw)
+    return body
 
 
 def _empty_invoice_list() -> dict:
@@ -532,12 +553,31 @@ def get_labor_payments_summary(project_id: str):
 
 
 def _invoice_subject(invoice) -> str:
-    """ "Number · recipient · amount" for the admins' bell; best effort, never raises."""
+    """ "Number · recipient" for the admins' bell; the amount is added per reader's locale. Never raises."""
     try:
-        amount = f"{float(invoice.total_amount):,.2f} €".replace(",", " ")
-        return " · ".join(p for p in (invoice.invoice_number, invoice.recipient_name, amount) if p)
+        return " · ".join(p for p in (invoice.invoice_number, invoice.recipient_name) if p)
     except Exception:
         return ""
+
+
+def _invoice_activity(invoice) -> dict:
+    """Details the admins' bell needs for an expense: amount, kind of entry and the invoice id."""
+    try:
+        kind = getattr(invoice, "type", None)
+        kind = getattr(kind, "value", kind)
+        if kind == "released_funds" and getattr(invoice, "is_cash_advance", False):
+            variant = "cash_advance"
+        elif kind in ("released_funds", "return"):
+            variant = kind
+        else:
+            variant = None
+        return {
+            "amount": invoice.total_amount,
+            "variant": variant,
+            "extra_data": {"invoice_id": str(invoice.id)},
+        }
+    except Exception:
+        return {}
 
 
 @invoice_bp.route("/projects/<project_id>/invoices", methods=["POST"])
@@ -629,7 +669,7 @@ def create_invoice(project_id: str):
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
-    notify_admins("invoice_created", _invoice_subject(result), project_id=project_id)
+    notify_admins("invoice_created", _invoice_subject(result), project_id=project_id, **_invoice_activity(result))
     return jsonify(d), 201
 
 
@@ -801,7 +841,7 @@ def update_invoice(project_id: str, invoice_id: str):
     _enrich_applied_to_invoice_number(d, result.applied_to_invoice_id)
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
-    notify_admins("invoice_updated", _invoice_subject(result), project_id=project_id)
+    notify_admins("invoice_updated", _invoice_subject(result), project_id=project_id, **_invoice_activity(result))
     return jsonify(d)
 
 
@@ -834,5 +874,5 @@ def delete_invoice(project_id: str, invoice_id: str):
     except ValueError as e:
         return _error_response("ValidationError", str(e), 400)
 
-    notify_admins("invoice_deleted", _invoice_subject(existing), project_id=project_id)
+    notify_admins("invoice_deleted", _invoice_subject(existing), project_id=project_id, **_invoice_activity(existing))
     return "", 204

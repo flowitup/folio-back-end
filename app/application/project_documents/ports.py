@@ -64,6 +64,10 @@ class IProjectDocumentRepository(Protocol):
         """Return a paginated, filtered list of documents for a project."""
         ...
 
+    def live_filenames(self, project_id: UUID) -> set[str]:
+        """Lower-cased file names of the project's non-deleted documents."""
+        ...
+
     def update_filename(self, doc_id: UUID, new_filename: str) -> None:
         """Update the display filename of a document."""
         ...

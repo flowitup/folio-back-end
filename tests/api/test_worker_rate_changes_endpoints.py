@@ -640,6 +640,30 @@ class TestCurrentDailyRateOnWorkerList:
         # base rate is unchanged
         assert w["daily_rate"] == pytest.approx(100.0)
 
+    def test_update_response_reports_the_rate_in_force_like_the_list(self, rc_client, admin_token, rate_app):
+        """PUT /workers/<id> answers the same current_daily_rate as GET /workers (not the base rate)."""
+        from datetime import date, timedelta
+
+        pid = rate_app._test_project_id
+        worker = _create_worker(rc_client, admin_token, pid, "Put-Rate Worker", rate=120.5)
+        wid = worker["id"]
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        assert (
+            rc_client.post(
+                _rate_changes_url(pid, wid),
+                json={"effective_date": yesterday, "daily_rate": 130.0},
+                headers=_auth(admin_token),
+            ).status_code
+            == 201
+        )
+
+        resp = rc_client.put(
+            f"/api/v1/projects/{pid}/workers/{wid}", json={"name": "Put-Rate Worker"}, headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["current_daily_rate"] == pytest.approx(130.0)
+        assert resp.get_json()["daily_rate"] == pytest.approx(120.5)
+
     def test_future_rate_change_does_not_affect_current(self, rc_client, admin_token, rate_app):
         """A rate change with effective_date > today → current_daily_rate stays at prior/base."""
         from datetime import date, timedelta

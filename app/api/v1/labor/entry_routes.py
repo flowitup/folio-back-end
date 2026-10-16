@@ -54,7 +54,8 @@ from app.domain.exceptions.labor_exceptions import (
     LaborEntryNotFoundError,
     DuplicateEntryError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
 
 
@@ -68,13 +69,16 @@ def _entry_subject(worker_id: str, day: str) -> str:
         return ""
 
 
-def _existing_entry_subject(entry_id: str) -> str:
-    """Same label for an entry about to be deleted; empty if it cannot be resolved."""
+def _existing_entry_subject(entry_id: str) -> tuple:
+    """Same label for an entry about to be deleted, plus its day (the apps open the calendar
+    on it); empty strings if it cannot be resolved."""
     try:
         entry = get_container().labor_entry_repository.find_by_id(UUID(entry_id))
-        return _entry_subject(str(entry.worker_id), entry.date.isoformat()) if entry is not None else ""
+        if entry is None:
+            return "", ""
+        return _entry_subject(str(entry.worker_id), entry.date.isoformat()), entry.date.isoformat()
     except Exception:
-        return ""
+        return "", ""
 
 
 def _notify_logged(project_id: str, day: str, worker_ids: list) -> None:
@@ -183,6 +187,37 @@ def list_labor_entries(project_id: str):
     )
 
 
+def _conflicts_response(e: ConflictsNotAcknowledgedError):
+    """409 listing the other sites where the same person already has a day on that date."""
+    return (
+        jsonify(
+            {
+                "error": "Conflict",
+                # Lets a client tell this 409 from a duplicate entry and say "already logged elsewhere".
+                "reason": "cross_project_conflict",
+                "message": ("Cross-project conflicts exist; resend with " "acknowledge_conflicts=true to override."),
+                "conflicts": [
+                    CrossProjectConflictResponse(
+                        person_id=str(c.person_id),
+                        person_name=c.person_name,
+                        entries=[
+                            CrossProjectConflictEntryResponse(
+                                project_id=str(ent.project_id),
+                                project_name=ent.project_name,
+                                shift_type=ent.shift_type,
+                                supplement_hours=ent.supplement_hours,
+                            )
+                            for ent in c.entries
+                        ],
+                    ).model_dump()
+                    for c in e.conflicts
+                ],
+            }
+        ),
+        409,
+    )
+
+
 @labor_bp.route("/projects/<project_id>/labor-entries", methods=["POST"])
 @openapi_doc(
     summary="Log daily attendance for a worker",
@@ -190,7 +225,7 @@ def list_labor_entries(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def log_attendance(project_id: str):
@@ -210,6 +245,7 @@ def log_attendance(project_id: str):
                 note=data.note,
                 shift_type=data.shift_type,
                 supplement_hours=data.supplement_hours,
+                acknowledge_conflicts=data.conflicts_acknowledged,
             )
         )
     except ValueError as e:
@@ -222,6 +258,8 @@ def log_attendance(project_id: str):
         return _error_response("NotFound", str(e), 404)
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
+    except ConflictsNotAcknowledgedError as e:
+        return _conflicts_response(e)
 
     _notify_logged(project_id, result.date, [result.worker_id])
     return (
@@ -310,7 +348,7 @@ def get_cross_project_conflicts(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def bulk_log_attendance(project_id: str):
@@ -355,33 +393,7 @@ def bulk_log_attendance(project_id: str):
     except DuplicateEntryError as e:
         return _error_response("Conflict", str(e), 409)
     except ConflictsNotAcknowledgedError as e:
-        return (
-            jsonify(
-                {
-                    "error": "Conflict",
-                    "message": (
-                        "Cross-project conflicts exist; resend with " "acknowledge_conflicts=true to override."
-                    ),
-                    "conflicts": [
-                        CrossProjectConflictResponse(
-                            person_id=str(c.person_id),
-                            person_name=c.person_name,
-                            entries=[
-                                CrossProjectConflictEntryResponse(
-                                    project_id=str(ent.project_id),
-                                    project_name=ent.project_name,
-                                    shift_type=ent.shift_type,
-                                    supplement_hours=ent.supplement_hours,
-                                )
-                                for ent in c.entries
-                            ],
-                        ).model_dump()
-                        for c in e.conflicts
-                    ],
-                }
-            ),
-            409,
-        )
+        return _conflicts_response(e)
 
     _notify_logged(
         project_id,
@@ -406,7 +418,7 @@ def bulk_log_attendance(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def update_attendance(project_id: str, entry_id: str):
@@ -447,7 +459,12 @@ def update_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
-    notify_admins("attendance_edited", _entry_subject(result.worker_id, result.date), project_id=project_id)
+    notify_admins(
+        "attendance_edited",
+        _entry_subject(result.worker_id, result.date),
+        project_id=project_id,
+        extra_data={"date": str(result.date)[:10]} if result.date else None,
+    )
     return jsonify(
         {
             "id": result.id,
@@ -465,12 +482,12 @@ def update_attendance(project_id: str, entry_id: str):
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>", methods=["DELETE"])
 @openapi_doc(summary="Delete a labor entry", tags=["labor"])
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def delete_attendance(project_id: str, entry_id: str):
     """Delete a labor entry."""
-    subject = _existing_entry_subject(entry_id)
+    subject, day = _existing_entry_subject(entry_id)
     try:
         get_container().delete_attendance_usecase.execute(
             DeleteAttendanceRequest(entry_id=UUID(entry_id), project_id=UUID(project_id))
@@ -480,7 +497,7 @@ def delete_attendance(project_id: str, entry_id: str):
     except LaborEntryNotFoundError:
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
-    notify_admins("attendance_deleted", subject, project_id=project_id)
+    notify_admins("attendance_deleted", subject, project_id=project_id, extra_data={"date": day} if day else None)
     return "", 204
 
 

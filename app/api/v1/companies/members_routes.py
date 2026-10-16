@@ -13,6 +13,7 @@ D8 grant/deny management routes live in a separate module
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from flask import jsonify, request
@@ -47,12 +48,29 @@ from app.application.company_persons import (
 )
 from app.application.company_persons.exceptions import PhoneAlreadyInCompanyError
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
-from app.infrastructure.rate_limiter import limiter
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
+
+logger = logging.getLogger(__name__)
 
 
 def _err(error: str, message: str, status: int):
     return jsonify({"error": error, "message": message}), status
+
+
+def _tell_added_account(person_id: UUID, caller_id: UUID, company_id: UUID) -> None:
+    """An existing account was attached to the company: tell its owner (push + bell).
+
+    Best effort and after the response is decided, so it reveals nothing to the caller."""
+    try:
+        c = get_container()
+        person = c.person_repo.find_by_id(person_id)
+        user_id = getattr(person, "user_id", None)
+        notifier = c.membership_push_notifier
+        if user_id is not None and notifier is not None:
+            notifier.notify("company_member_added", user_id=user_id, actor_id=caller_id, entity_id=company_id)
+    except Exception:
+        logger.exception("company_member_added notification failed")
 
 
 def _company_uuid_or_404(company_id: str):
@@ -74,8 +92,8 @@ def _company_uuid_or_404(company_id: str):
     tags=["companies"],
 )
 @jwt_required()
-@limiter.limit("20 per minute", key_func=jwt_user_key)
-@limiter.limit("20 per hour", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
+@limiter.limit("100 per hour", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_company_role("admin")
 def add_member_by_phone(company_id: str):
     """Onboard a person by phone (match order: existing account → un-linked
@@ -166,6 +184,8 @@ def add_member_by_phone(company_id: str):
         )
 
     notify_admins("member_added", result.name or "", company_id=company_id)
+    if not getattr(result, "pending", True):
+        _tell_added_account(result.person_id, caller_id, company_uuid)
     return (
         jsonify(
             {
@@ -221,6 +241,10 @@ def import_members(company_id: str):
         return _err("Forbidden", "Admin permission required", 403)
     except SourceCompanyNotAccessibleError:
         return _err("Forbidden", "Admin permission required in the source company", 403)
+    except IntegrityError:
+        # A concurrent add took one of these numbers in the meantime: nothing was imported.
+        db.session.rollback()
+        return _err("Conflict", "Someone in this company already uses one of these phone numbers.", 409)
 
     return (
         jsonify(
@@ -261,12 +285,23 @@ def list_directory(company_id: str):
 
     result = get_container().list_directory_usecase.execute(company_uuid)
 
+    # A person linked to an account shows the name that account chose, not the label the
+    # first admin typed (often just the phone) on the Person shared by every company.
+    from app import db
+    from app.infrastructure.database.user_names import own_display_names
+
+    own_names = own_display_names(
+        db.session, [e.linked_user_id for e in result.items if not e.pending], company_ids=[company_uuid]
+    )
+
     return jsonify(
         {
             "items": [
                 {
                     "person_id": str(entry.person_id),
-                    "name": entry.name,
+                    "name": (
+                        own_names.get(str(entry.linked_user_id), entry.name) if entry.linked_user_id else entry.name
+                    ),
                     "phone": entry.phone,
                     "linked_user_id": str(entry.linked_user_id) if entry.linked_user_id else None,
                     "assigned_project_ids": [str(pid) for pid in entry.assigned_project_ids],
@@ -275,6 +310,11 @@ def list_directory(company_id: str):
                     "labor_role_id": str(entry.labor_role_id) if entry.labor_role_id else None,
                     "default_daily_rate": (
                         float(entry.default_daily_rate) if entry.default_daily_rate is not None else None
+                    ),
+                    # Pending rows only: the role granted at sign-up and the end of the window.
+                    "pending_role": entry.pending_company_role,
+                    "pending_expires_at": (
+                        entry.pending_expires_at.isoformat() if entry.pending_expires_at is not None else None
                     ),
                 }
                 for entry in result.items
@@ -383,6 +423,12 @@ def cancel_pending_member(company_id: str, person_id: str):
         person_repo=c.person_repo,
         role_checker=c.authorization_service,
     )
+    # Read the name first: the cancel may delete the pending profile.
+    try:
+        pending = c.person_repo.find_by_id(person_uuid)
+    except Exception:
+        pending = None
+    pending_name = (getattr(pending, "name", None) or getattr(pending, "phone", None) or "").strip()
     try:
         usecase.execute(UUID(get_jwt_identity()), company_uuid, person_uuid, db.session)
     except ForbiddenCompanyError:
@@ -392,5 +438,5 @@ def cancel_pending_member(company_id: str, person_id: str):
     except LinkedMemberNotCancellableError:
         return _err("Conflict", "This person has an account; remove the member instead", 409)
 
-    notify_admins("member_removed", "", company_id=company_id)
+    notify_admins("member_removed", pending_name, company_id=company_id)
     return "", 204

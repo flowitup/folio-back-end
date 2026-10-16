@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from flask import g
@@ -13,13 +13,17 @@ from wiring import get_container
 
 def notify_admins(
     event: str,
-    subject: str,
+    subject: Any,
     *,
     project_id: Optional[str] = None,
     company_id: Optional[str] = None,
     about_user_id: Optional[UUID] = None,
+    **details: Any,
 ) -> None:
-    """Fire-and-forget: the notifier swallows its own failures, so the request never pays for it."""
+    """Fire-and-forget: the notifier swallows its own failures, so the request never pays for it.
+
+    ``details`` pass straight to `CompanyActivityNotifier.admin_acted` (amount, variant, role,
+    all_sites, extra_data)."""
     notifier = get_container().company_activity_notifier
     if notifier is None:
         return
@@ -31,4 +35,5 @@ def notify_admins(
         company_id=UUID(str(company_id)) if company_id else None,
         about_user_id=about_user_id,
         via_api_key=g.get("api_key_name"),
+        **details,
     )

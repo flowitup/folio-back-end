@@ -46,6 +46,8 @@ from app.application.bibliotheque.exceptions import (
     UnsupportedImageTypeError,
 )
 from app.application.bibliotheque.update_product_usecase import UNSET
+from app.application.companies.default_company import default_company_id
+from app.domain.entities.library_product import LibraryQuantityOverflowError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -60,7 +62,7 @@ def _resolve_company_id() -> "tuple[UUID | None, tuple[Response, int] | None]":
     """Resolve the company these library reads apply to.
 
     ``?company_id=`` wins when present; a malformed one is a client error.
-    Without it the caller's primary company is used, so a client that knows
+    Without it the caller's default company (primary, else oldest attachment) is used, so a client that knows
     only its own session does not have to pass one. Returns
     ``(None, 403 response)`` when the caller is attached to no company — the
     use-cases still run their own membership check, so this is never a
@@ -72,8 +74,13 @@ def _resolve_company_id() -> "tuple[UUID | None, tuple[Response, int] | None]":
             return UUID(raw), None
         except ValueError:
             return None, _err(422, "ValidationError", "company_id must be a valid UUID.")
-    reader = getattr(get_container(), "authz_reader", None)
-    primary = reader.primary_company_id(UUID(get_jwt_identity())) if reader is not None else None
+    container = get_container()
+    # Primary, else the oldest attachment (a user added to two companies has no primary).
+    primary = default_company_id(
+        getattr(container, "authz_reader", None),
+        getattr(container, "user_company_access_repo", None),
+        UUID(get_jwt_identity()),
+    )
     if primary is None:
         return None, _err(403, "Forbidden", "You are not a member of any company.")
     return primary, None
@@ -306,6 +313,11 @@ def import_purchases() -> Any:
         return _err(403, "Forbidden", "Not a member of this company.")
     except InsufficientPermissionError:
         return _err(403, "Forbidden", "bibliotheque:manage permission required.")
+    except LibraryQuantityOverflowError as exc:
+        from app import db
+
+        db.session.rollback()
+        return _err(422, "ValidationError", str(exc))
     except Exception:
         logger.exception("import_purchases error company_id=%s", body.company_id)
         return _err(500, "InternalError", "An unexpected error occurred.")
@@ -491,6 +503,31 @@ def upload_product_image(product_id: UUID) -> Any:
         return _err(500, "InternalError", "An unexpected error occurred.")
 
     return jsonify({"image_storage_key": key}), 200
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/bibliotheque/products/<id>/image
+# ---------------------------------------------------------------------------
+
+
+@bibliotheque_bp.delete("/bibliotheque/products/<uuid:product_id>/image")
+@jwt_required()  # type: ignore[untyped-decorator]
+@limiter.limit("30 per minute", key_func=jwt_user_key)
+def delete_product_image(product_id: UUID) -> Any:
+    """Remove a product's image (e.g. a wrong photo). Requires bibliotheque:manage."""
+    requester_id = UUID(get_jwt_identity())
+    try:
+        get_container().bibliotheque_upload_image_usecase.remove(requester_id=requester_id, product_id=product_id)
+    except ProductNotFoundError:
+        return _err(404, "NotFound", "Product not found.")
+    except CompanyAccessDeniedError:
+        return _err(403, "Forbidden", "Not a member of this company.")
+    except InsufficientPermissionError:
+        return _err(403, "Forbidden", "bibliotheque:manage permission required.")
+    except Exception:
+        logger.exception("delete_product_image error product_id=%s", product_id)
+        return _err(500, "InternalError", "An unexpected error occurred.")
+    return "", 204
 
 
 # ---------------------------------------------------------------------------

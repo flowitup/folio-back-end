@@ -43,6 +43,11 @@ class ExportContext:
     worker_daily_rate: Optional[Decimal] = field(default=None)
     # Language of the labels: "en" (default), "fr" or "vi".
     locale: str = "en"
+    # Single-worker scope: the rates in force during the range, as (first day,
+    # daily rate) in date order (the first one from the start of the range).
+    # More than one when the rate changed, so the header does not suggest a
+    # single rate the day costs contradict. Empty = use worker_daily_rate.
+    worker_rate_periods: tuple = field(default=())
 
 
 @dataclass(frozen=True)

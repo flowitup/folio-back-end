@@ -25,6 +25,30 @@ migrate = Migrate()
 jwt = JWTManager()
 
 
+def _cors_origins() -> list[str]:
+    """The browser origins allowed to call the API (CORS_ORIGINS, comma-separated)."""
+    raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _no_store_for_authenticated_api(response):
+    """Private API answers must never be cached by a proxy or CDN (Cloudflare sits in front).
+
+    Applies to /api/ responses of a request carrying credentials (bearer token or session
+    cookie) that did not choose their own Cache-Control (downloads and thumbnails do).
+    """
+    from flask import request
+
+    if not request.path.startswith("/api/"):
+        return response
+    has_credentials = bool(request.headers.get("Authorization")) or bool(request.cookies)
+    if has_credentials and "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"] = "no-store"
+    if has_credentials:
+        response.vary.update(("Authorization", "Cookie"))
+    return response
+
+
 def create_app(config_class: type = Config) -> Flask:
     """
     Application factory function.
@@ -96,18 +120,22 @@ def create_app(config_class: type = Config) -> Flask:
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Initialize extensions
-    cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")]
+    cors_origins = _cors_origins()
     # expose_headers is critical for binary download endpoints (e.g. labor-export):
     # cross-origin browser fetches cannot read non-default-safelisted headers without
     # explicit exposure. Without this, fetchLaborExport's filename parsing falls back
     # to a generic timestamped name in production.
+    # Retry-After is exposed so the web can say how long to wait after a 429. max_age lets the
+    # browser reuse a preflight for a day instead of sending a new OPTIONS every 5 seconds.
     CORS(
         app,
         supports_credentials=True,
         origins=cors_origins,
-        expose_headers=["Content-Disposition", "X-Content-Type-Options"],
+        expose_headers=["Content-Disposition", "X-Content-Type-Options", "Retry-After"],
+        max_age=86400,
     )
     db.init_app(app)
+    app.after_request(_no_store_for_authenticated_api)
     jwt.init_app(app)
 
     # Recognize an API-key credential (Authorization: Bearer folio_sk_... or
@@ -296,13 +324,26 @@ def _configure_di_container() -> None:
 
         logging.getLogger(__name__).warning("S3 bucket bootstrap failed: %s (uploads will fail until resolved)", exc)
 
+    # Without a public endpoint, presigned previews and direct uploads are off (501) and
+    # every file goes through the API, as before. Say so at startup instead of failing
+    # silently, but never refuse to boot over it: a missing value must not block a deploy.
+    if not Config.S3_PUBLIC_ENDPOINT_URL and Config.S3_ENDPOINT_URL:
+        import logging as _s3_log
+
+        _s3_log.getLogger(__name__).warning(
+            "S3_PUBLIC_ENDPOINT_URL is not set: presigned downloads and uploads are disabled and files "
+            "go through the API. Set it to the public S3 origin the web app's CSP allows "
+            "(NEXT_PUBLIC_S3_PUBLIC_URL)."
+        )
+
     # Configure CORS for presigned-URL direct uploads
     if Config.S3_PUBLIC_ENDPOINT_URL:
         import logging as _cors_log
 
-        _cors_origin = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")[0].strip()
+        # Every allowed browser origin, as for the API's own CORS: only the first one used
+        # to be written, so a second origin (www, staging) could not upload directly.
         try:
-            storage.ensure_cors([_cors_origin])
+            storage.ensure_cors(_cors_origins())
         except Exception as exc:
             _cors_log.getLogger(__name__).warning("S3 CORS setup failed: %s", exc)
 
@@ -318,7 +359,12 @@ def _configure_di_container() -> None:
         attachment_storage=storage,
         invoice_attachment_repository=SQLAlchemyInvoiceAttachmentRepository(db.session),
         task_repository=SQLAlchemyTaskRepository(db.session),
-        token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
+        # One source for the lifetimes: the issuer, the cookies and `expires_in` all follow the config.
+        token_issuer=JWTTokenIssuer(
+            access_expires_minutes=int(Config.JWT_ACCESS_TOKEN_EXPIRES.total_seconds() // 60),
+            refresh_expires_days=Config.JWT_REFRESH_TOKEN_EXPIRES.days,
+            redis_url=Config.REDIS_URL,
+        ),
         session_manager=FlaskSessionManager(),
         invitation_repo=invitation_repo,
         project_membership_repo=membership_repo,
@@ -485,7 +531,9 @@ def _configure_di_container() -> None:
         SendMessageUseCase as _SendChatMessageUseCase,
         BlockUserUseCase as _BlockChatUserUseCase,
         ListBlockedUsersUseCase as _ListBlockedChatUsersUseCase,
+        ListReportsUseCase as _ListChatReportsUseCase,
         RemoveMessageReactionUseCase as _RemoveChatReactionUseCase,
+        ResolveReportUseCase as _ResolveChatReportUseCase,
         ReportMessageUseCase as _ReportChatMessageUseCase,
         SetMessageReactionUseCase as _SetChatReactionUseCase,
         UnblockUserUseCase as _UnblockChatUserUseCase,
@@ -499,8 +547,14 @@ def _configure_di_container() -> None:
     _c.mark_chat_channel_read_usecase = _MarkChatChannelReadUseCase(_chat_repo, _chat_repo, db.session)
     _c.get_chat_attachment_usecase = _GetChatAttachmentUseCase(_chat_repo, _chat_repo, storage)
     _c.report_chat_message_usecase = _ReportChatMessageUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
-    _c.set_chat_reaction_usecase = _SetChatReactionUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
-    _c.remove_chat_reaction_usecase = _RemoveChatReactionUseCase(_chat_repo, _chat_repo, _chat_repo, db.session)
+    _c.set_chat_reaction_usecase = _SetChatReactionUseCase(
+        _chat_repo, _chat_repo, _chat_repo, db.session, safety_repo=_chat_repo
+    )
+    _c.remove_chat_reaction_usecase = _RemoveChatReactionUseCase(
+        _chat_repo, _chat_repo, _chat_repo, db.session, safety_repo=_chat_repo
+    )
+    _c.list_chat_reports_usecase = _ListChatReportsUseCase(_chat_repo, _chat_repo)
+    _c.resolve_chat_report_usecase = _ResolveChatReportUseCase(_chat_repo, _chat_repo, _chat_repo, storage, db.session)
     _c.block_chat_user_usecase = _BlockChatUserUseCase(_chat_repo, _chat_repo, db.session)
     _c.unblock_chat_user_usecase = _UnblockChatUserUseCase(_chat_repo, db.session)
     _c.list_blocked_chat_users_usecase = _ListBlockedChatUsersUseCase(_chat_repo, _chat_repo)
@@ -575,7 +629,7 @@ def _configure_di_container() -> None:
     _c.notification_event_repository = SQLAlchemyNotificationEventRepository(db.session)
     _c.push_sender = (
         ExpoPushSender(_cfg.get("EXPO_ACCESS_TOKEN", ""))
-        if _cfg.get("PUSH_PROVIDER") == "expo"
+        if str(_cfg.get("PUSH_PROVIDER") or "").strip().lower() == "expo"
         else LoggingPushSender()
     )
     if _c.worker_repository is not None and _c.project_repository is not None:
@@ -588,6 +642,7 @@ def _configure_di_container() -> None:
             run_async=not _cfg.get("TESTING", False),
             preferences=_c.notification_preference_repository,
             events=_c.notification_event_repository,
+            names=_chat_repo,
         )
     # Chat pushes are coalesced per (user, channel); the notifier is attached to the
     # already-constructed send use case because the push stack is wired later than chat.
@@ -609,8 +664,17 @@ def _configure_di_container() -> None:
             messages=_chat_repo,
             names=_chat_repo,
             blocks=_chat_repo,
+            events=_c.notification_event_repository,
         )
         _c.send_chat_message_usecase.notifier = _chat_push_notifier
+        if _c.mark_chat_channel_read_usecase is not None:
+            _c.mark_chat_channel_read_usecase.bell = _chat_push_notifier
+    if _c.report_chat_message_usecase is not None:
+        from app.application.push.chat_report_notifier import ChatReportNotifier
+
+        _c.report_chat_message_usecase.notifier = ChatReportNotifier(
+            dispatcher=_c.push_dispatcher, directory=_chat_repo
+        )
 
     if _c.project_repository is not None:
         _c.task_push_notifier = TaskPushNotifier(dispatcher=_c.push_dispatcher, project_repo=_c.project_repository)
@@ -742,6 +806,9 @@ def _configure_di_container() -> None:
         from app.infrastructure.adapters.sqlalchemy_personal_data_eraser import (
             SQLAlchemyPersonalDataEraser,
         )
+        from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+            SqlAlchemyCompanyPersonRepository as _DeletionCompanyPersonRepository,
+        )
 
         _c.delete_account_usecase = DeleteAccountUseCase(
             user_repo=_c.user_repository,
@@ -750,6 +817,7 @@ def _configure_di_container() -> None:
             eraser=SQLAlchemyPersonalDataEraser(db.session),
             db_session=db.session,
             clock=_clock,
+            company_person_repo=_DeletionCompanyPersonRepository(db.session),
         )
 
     # Membership pushes need both name sources, so they are wired here rather than in the
@@ -759,6 +827,7 @@ def _configure_di_container() -> None:
             dispatcher=_c.push_dispatcher,
             project_repo=_c.project_repository,
             company_repo=_company_repo,
+            names=_chat_repo,
         )
         if _c.attendance_push_notifier is not None:
             _c.attendance_push_notifier.set_access_repo(_access_repo)  # no decision pushes to a removed member
@@ -1494,6 +1563,7 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
     from app.infrastructure.adapters.ffmpeg_video_thumbnailer import FfmpegVideoThumbnailer
     from app.infrastructure.adapters.media_thumbnailer import MediaThumbnailer
+    from app.infrastructure.adapters.media_capture_date_reader import MediaCaptureDateReader
     from app.application.project_photos import (
         UploadProjectPhotoUseCase,
         ListProjectPhotosUseCase,
@@ -1518,6 +1588,7 @@ def _configure_di_container() -> None:
         thumbnailer=_photo_thumbnailer,
         db_session=db.session,
         filename_sanitizer=_filename_sanitizer,
+        capture_date_reader=MediaCaptureDateReader(),
     )
     _c.list_project_photos_usecase = ListProjectPhotosUseCase(repo=_photo_repo)
     _c.get_project_photo_usecase = GetProjectPhotoUseCase(repo=_photo_repo, storage=storage)

@@ -42,6 +42,7 @@ from app.application.inventory.exceptions import (
 from app.application.inventory.item_usecases import UNSET as ITEM_UNSET
 from app.application.inventory.warehouse_usecases import UNSET as WAREHOUSE_UNSET
 from app.domain.value_objects.inventory import INVENTORY_CONDITIONS, INVENTORY_LOCATION_TYPES
+from app.application.companies.default_company import default_company_id
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
 
@@ -57,15 +58,20 @@ def _err(code: int, error: str, message: str) -> tuple[Response, int]:
 
 
 def _resolve_company_id() -> "tuple[UUID | None, tuple[Response, int] | None]":
-    """`?company_id=` wins; without it the caller's primary company is used."""
+    """`?company_id=` wins; without it the caller's default company (primary, else oldest attachment)."""
     raw = request.args.get("company_id")
     if raw:
         try:
             return UUID(raw), None
         except ValueError:
             return None, _err(422, "ValidationError", "company_id must be a valid UUID.")
-    reader = getattr(get_container(), "authz_reader", None)
-    primary = reader.primary_company_id(UUID(get_jwt_identity())) if reader is not None else None
+    container = get_container()
+    # Primary, else the oldest attachment (a user added to two companies has no primary).
+    primary = default_company_id(
+        getattr(container, "authz_reader", None),
+        getattr(container, "user_company_access_repo", None),
+        UUID(get_jwt_identity()),
+    )
     if primary is None:
         return None, _err(403, "Forbidden", "You are not a member of any company.")
     return primary, None

@@ -14,6 +14,7 @@ from app.infrastructure.database.like_pattern import LIKE_ESCAPE, contains_patte
 from app.infrastructure.database.models.company import CompanyModel
 from app.infrastructure.database.models.inventory_item import InventoryItemModel
 from app.infrastructure.database.models.inventory_warehouse import InventoryWarehouseModel
+from app.infrastructure.database.text_fold import fold_text, folded
 
 
 class SqlAlchemyInventoryWarehouseRepository:
@@ -118,12 +119,13 @@ class SqlAlchemyInventoryItemRepository:
             stmt = stmt.where(InventoryItemModel.condition == condition)
         if q:
             # Literal substring: "%" and "_" in the search text match only themselves.
-            needle = contains_pattern(q.strip().lower())
+            # Accent-insensitive too: 'echafaudage' finds 'Échafaudage'.
+            needle = contains_pattern(fold_text(q.strip()))
             stmt = stmt.where(
                 or_(
-                    func.lower(InventoryItemModel.name).like(needle, escape=LIKE_ESCAPE),
-                    func.lower(func.coalesce(InventoryItemModel.reference, "")).like(needle, escape=LIKE_ESCAPE),
-                    func.lower(func.coalesce(InventoryItemModel.description, "")).like(needle, escape=LIKE_ESCAPE),
+                    folded(InventoryItemModel.name).like(needle, escape=LIKE_ESCAPE),
+                    folded(func.coalesce(InventoryItemModel.reference, "")).like(needle, escape=LIKE_ESCAPE),
+                    folded(func.coalesce(InventoryItemModel.description, "")).like(needle, escape=LIKE_ESCAPE),
                 )
             )
         stmt = stmt.order_by(InventoryItemModel.name, InventoryItemModel.created_at)

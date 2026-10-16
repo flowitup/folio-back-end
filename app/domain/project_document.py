@@ -24,6 +24,45 @@ EXT_TO_KIND: dict[str, str] = {
 }
 
 
+# The MIME type a document of each extension is stored and served with. The
+# client's declared type is not trusted (browsers send octet-stream for
+# .docx/.webp, and anything can be declared): the validated extension decides.
+# DWG has no stable MIME type and is absent on purpose.
+EXT_TO_MIME: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt": "text/plain",
+}
+
+
+def canonical_content_type(filename: str, fallback: str) -> str:
+    """The MIME type for a document named ``filename``.
+
+    Derived from the extension when it is a known one; otherwise ``fallback``
+    (the stored or declared type) is returned unchanged.
+    """
+    return EXT_TO_MIME.get(os.path.splitext(filename)[1].lower(), fallback)
+
+
+def unique_filename(filename: str, taken: set[str]) -> str:
+    """``filename``, or 'name (2).ext', 'name (3).ext'... when that name (any case) is taken.
+
+    ``taken`` holds lower-cased names already used in the project.
+    """
+    if filename.lower() not in taken:
+        return filename
+    stem, ext = os.path.splitext(filename)
+    n = 2
+    while f"{stem} ({n}){ext}".lower() in taken:
+        n += 1
+    return f"{stem} ({n}){ext}"
+
+
 def kind_for_extension(extension: str) -> str:
     """Return the kind tag for a file extension, defaulting to 'other'.
 
@@ -72,3 +111,12 @@ class ProjectDocument:
         if self.content_type == "text/plain":
             return "text"
         return "other"
+
+    @property
+    def effective_content_type(self) -> str:
+        """The content type to serve: canonical for the extension, else the stored one.
+
+        Rows stored before uploads normalised the type may carry the client's
+        octet-stream or a type that contradicts the extension.
+        """
+        return canonical_content_type(self.filename, self.content_type)

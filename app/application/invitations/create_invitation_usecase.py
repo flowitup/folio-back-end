@@ -161,6 +161,7 @@ class CreateInvitationUseCase:
                 inviter_name=inviter.display_or_email,
                 role_name=self._role_label(locale),
                 locale=locale,
+                project_id=project_id,
             )
             return CreateInvitationResultDto(kind="direct_added", user_id=existing_user.id)
 
@@ -305,13 +306,19 @@ class CreateInvitationUseCase:
         inviter_name: str,
         role_name: str,
         locale: str,
+        project_id: UUID | None = None,
     ) -> None:
-        """Render + enqueue the 'added directly' email. Caller MUST commit before invoking (H2)."""
+        """Render + enqueue the 'added directly' email. Caller MUST commit before invoking (H2).
+
+        'Consultez votre projet ici' opens that project (its planning page selects it from
+        the URL), not the dashboard, which shows whatever project the browser picked last.
+        """
+        project_path = f"projects/{project_id}/planning" if project_id else "dashboard"
         ctx = {
             "project_name": project_name,
             "inviter_name": inviter_name,
             "role_name": role_name,
-            "accept_url": f"{self._base_url}/{locale}/dashboard",
+            "accept_url": f"{self._base_url}/{locale}/{project_path}",
         }
         subject, text, html = self._renderer.render("added_to_project", locale, ctx)
         payload = EmailPayload(to=to, subject=subject, body=text, html_body=html)

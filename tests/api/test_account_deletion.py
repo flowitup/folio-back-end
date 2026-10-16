@@ -444,6 +444,33 @@ class TestWhatSurvivesErasure:
             assert kept is not None and kept.name == "Jean Dupont"
             assert kept.user_id is None, "the erased account must not stay linkable"
 
+    def test_tasks_assigned_to_the_account_stay_but_become_unassigned(self, inv_client, invitation_app):
+        """planning-notes-01: the work stays with the company; the erased person stops owning it."""
+        from app import db
+        from app.infrastructure.database.models.task import TaskModel
+
+        user = _make_user(invitation_app, "tiler@example.com", "+33600009034")
+        token = mint_access_token(inv_client, "tiler@example.com")
+        with invitation_app.app_context():
+            task = TaskModel(
+                id=uuid4(),
+                project_id=UUID(invitation_app._test_project_2_id),
+                title="Pose carrelage",
+                status="todo",
+                assignee_id=user.id,
+                created_by=user.id,
+            )
+            db.session.add(task)
+            db.session.commit()
+            task_id = task.id
+
+        assert inv_client.delete("/api/v1/auth/me", headers=_auth(token)).status_code == 204
+
+        with invitation_app.app_context():
+            kept = db.session.get(TaskModel, task_id)
+            assert kept is not None and kept.title == "Pose carrelage"
+            assert kept.assignee_id is None
+
 
 class TestRequestHandling:
     def test_a_malformed_body_does_not_break_the_erasure(self, inv_client, invitation_app):
@@ -476,3 +503,75 @@ class TestRequestHandling:
 
         assert inv_client.get("/api/v1/auth/me", headers=_auth(token)).status_code == 401
         assert inv_client.post("/api/v1/auth/logout", headers=_auth(token)).status_code == 200
+
+
+class TestSoloAdminLeavesNoWayIn:
+    """auth-onboarding-02: a company whose solo admin deleted their account takes nobody in."""
+
+    def test_join_code_and_pending_profiles_are_retired(self, inv_client, invitation_app):
+        from app import db
+        from app.infrastructure.database.models.company_person import CompanyPersonModel
+
+        admin = _make_user(invitation_app, "orphan-admin@example.com", "+33600009801")
+        company = _make_company(invitation_app, admin.id, "QA Orphan Co")
+        _attach(invitation_app, admin.id, company.id, "admin")
+        token = mint_access_token(inv_client, "orphan-admin@example.com")
+
+        code = inv_client.post(f"/api/v1/companies/{company.id}/join-code", headers=_auth(token))
+        assert code.status_code == 200, code.get_json()
+        join_code = code.get_json()["join_code"]
+        from datetime import timedelta
+
+        from app.infrastructure.database.models.person import PersonModel
+
+        with invitation_app.app_context():
+            # A worker added by phone who has not signed up yet.
+            person = PersonModel(
+                id=uuid4(), name="Pending Worker", normalized_name="pending worker", created_by_user_id=admin.id
+            )
+            db.session.add(person)
+            db.session.flush()
+            db.session.add(
+                CompanyPersonModel(
+                    id=uuid4(),
+                    company_id=company.id,
+                    person_id=person.id,
+                    phone_normalized="+33600009802",
+                    pending_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                    pending_company_role="manager",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            db.session.commit()
+
+        assert inv_client.delete("/api/v1/auth/me", headers=_auth(token)).status_code == 204
+
+        with invitation_app.app_context():
+            assert db.session.get(CompanyModel, company.id).join_code is None
+            pending = db.session.query(CompanyPersonModel).filter_by(company_id=company.id).all()
+            assert pending and all(not row.is_active for row in pending)
+
+        _make_user(invitation_app, "would-be-joiner@example.com", "+33600009803")
+        joiner = mint_access_token(inv_client, "would-be-joiner@example.com")
+        resp = inv_client.post("/api/v1/companies/join", json={"code": join_code}, headers=_auth(joiner))
+        assert resp.status_code == 404, resp.get_json()
+
+    def test_a_company_with_no_admin_refuses_its_join_code(self, inv_client, invitation_app):
+        from app import db
+
+        admin = _make_user(invitation_app, "gone-admin@example.com", "+33600009811")
+        company = _make_company(invitation_app, admin.id, "QA Adminless Co")
+        _attach(invitation_app, admin.id, company.id, "admin")
+        token = mint_access_token(inv_client, "gone-admin@example.com")
+        join_code = inv_client.post(f"/api/v1/companies/{company.id}/join-code", headers=_auth(token)).get_json()[
+            "join_code"
+        ]
+        with invitation_app.app_context():
+            # However it happened (an older deletion, a manual fix), nobody administers it now.
+            db.session.query(UserCompanyAccessModel).filter_by(company_id=company.id).delete()
+            db.session.commit()
+
+        _make_user(invitation_app, "adminless-joiner@example.com", "+33600009812")
+        joiner = mint_access_token(inv_client, "adminless-joiner@example.com")
+        resp = inv_client.post("/api/v1/companies/join", json={"code": join_code}, headers=_auth(joiner))
+        assert resp.status_code == 404, resp.get_json()

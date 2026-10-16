@@ -5,11 +5,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
 
+from app.api._helpers.profile_fields import DISPLAY_NAME_MAX_LENGTH
+
 
 class OtpRequestBody(BaseModel):
     """POST /auth/otp/request — ask for a 6-digit code by SMS."""
 
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional, Vietnamese by default.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class OtpRequestResponse(BaseModel):
@@ -39,6 +43,8 @@ class SignupRequestBody(BaseModel):
     """POST /auth/signup/request — text a sign-up code to a phone without an account."""
 
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional, Vietnamese by default.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class SignupVerifyBody(BaseModel):
@@ -47,13 +53,17 @@ class SignupVerifyBody(BaseModel):
     phone: str = Field(..., min_length=6, max_length=32)
     code: str = Field(..., pattern=r"^\s*[0-9]{6}\s*$")
     # Trimmed before the length check: a name of spaces only is refused here (400), not deep in the use case.
-    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    display_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)
+    ]
 
 
 class PhoneChangeRequestBody(BaseModel):
     """POST /auth/me/phone/request-code — text a code to the new number the caller wants to use."""
 
     phone: str = Field(..., min_length=6, max_length=32)
+    # The app's language ("fr", "en", "vi"): the SMS is written in it. Optional, Vietnamese by default.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class PhoneChangeConfirmBody(BaseModel):
@@ -76,6 +86,8 @@ class UserCompanySummary(BaseModel):
     legal_name: str
     role: str  # "admin" | "manager" | "member" — see app.domain.companies.roles.CompanyRole
     is_primary: bool
+    # Sections the company hides from every member's navigation (see domain.companies.sections).
+    hidden_sections: List[str] = []
 
 
 class UserResponse(BaseModel):
@@ -105,7 +117,7 @@ class UpdateMeRequest(BaseModel):
     ``/auth/me/phone/request-code`` + ``/auth/me/phone/confirm`` flow. At least one field must be provided.
     """
 
-    display_name: Optional[str] = Field(default=None, max_length=255)
+    display_name: Optional[str] = Field(default=None, max_length=DISPLAY_NAME_MAX_LENGTH)
     phone: Optional[str] = Field(default=None, max_length=32)
 
 
@@ -127,16 +139,24 @@ class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "Bearer"
-    expires_in: int = 1800  # 30 minutes in seconds
+    # Seconds the access token lives: filled from JWT_ACCESS_TOKEN_EXPIRES by the routes.
+    expires_in: int = 604800
     user: UserResponse
 
 
 class RefreshResponse(BaseModel):
-    """Refresh token response."""
+    """Refresh token response.
+
+    ``refresh_token`` is a rotated refresh token (absent for a persistent session, whose token
+    never expires): storing it in place of the old one lets an active session slide instead of
+    ending when the first refresh token expires. The old one stays valid until its own expiry,
+    so a client that ignores this field keeps working as before.
+    """
 
     access_token: str
     token_type: str = "Bearer"
-    expires_in: int = 1800
+    expires_in: int = 604800
+    refresh_token: Optional[str] = None
 
 
 class LogoutResponse(BaseModel):

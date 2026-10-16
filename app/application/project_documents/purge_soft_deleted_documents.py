@@ -1,6 +1,7 @@
 """Use case: purge soft-deleted documents past their retention window.
 
-Operator-run via `scripts/purge_soft_deleted_documents.py`. Removes the MinIO
+Operator-run via `scripts/purge_soft_deleted_documents.py`; the scheduled daily
+job is `scripts/purge_soft_deleted_files.py`, which also covers photos and analyses. Removes the MinIO
 object first, then hard-deletes the DB row. If storage delete fails for one
 document, the run continues for the others — the failed row stays soft-deleted
 and surfaces in the return value so the operator can investigate.

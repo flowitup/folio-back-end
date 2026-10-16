@@ -21,7 +21,6 @@ from app.domain.payment_methods.payment_method import PaymentMethod
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.payment_method import PaymentMethodModel
 
-
 # One active label per company (case-insensitive): see the model's partial index.
 _LABEL_UNIQUE_INDEX = "ux_payment_methods_company_label_active"
 
@@ -133,6 +132,14 @@ class SqlAlchemyPaymentMethodRepository:
 
         rows = self._session.execute(stmt).all()
         return [(_to_entity(row[0]), int(row[1])) for row in rows]
+
+    def count_refund_tracked_expenses(self, payment_method_id: UUID) -> int:
+        """Number of expenses paid with this method whose refund is tracked (refundable_status set)."""
+        stmt = select(func.count(InvoiceModel.id)).where(
+            InvoiceModel.payment_method_id == payment_method_id,
+            InvoiceModel.refundable_status.is_not(None),
+        )
+        return int(self._session.execute(stmt).scalar_one())
 
     # ------------------------------------------------------------------
     # Writes

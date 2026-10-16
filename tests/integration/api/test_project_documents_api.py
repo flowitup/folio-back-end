@@ -751,6 +751,23 @@ class TestDocumentFilenameControlCharacters:
         dl = doc_client.get(_download_url(doc_app._doc_project_id, doc_id), headers=_auth(owner_token))
         assert dl.status_code == 200
 
+    def test_422_rename_with_a_name_over_255_characters(self, doc_client, owner_token, doc_app):
+        """documents-photos-analyses-15: a 20,000-character name broke the download header."""
+        doc_id = _upload_doc(doc_client, doc_app._doc_project_id, owner_token)
+        resp = doc_client.patch(
+            f"{_docs_url(doc_app._doc_project_id)}/{doc_id}/rename",
+            json={"filename": "a" * 300 + ".pdf"},
+            headers=_auth(owner_token),
+        )
+        assert resp.status_code == 422, resp.get_data(as_text=True)
+        assert resp.get_json()["error"] == "FILENAME_TOO_LONG"
+        ok = doc_client.patch(
+            f"{_docs_url(doc_app._doc_project_id)}/{doc_id}/rename",
+            json={"filename": "a" * 251 + ".pdf"},
+            headers=_auth(owner_token),
+        )
+        assert ok.status_code == 200, ok.get_data(as_text=True)
+
     def test_201_upload_drops_control_characters_from_the_name(self, doc_client, owner_token, doc_app):
         # A crafted part can carry a line break through RFC 2231 percent-encoding
         boundary = "qa-boundary"
@@ -1261,3 +1278,41 @@ class TestConfirmReplayKeepsTheStoredObject:
         assert resp.status_code == 409, resp.get_data(as_text=True)
         assert resp.get_json()["error"] == "DOCUMENT_ALREADY_EXISTS"
         assert get_container().document_storage.has(key)
+
+
+class TestQa3DuplicateDocumentNames:
+    """QA3 documents-photos-analyses-16: same-name documents are kept apart, renames refused."""
+
+    @pytest.fixture(autouse=True)
+    def _wire_rename(self, doc_app):
+        from app import db
+        from app.application.project_documents import RenameProjectDocumentUseCase
+        from wiring import get_container
+
+        _c = get_container()
+        _c.rename_project_document_usecase = RenameProjectDocumentUseCase(
+            repo=_c.project_document_repository, db_session=db.session
+        )
+
+    def test_second_upload_of_the_same_name_gets_a_suffix(self, doc_client, owner_token, doc_app):
+        pid = doc_app._doc_project_id
+        first = _upload(doc_client, pid, owner_token, filename="QA3 Plan.pdf")
+        second = _upload(doc_client, pid, owner_token, filename="qa3 plan.pdf")
+        third = _upload(doc_client, pid, owner_token, filename="QA3 Plan.pdf")
+        assert first.get_json()["filename"] == "QA3 Plan.pdf"
+        assert second.get_json()["filename"] == "qa3 plan (2).pdf"
+        assert third.get_json()["filename"] == "QA3 Plan (3).pdf"
+
+    def test_rename_onto_an_existing_name_is_409(self, doc_client, owner_token, doc_app):
+        pid = doc_app._doc_project_id
+        _upload(doc_client, pid, owner_token, filename="QA3 Devis.pdf")
+        other = _upload(doc_client, pid, owner_token, filename="QA3 Autre.pdf").get_json()["id"]
+        resp = doc_client.patch(
+            f"{_docs_url(pid)}/{other}/rename", json={"filename": "qa3 devis.pdf"}, headers=_auth(owner_token)
+        )
+        assert resp.status_code == 409
+        assert resp.get_json()["error"] == "DUPLICATE_NAME"
+        same = doc_client.patch(
+            f"{_docs_url(pid)}/{other}/rename", json={"filename": "QA3 AUTRE.pdf"}, headers=_auth(owner_token)
+        )
+        assert same.status_code == 200

@@ -141,5 +141,6 @@ class SQLAlchemyWorkerRepository(IWorkerRepository):
             role_id=model.role_id,
             role_name=role.name if role else None,
             role_color=role.color if role else None,
+            role_slug=role.slug if role else None,
             user_id=model.user_id,
         )

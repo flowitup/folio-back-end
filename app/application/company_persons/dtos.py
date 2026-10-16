@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import List, Optional
@@ -78,6 +80,10 @@ class DirectoryEntry:
     pending: bool
     labor_role_id: Optional[UUID] = None
     default_daily_rate: Optional[Decimal] = None
+    # Set on a pending row only: the company role the person gets at sign-up, and when the
+    # invitation window closes.
+    pending_company_role: Optional[str] = None
+    pending_expires_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)

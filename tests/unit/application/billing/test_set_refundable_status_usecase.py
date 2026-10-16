@@ -11,6 +11,7 @@ Focuses on:
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
@@ -23,6 +24,7 @@ from app.application.invoice.set_refundable_status_usecase import SetInvoiceRefu
 from app.domain.billing.exceptions import ForbiddenCompanyBillingError
 from app.domain.companies.user_company_access import UserCompanyAccess
 from app.domain.entities.invoice import Invoice, InvoiceType
+from app.domain.value_objects.invoice_item import InvoiceItem
 from app.domain.exceptions.invoice_exceptions import InvalidInvoiceDataError, InvoiceNotFoundError
 
 
@@ -37,6 +39,7 @@ def _make_invoice(
     invoice_type: InvoiceType = InvoiceType.MATERIALS_SERVICES,
     refundable_status: Optional[str] = None,
     payment_method_id: Optional[UUID] = None,
+    unit_price: Decimal = Decimal("10"),
 ) -> Invoice:
     now = datetime.now(timezone.utc)
     return Invoice(
@@ -51,6 +54,7 @@ def _make_invoice(
         updated_at=now,
         refundable_status=refundable_status,
         payment_method_id=payment_method_id,
+        items=[InvoiceItem(description="Ligne", quantity=Decimal("1"), unit_price=unit_price, vat_rate=Decimal("0"))],
     )
 
 
@@ -414,3 +418,20 @@ class TestAuthorizationBeforeBusinessGuards:
                 invoice_id=inv.id,
                 refundable_status="refundable",
             )
+
+
+class TestPositiveTotalGuard:
+    """A zero or negative expense cannot start refund tracking (it would lower 'À rembourser')."""
+
+    @pytest.mark.parametrize("unit_price", [Decimal(-50), Decimal(0)])
+    def test_non_positive_expense_cannot_become_refundable(self, unit_price):
+        inv = _make_invoice(unit_price=unit_price)
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=_make_invoice_repo(invoice=inv))
+        with pytest.raises(InvalidInvoiceDataError, match="positive total"):
+            uc.execute(user_id=uuid4(), is_superadmin=True, invoice_id=inv.id, refundable_status="refundable")
+
+    def test_already_tracked_non_positive_expense_can_still_be_cleared(self):
+        inv = _make_invoice(unit_price=Decimal(-50), refundable_status="refundable")
+        uc = SetInvoiceRefundableStatusUseCase(invoice_repo=_make_invoice_repo(invoice=inv))
+        result = uc.execute(user_id=uuid4(), is_superadmin=True, invoice_id=inv.id, refundable_status=None)
+        assert result.refundable_status is None

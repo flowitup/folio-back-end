@@ -563,3 +563,32 @@ def test_create_project_adds_other_company_admins(inv_client, admin_token, invit
     assert ids["gone"] not in members
     assert ids["mgr"] not in members
     assert body["user_count"] == 2
+
+
+def test_list_projects_newest_first_in_a_stable_order(inv_client, admin_token, invitation_app):
+    """dashboard-projects-11: the list has a defined order (newest first, then id), so the
+    cards, the featured first card and the default project no longer reshuffle between loads."""
+    from datetime import datetime, timedelta, timezone
+    from uuid import UUID
+
+    from app import db
+    from app.infrastructure.database.models.project import ProjectModel
+
+    ids = []
+    for name in ("Order A", "Order B", "Order C"):
+        status, body = _create_project(inv_client, admin_token, name=name)
+        assert status == 201, body
+        ids.append(body["id"])
+    base = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    with invitation_app.app_context():
+        # B newest, then A and C created at the same instant (tie broken by id).
+        for pid, offset in zip(ids, (0, 1, 0)):
+            db.session.get(ProjectModel, UUID(pid)).created_at = base + timedelta(days=offset)
+        db.session.commit()
+
+    for _ in range(2):
+        listed = [
+            p["id"] for p in inv_client.get("/api/v1/projects", headers=_auth(admin_token)).get_json()["projects"]
+        ]
+        ours = [pid for pid in listed if pid in ids]
+        assert ours == [ids[1]] + sorted([ids[0], ids[2]])

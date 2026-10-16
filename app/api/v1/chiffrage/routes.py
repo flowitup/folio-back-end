@@ -69,6 +69,7 @@ from app.application.chiffrage.exceptions import (
     StoreNotFoundError,
     UnsupportedImageTypeError,
     UnitAlreadyExistsError,
+    UnitInUseError,
     UnitNotFoundError,
 )
 from app.infrastructure.rate_limiter import limiter
@@ -124,7 +125,7 @@ def _handle(fn: Callable[[], Any]) -> Any:
         UnitNotFoundError,
     ) as e:
         return _err(404, "NotFound", str(e))
-    except (UnitAlreadyExistsError, RoomAlreadyExistsError, StoreAlreadyExistsError) as e:
+    except (UnitAlreadyExistsError, UnitInUseError, RoomAlreadyExistsError, StoreAlreadyExistsError) as e:
         return _err(409, "Conflict", str(e))
     except InvalidChiffrageInputError as e:
         return _err(400, "InvalidInput", str(e))

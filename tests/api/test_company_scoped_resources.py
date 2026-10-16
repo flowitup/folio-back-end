@@ -126,12 +126,25 @@ def scoped_app():
             updated_at=now,
         )
         db.session.add(person_b_only)
-        db.session.flush()
-        db.session.add(
-            CompanyPersonModel(
-                id=uuid4(), company_id=company_b.id, person_id=person_b_only.id, is_active=True, created_at=now
-            )
+        # Accents and a phone, for the duplicate search (chiffrage-library-inventory-10).
+        person_b_accented = PersonModel(
+            id=uuid4(),
+            name="Trần Văn Dũng",
+            normalized_name="trần văn dũng",
+            phone="+33620800052",
+            phone_normalized="+33620800052",
+            created_by_user_id=admin_b.id,
+            created_at=now,
+            updated_at=now,
         )
+        db.session.add(person_b_accented)
+        db.session.flush()
+        for person in (person_b_only, person_b_accented):
+            db.session.add(
+                CompanyPersonModel(
+                    id=uuid4(), company_id=company_b.id, person_id=person.id, is_active=True, created_at=now
+                )
+            )
         db.session.commit()
 
         user_repo = SQLAlchemyUserRepository(db.session)
@@ -305,6 +318,12 @@ class TestPersonsSearchCompanyScope:
             resp = client.get("/api/v1/persons", query_string={"q": q}, headers=admin_b_h)
             assert resp.status_code == 200
             assert resp.get_json()["persons"] == []
+
+    @pytest.mark.parametrize("q", ["tran van", "Trần", "TRAN VAN DUNG", "06 20 80 00 52", "0620800052"])
+    def test_accents_and_phone_formats_still_match(self, client, admin_b_h, q):
+        resp = client.get("/api/v1/persons", query_string={"q": q}, headers=admin_b_h)
+        assert resp.status_code == 200
+        assert [p["name"] for p in resp.get_json()["persons"]] == ["Trần Văn Dũng"]
 
     def test_member_only_caller_gets_403(self, client, member_a_h):
         resp = client.get("/api/v1/persons?q=only", headers=member_a_h)

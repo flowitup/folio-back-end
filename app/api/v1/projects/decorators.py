@@ -241,15 +241,20 @@ def require_permission(permission: str):
                 return _not_found(_missing_ref_message(kwargs))
             permissions = _permissions_for(project_id)
 
-            if not _has_permission(permissions, permission):
-                return (
-                    jsonify(
-                        ErrorResponse(
-                            error="Forbidden", message=f"Missing permission: {permission}", status_code=403
-                        ).model_dump()
-                    ),
-                    403,
-                )
+            # Any project permission on a resolved project also needs `project:read`: a D8
+            # grant on a project the caller is not assigned to must not let them change it
+            # (or add expenses to it) while every read of it answers 403.
+            needs_read = project_id is not None and permission.startswith("project:")
+            for required in (permission, "project:read") if needs_read else (permission,):
+                if not _has_permission(permissions, required):
+                    return (
+                        jsonify(
+                            ErrorResponse(
+                                error="Forbidden", message=f"Missing permission: {required}", status_code=403
+                            ).model_dump()
+                        ),
+                        403,
+                    )
 
             return fn(*args, **kwargs)
 
@@ -284,8 +289,13 @@ def can_mutate_project(project, user_id: UUID, permission: str = "project:update
     else keeps the default `project:update`. Chaining the SAME permission the
     route's `require_permission(...)` already demands means a D8 grant actually
     unlocks the resource it names — and nothing more.
+
+    Writing also requires `project:read`: a D8 grant of a write permission on a project
+    the caller cannot open (not assigned to it) must not rename it or add expenses to it
+    through the API while every read answers 403.
     """
-    return _has_permission(list(_resolver_permissions_for_project(user_id, project.id)), permission)
+    perms = list(_resolver_permissions_for_project(user_id, project.id))
+    return _has_permission(perms, permission) and _has_permission(perms, "project:read")
 
 
 # ---------------------------------------------------------------------------

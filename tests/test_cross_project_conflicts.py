@@ -146,7 +146,7 @@ class TestCrossProjectConflicts:
         assert result[0].person_id == hugo.id
         assert result[0].person_name == "Hugo Martin"
         assert len(result[0].entries) == 1
-        assert result[0].entries[0].project_name == "Beta"
+        assert result[0].entries[0].project_name == "Beta"  # name first, as the apps show it (project_label)
         assert result[0].entries[0].shift_type == "half"
 
     def test_ignores_inactive_other_worker(self, session, owner, company):

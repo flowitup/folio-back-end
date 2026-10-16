@@ -301,6 +301,23 @@ class TestListAggregation:
             assert "project_name" in item
             assert item["project_name"] is not None
 
+    def test_project_is_named_first_and_its_address_goes_alongside(self, mat_client, admin_tok, mat_exp_app):
+        """Projects are shown name first (project_label), as everywhere else; the address comes alongside."""
+        from app import db
+        from app.infrastructure.database.models.project import ProjectModel
+
+        with mat_exp_app.app_context():
+            project = db.session.get(ProjectModel, mat_exp_app._project_a1_id)
+            project.address = "12 Rue des Lilas, 69003 Lyon"
+            db.session.commit()
+            _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+
+        items = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true", headers=_auth(admin_tok)
+        ).get_json()["items"]
+        rows = {(i["project_name"], i["project_address"]) for i in items}
+        assert ("Project A1", "12 Rue des Lilas, 69003 Lyon") in rows
+
 
 # ---------------------------------------------------------------------------
 # Refundable filter
@@ -370,6 +387,52 @@ class TestRefundableFilter:
         ids = [i["id"] for i in resp.get_json()["items"]]
         assert inv_null_id not in ids
         assert inv_set_id in ids
+
+
+class TestRefundChannelAndProjectFilters:
+    """Drill-down from the dashboard pills / summary cards: one channel, one project."""
+
+    def test_channel_and_project_filters(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            uid = mat_exp_app._admin_user_id
+            pending = _make_invoice(mat_exp_app._project_a2_id, uid, refundable_status="refund_pending")
+            bank_only = _make_invoice(mat_exp_app._project_a2_id, uid, refundable_status="refunded", refunded_by="bank")
+            company_only = _make_invoice(
+                mat_exp_app._project_a2_id, uid, refundable_status="refunded", refunded_by="company"
+            )
+            both = _make_invoice(mat_exp_app._project_a2_id, uid, refundable_status="refunded", refunded_by="both")
+            other_project = _make_invoice(mat_exp_app._project_a1_id, uid, refundable_status="refundable")
+            ids = {k: str(v.id) for k, v in locals().items() if isinstance(v, InvoiceModel)}
+
+        base = f"/api/v1/billing/materials-expenses?refundable=true&limit=200&project_id={mat_exp_app._project_a2_id}"
+
+        def listed(url):
+            resp = mat_client.get(url, headers=_auth(admin_tok))
+            assert resp.status_code == 200, resp.get_data(as_text=True)
+            return {i["id"] for i in resp.get_json()["items"]}, resp.get_json()["summary"]
+
+        everything, summary = listed(base)
+        assert ids["other_project"] not in everything
+        assert {ids["pending"], ids["bank_only"], ids["company_only"], ids["both"]} <= everything
+
+        company, _ = listed(base + "&channel=company")
+        assert ids["pending"] in company and ids["bank_only"] in company
+        assert ids["company_only"] not in company and ids["both"] not in company
+
+        bank, _ = listed(base + "&channel=bank")
+        assert ids["pending"] in bank and ids["company_only"] in bank
+        assert ids["bank_only"] not in bank and ids["both"] not in bank
+
+        # The summary follows the project and carries the bank channel's balance.
+        bank_total = sum(
+            i["total_amount"]
+            for i in mat_client.get(base + "&channel=bank", headers=_auth(admin_tok)).get_json()["items"]
+        )
+        assert summary["bank_outstanding"] == pytest.approx(bank_total)
+
+    def test_unknown_channel_is_400(self, mat_client, admin_tok):
+        resp = mat_client.get("/api/v1/billing/materials-expenses?channel=cash", headers=_auth(admin_tok))
+        assert resp.status_code == 400
 
 
 class TestMoneyIsRoundedToCents:
@@ -1178,6 +1241,7 @@ class TestRefundSummary:
             "refunded_by_company": 0.0,
             "refunded_by_bank": 0.0,
             "refunded_by_both": 0.0,
+            "bank_outstanding": 0.0,
         }
 
 
@@ -1285,3 +1349,50 @@ class TestSearch:
         assert searched["total"] == 0
         assert searched["summary"] == full["summary"]
         assert full["summary"]["refundable_amount"] == pytest.approx(1000.0)
+
+
+class TestPayerAndFilters:
+    """QA round 3 expenses-invoices-07: payer on each row, status and project filters."""
+
+    def test_rows_carry_payer_and_project_address_and_filter(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(
+                mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refund_pending"
+            )
+            inv.payment_method_label = "QA3 Carte perso Hélène"
+            db.session.commit()
+            other = _make_invoice(
+                mat_exp_app._project_a2_id, mat_exp_app._admin_user_id, refundable_status="refundable"
+            )
+            inv_id, other_id = str(inv.id), str(other.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true&status=refund_pending"
+            f"&project_id={mat_exp_app._project_a1_id}",
+            headers=_auth(admin_tok),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        items = resp.get_json()["items"]
+        ids = {i["id"] for i in items}
+        assert inv_id in ids and other_id not in ids
+        assert all(i["refundable_status"] == "refund_pending" for i in items)
+        row = next(i for i in items if i["id"] == inv_id)
+        assert row["payment_method_label"] == "QA3 Carte perso Hélène"
+        assert "project_address" in row
+
+    def test_search_matches_payer_label(self, mat_client, admin_tok, mat_exp_app):
+        with mat_exp_app.app_context():
+            inv = _make_invoice(mat_exp_app._project_a1_id, mat_exp_app._admin_user_id, refundable_status="refundable")
+            inv.payment_method_label = "QA3 Carte perso Zoé"
+            db.session.commit()
+            inv_id = str(inv.id)
+
+        resp = mat_client.get(
+            "/api/v1/billing/materials-expenses?refundable=true&q=perso%20zo", headers=_auth(admin_tok)
+        )
+        assert resp.status_code == 200
+        assert inv_id in {i["id"] for i in resp.get_json()["items"]}
+
+    def test_invalid_status_filter_is_400(self, mat_client, admin_tok):
+        resp = mat_client.get("/api/v1/billing/materials-expenses?status=bogus", headers=_auth(admin_tok))
+        assert resp.status_code == 400

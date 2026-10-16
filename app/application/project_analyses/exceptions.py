@@ -16,6 +16,12 @@ class InvalidAnalysisFileError(Exception):
     pass
 
 
+class InvalidAnalysisEncodingError(InvalidAnalysisFileError):
+    """Raised when a report is neither UTF-8 nor in a charset it declares (BOM / <meta charset>)."""
+
+    pass
+
+
 class AnalysisTooLargeError(Exception):
     """Raised when an uploaded file exceeds the configured size cap."""
 

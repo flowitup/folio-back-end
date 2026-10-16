@@ -556,3 +556,27 @@ class TestHardDelete:
         repo.hard_delete(doc.id)
 
         assert doc.id not in [d.id for d in repo.find_soft_deleted_before(now)]
+
+
+def test_qa3_uploader_sort_uses_names_not_ids(session):
+    """QA3 documents-photos-analyses-08: 'Déposé par' sorts by the uploader's name."""
+    from app.application.project_documents.dtos import ListFiltersDTO as _Filters
+    from app.infrastructure.database.models.user import UserModel
+
+    project_id = uuid4()
+    import uuid as _uuid
+
+    names = {
+        "Zoé Manager2": _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001"),
+        "Admin Étienne": _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000003"),
+        "Anh Manager3": _uuid.UUID("aaaaaaaa-0000-0000-0000-000000000002"),
+    }
+    repo = SqlAlchemyProjectDocumentRepository(session)
+    for name, uid in names.items():
+        session.add(UserModel(id=uid, email=f"{uid.hex}@qa3.test", display_name=name, is_active=True))
+        session.flush()
+        repo.save(_make_doc(project_id, uid, filename=f"{name}.pdf"))
+    session.commit()
+
+    result = repo.list_for_project(project_id, _Filters(sort="uploader", order="asc"))
+    assert [d.filename for d in result.items] == ["Admin Étienne.pdf", "Anh Manager3.pdf", "Zoé Manager2.pdf"]

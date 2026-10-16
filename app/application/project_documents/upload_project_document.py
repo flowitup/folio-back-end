@@ -9,6 +9,7 @@ from typing import BinaryIO
 from uuid import UUID, uuid4
 
 from app.application.project_documents.exceptions import (
+    FilenameTooLongError,
     DocumentFileTooLargeError,
     EmptyFileError,
     UnsupportedDocumentTypeError,
@@ -19,8 +20,8 @@ from app.application.project_documents.ports import (
     IProjectDocumentRepository,
     ITransactionalSession,
 )
-from app.domain.project_document import ProjectDocument, kind_for_extension
-from app.domain.value_objects.display_filename import strip_control_chars
+from app.domain.project_document import ProjectDocument, canonical_content_type, kind_for_extension, unique_filename
+from app.domain.value_objects.display_filename import MAX_DISPLAY_FILENAME_LENGTH, is_too_long, strip_control_chars
 
 _log = logging.getLogger(__name__)
 
@@ -51,6 +52,8 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset(
     }
 )
 
+ALLOWED_EXTENSIONS_TEXT = ".pdf, .jpg, .jpeg, .png, .webp, .docx, .xlsx, .dwg, .txt"
+
 
 def validate_file_type(filename: str, mime_type: str) -> str:
     """Validate extension and MIME type; return the kind tag on success.
@@ -69,7 +72,9 @@ def validate_file_type(filename: str, mime_type: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
 
     if ext not in ALLOWED_EXTENSIONS:
-        raise UnsupportedDocumentTypeError(f"Extension '{ext}' is not allowed")
+        raise UnsupportedDocumentTypeError(
+            f"Extension '{ext}' is not allowed — must be one of {ALLOWED_EXTENSIONS_TEXT}"
+        )
 
     # DWG MIME types are unstable across clients — accept by extension alone.
     if ext == ".dwg":
@@ -84,14 +89,17 @@ def validate_file_type(filename: str, mime_type: str) -> str:
     return kind_for_extension(ext)
 
 
-def stored_content_type(mime_type: str) -> str:
+def stored_content_type(filename: str, mime_type: str) -> str:
     """The MIME type to store for an upload that passed validate_file_type.
 
-    DWG is accepted by extension alone, so its client MIME is free text of any
-    length (the column holds 255 characters): an unlisted value is stored as
-    the generic type instead.
+    The validated extension decides (a .txt declared as application/pdf is
+    stored as text/plain, a .webp sent as octet-stream as image/webp). DWG has
+    no canonical type and is accepted by extension alone, so its client MIME is
+    free text of any length (the column holds 255 characters): an unlisted
+    value is stored as the generic type instead.
     """
-    return mime_type if mime_type in ALLOWED_MIME_TYPES else "application/octet-stream"
+    fallback = mime_type if mime_type in ALLOWED_MIME_TYPES else "application/octet-stream"
+    return canonical_content_type(filename, fallback)
 
 
 class UploadProjectDocumentUseCase:
@@ -144,6 +152,9 @@ class UploadProjectDocumentUseCase:
         if size_bytes > MAX_SIZE_BYTES:
             raise DocumentFileTooLargeError(f"File size {size_bytes} bytes exceeds maximum of {MAX_SIZE_BYTES} bytes")
 
+        if is_too_long(filename):
+            raise FilenameTooLongError(f"File name is too long (max {MAX_DISPLAY_FILENAME_LENGTH} characters)")
+
         # --- Filename sanitation (strips path separators, null bytes, etc.) ---
         sanitized = self._filename_sanitizer.sanitize(filename)
         if not sanitized:
@@ -151,7 +162,7 @@ class UploadProjectDocumentUseCase:
 
         # --- Type validation (uses sanitized name; raises on disallowed type) ---
         validate_file_type(sanitized, content_type)
-        content_type = stored_content_type(content_type)
+        content_type = stored_content_type(sanitized, content_type)
 
         # --- Build storage key using sanitized name to prevent path-traversal in key ---
         doc_id = uuid4()
@@ -166,7 +177,8 @@ class UploadProjectDocumentUseCase:
             project_id=project_id,
             uploader_user_id=uploader_user_id,
             # Minus control characters: a line break would 500 every download
-            filename=strip_control_chars(filename),
+            # Same name as a live document of the project: kept apart as 'name (2).ext'
+            filename=unique_filename(strip_control_chars(filename), self._repo.live_filenames(project_id)),
             content_type=content_type,
             size_bytes=size_bytes,
             storage_key=storage_key,

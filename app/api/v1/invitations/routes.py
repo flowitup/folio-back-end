@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
-from app.api._helpers.validation_error import safe_validation_fields
+from app.api._helpers.validation_error import field_rule_message
 
 from app.api.openapi import openapi_doc
 from app.api.v1.invitations import invitations_bp
@@ -44,13 +44,20 @@ from app.domain.exceptions.invitation_exceptions import (
     InvitationExpiredError,
     InvitationNotFoundError,
     InvitationRevokedError,
+    InvitationSupersededError,
     InvalidInvitationTokenError,
     InvitationWrongAccountError,
 )
 from app.domain.entities.invitation import InvalidInvitationEmailError
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
 from app.api._helpers.rate_limit_keys import jwt_user_key
-from app.infrastructure.rate_limiter import code_request_answered, limiter, sms_send_ip_limits
+from app.infrastructure.rate_limiter import (
+    code_request_answered,
+    limiter,
+    request_succeeded,
+    remote_address_bucket,
+    sms_send_ip_limits,
+)
 from wiring import get_container
 
 
@@ -58,12 +65,23 @@ def _err(code: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=code).model_dump()), code
 
 
-def _gone(reason: str, message: str):
+# Public answers: fixed texts, never the domain message (which may name the invitation's id).
+_GONE_MESSAGES = {
+    "expired": "This invitation has expired.",
+    "revoked": "This invitation has been revoked.",
+    "superseded": "A newer invitation was sent to this address; use the latest e-mail.",
+    "accepted": "This invitation was already accepted.",
+}
+
+
+def _gone(reason: str, _detail: object = None):
     """410 Gone with a `reason` discriminator the frontend uses to pick the error UI.
 
-    reason ∈ {'expired', 'revoked', 'accepted'}.
+    reason ∈ {'expired', 'revoked', 'superseded', 'accepted'}. 'superseded' is a revoked
+    invitation replaced by a re-send; older clients that do not know it fall back to their
+    generic "unavailable" text.
     """
-    body = ErrorResponse(error="Gone", message=message, status_code=410).model_dump()
+    body = ErrorResponse(error="Gone", message=_GONE_MESSAGES[reason], status_code=410).model_dump()
     body["reason"] = reason
     return jsonify(body), 410
 
@@ -94,8 +112,7 @@ def _unprocessable(reason: str, message: str):
 
 
 def _validation_err(e: ValidationError):
-    fields = safe_validation_fields(e)
-    return _err(422, "ValidationError", f"Invalid input: {', '.join(str(f) for f in fields)}")
+    return _err(422, "ValidationError", field_rule_message(e, {"code": "6 digits"}))
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +128,7 @@ def _validation_err(e: ValidationError):
     tags=["invitations"],
 )
 @jwt_required()
-@limiter.limit("10 per hour", key_func=jwt_user_key)
+@limiter.limit("50 per hour", key_func=jwt_user_key, deduct_when=request_succeeded)
 def create_invitation():
     """Create an invitation (or directly add existing user) to a project."""
     try:
@@ -267,6 +284,8 @@ def verify_invitation(token: str):
         return _err(404, "NotFound", "Invitation not found.")
     except InvitationExpiredError as e:
         return _gone("expired", str(e))
+    except InvitationSupersededError as e:
+        return _gone("superseded", str(e))
     except InvitationRevokedError as e:
         return _gone("revoked", str(e))
     except InvitationAlreadyAcceptedError as e:
@@ -305,8 +324,10 @@ def verify_invitation(token: str):
     tags=["invitations"],
     auth=False,
 )
-@limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 def request_invite_code():
     """Text a sign-up code to the phone being claimed. Public: the invitation token is the authorisation."""
     try:
@@ -319,7 +340,9 @@ def request_invite_code():
         return _err(503, "ServiceUnavailable", "Invitation service not configured.")
 
     try:
-        result = container.request_invite_otp_usecase.execute(data.token, data.phone)
+        result = container.request_invite_otp_usecase.execute(
+            data.token, data.phone, locale=data.locale or request.accept_languages.best_match(["fr", "en", "vi"])
+        )
     except InvalidInvitationTokenError:
         return _err(404, "NotFound", "Invitation not found.")
     except InvitationExpiredError as e:
@@ -362,7 +385,7 @@ def request_invite_code():
     tags=["invitations"],
     auth=False,
 )
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
 def accept_invitation():
     """Accept an invitation: create the account and membership, then sign the invitee in."""
     try:
@@ -428,6 +451,7 @@ def accept_invitation():
             email=result.user.email,
             display_name=result.user.display_name,
         ),
+        project_id=result.project_id,
     )
     response = make_response(jsonify(body.model_dump(mode="json")), 200)
     set_auth_cookies(response, result.access_token, result.refresh_token)

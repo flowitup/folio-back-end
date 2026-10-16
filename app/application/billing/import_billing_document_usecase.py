@@ -14,7 +14,7 @@ Differences from CreateBillingDocumentUseCase:
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy.exc import IntegrityError
 
@@ -36,19 +36,19 @@ from app.application.billing.ports import (
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
+    assert_project_in_company,
     assert_project_link_access,
     assert_user_company_access,
 )
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
 from app.domain.billing.document import BillingDocument
 from app.domain.billing.enums import BillingDocumentKind
-from app.domain.billing.numbering import next_document_number
+from app.domain.billing.numbering import document_number_year, next_document_number
 from app.domain.billing.exceptions import (
     BillingDocumentAlreadyExistsError,
     MissingCompanyProfileError,
 )
 from app.domain.time import business_today
-
 
 # Regex to detect document numbers that encode year + sequence.
 # Matches e.g. FAC2025001, FAC-2025-001, DEV-2026-00003, FLW-FACTURE-2026-007.
@@ -75,6 +75,15 @@ def _parse_year_seq(document_number: str) -> tuple[int, int] | None:
     if m is None:
         return None
     return int(m.group("year")), int(m.group("seq"))
+
+
+def _default_issue_date(document_number: str, now: datetime) -> date:
+    """Today, unless the number encodes another year: then the last (past) or first (future) day of it."""
+    today = business_today(now)
+    year = document_number_year(document_number)
+    if year is None or year == today.year:
+        return today
+    return date(year, 12, 31) if year < today.year else date(year, 1, 1)
 
 
 class ImportBillingDocumentUseCase:
@@ -122,6 +131,7 @@ class ImportBillingDocumentUseCase:
 
         # Importing writes the company's billing, exactly like creating: admins only.
         assert_company_admin(self._access_repo, inp.user_id, inp.company_id)
+        assert_project_in_company(self._project_repo, inp.project_id, inp.company_id)
 
         issuer_snapshot = _snapshot_issuer_from_company(company)
 
@@ -164,7 +174,12 @@ class ImportBillingDocumentUseCase:
         # 6. Resolve timestamps
         now = datetime.now(timezone.utc)
         created_at = inp.created_at if inp.created_at is not None else now
-        issue_date = inp.issue_date if inp.issue_date is not None else business_today(now)
+        issue_date = inp.issue_date if inp.issue_date is not None else _default_issue_date(doc_number, now)
+        number_year = document_number_year(doc_number)
+        if number_year is not None and issue_date.year != number_year:
+            # Every later edit enforces this rule (update_billing_document_usecase._check_dates),
+            # so a mismatched import could never be saved again.
+            raise ValueError(f"issue_date must be in {number_year}, the year of document number {doc_number}")
         validate_document_dates(issue_date, inp.validity_until, inp.payment_due_date)
 
         # 7. Build domain entity — resolve kind-specific optional dates

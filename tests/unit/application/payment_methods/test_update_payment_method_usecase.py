@@ -192,3 +192,40 @@ class TestUpdatePaymentMethodGuards:
                 _inp(admin_id, pm.id, company_id=company_id, is_personal_payment=True),
                 fake_session,
             )
+
+
+class TestQa3PurseFlagGuards:
+    """QA3 expenses-invoices-04: a flag change must not leave company-paid expenses refundable."""
+
+    def test_company_flag_refused_while_refund_tracked_expenses_use_the_method(
+        self, usecase, pm_repo, admin_id, company_id, fake_session
+    ):
+        from app.domain.payment_methods.exceptions import PaymentMethodRefundTrackedExpensesError
+
+        pm = make_payment_method(company_id, label="QA3 Carte perso", is_personal_payment=True)
+        pm_repo.save(pm)
+        pm_repo.set_refund_tracked_count(pm.id, 2)
+
+        with pytest.raises(PaymentMethodRefundTrackedExpensesError) as exc:
+            usecase.execute(
+                _inp(admin_id, pm.id, company_id=company_id, is_company_payment=True, is_personal_payment=False),
+                fake_session,
+            )
+        assert exc.value.count == 2
+        assert pm_repo.find_by_id(pm.id).is_company_payment is False
+
+    def test_company_flag_allowed_without_tracked_refunds(self, usecase, pm_repo, admin_id, company_id, fake_session):
+        pm = make_payment_method(company_id, label="QA3 Virement")
+        pm_repo.save(pm)
+        result = usecase.execute(_inp(admin_id, pm.id, company_id=company_id, is_company_payment=True), fake_session)
+        assert result.is_company_payment is True
+
+    def test_builtin_company_method_keeps_its_flag(self, usecase, pm_repo, admin_id, company_id, fake_session):
+        from app.domain.payment_methods.exceptions import BuiltinCompanyPaymentFlagError
+
+        pm = make_payment_method(company_id, label="QA3 SARL", is_builtin=True, is_company_payment=True)
+        pm_repo.save(pm)
+        with pytest.raises(BuiltinCompanyPaymentFlagError):
+            usecase.execute(_inp(admin_id, pm.id, company_id=company_id, is_company_payment=False), fake_session)
+        renamed = usecase.execute(_inp(admin_id, pm.id, company_id=company_id, label="QA3 SARL bis"), fake_session)
+        assert renamed.is_company_payment is True

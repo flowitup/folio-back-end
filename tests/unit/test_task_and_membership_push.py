@@ -142,17 +142,23 @@ def _membership():
 def test_project_member_added_notifies_that_user():
     notifier, sender = _membership()
     user, project = uuid4(), uuid4()
-    notifier.notify("project_member_added", user_id=user, actor_id=uuid4(), entity_id=project)
+    actor = uuid4()
+    notifier.notify("project_member_added", user_id=user, actor_id=actor, entity_id=project)
     assert [m.token for m in sender.sent] == [f"tok-{user}"]
-    assert sender.sent[0].data == {"kind": "project_member_added", "project_id": str(project)}
+    assert sender.sent[0].data == {"kind": "project_member_added", "project_id": str(project), "actor_id": str(actor)}
     assert sender.sent[0].body == "Chantier Arcueil"
 
 
 def test_company_events_carry_the_company_id_and_name():
     notifier, sender = _membership()
     user, company = uuid4(), uuid4()
-    notifier.notify("company_member_role_changed", user_id=user, actor_id=uuid4(), entity_id=company, role="admin")
-    assert sender.sent[0].data == {"kind": "company_member_role_changed", "company_id": str(company)}
+    actor = uuid4()
+    notifier.notify("company_member_role_changed", user_id=user, actor_id=actor, entity_id=company, role="admin")
+    assert sender.sent[0].data == {
+        "kind": "company_member_role_changed",
+        "company_id": str(company),
+        "actor_id": str(actor),
+    }
     assert sender.sent[0].body == "Flowitup SAS · Admin"
 
 
@@ -161,7 +167,8 @@ def test_role_change_names_the_role_in_the_dispatcher_language():
         ("vi", "admin", "Quản trị viên"),
         ("vi", "manager", "Quản lý"),
         ("vi", "member", "Thành viên"),
-        ("fr", "manager", "Responsable"),
+        # One French word for the role on web, mobile and pushes.
+        ("fr", "manager", "Manager"),
         ("fr", "member", "Membre"),
         ("en", "manager", "Manager"),
     )
@@ -259,7 +266,7 @@ def test_an_assignee_still_on_the_project_is_told_about_the_move():
     assert [m.token for m in sender.sent] == [f"tok-{assignee}"]
 
 
-# -- project label: the site address the apps show, else the name -------------
+# -- project label: the name the apps show first, else the site address --------
 
 
 @dataclass
@@ -276,20 +283,70 @@ class LocatedRepo:
         return Located("Chantier Arcueil", self._address)
 
 
-def test_task_push_names_the_project_by_its_address():
+def test_task_push_names_the_project_by_its_name_first():
     d, sender = _dispatcher()
     TaskPushNotifier(d, LocatedRepo(" 3 rue QA ")).task_assigned(task=_task(uuid4()), actor_id=uuid4())
-    assert sender.sent[0].body == "Poser les cloisons · 3 rue QA"
+    assert sender.sent[0].body == "Poser les cloisons · Chantier Arcueil"
 
 
-def test_task_push_falls_back_to_the_name_without_an_address():
+def test_task_push_names_the_project_without_an_address():
     d, sender = _dispatcher()
     TaskPushNotifier(d, LocatedRepo("  ")).task_assigned(task=_task(uuid4()), actor_id=uuid4())
     assert sender.sent[0].body == "Poser les cloisons · Chantier Arcueil"
 
 
-def test_project_membership_push_names_the_project_by_its_address():
+def test_project_label_falls_back_to_the_address_when_the_name_is_blank():
+    from app.application.push.project_label import project_label
+
+    assert project_label(Located("  ", " 3 rue QA ")) == "3 rue QA"
+    assert project_label(None) == ""
+
+
+def test_project_membership_push_names_the_project_by_its_name():
     d, sender = _dispatcher()
     notifier = MembershipPushNotifier(d, LocatedRepo("3 rue QA"), StubRepo("Flowitup SAS"))
     notifier.notify("project_member_added", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
-    assert sender.sent[0].body == "3 rue QA"
+    assert sender.sent[0].body == "Chantier Arcueil"
+
+
+class StubNames:
+    def __init__(self, names) -> None:
+        self._names = names
+
+    def display_names(self, user_ids):
+        return {u: self._names[u] for u in user_ids if u in self._names}
+
+
+def _membership_in(locale, names=None):
+    sender = RecordingSender()
+    d = PushDispatcher(devices=StubDevices(), sender=sender, locale=locale, run_async=False)
+    notifier = MembershipPushNotifier(d, StubRepo("5 place Bellecour"), StubRepo("Flowitup SAS"), names=names)
+    return notifier, sender
+
+
+def test_an_accepted_invitation_says_who_accepted():
+    inviter, guest = uuid4(), uuid4()
+    notifier, sender = _membership_in("fr", StubNames({guest: "Bảo"}))
+    notifier.notify("invitation_accepted", user_id=inviter, actor_id=guest, entity_id=uuid4())
+    assert (sender.sent[0].title, sender.sent[0].body) == (
+        "Invitation acceptée",
+        "Bảo a accepté l'invitation · 5 place Bellecour",
+    )
+    # Without a name source the body stays the plain site label.
+    notifier, sender = _membership_in("fr")
+    notifier.notify("invitation_accepted", user_id=inviter, actor_id=guest, entity_id=uuid4())
+    assert sender.sent[0].body == "5 place Bellecour"
+
+
+def test_removal_and_addition_wording_says_what_happened():
+    notifier, sender = _membership_in("vi")
+    notifier.notify("project_member_removed", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
+    notifier.notify("company_member_removed", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
+    assert [m.title for m in sender.sent] == ["Bạn đã bị gỡ khỏi công trình", "Bạn đã bị gỡ khỏi công ty"]
+    notifier, sender = _membership_in("fr")
+    notifier.notify("project_member_added", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
+    notifier.notify("company_member_added", user_id=uuid4(), actor_id=uuid4(), entity_id=uuid4())
+    assert [m.title for m in sender.sent] == [
+        "Vous avez été ajouté à un chantier",
+        "Vous avez été ajouté à une entreprise",
+    ]

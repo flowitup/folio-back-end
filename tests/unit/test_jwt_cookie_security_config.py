@@ -5,7 +5,8 @@ JWT_COOKIE_SECURE=False, JWT_COOKIE_CSRF_PROTECT=False, SameSite=None.
 A staging/preview/demo deploy would inherit those flags and run wide-open.
 
 Post-fix behavior:
-  * Production stays Secure=True / CSRF=True / SameSite=Strict.
+  * Production is Secure=True / CSRF=True / SameSite=Lax (Strict dropped the session on every
+    link opened from an e-mail or another site; sweep-cannot-open-05).
   * Non-prod default tightens to Secure=True / CSRF=True / SameSite=Lax.
   * FLASK_DEV_INSECURE=1 is the only opt-in for the legacy localhost-HTTP mode,
     and is rejected at boot when FLASK_ENV=production or when CORS_ORIGINS
@@ -48,7 +49,7 @@ class TestJwtCookieSecurityDefaults:
         cfg = reload_config({"FLASK_ENV": "production", "FLASK_DEV_INSECURE": None})
         assert cfg.Config.JWT_COOKIE_SECURE is True
         assert cfg.Config.JWT_COOKIE_CSRF_PROTECT is True
-        assert cfg.Config.JWT_COOKIE_SAMESITE == "Strict"
+        assert cfg.Config.JWT_COOKIE_SAMESITE == "Lax"
 
     def test_non_production_default_is_secure_lax_with_csrf(self, reload_config):
         cfg = reload_config({"FLASK_ENV": "development", "FLASK_DEV_INSECURE": None})
@@ -63,11 +64,11 @@ class TestJwtCookieSecurityDefaults:
         assert cfg.Config.JWT_COOKIE_SAMESITE == "None"
 
     def test_dev_insecure_is_ignored_in_production_config(self, reload_config):
-        # Even if both are set, the production branch wins — Secure / CSRF / Strict.
+        # Even if both are set, the production branch wins — Secure / CSRF / Lax.
         cfg = reload_config({"FLASK_ENV": "production", "FLASK_DEV_INSECURE": "1"})
         assert cfg.Config.JWT_COOKIE_SECURE is True
         assert cfg.Config.JWT_COOKIE_CSRF_PROTECT is True
-        assert cfg.Config.JWT_COOKIE_SAMESITE == "Strict"
+        assert cfg.Config.JWT_COOKIE_SAMESITE == "Lax"
 
 
 class TestBootGuardRejectsTrap:

@@ -449,6 +449,8 @@ class Container:
     block_chat_user_usecase: Optional[Any] = None
     unblock_chat_user_usecase: Optional[Any] = None
     list_blocked_chat_users_usecase: Optional[Any] = None
+    list_chat_reports_usecase: Optional[Any] = None
+    resolve_chat_report_usecase: Optional[Any] = None
 
     # Invoice export use case
     export_invoices_usecase: Optional[ExportInvoicesUseCase] = None
@@ -682,12 +684,13 @@ def _build_email_port() -> Any:
     """
     Instantiate the correct email adapter based on EMAIL_PROVIDER env var.
 
-    Supported values: 'resend', 'inmemory', 'smtp' (smtp keeps legacy path).
-    Defaults to 'smtp' when unset.
+    Supported values: 'resend', 'inmemory' (tests), 'log' (the default: each e-mail is
+    written to the API log, like the SMS and push "log" providers). 'smtp' — the former
+    default, never implemented, which silently dropped every e-mail — is an alias of 'log'.
     """
     global _inmemory_email_adapter
 
-    provider = os.environ.get("EMAIL_PROVIDER", "smtp").lower()
+    provider = (os.environ.get("EMAIL_PROVIDER") or "log").strip().lower()
 
     if provider == "resend":
         from app.infrastructure.email.resend_adapter import ResendEmailAdapter
@@ -703,9 +706,12 @@ def _build_email_port() -> Any:
             _inmemory_email_adapter = InMemoryEmailAdapter()
         return _inmemory_email_adapter
 
-    # 'smtp' or any unknown value — no email adapter wired. The invitation
-    # use-cases will fail loudly if they try to enqueue a send while
-    # email_port is None, which is the right signal in non-prod/non-test envs.
+    if provider in ("log", "smtp"):
+        from app.infrastructure.email.logging_adapter import LoggingEmailAdapter
+
+        return LoggingEmailAdapter()
+
+    # Any unknown value is refused at boot (config.validate_boot_settings); nothing wired.
     return None
 
 

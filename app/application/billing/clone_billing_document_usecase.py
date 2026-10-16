@@ -26,6 +26,7 @@ from app.application.billing.ports import (
     UserCompanyAccessRepositoryPort,
     assert_company_admin,
     assert_project_link_access,
+    project_in_company,
     assert_user_company_access,
 )
 from app.domain.billing.enums import BillingDocumentKind
@@ -111,8 +112,15 @@ class CloneBillingDocumentUseCase:
         # 7. Build new doc — dates reset, issuer from current company.
         # H2: When changing kind, zero out incompatible fields to avoid DB CHECK constraint.
         source_payment_terms = source.payment_terms
+        signature_block_text = source.signature_block_text
         if target_kind == BillingDocumentKind.DEVIS and source.kind != BillingDocumentKind.DEVIS:
             source_payment_terms = None
+        if target_kind == BillingDocumentKind.FACTURE and source.kind == BillingDocumentKind.DEVIS:
+            # A facture needs payment terms (a mandatory mention): take the
+            # company's default, as create and convert do. The devis 'Bon pour
+            # accord / signature du client' block has no place on a facture.
+            source_payment_terms = source_payment_terms or company.default_payment_terms
+            signature_block_text = None
 
         doc = _build_doc_from_inputs(
             user_id=inp.user_id,
@@ -123,13 +131,19 @@ class CloneBillingDocumentUseCase:
             recipient_name=source.recipient_name,
             items=source.items,
             issue_date=today,
-            project_id=source.project_id,
+            # A copy issued by another company does not keep the source's project: a
+            # document stays on its own company's projects.
+            project_id=(
+                source.project_id
+                if project_in_company(self._project_repo, source.project_id, effective_company_id)
+                else None
+            ),
             recipient_address=source.recipient_address,
             recipient_email=source.recipient_email,
             recipient_siret=source.recipient_siret,
             notes=source.notes,
             terms=source.terms,
-            signature_block_text=source.signature_block_text,
+            signature_block_text=signature_block_text,
             payment_terms=source_payment_terms,
             source_devis_id=None,  # plain clone — no audit trail link
         )

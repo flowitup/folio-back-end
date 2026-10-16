@@ -48,12 +48,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from app.domain.billing.sections import section_headings
 from app.domain.billing.document import BillingDocument
-from app.domain.billing.document_wording import intro_sentence, place_of_issue
+from app.domain.billing.document_wording import LATE_PAYMENT_NOTE, format_iban, intro_sentence, place_of_issue
 from app.domain.billing.enums import BillingDocumentKind
 from app.domain.entities.project import Project
-from app.domain.labor.export.format import format_decimal_fr
+from app.domain.labor.export.format import format_decimal_fr, format_eur_fr
 from app.domain.services.xlsx_safe_cell import safe_cell
-
 
 # ---------------------------------------------------------------------------
 # Style helpers / constants
@@ -65,19 +64,23 @@ COLOR_ORANGE_BG = "FFF18728"
 COLOR_DARK_GREY = "FF222222"
 
 # Column widths (Excel character units) — copied verbatim from the source.
+# The source's 'U' (G) and 'Avancement' (J) columns are gone: lines carry no unit and
+# there is no progress billing. The description now spans C..H, I=Qté, J=PU, K=Montant,
+# L=TVA, wide enough for '5,5 %'; C and E gave up the width. Same total width, so the
+# sheet still fits one A4 page wide (see the page setup in render()).
 COL_WIDTHS = {
     "A": 2.29,
     "B": 1.71,
-    "C": 15.71,
+    "C": 11.0,
     "D": 3.42,
-    "E": 15.29,
+    "E": 11.78,
     "F": 9.71,
     "G": 5.14,
     "H": 5.29,
     "I": 9.29,
-    "J": 8.42,
-    "K": 11.29,
-    "L": 4.57,
+    "J": 11.5,
+    "K": 12.5,
+    "L": 8.5,
 }
 
 
@@ -264,7 +267,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         # ---- 6. Greeting (rows 19-21) --------------------------------------
         greeting_row = max(19 + top, date_row + len(meta_lines) + 2, recipient_last_row + 2)
         ws.cell(row=greeting_row, column=2, value="Madame, Monsieur,").font = _font(11)
-        ws.cell(row=greeting_row + 1, column=3, value=intro_sentence(doc.kind)).font = _font(11)
+        ws.cell(row=greeting_row + 1, column=3, value=intro_sentence(doc.kind, bool(project_title))).font = _font(11)
         ws.cell(row=greeting_row + 1, column=3).alignment = _align(wrap=True)
         ws.merge_cells(start_row=greeting_row + 1, start_column=3, end_row=greeting_row + 1, end_column=12)
         ws.cell(
@@ -281,10 +284,8 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         items_header_row = greeting_row + 4
         header_cells = [
             (2, "Libellé"),
-            (7, "U"),
-            (8, "Qté"),
-            (9, "PU\n (HT) en €"),
-            (10, "Avancement"),
+            (9, "Qté"),
+            (10, "PU\n (HT) en €"),
             (11, "Montant (HT) en €"),
             (12, "TVA"),
         ]
@@ -294,8 +295,8 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             c.fill = _fill(COLOR_ORANGE_BG)
             c.alignment = _align("center", "center", wrap=True)
             c.border = _thin_box()
-        # Description label spans B..F
-        ws.merge_cells(start_row=items_header_row, start_column=2, end_row=items_header_row, end_column=6)
+        # Description label spans B..H
+        ws.merge_cells(start_row=items_header_row, start_column=2, end_row=items_header_row, end_column=8)
 
         # ---- 8. Project repeat row (row 24) — bold dark grey, only with a project
         row = items_header_row + 1
@@ -304,9 +305,9 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             c.font = _font(11, bold=True, color=COLOR_DARK_GREY)
             c.alignment = _align("left", "center", wrap=True)
             c.border = _thin_box()
-            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=6)
-            # Empty bordered cells for G-L
-            for col in range(7, 13):
+            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
+            # Empty bordered cells for I-L
+            for col in range(9, 13):
                 ws.cell(row=row, column=col).border = _thin_box()
             row += 1
 
@@ -321,9 +322,9 @@ class OpenpyxlBillingDocumentXlsxRenderer:
                 sh.font = _font(11, bold=True)
                 sh.alignment = _align("center", "center", wrap=True)
                 sh.border = _thin_box()
-                ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=6)
-                # Border the rest of the row (B + G..L) for visual continuity
-                for col in [2] + list(range(7, 13)):
+                ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=8)
+                # Border the rest of the row (B + I..L) for visual continuity
+                for col in [2] + list(range(9, 13)):
                     ws.cell(row=row, column=col).border = _thin_box()
                 row += 1
 
@@ -331,42 +332,35 @@ class OpenpyxlBillingDocumentXlsxRenderer:
             if first_item_row is None:
                 first_item_row = row
             last_item_row = row
-            # Description (merged C..F)
+            # Description (merged C..H)
             d = _text_cell(ws, row, 3, item.description)
             d.font = _font(11)
             d.alignment = _align("left", "center", wrap=True)
             d.border = _thin_box()
-            ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=6)
+            ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=8)
             # Empty B (left margin) cell with border
             ws.cell(row=row, column=2).border = _thin_box()
-            # G = unit (we don't model it — leave blank but bordered)
-            ws.cell(row=row, column=7).border = _thin_box()
-            ws.cell(row=row, column=7).alignment = _align("center", "center")
-            # H = Qté
-            ws.cell(row=row, column=8, value=float(item.quantity)).font = _font(11)
-            ws.cell(row=row, column=8).alignment = _align("center", "center")
-            ws.cell(row=row, column=8).border = _thin_box()
-            # I = PU HT
-            ws.cell(row=row, column=9, value=float(item.unit_price)).font = _font(11)
+            # I = Qté
+            ws.cell(row=row, column=9, value=float(item.quantity)).font = _font(11)
             ws.cell(row=row, column=9).alignment = _align("center", "center")
-            # Shows a price's own decimals (15.015, not 15.02) so Qté × PU gives the line amount.
-            ws.cell(row=row, column=9).number_format = "#,##0.00####"
             ws.cell(row=row, column=9).border = _thin_box()
-            # J = Avancement (default 100% — we don't model partial advancement)
-            ws.cell(row=row, column=10, value=1).font = _font(11)
+            # J = PU HT
+            ws.cell(row=row, column=10, value=float(item.unit_price)).font = _font(11)
             ws.cell(row=row, column=10).alignment = _align("center", "center")
-            ws.cell(row=row, column=10).number_format = "0.00%"
+            # Shows a price's own decimals (15.015, not 15.02) so Qté × PU gives the line amount.
+            ws.cell(row=row, column=10).number_format = "#,##0.00####"
             ws.cell(row=row, column=10).border = _thin_box()
             # K = Montant HT — formula so Excel recomputes if user edits; rounded to the
             # cent like the app's line totals, so the SUM matches the document's HT.
-            ws.cell(row=row, column=11, value=f"=ROUND(I{row}*J{row}*H{row},2)").font = _font(11)
+            ws.cell(row=row, column=11, value=f"=ROUND(J{row}*I{row},2)").font = _font(11)
             ws.cell(row=row, column=11).alignment = _align("center", "center")
             ws.cell(row=row, column=11).number_format = "#,##0.00"
             ws.cell(row=row, column=11).border = _thin_box()
-            # L = TVA (decimal: 0.1, 0.2)
-            ws.cell(row=row, column=12, value=float(item.vat_rate) / 100).font = _font(11)
+            # L = TVA (decimal: 0.1, 0.2), printed '20 %' / '5,5 %' like the PDF.
+            rate = float(item.vat_rate)
+            ws.cell(row=row, column=12, value=rate / 100).font = _font(11)
             ws.cell(row=row, column=12).alignment = _align("center", "center")
-            ws.cell(row=row, column=12).number_format = "0.00%"
+            ws.cell(row=row, column=12).number_format = "0\\ %" if rate.is_integer() else "0.0#\\ %"
             ws.cell(row=row, column=12).border = _thin_box()
             row += 1
 
@@ -398,7 +392,9 @@ class OpenpyxlBillingDocumentXlsxRenderer:
         # TVA — one row per rate, from the doc's computed breakdown (the same one the PDF
         # prints) rather than =K_HT*rate, so mixed-rate documents add up exactly.
         for r, (rate, _base_ht, tva_amt) in enumerate(vat_rows, start=first_tva_row):
-            ws.cell(row=r, column=8, value=f"TVA {format_decimal_fr(rate)}\u00a0%").font = _font(11, bold=True)
+            # The taxable base each amount applies to, so it can be checked (as on the PDF).
+            label = f"TVA {format_decimal_fr(rate)}\u00a0% (base HT {format_eur_fr(_base_ht)})"
+            ws.cell(row=r, column=8, value=label).font = _font(11, bold=True)
             ws.cell(row=r, column=8).alignment = _align("center", "center")
             ws.cell(row=r, column=11, value=float(tva_amt)).font = _font(11, bold=True)
             ws.cell(row=r, column=11).number_format = "#,##0.00"
@@ -448,7 +444,7 @@ class OpenpyxlBillingDocumentXlsxRenderer:
                 r = bank_title_row + offset
                 ws.cell(row=r, column=2, value="IBAN").font = _font(11)
                 ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
-                _text_cell(ws, r, 4, doc.issuer_iban).font = _font(11)
+                _text_cell(ws, r, 4, format_iban(doc.issuer_iban)).font = _font(11)
                 ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=12)
                 offset += 1
             if doc.issuer_bic:
@@ -464,14 +460,19 @@ class OpenpyxlBillingDocumentXlsxRenderer:
 
         # ---- 14. Late-payment legal note (factures only) ------------------
         if doc.kind == BillingDocumentKind.FACTURE:
-            note = (
-                "Indemnité forfaitaire de retard de paiement: 40€ "
-                "(conformément à l'article 121-II de la loi n° 2012-387 du 22 Mars 2012 "
-                "et au décret n° 2012-1115 du 2 Oct. 2012)"
-            )
+            note = LATE_PAYMENT_NOTE  # same wording as the PDF
             ws.cell(row=footer_anchor, column=1, value=note).font = _font(7)
             ws.cell(row=footer_anchor, column=1).alignment = _align("left", "top", wrap=True)
             ws.merge_cells(start_row=footer_anchor, start_column=1, end_row=footer_anchor, end_column=12)
+
+        # ---- 15. Page setup: A4 portrait, one page wide ---------------------
+        # Without it the TVA column and the € units printed on a page of their own.
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.print_area = f"A1:L{ws.max_row}"
 
         # Serialise
         buf = BytesIO()

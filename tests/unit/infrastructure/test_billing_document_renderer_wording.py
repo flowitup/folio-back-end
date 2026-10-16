@@ -55,7 +55,21 @@ def _sheet_texts(doc: BillingDocument) -> list[str]:
 )
 def test_intro_sentence_agrees_with_the_document_kind(kind, expected):
     assert intro_sentence(kind) == expected
-    assert expected in _sheet_texts(_doc(kind))
+
+
+@pytest.mark.parametrize(
+    "kind,expected",
+    [
+        (BillingDocumentKind.FACTURE, "Veuillez trouver ci-après notre facture."),
+        (BillingDocumentKind.DEVIS, "Veuillez trouver ci-après notre devis."),
+    ],
+)
+def test_intro_sentence_is_neutral_without_an_objet_line(kind, expected):
+    """billing-15: no project, so no 'Objet' line, so no 'mission citée en objet'."""
+    assert intro_sentence(kind, has_object=False) == expected
+    texts = _sheet_texts(_doc(kind))
+    assert expected in texts
+    assert not any("citée en objet" in t for t in texts)
 
 
 @pytest.mark.parametrize(

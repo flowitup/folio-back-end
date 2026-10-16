@@ -19,9 +19,9 @@ class DeleteProjectAnalysisUseCase:
 
     Authorization: the acting user must be a member of the analysis's project
     AND be the uploader, the project owner, or an admin — see
-    ``authorize_analysis_mutation``. The underlying storage object is NOT
-    removed — soft-delete preserves it for audit trails, mirroring
-    DeleteProjectDocumentUseCase.
+    ``authorize_analysis_mutation``. The underlying storage object is kept
+    for the retention window, then erased with the row by the storage janitor
+    (scripts/purge_soft_deleted_files.py), like documents and photos.
     """
 
     def __init__(

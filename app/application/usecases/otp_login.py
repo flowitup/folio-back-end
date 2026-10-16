@@ -50,6 +50,28 @@ logger = logging.getLogger(__name__)
 # ASCII on purpose: one GSM-7 segment, no Unicode surcharge.
 DEFAULT_MESSAGE = "Folio: ma dang nhap cua ban la {code}. Ma het han sau {minutes} phut."
 SIGNUP_MESSAGE = "Folio: ma dang ky tai khoan cua ban la {code}. Ma het han sau {minutes} phut."
+# The same texts in the app's other languages, picked by the ``locale`` the app sends (the person's
+# chosen language); Vietnamese stays the default. GSM-7 only (é, è, à are in its basic set), so a
+# French text is still one segment.
+SIGN_IN_MESSAGES = {
+    "vi": DEFAULT_MESSAGE,
+    "fr": "Folio : votre code de connexion est {code}. Il expire dans {minutes} min.",
+    "en": "Folio: your sign-in code is {code}. It expires in {minutes} min.",
+}
+SIGNUP_MESSAGES = {
+    "vi": SIGNUP_MESSAGE,
+    "fr": "Folio : votre code de création de compte est {code}. Il expire dans {minutes} min.",
+    "en": "Folio: your sign-up code is {code}. It expires in {minutes} min.",
+}
+
+
+def localized_message(configured: str, default: str, translations: dict[str, str], locale: Optional[str]) -> str:
+    """The SMS text for ``locale`` when the use case kept the default text, else the configured one."""
+    if configured != default or not locale:
+        return configured
+    return translations.get(locale.strip().lower()[:2], configured)
+
+
 # Users created from a phone number have no email; this placeholder keeps the NOT NULL/unique column
 # happy. It must pass strict email validation (admin responses use EmailStr), so no reserved TLD
 # (.local/.invalid/.test are rejected); the host has no mailbox, nothing is ever sent to it.
@@ -312,7 +334,7 @@ class RequestOtpUseCase:
         self._message = message
         self._clock = clock
 
-    def execute(self, raw_phone: str) -> RequestOtpResult:
+    def execute(self, raw_phone: str, locale: Optional[str] = None) -> RequestOtpResult:
         phone = normalize_french_phone(raw_phone)
         now = self._clock()
         user = self._users.find_by_phone(phone)
@@ -329,7 +351,7 @@ class RequestOtpUseCase:
             ttl=self._ttl,
             resend_after=self._resend_after,
             hourly_max=self._hourly_max,
-            message=self._message,
+            message=localized_message(self._message, DEFAULT_MESSAGE, SIGN_IN_MESSAGES, locale),
         )
         return RequestOtpResult(expires_in=self._ttl)
 
@@ -396,9 +418,18 @@ class RequestSignupOtpUseCase:
         self._message = message
         self._clock = clock
 
-    def execute(self, raw_phone: str) -> RequestOtpResult:
+    def execute(self, raw_phone: str, locale: Optional[str] = None) -> RequestOtpResult:
+        """Raises ``UserInactiveError`` when the number belongs to a deactivated account.
+
+        Sign-up already reveals that a number has an account (409), so saying that the account
+        was deactivated hides nothing more and spares the person a sign-in that silently never
+        sends a code.
+        """
         phone = normalize_french_phone(raw_phone)
-        if self._users.find_by_phone(phone) is not None:
+        existing = self._users.find_by_phone(phone)
+        if existing is not None:
+            if not existing.is_active:
+                raise UserInactiveError("This account is deactivated")
             raise PhoneAlreadyRegisteredError("This phone number already has an account")
         _issue_code(
             self._otps,
@@ -409,7 +440,7 @@ class RequestSignupOtpUseCase:
             ttl=self._ttl,
             resend_after=self._resend_after,
             hourly_max=self._hourly_max,
-            message=self._message,
+            message=localized_message(self._message, SIGNUP_MESSAGE, SIGNUP_MESSAGES, locale),
         )
         return RequestOtpResult(expires_in=self._ttl)
 
@@ -469,7 +500,7 @@ class VerifySignupOtpUseCase:
         # row never blocks sign-up itself.
         if self._link_person_on_signup is not None:
             try:
-                self._link_person_on_signup.execute(user.id, phone)
+                self._link_person_on_signup.execute(user.id, phone, display_name=name)
             except Exception:
                 logger.exception(
                     "link_person_on_signup failed during sign-up for user %s; continuing without it", user.id

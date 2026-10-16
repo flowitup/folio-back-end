@@ -311,6 +311,44 @@ class TestSQLAlchemyLaborEntryRepository:
         assert result[0].days_worked == 3
         assert result[0].total_cost == Decimal("300.00")
 
+    def test_get_summary_names_a_phone_named_person_by_the_worker_name(
+        self, entry_repo, worker_repo, sample_project, session
+    ):
+        """A Person created for a phone-only account is named by its phone: show the worker's name."""
+        from app.infrastructure.database.models import PersonModel
+
+        person = PersonModel(
+            id=uuid4(),
+            name="+33621500003",
+            normalized_name="+33621500003",
+            created_by_user_id=sample_project.owner_id,
+        )
+        session.add(person)
+        session.flush()
+        worker = Worker(
+            id=uuid4(),
+            project_id=sample_project.id,
+            name="Nguyen Van An",
+            daily_rate=Decimal("100.00"),
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            person_id=person.id,
+        )
+        worker_repo.create(worker)
+        entry_repo.create(
+            LaborEntry(
+                id=uuid4(),
+                worker_id=worker.id,
+                date=date(2026, 1, 5),
+                shift_type="full",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+        assert [row.worker_name for row in entry_repo.get_summary(sample_project.id)] == ["Nguyen Van An"]
+        monthly = entry_repo.get_monthly_summary(sample_project.id)
+        assert [w.worker_name for m in monthly for w in m.workers] == ["Nguyen Van An"]
+
     def test_insert_null_shift_with_supplement_ok(self, entry_repo, worker_repo, sample_project):
         """shift_type=NULL + supplement_hours=3 inserts and round-trips through _to_entity."""
         from app.domain.entities.worker import Worker

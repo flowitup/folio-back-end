@@ -20,7 +20,6 @@ from app.domain.value_objects.library_category import (
     is_valid_category_slug,
 )
 
-
 # ---------------------------------------------------------------------------
 # Exact canonical FR label matches — one per univers
 # ---------------------------------------------------------------------------
@@ -264,7 +263,7 @@ class TestWordBoundaryMatching:
             "Tournevis",  # 'vis' inside tourneVIS — must not → quincaillerie
             "Visiere de protection",  # 'vis' inside VISiere
             "Console murale",  # 'sol' inside conSOLe (and 'mur' is not token 'murale')
-            "Isolant mince",  # 'sol' inside iSOLant
+            "Parasol déporté",  # 'sol' inside paraSOL (isolant is now a keyword of its own)
         ],
     )
     def test_short_key_not_matched_inside_word(self, raw: str) -> None:

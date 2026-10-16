@@ -50,6 +50,7 @@ class ListDirectoryUseCase:
             if person is None:
                 continue
             assigned = assigned_by_user.get(person.user_id, []) if person.user_id is not None else []
+            pending = profile.is_pending(now)
             items.append(
                 DirectoryEntry(
                     person_id=person.id,
@@ -58,9 +59,11 @@ class ListDirectoryUseCase:
                     linked_user_id=person.user_id,
                     assigned_project_ids=assigned,
                     is_active=profile.is_active,
-                    pending=profile.is_pending(now),
+                    pending=pending,
                     labor_role_id=profile.labor_role_id,
                     default_daily_rate=profile.default_daily_rate,
+                    pending_company_role=(profile.pending_company_role or "member") if pending else None,
+                    pending_expires_at=profile.pending_expires_at if pending else None,
                 )
             )
         return ListDirectoryResult(items=items)

@@ -69,11 +69,25 @@ def credit_project(invitation_app):
             is_builtin=True,
             is_active=True,
             is_company_payment=False,
+            is_personal_payment=True,
             created_by=owner_id,
             created_at=now,
             updated_at=now,
         )
-        db.session.add_all([company_pm, regular_pm])
+        # A method in no purse (neither flag): its spend is "unassigned", never personal.
+        unflagged_pm = PaymentMethodModel(
+            id=uuid4(),
+            company_id=company.id,
+            label="Virement",
+            is_builtin=False,
+            is_active=True,
+            is_company_payment=False,
+            is_personal_payment=False,
+            created_by=owner_id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add_all([company_pm, regular_pm, unflagged_pm])
         db.session.flush()
 
         project = ProjectModel(name="Credit Split Project", owner_id=owner_id, company_id=company.id)
@@ -85,6 +99,7 @@ def credit_project(invitation_app):
             "company_id": company.id,
             "company_pm_id": company_pm.id,
             "regular_pm_id": regular_pm.id,
+            "unflagged_pm_id": unflagged_pm.id,
             "owner_id": owner_id,
         }
 
@@ -596,7 +611,7 @@ def test_reconciliation_invariant_holds_on_mixed_data(invitation_app, credit_pro
         _add_invoice(db.session, pid, number="CS-M6", amount=99999, type="released_funds")
 
         r = _reader(db.session).sum_spent_by_projects([pid])[pid]
-        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+        assert r.by_credits + r.personal + r.unassigned + r.labor_unpaid == pytest.approx(r.total)
 
         # Labor: 800 accrued but 1090 actually paid out (1000 company + 90 cash), so labor
         # costs the larger figure — the 290 over the accrual left an account for real.
@@ -634,7 +649,7 @@ def test_wages_paid_without_logged_attendance_still_count_as_spend(invitation_ap
         assert r.labor_paid == pytest.approx(Decimal("700"))
         assert r.labor_unpaid == Decimal("0")
         assert r.total == pytest.approx(Decimal("700"))
-        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+        assert r.by_credits + r.personal + r.unassigned + r.labor_unpaid == pytest.approx(r.total)
 
 
 def test_worker_less_labor_invoice_settles_nobody(invitation_app, credit_project):
@@ -662,7 +677,7 @@ def test_worker_less_labor_invoice_settles_nobody(invitation_app, credit_project
         assert r.labor_paid == pytest.approx(Decimal("250"))
         assert r.labor_unpaid == pytest.approx(Decimal("600"))
         assert r.total == pytest.approx(Decimal("850"))
-        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+        assert r.by_credits + r.personal + r.unassigned + r.labor_unpaid == pytest.approx(r.total)
 
 
 def test_unpaid_is_reconciled_per_worker_not_project_wide(invitation_app, credit_project):
@@ -689,7 +704,7 @@ def test_unpaid_is_reconciled_per_worker_not_project_wide(invitation_app, credit
         # Bob is still owed 500.
         assert r.labor_unpaid == pytest.approx(Decimal("500"))
         assert r.total == pytest.approx(Decimal("1500"))
-        assert r.by_credits + r.personal + r.labor_unpaid == pytest.approx(r.total)
+        assert r.by_credits + r.personal + r.unassigned + r.labor_unpaid == pytest.approx(r.total)
 
 
 def test_invoiced_is_the_invoice_ledger_without_accruals(invitation_app, credit_project):
@@ -800,5 +815,34 @@ def test_spent_sums_the_invoices_as_the_ledger_shows_them(invitation_app, credit
         r = _reader(db.session).sum_spent_by_projects([pid])[pid]
         assert r.total == Decimal("100.22")
         assert r.invoiced == Decimal("100.22")
-        assert r.personal == Decimal("100.22")
-        assert r.personal_by_type["materials_services"] == Decimal("100.22")
+        # No payment method: the spend sits in no purse, not in the personal one.
+        assert r.personal == Decimal("0")
+        assert r.unassigned == Decimal("100.22")
+        assert r.unassigned_by_type["materials_services"] == Decimal("100.22")
+
+
+def test_no_method_and_unflagged_method_are_unassigned_not_personal(invitation_app, credit_project):
+    """Personal = personal-flagged methods only, like the Expense page's purse split."""
+    from app import db
+
+    with invitation_app.app_context():
+        pid = credit_project["project_id"]
+        _add_invoice(db.session, pid, number="CS-U1", amount=100, payment_method_id=credit_project["regular_pm_id"])
+        _add_invoice(db.session, pid, number="CS-U2", amount=269.5)
+        _add_invoice(db.session, pid, number="CS-U3", amount=80, payment_method_id=credit_project["unflagged_pm_id"])
+        _add_invoice(
+            db.session,
+            pid,
+            number="CS-U4",
+            amount=-30,
+            type="return",
+            payment_method_id=credit_project["unflagged_pm_id"],
+        )
+        _add_invoice(db.session, pid, number="CS-U5", amount=500, payment_method_id=credit_project["company_pm_id"])
+
+        r = _reader(db.session).sum_spent_by_projects([pid])[pid]
+        assert r.by_credits == Decimal("500")
+        assert r.personal == Decimal("100")
+        assert r.unassigned == Decimal("319.5")
+        assert r.unassigned_by_type == {"materials_services": Decimal("349.5"), "return": Decimal("-30")}
+        assert r.by_credits + r.personal + r.unassigned + r.labor_unpaid == r.total

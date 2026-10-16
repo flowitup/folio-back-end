@@ -302,7 +302,7 @@ class TestUnits:
         )
         assert resp.status_code == 400
 
-    def test_deleting_a_custom_unit_leaves_articles_using_it_intact(
+    def test_a_custom_unit_in_use_cannot_be_deleted_and_its_articles_stay_editable(
         self, inv_client, writer_token, reader_token, project_id, poste
     ):
         created = inv_client.post(
@@ -315,10 +315,47 @@ class TestUnits:
         ).get_json()
 
         resp = inv_client.delete(f"{_base(project_id)}/units/{created['id']}", headers=_auth(writer_token))
-        assert resp.status_code == 204
+        assert resp.status_code == 409
 
         found = _article_in_tree(inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json(), art["id"])
         assert found["unit"] == "palette"
+
+        # Once no article uses it, the unit can go.
+        moved = inv_client.patch(
+            f"{_base(project_id)}/articles/{art['id']}", json={"unit": "u"}, headers=_auth(writer_token)
+        )
+        assert moved.status_code == 200
+        resp = inv_client.delete(f"{_base(project_id)}/units/{created['id']}", headers=_auth(writer_token))
+        assert resp.status_code == 204
+
+    @pytest.mark.parametrize("symbol", ["U", "Sac", "M2", "m3"])
+    def test_case_variants_of_presets_are_refused(self, inv_client, writer_token, project_id, symbol):
+        resp = inv_client.post(f"{_base(project_id)}/units", json={"symbol": symbol}, headers=_auth(writer_token))
+        assert resp.status_code == 409
+
+    def test_case_variant_of_a_custom_unit_is_refused(self, inv_client, writer_token, project_id):
+        first = inv_client.post(f"{_base(project_id)}/units", json={"symbol": "Benne"}, headers=_auth(writer_token))
+        assert first.status_code == 201
+        resp = inv_client.post(f"{_base(project_id)}/units", json={"symbol": "benne"}, headers=_auth(writer_token))
+        assert resp.status_code == 409
+
+    def test_resending_the_unchanged_unit_of_an_article_is_accepted(
+        self, inv_client, writer_token, project_id, poste, monkeypatch
+    ):
+        art = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "Parpaing", "quantity": "2", "unit": "u"},
+            headers=_auth(writer_token),
+        ).get_json()
+        resp = inv_client.patch(
+            f"{_base(project_id)}/articles/{art['id']}",
+            json={"name": "Parpaing 20", "unit": "u", "quantity": "-0"},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["quantity"] == 0
+        assert str(body["quantity"]) != "-0.0"
 
 
 class TestReorder:

@@ -21,7 +21,7 @@ from app.api.v1.labor.schemas import (
     WorkerListResponse,
 )
 from app.api.v1.projects.decorators import require_permission, require_project_access
-from app.api.v1.projects.labor_scope import labor_scope_for
+from app.api.v1.projects.labor_scope import caller_manages_labor, labor_scope_for
 from app.application.labor import (
     CreateWorkerRequest as CreateWorkerDTO,
     UpdateWorkerRequest as UpdateWorkerDTO,
@@ -33,12 +33,43 @@ from app.domain.exceptions.labor_exceptions import (
     WorkerPersonNotFoundError,
     SharedPersonEditError,
     InvalidWorkerDataError,
+    InvalidLaborRoleError,
     InvalidWorkerPhoneError,
     WorkerAlreadyLinkedError,
     WorkerAlreadyOnProjectError,
 )
-from app.infrastructure.rate_limiter import limiter
+from app.api._helpers.rate_limit_keys import jwt_user_key
+from app.domain.time import business_today
+from app.infrastructure.rate_limiter import limiter, request_succeeded
 from wiring import get_container
+
+
+def _resolved_current_rate(w) -> float | None:
+    """The rate in force today (latest rate change <= today, else base) for a create/update response."""
+    repo = getattr(get_container(), "worker_rate_change_repository", None)
+    if repo is None:
+        return None
+    try:
+        today = business_today()
+        for change in repo.list_by_worker(UUID(str(w.id))):  # effective_date DESC
+            if change.effective_date <= today:
+                return float(change.daily_rate)
+    except Exception:
+        return None
+    return float(w.daily_rate)
+
+
+def _sites_caller_manages(project_id: str, person_id) -> list[UUID] | None:
+    """The company sites of ``person_id`` where the caller may manage labor.
+
+    A company-wide stop, restart or role change must not reach a site the caller has no
+    labor rights on (a manager assigned to A and B never changes C). None when unknown.
+    """
+    roster = get_container().enroll_company_workers_usecase
+    if roster is None or person_id is None:
+        return None
+    caller = UUID(str(get_jwt_identity()))
+    return [p for p in roster.person_project_ids(UUID(project_id), person_id) if caller_manages_labor(p, caller)]
 
 
 def _user_id_or_error(raw: str | None, project_id: str):
@@ -70,15 +101,15 @@ def _worker_response(w) -> WorkerResponse:
     cook 1d-ii-a. They are None for workers not yet linked (pre-backfill).
     role_id / role_name / role_color surface the joined LaborRole identity.
 
-    current_daily_rate is resolved by ListWorkersUseCase from the rate-change
-    timeline (latest change <= today, else base). On create/update responses
-    the use case is not invoked, so we fall back to daily_rate — the FE
-    re-fetches the list to display the resolved rate.
+    current_daily_rate is the rate in force today (latest rate change <= today,
+    else base): resolved by ListWorkersUseCase on the list path, and looked up
+    here on the create/update paths so every response agrees.
     """
-    # WorkerSummary (list path) carries current_daily_rate; Worker entity
-    # (create/update path) carries the transient field set to None until
-    # list_workers resolves it.
+    # WorkerSummary (list path) carries current_daily_rate; the create/update
+    # paths resolve it here from the rate-change timeline.
     _current = getattr(w, "current_daily_rate", None)
+    if _current is None:
+        _current = _resolved_current_rate(w)
     return WorkerResponse(
         id=w.id,
         project_id=w.project_id,
@@ -93,6 +124,7 @@ def _worker_response(w) -> WorkerResponse:
         role_id=str(w.role_id) if w.role_id else None,
         role_name=w.role_name,
         role_color=w.role_color,
+        role_slug=getattr(w, "role_slug", None),
         current_daily_rate=float(_current) if _current is not None else float(w.daily_rate),
         user_id=str(w.user_id) if getattr(w, "user_id", None) else None,
     )
@@ -141,7 +173,7 @@ def _worker_name(worker_id: str) -> str:
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def create_worker(project_id: str):
@@ -178,6 +210,9 @@ def create_worker(project_id: str):
     except InvalidWorkerPhoneError as e:
         # Its own code so a client can point at the phone field.
         return _error_response("InvalidPhone", str(e), 400)
+    except InvalidLaborRoleError as e:
+        # Its own code so clients can point at the Role field and reload the role list.
+        return _error_response("InvalidLaborRole", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except WorkerPersonNotFoundError:
@@ -203,7 +238,7 @@ def create_worker(project_id: str):
     if roster is not None:
         roster.after_worker_created(UUID(project_id), UUID(result.person_id) if result.person_id else None)
 
-    notify_admins("worker_added", result.name, project_id=project_id)
+    notify_admins("worker_added", result.name, project_id=project_id, extra_data={"worker_id": str(result.id)})
     return jsonify(_worker_response(result).model_dump()), 201
 
 
@@ -215,7 +250,7 @@ def create_worker(project_id: str):
     tags=["labor"],
 )
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def update_worker(project_id: str, worker_id: str):
@@ -243,14 +278,28 @@ def update_worker(project_id: str, worker_id: str):
             if err is not None:
                 return err
             update_kwargs["user_id"] = linked_user_id
+        previous = get_container().worker_repository.find_by_id(UUID(worker_id))
+        previous_role = previous.role_id if previous is not None else None
         result = get_container().update_worker_usecase.execute(UpdateWorkerDTO(**update_kwargs))
-        if update_kwargs["reactivate"]:
-            roster = get_container().enroll_company_workers_usecase
-            if roster is not None:
-                roster.after_worker_restarted(UUID(project_id), UUID(result.person_id) if result.person_id else None)
+        roster = get_container().enroll_company_workers_usecase
+        person_id = UUID(result.person_id) if result.person_id else None
+        if roster is not None and person_id is not None:
+            sites = None
+            if update_kwargs["reactivate"]:
+                sites = _sites_caller_manages(project_id, person_id)
+                roster.after_worker_restarted(UUID(project_id), person_id, sites)
+            new_role = update_kwargs.get("role_id", previous_role)
+            if "role_id" in update_kwargs and new_role != previous_role:
+                # The role is the person's trade: it follows them to their other sites.
+                if sites is None:
+                    sites = _sites_caller_manages(project_id, person_id)
+                roster.after_role_changed(UUID(project_id), person_id, new_role, sites)
     except InvalidWorkerPhoneError as e:
         # Its own code so a client can point at the phone field.
         return _error_response("InvalidPhone", str(e), 400)
+    except InvalidLaborRoleError as e:
+        # Its own code so clients can point at the Role field and reload the role list.
+        return _error_response("InvalidLaborRole", str(e), 400)
     except (ValueError, InvalidWorkerDataError) as e:
         return _error_response("ValidationError", str(e), 400)
     except SharedPersonEditError as e:
@@ -264,7 +313,7 @@ def update_worker(project_id: str, worker_id: str):
 @labor_bp.route("/projects/<project_id>/workers/<worker_id>", methods=["DELETE"])
 @openapi_doc(summary="Soft delete a worker (deactivate)", tags=["labor"])
 @jwt_required()
-@limiter.limit("10 per minute")
+@limiter.limit("60 per minute", key_func=jwt_user_key, deduct_when=request_succeeded)
 @require_permission("project:manage_labor")
 @require_project_access(write=False)
 def delete_worker(project_id: str, worker_id: str):
@@ -281,7 +330,14 @@ def delete_worker(project_id: str, worker_id: str):
 
     roster = get_container().enroll_company_workers_usecase
     if roster is not None:
-        roster.after_worker_stopped(UUID(project_id), person_id)
+        roster.after_worker_stopped(UUID(project_id), person_id, _sites_caller_manages(project_id, person_id))
 
-    notify_admins("worker_removed", subject, project_id=project_id)
+    # A worker linked to a directory person is stopped on every site of the company.
+    notify_admins(
+        "worker_removed",
+        subject,
+        project_id=project_id,
+        all_sites=person_id is not None,
+        extra_data={"worker_id": worker_id},
+    )
     return "", 204

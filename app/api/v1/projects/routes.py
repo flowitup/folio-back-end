@@ -1,5 +1,6 @@
 """Project API routes."""
 
+import logging
 from decimal import Decimal
 from uuid import UUID
 
@@ -36,6 +37,7 @@ from app.application.projects import CreateProjectRequest as CreateDTO
 from app.application.projects.assignments import (
     AssignmentForbiddenError,
     ProjectCompanyUnresolvedError,
+    TargetIsCompanyAdminError,
     TargetNotCompanyMemberError,
 )
 from app.application.projects.ports import ProjectSpent
@@ -44,6 +46,8 @@ from app.domain.entities.project_membership import ProjectMembership
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError, InvalidProjectDataError
 from app.infrastructure.rate_limiter import limiter
 from wiring import get_container
+
+logger = logging.getLogger(__name__)
 
 # Zero rollup for projects with no spend, or when the reader is not wired.
 _NO_SPEND = ProjectSpent(
@@ -94,6 +98,8 @@ def _spend_fields(rollup: ProjectSpent) -> dict:
         "labor_paid": money(rollup.labor_paid),
         "labor_unpaid": money(rollup.labor_unpaid),
         "personal_by_type": {k: money(v) for k, v in rollup.personal_by_type.items()},
+        "spent_unassigned": money(rollup.unassigned),
+        "unassigned_by_type": {k: money(v) for k, v in rollup.unassigned_by_type.items()},
     }
 
 
@@ -163,6 +169,11 @@ def list_projects():
             prefix_map[row.id] = row.invoice_prefix
             created_map[row.id] = row.created_at.isoformat() if row.created_at else ""
 
+    # Company admins open every project of their company, so they belong in each team count.
+    from app.infrastructure.database.company_admins import active_admin_ids_by_company, team_size
+
+    admins_by_company = active_admin_ids_by_company(db.session, company_id_map.values())
+
     user_uuid = UUID(user_id)
     items = []
     for p in projects:
@@ -183,7 +194,7 @@ def list_projects():
                 name=p.name,
                 address=p.address,
                 owner_id=p.owner_id,
-                user_count=p.user_count,
+                user_count=team_size(p.user_ids, admins_by_company.get(company_id_map.get(pid) or "")),
                 created_at=created_map.get(pid, ""),
                 company_id=company_id_map.get(pid),
                 # Same value the detail endpoint returns, so a client seeding its
@@ -395,6 +406,15 @@ def create_project():
     )
 
 
+def _team_size_for(user_ids, company_id: "str | None") -> int:
+    """Assigned people plus the company's active admins (who open every project), each once."""
+    from app import db
+    from app.infrastructure.database.company_admins import active_admin_ids_by_company, team_size
+
+    admins = active_admin_ids_by_company(db.session, [company_id]) if company_id else {}
+    return team_size(user_ids or [], admins.get(str(company_id)) if company_id else None)
+
+
 def _company_id_of(project_id: UUID) -> "str | None":
     """company_id from the DB model (not exposed on the domain entity)."""
     from app import db
@@ -444,7 +464,7 @@ def get_project(project_id: str):
             name=project.name,
             address=project.address,
             owner_id=str(project.owner_id),
-            user_count=len(project.user_ids),
+            user_count=_team_size_for(project.user_ids, company_id_str),
             created_at=project.created_at.isoformat(),
             company_id=company_id_str,
             invoice_prefix=project.invoice_prefix,
@@ -541,7 +561,7 @@ def update_project(project_id: str):
             name=result.name,
             address=result.address,
             owner_id=str(result.owner_id),
-            user_count=len(result.user_ids),
+            user_count=_team_size_for(result.user_ids, _company_id_of(result.id)),
             created_at=result.created_at.isoformat(),
             company_id=_company_id_of(result.id),
             invoice_prefix=result.invoice_prefix,
@@ -577,6 +597,12 @@ def delete_project(project_id: str):
         return jsonify(ErrorResponse(error="Forbidden", message="Access denied", status_code=403).model_dump()), 403
 
     container.delete_project_usecase.execute(UUID(project_id))
+    # Bell entries about the project would only lead to "page not found" now.
+    if container.notification_event_repository is not None:
+        try:
+            container.notification_event_repository.delete_matching(match={"project_id": str(project_id)})
+        except Exception:
+            logger.exception("bell cleanup failed for deleted project %s", project_id)
     # The project row is gone, so name it and its company here rather than letting the notifier look it up.
     notify_admins("project_deleted", project_label(project), company_id=getattr(project, "company_id", None))
     return "", 204
@@ -696,6 +722,35 @@ def get_project_members(project_id: UUID):
         {"pid": project_id, "cid": company_id},
     ).fetchall()
 
+    # Company admins open every project of their company with or without a row (rows exist
+    # only for the admins present when the project was created), so the team lists them too.
+    if company_id is not None:
+        from app.infrastructure.database.company_admins import active_admin_ids_by_company
+
+        listed = {str(row[0]) for row in rows}
+        missing = active_admin_ids_by_company(db.session, [company_id]).get(str(company_id), set()) - listed
+        if missing:
+            from app.infrastructure.database.models import UserCompanyAccessModel, UserModel
+
+            extra = (
+                db.session.query(
+                    UserModel.id,
+                    UserModel.email,
+                    UserModel.display_name,
+                    UserCompanyAccessModel.role,
+                    UserCompanyAccessModel.attached_at,
+                    UserModel.phone,
+                )
+                .join(UserCompanyAccessModel, UserCompanyAccessModel.user_id == UserModel.id)
+                .filter(
+                    UserCompanyAccessModel.company_id == company_id,
+                    UserModel.id.in_([UUID(m) for m in missing]),
+                )
+                .order_by(UserCompanyAccessModel.attached_at)
+                .all()
+            )
+            rows = list(rows) + list(extra)
+
     members = [
         {
             "user_id": str(row[0]),
@@ -707,6 +762,8 @@ def get_project_members(project_id: UUID):
             # Phone-only accounts carry a placeholder email; the phone is what
             # identifies them, so clients can show it instead.
             "phone": row[5],
+            # Company admins reach every project of the company: they cannot be removed from one.
+            "is_company_admin": row[3] == "admin",
         }
         for row in rows
     ]
@@ -758,6 +815,12 @@ def remove_user_from_project(project_id: str, user_id: str):
         return _error(404, "NotFound", f"Project {project_id} not found")
     except AssignmentForbiddenError as exc:
         return _error(403, "Forbidden", str(exc))
+    except TargetIsCompanyAdminError:
+        return _error(
+            409,
+            "CompanyAdmin",
+            "A company admin has access to every project of the company and cannot be removed from one",
+        )
     except TargetNotCompanyMemberError:
         if container.authz_reader.company_role_for(caller_id, project.company_id) != "admin":
             return _error(403, "Forbidden", "A manager may only assign or unassign a company 'member'")

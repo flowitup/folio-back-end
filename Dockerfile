@@ -35,8 +35,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ffmpeg: extract poster frames from uploaded project videos
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# ffmpeg: extract poster frames from uploaded project videos.
+# util-linux (already in the Debian base, named so it stays): prlimit caps ffprobe/ffmpeg's
+# memory, CPU and output size without a preexec_fn, which is unsafe under gthread workers.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -62,5 +64,7 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "app:create_app()"]
+# Run with gunicorn. gthread workers (4 x 4 threads) so a slow photo/video upload, an ffmpeg
+# thumbnail or a PDF export holds one thread, not one of only four processes: with sync workers
+# four slow requests blocked every other user. Same settings as the QA stack.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "app:create_app()"]

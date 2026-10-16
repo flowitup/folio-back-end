@@ -52,6 +52,39 @@ class BuiltinPaymentMethodDeletionError(PaymentMethodError):
         super().__init__(f"Payment method {payment_method_id} is a builtin method and cannot be deleted")
 
 
+class BuiltinCompanyPaymentFlagError(PaymentMethodError):
+    """Raised when the built-in company payment method would lose ``is_company_payment``.
+
+    That method is what every company-paid expense defaults to; un-flagging it
+    would silently move all of them out of the company purse.
+
+    Maps to HTTP 409 at the API boundary.
+    """
+
+    def __init__(self, payment_method_id: UUID) -> None:
+        self.payment_method_id = payment_method_id
+        super().__init__(f"Payment method {payment_method_id} is the built-in company method and stays company-paid")
+
+
+class PaymentMethodRefundTrackedExpensesError(PaymentMethodError):
+    """Raised when a method becomes company-paid while expenses paid with it have a tracked refund.
+
+    Refund tracking only applies to an expense someone paid personally (the rule the
+    per-expense update already enforces); flagging the method would leave those
+    expenses company-paid AND refundable.
+
+    Maps to HTTP 409 at the API boundary.
+    """
+
+    def __init__(self, payment_method_id: UUID, count: int) -> None:
+        self.payment_method_id = payment_method_id
+        self.count = count
+        super().__init__(
+            f"{count} expense(s) paid with this method have a tracked refund; "
+            "clear their refund status before marking the method as paid by the company"
+        )
+
+
 class PaymentMethodConflictingFlagsError(PaymentMethodError, ValueError):
     """Raised when a payment method's effective final state has both
     ``is_company_payment`` and ``is_personal_payment`` set to True.

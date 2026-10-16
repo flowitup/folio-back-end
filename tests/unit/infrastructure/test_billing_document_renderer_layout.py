@@ -182,14 +182,13 @@ def test_pdf_figure_columns_fit_their_widest_value_and_header():
     widths = table._colWidths
     padding = 8  # LEFTPADDING + RIGHTPADDING
     for col, text, font, size in [
-        (2, "125,75", "DejaVu", 8),
-        (3, "1 250,50 €", "DejaVu", 8),
-        (3, "(HT) en €", "DejaVu-Bold", 9),
-        (4, "Avancement", "DejaVu-Bold", 9),
-        (5, "157 250,38 €", "DejaVu", 8),
-        (5, "48 500,00 €", "DejaVu", 8),
-        (6, "5,5 %", "DejaVu", 8),
-        (6, "TVA", "DejaVu-Bold", 9),
+        (1, "125,75", "DejaVu", 8),
+        (2, "1 250,50 €", "DejaVu", 8),
+        (2, "(HT) en €", "DejaVu-Bold", 9),
+        (3, "157 250,38 €", "DejaVu", 8),
+        (3, "48 500,00 €", "DejaVu", 8),
+        (4, "5,5 %", "DejaVu", 8),
+        (4, "TVA", "DejaVu-Bold", 9),
     ]:
         assert widths[col] - padding >= pdfmetrics.stringWidth(text, font, size), text
     assert widths[0] >= 510 * 0.4
@@ -199,9 +198,11 @@ def test_pdf_figure_columns_fit_their_widest_value_and_header():
 def test_pdf_prints_headers_and_amounts_unbroken():
     text = _pdf_text(_pdf(_doc(items=(_item("Coffrage", "125.75", "1250.50", "20"),))))
     lines = text.splitlines()
-    for word in ("Avancement", "TVA", "125,75", "1 250,50 €", "157 250,38 €", "20 %"):
+    for word in ("Montant", "TVA", "125,75", "1 250,50 €", "157 250,38 €", "20 %"):
         assert any(word in line for line in lines), word
-    assert "Avanc\n" not in text
+    # billing-14: no always-empty 'U' column and no 'Avancement 100%' column.
+    assert "Avancement" not in text
+    assert "100%" not in text
 
 
 def test_pdf_totals_are_right_aligned_like_the_ttc_row():
@@ -336,7 +337,10 @@ def test_xlsx_facture_prints_due_date_and_payment_terms():
 def test_xlsx_prints_one_vat_row_per_rate_and_sums_them_into_ttc():
     ws = _sheet(_doc())
     cells = _cells(ws)
-    rows = {v.replace(" ", " "): ws[coord].row for coord, v in cells.items() if isinstance(v, str)}
+    # Labels read "TVA 5,5 % (base HT 10,50 €)": key them on the part before the base.
+    rows = {
+        v.replace(" ", " ").split(" (base HT")[0]: ws[coord].row for coord, v in cells.items() if isinstance(v, str)
+    }
     assert {"TVA 20 %", "TVA 10 %", "TVA 5,5 %"} <= set(rows)
     assert not any(ws[coord].column_letter == "H" and v == "TVA" for coord, v in cells.items())  # no lump row
     doc = _doc()
@@ -397,3 +401,27 @@ def test_xlsx_hostile_text_in_every_user_field_never_becomes_a_formula(hostile):
     ]
     assert hostile_cells
     assert all(c.data_type == "s" and c.quotePrefix for c in hostile_cells if c.value == hostile.replace("\r", "\n"))
+
+
+def test_vat_rows_show_the_taxable_base_and_the_iban_is_grouped():
+    """billing-09 / billing-20: base HT per rate on PDF and XLSX; IBAN in groups of four."""
+    doc = _doc(issuer_iban="FR7630006000011234567890189")
+    text = _pdf_text(_pdf(doc)).replace("\u00a0", " ").replace("\u202f", " ")
+    assert "(base HT" in text
+    assert "FR76 3000 6000 0112 3456 7890 189" in text
+    values = [str(v).replace("\u00a0", " ") for v in _values(_sheet(doc))]
+    assert any(v.startswith("TVA ") and "(base HT" in v for v in values)
+    assert "FR76 3000 6000 0112 3456 7890 189" in values
+
+
+def test_xlsx_fits_one_page_wide_and_shows_rates_readably():
+    """billing-08: A4 portrait, fit to one page wide; the TVA column is wide enough for '5,5 %'."""
+    ws = _sheet(_doc())
+    assert ws.sheet_properties.pageSetUpPr.fitToPage is True
+    assert ws.page_setup.fitToWidth == 1
+    assert ws.page_setup.fitToHeight == 0
+    assert ws.column_dimensions["L"].width >= 8
+    formats = {
+        c.number_format for row in ws.iter_rows(min_col=12, max_col=12) for c in row if isinstance(c.value, float)
+    }
+    assert formats and all("%" in f and f != "0.00%" for f in formats)

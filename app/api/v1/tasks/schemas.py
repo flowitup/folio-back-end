@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.api.v1.date_bounds import BusinessDate
 
@@ -45,7 +45,21 @@ class CreateTaskSchema(BaseModel):
 
 
 class UpdateTaskSchema(BaseModel):
-    """All fields optional — partial update."""
+    """All fields optional — partial update.
+
+    Unknown fields are refused (a misspelled ``assigne_id`` or a camelCase
+    ``dueDate`` used to answer 200 while changing nothing), and so is ``status``,
+    which only the move endpoint changes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _status_moves_elsewhere(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "status" in data:
+            raise ValueError("status: use PATCH /api/v1/tasks/<id>/move to change the status")
+        return data
 
     title: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
@@ -62,6 +76,8 @@ class MoveTaskSchema(BaseModel):
     by `status` — the same lane the card already sits in when it is only
     reordered. Sending neither appends the card to the end of that lane.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     status: str = Field(pattern="^(backlog|todo|in_progress|blocked|done)$")
     before_id: Optional[UUID] = Field(

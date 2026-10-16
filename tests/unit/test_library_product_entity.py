@@ -215,8 +215,8 @@ class TestLibraryProductWithPurchaseApplied:
             purchased_at=yesterday,
         )
 
-        # first_purchased_at should remain "now" (was set first)
-        assert p3.first_purchased_at == now
+        # first_purchased_at is the earliest purchase, even when it is imported last
+        assert p3.first_purchased_at == yesterday
         # last_purchased_at should be "tomorrow" (most recent in real time)
         assert p3.last_purchased_at == tomorrow
 

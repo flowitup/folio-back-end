@@ -7,7 +7,14 @@ Aggregates project spend, split by funding source:
                             + Σ(invoice totals except released_funds and labor)
     invoiced(project)     = Σ(invoice totals except released_funds)
     by_credits(project)   = Σ(invoice totals funded with company money, except released_funds)
-    personal(project)     = Σ(invoice totals funded out of pocket, except released_funds)
+    personal(project)     = Σ(invoice totals paid with a personal-flagged method and not
+                              reimbursed by the company, except released_funds)
+    unassigned(project)   = Σ(every other invoice total except released_funds: no payment
+                              method, or a method flagged neither company nor personal)
+
+The three-way split is the Expense page's purse rule (``sum_spent_split``): an expense lands
+in the personal purse only when its method says so. Folding "no purse" spend into personal
+made the projects card read a different personal figure from the Expense page and Overview.
 
 Labor is accrued from attendance entries and settled by labor-type invoices. Those invoices
 say *who paid* rather than adding cost, so they are excluded from ``total`` — counting the
@@ -21,7 +28,7 @@ worker to credit it to — so it raises ``labor_paid`` and ``total`` without red
 anyone is owed. ``labor_unpaid`` therefore no longer equals ``labor_accrued − labor_paid``;
 that difference is exactly the money paid out beyond, or beside, what was logged.
 
-Invariant: ``by_credits + personal + labor_unpaid == total``.
+Invariant: ``by_credits + personal + unassigned + labor_unpaid == total``.
 
 ``invoiced`` is the same ledger the invoice list adds up client-side: every spend invoice
 plus every credit note, and nothing accrued. It sits alongside ``total`` rather than
@@ -64,6 +71,7 @@ from app.infrastructure.database.invoice_spend_rules import (
     is_company_paid,
     items_total,
     load_company_paid_method_ids,
+    load_personal_method_ids,
 )
 from app.infrastructure.database.models.invoice import InvoiceModel
 from app.infrastructure.database.models.labor_entry import LaborEntryModel
@@ -93,6 +101,8 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
         credits: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
         personal: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
         personal_by_type: dict[UUID, dict[str, Decimal]] = {pid: {} for pid in project_ids}
+        unassigned: dict[UUID, Decimal] = {pid: zero for pid in project_ids}
+        unassigned_by_type: dict[UUID, dict[str, Decimal]] = {pid: {} for pid in project_ids}
 
         # ------------------------------------------------------------------
         # Query 1: labor cost grouped by project_id
@@ -189,9 +199,9 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             .filter(ProjectModel.id.in_(project_ids))
             .all()
         }
-        methods_by_company = load_company_paid_method_ids(
-            self._session, {cid for cid in company_by_project.values() if cid is not None}
-        )
+        company_ids = {cid for cid in company_by_project.values() if cid is not None}
+        methods_by_company = load_company_paid_method_ids(self._session, company_ids)
+        personal_methods_by_company = load_personal_method_ids(self._session, company_ids)
 
         # ------------------------------------------------------------------
         # Query 4: invoice totals grouped by project_id, classified by funding source.
@@ -233,6 +243,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
 
             company_id = company_by_project.get(pid)
             company_paid_ids = methods_by_company.get(company_id, set()) if company_id else set()
+            personal_ids = personal_methods_by_company.get(company_id, set()) if company_id else set()
             if is_company_paid(
                 payment_method_id=row.payment_method_id,
                 refundable_status=row.refundable_status,
@@ -240,9 +251,15 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
                 company_paid_ids=company_paid_ids,
             ):
                 credits[pid] = credits.get(pid, zero) + amount
-            else:
+            elif row.payment_method_id is not None and row.payment_method_id in personal_ids:
+                # Same personal-purse predicate as sum_spent_split (a company-reimbursed row
+                # was already taken by the company branch above).
                 personal[pid] = personal.get(pid, zero) + amount
                 by_type = personal_by_type[pid]
+                by_type[row.type] = by_type.get(row.type, zero) + amount
+            else:
+                unassigned[pid] = unassigned.get(pid, zero) + amount
+                by_type = unassigned_by_type[pid]
                 by_type[row.type] = by_type.get(row.type, zero) + amount
 
         result: dict[UUID, ProjectSpent] = {}
@@ -261,7 +278,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
             # paid more than they logged — wages paid without the attendance recorded, or a
             # payment tagged to nobody — the extra really did leave someone's account, so it
             # counts as spend rather than vanishing. This is also what keeps
-            # `by_credits + personal + labor_unpaid == total` true: by_credits + personal
+            # `by_credits + personal + unassigned + labor_unpaid == total` true: by_credits + personal
             # already contains every labor invoice.
             result[pid] = ProjectSpent(
                 total=paid + unpaid + non_labor_invoices.get(pid, zero),
@@ -274,5 +291,7 @@ class SqlAlchemyProjectSpentReader(ProjectSpentReaderPort):
                 labor_paid=paid,
                 labor_unpaid=unpaid,
                 personal_by_type={k: v for k, v in personal_by_type[pid].items()},
+                unassigned=max(unassigned.get(pid, zero), zero),
+                unassigned_by_type={k: v for k, v in unassigned_by_type[pid].items()},
             )
         return result

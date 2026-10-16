@@ -324,6 +324,9 @@ class IInvoiceRepository(ABC):
         offset: int,
         all_companies: bool = False,
         search: Optional[str] = None,
+        channel: Optional[str] = None,
+        refundable_status: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated materials_services invoices across projects of company_ids.
 
@@ -350,6 +353,7 @@ class IInvoiceRepository(ABC):
         self,
         company_ids: list[UUID],
         all_companies: bool = False,
+        project_id: Optional[UUID] = None,
     ) -> dict:
         """Aggregate refund totals over the FULL materials_services filter set (not paginated).
 

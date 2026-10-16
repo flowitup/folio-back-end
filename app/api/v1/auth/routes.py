@@ -1,14 +1,18 @@
 """Auth API routes."""
 
 import logging
+import re
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
 from flask import current_app, jsonify, request, make_response
 from flask_jwt_extended import (
+    decode_token,
     jwt_required,
     get_jwt_identity,
     get_jwt,
+    get_jwt_request_location,
     unset_jwt_cookies,
 )
 from pydantic import ValidationError
@@ -17,6 +21,7 @@ from app.api._helpers.auth_cookies import set_auth_cookies
 from app.api._helpers.profile_fields import apply_profile_fields
 from app.api._helpers.rate_limit_keys import body_phone, jwt_user_key, phone_and_caller_key
 from app.api._helpers.api_key_request_auth import reject_api_key_mutations
+from app.api._helpers.validation_error import field_rule_message
 from app.api._helpers.otp_messages import INVALID_CODE_MESSAGE, otp_throttled
 from app.api.openapi import openapi_doc
 from app.api.v1.auth import auth_bp
@@ -55,7 +60,12 @@ from app.domain.exceptions.auth_exceptions import (
     UserInactiveError,
 )
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError
-from app.infrastructure.rate_limiter import code_request_answered, limiter, sms_send_ip_limits
+from app.infrastructure.rate_limiter import (
+    code_request_answered,
+    limiter,
+    remote_address_bucket,
+    sms_send_ip_limits,
+)
 from wiring import get_container
 
 logger = logging.getLogger(__name__)
@@ -84,8 +94,42 @@ def auth_config():
     )
 
 
+def access_token_expires_in() -> int:
+    """Seconds an access token lives: the issuer's own lifetime, else JWT_ACCESS_TOKEN_EXPIRES."""
+    container = get_container()
+    seconds = getattr(getattr(container, "token_issuer", None), "access_expires_seconds", None)
+    if isinstance(seconds, int):
+        return seconds
+    expires = current_app.config.get("JWT_ACCESS_TOKEN_EXPIRES")
+    return int(expires.total_seconds()) if isinstance(expires, timedelta) else 7 * 24 * 3600
+
+
+# The SMS code's rule is a regex; say it in words.
+_FIELD_RULES = {"code": "6 digits"}
+
+
+def _invalid(exc: ValidationError):
+    """400 naming only the fields that failed and the rule each broke."""
+    return _error(400, "ValidationError", field_rule_message(exc, _FIELD_RULES))
+
+
 def _error(status: int, error: str, message: str):
     return jsonify(ErrorResponse(error=error, message=message, status_code=status).model_dump()), status
+
+
+def _sms_locale(requested: "str | None") -> "str | None":
+    """The language to text the code in: the body's ``locale``, else the Accept-Language header."""
+    if requested:
+        return requested
+    best = request.accept_languages.best_match(["fr", "en", "vi"])
+    return best
+
+
+def _conflict(reason: str, message: str):
+    """409 with a ``reason`` discriminator the apps branch on (the message is a fallback)."""
+    body = ErrorResponse(error="Conflict", message=message, status_code=409).model_dump()
+    body["reason"] = reason
+    return jsonify(body), 409
 
 
 def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
@@ -99,6 +143,7 @@ def _user_companies(container, user_id: UUID) -> list[UserCompanySummary]:
                     legal_name=company.legal_name,
                     role=access.role,
                     is_primary=access.is_primary,
+                    hidden_sections=list(getattr(company, "hidden_sections", ()) or ()),
                 )
             )
     return companies
@@ -110,6 +155,7 @@ def _login_response(container, result: LoginResult):
     response_data = LoginResponse(
         access_token=result.access_token,
         refresh_token=result.refresh_token,
+        expires_in=access_token_expires_in(),
         user=UserResponse(
             id=user.id,
             email=user.email,
@@ -134,8 +180,10 @@ def _login_response(container, result: LoginResult):
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 # One source asks for a given number 4 times an hour at most: the per-number cap (5) is shared with
 # strangers, and this keeps one of them from using it all up. The store-review numbers are exempt.
 @limiter.limit(
@@ -148,13 +196,13 @@ def request_otp():
     """Always answers 202 for a well-formed number, whether or not an account has it."""
     try:
         data = OtpRequestBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.request_otp_usecase is None:
         return _error(500, "ServerError", "SMS sign-in not configured")
     try:
-        result = container.request_otp_usecase.execute(data.phone)
+        result = container.request_otp_usecase.execute(data.phone, locale=_sms_locale(data.locale))
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except OtpThrottledError as exc:
@@ -177,12 +225,12 @@ def request_otp():
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
 def verify_otp():
     try:
         data = OtpVerifyBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone, code")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.verify_otp_usecase is None:
         return _error(500, "ServerError", "SMS sign-in not configured")
@@ -261,8 +309,6 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
         if not refresh_token:
             continue
         try:
-            from flask_jwt_extended import decode_token
-
             refresh_claims = decode_token(refresh_token, allow_expired=True)
             refresh_jti = refresh_claims.get("jti") if refresh_claims else None
             if refresh_jti:
@@ -281,18 +327,45 @@ def _revoke_presented_refresh_tokens(token_issuer: Any) -> None:
     auth=False,
 )
 @jwt_required(refresh=True)
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 def refresh():
-    """Refresh access token using refresh token."""
+    """Refresh access token using refresh token.
+
+    An expiring refresh token is rotated: a fresh one comes back in the body and in the refresh
+    cookie, so a session that keeps refreshing slides instead of ending when the refresh token
+    issued at sign-in expires. A persistent refresh token never expires and is not rotated.
+
+    What happens to the presented token depends on where it came from:
+    - the refresh COOKIE (a browser): it is revoked 60 s after its first rotation. The browser
+      always stores the new cookie, and leaving the old one alive would let a copy of it outlive
+      a logout. The grace lets several tabs that refresh together with the same cookie all
+      succeed (each reuse is rotated again; the deadline does not move); a logout with the new
+      cookie revokes the old one at once.
+    - the Authorization header (mobile): it stays valid until it expires, as before rotation
+      existed: mobile 0.5.27 ignores the new field and keeps presenting the token it has.
+    """
     user_id = get_jwt_identity()
     container = get_container()
 
     # Identity only: the token carries no permissions, so a role or grant
     # change applies on the next request without a refresh.
     new_access_token = container.token_issuer.create_access_token(UUID(user_id))
+    new_refresh_token = None
+    if not get_jwt().get("persistent"):
+        new_refresh_token = container.token_issuer.create_refresh_token(UUID(user_id))
 
-    response_data = RefreshResponse(access_token=new_access_token)
-    response = make_response(jsonify(response_data.model_dump()))
-    set_auth_cookies(response, new_access_token)
+    if new_refresh_token and get_jwt_request_location() == "cookies":
+        presented_jti = get_jwt().get("jti")
+        if presented_jti:
+            container.token_issuer.retire_rotated_token(
+                presented_jti, successor_jti=decode_token(new_refresh_token).get("jti")
+            )
+
+    response_data = RefreshResponse(
+        access_token=new_access_token, expires_in=access_token_expires_in(), refresh_token=new_refresh_token
+    )
+    response = make_response(jsonify(response_data.model_dump(exclude_none=True)))
+    set_auth_cookies(response, new_access_token, new_refresh_token)
 
     return response
 
@@ -300,6 +373,9 @@ def refresh():
 @auth_bp.route("/me", methods=["GET"])
 @openapi_doc(summary="Get current authenticated user info", responses={200: UserResponse}, tags=["auth"])
 @jwt_required()
+# Every page load and app foregrounding checks the session: a per-user budget, never one shared
+# by the whole office network.
+@limiter.limit("300 per minute", key_func=jwt_user_key)
 def get_current_user():
     """Get current authenticated user info."""
     user_id = get_jwt_identity()
@@ -353,8 +429,8 @@ def update_current_user():
     """
     try:
         data = UpdateMeRequest.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: display_name, phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     provided = data.model_dump(exclude_unset=True)
     if not provided:
         return _error(400, "BadRequest", "No fields to update")
@@ -364,15 +440,46 @@ def update_current_user():
     if not user:
         return _error(404, "NotFound", "User not found")
 
-    profile_error = apply_profile_fields(user, provided, container.user_repository, allow_phone_change=False)
+    previous_name = user.display_name
+    profile_error = apply_profile_fields(
+        user, provided, container.user_repository, allow_phone_change=False, allow_clear_name=False
+    )
     if profile_error is not None:
         return _error(*profile_error)
 
     container.user_repository.save(user)
+    _sync_person_name(container, user, previous_name)
     from app import db
 
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())
+
+
+def _sync_person_name(container: Any, user: Any, previous_name: "str | None") -> None:
+    """Carry a self-service rename to the user's directory entry (persons.name, workers.name).
+
+    The person is shared by every company they work for, so member lists and pickers follow the
+    name they chose. Only when that entry still shows the account's previous name, is blank, or
+    is just a phone number: a different name there was chosen by an admin (e.g. when adding the
+    person by phone) and is kept.
+    """
+    person_repo = getattr(container, "person_repo", None)
+    new_name = user.display_name
+    if person_repo is None or not new_name or new_name == previous_name:
+        return
+    person = person_repo.find_by_user_id(user.id)
+    if person is None:
+        return
+    current = (person.name or "").strip()
+    placeholder = not current or _PHONE_LIKE.fullmatch(current) is not None
+    if not placeholder and current.lower() != (previous_name or "").strip().lower():
+        return
+    if current != new_name:
+        person_repo.rename(person.id, new_name, commit=False)
+
+
+# A directory entry named after the phone it was added by (digits, +, spaces, dots, dashes).
+_PHONE_LIKE = re.compile(r"\+?[\d\s.\-()]{6,}")
 
 
 _PHONE_TAKEN = "This phone number is already used by another account."
@@ -387,7 +494,9 @@ _PHONE_TAKEN = "This phone number is already used by another account."
 )
 @jwt_required()
 @limiter.limit("5 per minute", key_func=jwt_user_key)
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 # The caller chooses the destination number, so one account may ask for 5 codes a day at most.
 @limiter.limit("5 per day", key_func=jwt_user_key, deduct_when=code_request_answered)
 def request_phone_change_code():
@@ -400,14 +509,14 @@ def request_phone_change_code():
     """
     try:
         data = PhoneChangeRequestBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     usecase = container.request_phone_change_code_usecase
     if usecase is None:
         return _error(500, "ServerError", "Phone change not configured")
     try:
-        result = usecase.execute(UUID(get_jwt_identity()), data.phone)
+        result = usecase.execute(UUID(get_jwt_identity()), data.phone, locale=_sms_locale(data.locale))
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
     except PhoneUnchangedError:
@@ -451,8 +560,8 @@ def confirm_phone_change():
     """
     try:
         data = PhoneChangeConfirmBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone, code")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     usecase = container.confirm_phone_change_usecase
     if usecase is None:
@@ -564,22 +673,29 @@ def delete_current_user():
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
-@limiter.shared_limit(sms_send_ip_limits, scope="sms-send", deduct_when=code_request_answered)
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
+@limiter.shared_limit(
+    sms_send_ip_limits, scope="sms-send", key_func=remote_address_bucket, deduct_when=code_request_answered
+)
 def request_signup_otp():
     try:
         data = SignupRequestBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.request_signup_otp_usecase is None:
         return _error(500, "ServerError", "Sign-up not configured")
     try:
-        result = container.request_signup_otp_usecase.execute(data.phone)
+        result = container.request_signup_otp_usecase.execute(data.phone, locale=_sms_locale(data.locale))
     except InvalidPhoneNumberError:
         return _error(400, "ValidationError", "Invalid phone number")
+    except UserInactiveError:
+        return _conflict(
+            "account_deactivated",
+            "This account was deactivated. Contact your company administrator to get access back.",
+        )
     except PhoneAlreadyRegisteredError:
-        return _error(409, "Conflict", "This phone number already has an account. Sign in instead.")
+        return _conflict("phone_registered", "This phone number already has an account. Sign in instead.")
     except OtpThrottledError as exc:
         error, message, headers = otp_throttled(exc)
         body, status = _error(429, error, message)
@@ -600,12 +716,12 @@ def request_signup_otp():
     tags=["auth"],
     auth=False,
 )
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute", key_func=remote_address_bucket)
 def verify_signup_otp():
     try:
         data = SignupVerifyBody.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return _error(400, "ValidationError", "Invalid input: phone, code, display_name")
+    except ValidationError as exc:
+        return _invalid(exc)
     container = get_container()
     if container.verify_signup_otp_usecase is None:
         return _error(500, "ServerError", "Sign-up not configured")

@@ -26,9 +26,24 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from app import create_app
-from wiring import get_container
+
+
+def get_container():
+    """The DI container from wiring.py at the repo root.
+
+    `python scripts/<name>.py` puts scripts/ first on sys.path, not the repo root (the editable
+    install maps only app/ and config/), so `import wiring` failed when cron or
+    `docker compose exec` started the script that way. Add the root before importing.
+    """
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from wiring import get_container as wiring_container
+
+    return wiring_container()
 
 
 def main() -> int:

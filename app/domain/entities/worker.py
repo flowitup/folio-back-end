@@ -38,6 +38,8 @@ class Worker:
     role_id: Optional[UUID] = None
     role_name: Optional[str] = None
     role_color: Optional[str] = None
+    # Stable key of a default role (tho_chinh / tho_phu) so clients can translate it.
+    role_slug: Optional[str] = None
 
     # Signed-in account allowed to log its own attendance for this worker.
     # None for the (common) case of a worker without an app account.
@@ -54,3 +56,20 @@ class Worker:
 
     def __hash__(self) -> int:
         return hash(self.id)
+
+
+def worker_display_name(person_name: Optional[str], worker_name: str) -> str:
+    """The name a worker is shown under: their Person's name, else the worker row's.
+
+    A Person created for a phone-only account carries the phone number as its
+    name until someone renames it; printing "+33621500003" as the worker in an
+    export or a summary helps nobody, so the worker row's own name wins then.
+    """
+    from app.domain.value_objects.phone_number import is_phone_number
+
+    name = (person_name or "").strip()
+    if not name:
+        return worker_name
+    if is_phone_number(name) and worker_name and not is_phone_number(worker_name):
+        return worker_name
+    return name

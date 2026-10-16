@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.application.invitations.dtos import VerifyInvitationDto
 from app.application.invitations.ports import (
@@ -12,15 +12,19 @@ from app.application.invitations.ports import (
     UserWriteRepositoryPort,
 )
 from app.domain.companies.roles import CompanyRole
-from app.domain.entities.invitation import InvitationStatus
+from app.domain.entities.invitation import Invitation, InvitationStatus
 from app.domain.entities.project import project_display_label
 from app.domain.exceptions.invitation_exceptions import (
     InvalidInvitationTokenError,
     InvitationExpiredError,
     InvitationRevokedError,
     InvitationAlreadyAcceptedError,
+    InvitationSupersededError,
 )
 from app.domain.value_objects.invite_token import hash_token
+
+# Re-sending an invitation revokes the pending one and creates its successor in the same request.
+_SUPERSEDED_WINDOW = timedelta(seconds=30)
 
 
 class VerifyInvitationUseCase:
@@ -60,14 +64,17 @@ class VerifyInvitationUseCase:
                 updated_at=datetime.now(timezone.utc),
             )
             self._inv_repo.save(expired)
-            raise InvitationExpiredError(f"Invitation {inv.id} has expired.")
+            raise InvitationExpiredError("This invitation has expired.")
 
+        # Public endpoint: the messages carry no internal id.
         if inv.status == InvitationStatus.EXPIRED:
-            raise InvitationExpiredError(f"Invitation {inv.id} has expired.")
+            raise InvitationExpiredError("This invitation has expired.")
         if inv.status == InvitationStatus.REVOKED:
-            raise InvitationRevokedError(f"Invitation {inv.id} has been revoked.")
+            if self._was_superseded(inv):
+                raise InvitationSupersededError("A newer invitation was sent to this address; use the latest e-mail.")
+            raise InvitationRevokedError("This invitation has been revoked.")
         if inv.status == InvitationStatus.ACCEPTED:
-            raise InvitationAlreadyAcceptedError(f"Invitation {inv.id} was already accepted.")
+            raise InvitationAlreadyAcceptedError("This invitation was already accepted.")
 
         # Load related entities for the response DTO
         project = self._project_repo.find_by_id(inv.project_id)
@@ -86,3 +93,23 @@ class VerifyInvitationUseCase:
             inviter_name=inviter_name,
             expires_at=inv.expires_at,
         )
+
+    def _was_superseded(self, inv: Invitation) -> bool:
+        """Whether ``inv`` was revoked by a re-send: a newer invitation to the same address and
+        project was created when it was revoked (CreateInvitationUseCase does both in one request).
+        An admin's explicit revoke later on creates no successor and stays a plain revocation.
+        """
+        if inv.updated_at is None:
+            return False
+        email = inv.email.strip().lower()
+        try:
+            siblings = self._inv_repo.list_by_project(inv.project_id)
+            return any(
+                other.id != inv.id
+                and other.email.strip().lower() == email
+                and other.created_at > inv.created_at
+                and abs(other.created_at - inv.updated_at) <= _SUPERSEDED_WINDOW
+                for other in siblings
+            )
+        except Exception:  # a lookup failure must not turn a revoked link into a 500
+            return False

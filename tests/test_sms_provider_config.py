@@ -13,5 +13,8 @@ def test_known_sms_providers_are_accepted(provider):
 
 
 def test_unknown_sms_provider_is_rejected():
-    with pytest.raises(ValueError, match="SMS_PROVIDER"):
-        Config(SMS_PROVIDER="sms-gateway")
+    # The check runs at boot (create_app -> validate_boot_settings), not in Config itself.
+    from config import validate_boot_settings
+
+    with pytest.raises(RuntimeError, match="SMS_PROVIDER"):
+        validate_boot_settings({"SMS_PROVIDER": "sms-gateway"}, environ={})

@@ -143,8 +143,8 @@ class TestCompanyEvents:
         assert resp.status_code == 200
         body = resp.get_json()
         assert any(e["user_id"] == str(member_id) for e in body["company_events"])
-        # count must NOT include company_events (finding 12).
-        assert body["count"] == len(body["items"]) + len(body["attendance_pending"])
+        # Newcomers waiting for a project count in the badge: it is the admin's only sign someone joined.
+        assert body["count"] == len(body["items"]) + len(body["attendance_pending"]) + len(body["company_events"])
 
     def test_assigned_member_does_not_appear(self, notif_client, notif_app):
         admin_id = _make_user(notif_app, "ce_admin2@test.com")

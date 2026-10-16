@@ -62,6 +62,21 @@ class ChatDirectoryPort(Protocol):
         """Display name (or e-mail) for each user id."""
         ...
 
+    def account_states(self, user_ids: list[UUID]) -> dict[UUID, str]:
+        """``"deleted"`` (erased account) or ``"unnamed"`` (no display name) for the ids that are
+        shown by a placeholder name; absent for everyone else. Lets the apps translate the label."""
+        ...
+
+    def joined_at_many(self, user_id: UUID, channels: list[ChannelRef]) -> dict[str, datetime]:
+        """When the user gained access to each channel (by key), where the data tells."""
+        ...
+
+    def channel_company_id(self, channel: ChannelRef) -> Optional[UUID]: ...
+
+    def company_admin_ids(self, company_id: UUID) -> list[UUID]: ...
+
+    def company_channels(self, company_id: UUID) -> list[ChannelRef]: ...
+
 
 class ChatMessageRepositoryPort(Protocol):
     """Persistence of chat messages."""
@@ -70,9 +85,29 @@ class ChatMessageRepositoryPort(Protocol):
 
     def find_by_id(self, message_id: UUID) -> Optional[ChatMessage]: ...
 
-    def list_for_channel(self, channel: ChannelRef, before: Optional[datetime], limit: int) -> list[ChatMessage]:
-        """Newest ``limit`` messages created before ``before`` (or the newest overall), oldest first."""
+    def list_for_channel(
+        self,
+        channel: ChannelRef,
+        before: Optional[datetime],
+        limit: int,
+        exclude_senders: Optional[set[UUID]] = None,
+    ) -> list[ChatMessage]:
+        """Newest ``limit`` messages created before ``before`` (or the newest overall), oldest first,
+        leaving out ``exclude_senders`` before the limit applies."""
         ...
+
+    def count_since_many(
+        self,
+        thresholds: dict[ChannelRef, Optional[datetime]],
+        exclude_sender: UUID,
+        exclude_senders: Optional[set[UUID]] = None,
+    ) -> dict[str, int]:
+        """``count_since`` of many channels in one go, by channel key (absent = 0)."""
+        ...
+
+    def last_message_at_many(self, channels: list[ChannelRef]) -> dict[str, datetime]: ...
+
+    def delete_message(self, message_id: UUID) -> None: ...
 
     def count_since(self, channel: ChannelRef, since: Optional[datetime], exclude_sender: UUID) -> int:
         """Messages by other people after ``since`` (all of them when ``since`` is None).
@@ -91,6 +126,10 @@ class ChatReadRepositoryPort(Protocol):
     def last_read_at(self, user_id: UUID, channel: ChannelRef) -> Optional[datetime]: ...
 
     def mark_read(self, user_id: UUID, channel: ChannelRef, at: datetime) -> None: ...
+
+    def last_reads_for_user(self, user_id: UUID) -> dict[str, datetime]:
+        """Every read marker of the user, by channel key."""
+        ...
 
     def last_reads_for_channel(self, channel: ChannelRef) -> dict[UUID, datetime]:
         """Read marker of every user who has read the channel at least once (seen receipts)."""
@@ -130,10 +169,30 @@ class ChatAttachmentStoragePort(Protocol):
     def delete(self, key: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class ReportInfo:
+    """A member's report of a message, with the message as it stands."""
+
+    id: UUID
+    message: ChatMessage
+    reporter_id: UUID
+    reason: Optional[str]
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+
+
 class ChatSafetyRepositoryPort(Protocol):
     """Reports of messages and per-user blocks (App Store guideline 1.2)."""
 
-    def add_report(self, message_id: UUID, reporter_id: UUID, reason: Optional[str]) -> None: ...
+    def add_report(self, message_id: UUID, reporter_id: UUID, reason: Optional[str]) -> bool:
+        """Store the report; False when this person had already reported the message."""
+        ...
+
+    def list_open_reports(self, channels: list[ChannelRef]) -> list[ReportInfo]: ...
+
+    def find_report(self, report_id: UUID) -> Optional[ReportInfo]: ...
+
+    def resolve_reports_of_message(self, message_id: UUID, at: datetime) -> None: ...
 
     def block(self, blocker_id: UUID, blocked_id: UUID) -> None: ...
 

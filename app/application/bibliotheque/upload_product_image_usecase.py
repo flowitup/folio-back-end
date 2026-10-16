@@ -7,6 +7,8 @@ outbound HTTP from the server.
 
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
 from typing import BinaryIO
 from uuid import UUID
 
@@ -27,6 +29,8 @@ from app.application.bibliotheque.ports import (
 from app.domain.entities.library_product import LibraryProduct
 from app.domain.value_objects.image_signature import sniff_image_stream
 from app.infrastructure.adapters.bibliotheque_image_storage import BibliothequeImageStorage
+
+logger = logging.getLogger(__name__)
 
 _MANAGE_PERMISSION = "bibliotheque:manage"
 
@@ -132,3 +136,20 @@ class UploadProductImageUseCase:
         self._product_repo.upsert(updated)
         self._db.commit()
         return key
+
+    def remove(self, *, requester_id: UUID, product_id: UUID) -> None:
+        """Remove the product's image (a wrong photo), same access rule as an upload.
+
+        The stored object is deleted after the product row no longer points at
+        it; a storage failure then only leaves an unreferenced object behind.
+        """
+        product = self.authorize(requester_id=requester_id, product_id=product_id)
+        key = product.image_storage_key
+        if key is None:
+            return
+        self._product_repo.upsert(replace(product, image_storage_key=None))
+        self._db.commit()
+        try:
+            self._image_storage.delete(key)
+        except Exception:  # noqa: BLE001 - best effort, the product no longer shows it
+            logger.warning("Could not delete library image %s", key, exc_info=True)

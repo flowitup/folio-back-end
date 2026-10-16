@@ -24,7 +24,6 @@ from app.infrastructure.database.models.payment_method import PaymentMethodModel
 from tests.company_tenancy_helper import seed_company_tenancy
 from tests.auth_login_helper import mint_access_token
 
-
 # ---------------------------------------------------------------------------
 # App fixture
 # ---------------------------------------------------------------------------
@@ -699,7 +698,11 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
 
         resp = avoir_client.put(
             _invoice_url(avoir_app._test_project_id, invoice_id),
-            json={"type": "materials_services"},
+            # A purchase cannot total less than zero: the lines turn positive with the type.
+            json={
+                "type": "materials_services",
+                "items": [{"description": "Line item", "quantity": 1, "unit_price": 300.0}],
+            },
             headers=_auth(admin_token),
         )
         assert resp.status_code == 200, resp.get_data(as_text=True)
@@ -739,7 +742,11 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
 
         away = avoir_client.put(
             _invoice_url(avoir_app._test_project_id, invoice_id),
-            json={"type": "materials_services"},
+            # A purchase cannot total less than zero: the lines turn positive with the type.
+            json={
+                "type": "materials_services",
+                "items": [{"description": "Line item", "quantity": 1, "unit_price": 300.0}],
+            },
             headers=_auth(admin_token),
         )
         assert away.status_code == 200, away.get_data(as_text=True)
@@ -748,7 +755,7 @@ class TestUpdateTypeChangeClearsReturnLinkFields:
 
         back = avoir_client.put(
             _invoice_url(avoir_app._test_project_id, invoice_id),
-            json={"type": "return"},
+            json={"type": "return", "items": [{"description": "Line item", "quantity": 1, "unit_price": -300.0}]},
             headers=_auth(admin_token),
         )
         assert back.status_code == 200, back.get_data(as_text=True)
@@ -868,3 +875,22 @@ class TestMutationResponsesIncludePaidWithReturns:
         resp = _create(avoir_client, avoir_app, admin_token, invoice_type="materials_services", unit_price=250.0)
         assert resp.status_code == 201, resp.get_data(as_text=True)
         assert resp.get_json()["paid_with_returns"] == []
+
+
+class TestDeleteTargetOfAppliedAvoir:
+    """Deleting an expense an avoir is applied to would orphan the avoir (FK SET NULL)."""
+
+    def test_delete_is_refused_while_an_avoir_is_applied(self, avoir_client, avoir_app, admin_token):
+        target = _create_target(avoir_client, avoir_app, admin_token, amount=15.31, invoice_type="others")
+        applied = _create_return(
+            avoir_client, avoir_app, admin_token, applied_to=target["id"], settled_via="avoir", unit_price=-6.0
+        )
+        assert applied.status_code == 201, applied.get_data(as_text=True)
+
+        resp = avoir_client.delete(_invoice_url(avoir_app._test_project_id, target["id"]), headers=_auth(admin_token))
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert "Unlink the avoirs applied" in resp.get_json()["message"]
+        avoir = avoir_client.get(
+            _invoice_url(avoir_app._test_project_id, applied.get_json()["id"]), headers=_auth(admin_token)
+        ).get_json()
+        assert avoir["applied_to_invoice_id"] == target["id"]

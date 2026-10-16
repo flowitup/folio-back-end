@@ -331,6 +331,8 @@ def delete_billing_document(doc_id: str, billing_doc):
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
     except ForbiddenBillingDocumentError:
         return _err("NotFound", f"Billing document {doc_id} not found", 404)
+    except DevisLockedByFactureError as exc:
+        return jsonify({"error": "Conflict", "reason": "devis_locked_by_facture", "message": str(exc)}), 409
 
     return "", 204
 
@@ -502,6 +504,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
             document_id=result.id,
             company_id=getattr(result, "company_id", None),
             number=getattr(result, "document_number", "") or "",
+            document_kind=getattr(getattr(result, "kind", None), "value", getattr(result, "kind", None)),
         )
     return jsonify(_doc_to_json(result))
 
@@ -514,7 +517,7 @@ def update_billing_document_status(doc_id: str, billing_doc):
 @billing_documents_bp.route("/billing-documents/<doc_id>/pdf", methods=["GET"])
 @openapi_doc(summary="Render billing document as PDF and stream as attachment", tags=["billing"])
 @jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
 def render_billing_document_pdf(doc_id: str, billing_doc):
     """Render billing document as PDF and stream as attachment.
@@ -557,7 +560,7 @@ def render_billing_document_pdf(doc_id: str, billing_doc):
 @billing_documents_bp.route("/billing-documents/<doc_id>/xlsx", methods=["GET"])
 @openapi_doc(summary="Render billing document as XLSX and stream as attachment", tags=["billing"])
 @jwt_required()
-@limiter.limit("5 per minute", key_func=jwt_user_key)
+@limiter.limit("60 per minute", key_func=jwt_user_key)
 @require_billing_document_owner
 def render_billing_document_xlsx(doc_id: str, billing_doc):
     """Render billing document as XLSX (Open Office XML) and stream as attachment.

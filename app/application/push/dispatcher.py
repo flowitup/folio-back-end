@@ -92,8 +92,13 @@ class PushDispatcher:
         data: Dict[str, str],
         exclude: Optional[UUID] = None,
         render: Optional[Callable[[str], Tuple[str, str]]] = None,
+        record: bool = True,
     ) -> None:
         """Deliver to every recipient who still wants ``category``.
+
+        ``record=False`` pushes without adding a bell activity entry: for news the bell
+        already shows in its own section (attendance to validate, new company members), so
+        one thing is listed and counted once.
 
         ``exclude`` drops the actor: nobody is notified about their own action. Recipient
         and token resolution stay synchronous (cheap indexed reads, and they must see the
@@ -106,7 +111,8 @@ class PushDispatcher:
         targets = {u for u in recipients if u is not None and u != exclude}
         if not targets:
             return
-        self._record_events(category, targets, title, body, data, render)
+        if record:
+            self._record_events(category, targets, title, body, data, render)
         if self._preferences is not None:
             try:
                 targets -= self._preferences.muted_user_ids(list(targets), category)

@@ -140,6 +140,10 @@ class JoinCompanyByCodeUseCase:
         company = self._companies.find_by_join_code(code) if code else None
         if company is None:
             raise JoinCodeNotFoundError()
+        # A company nobody administers any more (its last admin deleted their account) takes no
+        # one in: the joiner would wait forever for someone to assign them.
+        if not any(a.role == CompanyRole.ADMIN.value for a in self._access.list_for_company(company.id)):
+            raise JoinCodeNotFoundError()
         if self._access.find(user_id, company.id) is not None:
             raise CompanyAlreadyAttachedError(user_id, company.id)
         now: datetime = self._clock.now()

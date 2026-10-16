@@ -43,6 +43,15 @@ class MaterialsExpenseItem:
     # one exists (bank-refund reconciliation). None otherwise.
     funds_release_number: Optional[str]
     attachments: list[MaterialsExpenseAttachment]
+    # The company of the expense's project (an admin of several companies sees them all).
+    company_id: Optional[str] = None
+    company_name: Optional[str] = None
+    # Who paid (the payment method's label at the time), so the refundable
+    # list can say whom to pay back; the project's address, which the apps use
+    # to name a project.
+    payment_method_id: Optional[str] = None
+    payment_method_label: Optional[str] = None
+    project_address: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +64,9 @@ class MaterialsExpensesSummary:
     refunded_by_bank: float
     # Overlap: rows refunded by 'both' (already included in company AND bank).
     refunded_by_both: float
+    # What the bank still owes (refunded_by neither 'bank' nor 'both'); overlaps
+    # refundable_amount, which is the company channel.
+    bank_outstanding: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -96,6 +108,9 @@ class ListMaterialsExpensesUseCase:
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        channel: Optional[str] = None,
+        refundable_status: Optional[str] = None,
+        project_id: Optional[UUID] = None,
     ) -> MaterialsExpensesResult:
         if is_superadmin:
             # Superadmin: pass company_id as single-element list or None to signal "all"
@@ -133,6 +148,9 @@ class ListMaterialsExpensesUseCase:
             offset=offset,
             all_companies=is_superadmin and company_id is None,
             search=(search or "").strip() or None,
+            channel=channel if refundable is True else None,
+            refundable_status=refundable_status,
+            project_id=project_id,
         )
 
         row_ids = [UUID(r["id"]) for r in rows]
@@ -158,6 +176,8 @@ class ListMaterialsExpensesUseCase:
                 refunded_by=r.get("refunded_by"),
                 has_bank_refund=UUID(r["id"]) in bank_refunded,
                 funds_release_number=release_numbers.get(UUID(r["id"])),
+                company_id=r.get("company_id"),
+                company_name=r.get("company_name"),
                 attachments=[
                     MaterialsExpenseAttachment(
                         id=a["id"],
@@ -167,6 +187,9 @@ class ListMaterialsExpensesUseCase:
                     )
                     for a in r.get("attachments", [])
                 ],
+                payment_method_id=r.get("payment_method_id"),
+                payment_method_label=r.get("payment_method_label"),
+                project_address=r.get("project_address"),
             )
             for r in rows
         ]
@@ -177,6 +200,7 @@ class ListMaterialsExpensesUseCase:
             agg = self._invoice_repo.materials_services_refund_summary(
                 company_ids=effective_ids or [],
                 all_companies=is_superadmin and company_id is None,
+                project_id=project_id,
             )
             summary = MaterialsExpensesSummary(
                 refundable_amount=agg["refundable_amount"],
@@ -184,6 +208,7 @@ class ListMaterialsExpensesUseCase:
                 refunded_by_company=agg["refunded_by_company"],
                 refunded_by_bank=agg["refunded_by_bank"],
                 refunded_by_both=agg["refunded_by_both"],
+                bank_outstanding=agg.get("bank_outstanding", 0.0),
             )
 
         return MaterialsExpensesResult(items=items, total=total, limit=limit, offset=offset, summary=summary)

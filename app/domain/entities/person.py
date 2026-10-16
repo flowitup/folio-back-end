@@ -5,6 +5,16 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
+from app.domain.value_objects.accent_fold import FOLD_FROM, FOLD_TO, fold_text
+
+# The app's one accent fold (searches, dedup): see app.domain.value_objects.accent_fold.
+ACCENTED_LETTERS, PLAIN_LETTERS = FOLD_FROM, FOLD_TO
+
+
+def fold_accents(text: str) -> str:
+    """Lowercase ``text`` without its accents: 'Trần Văn Dũng' -> 'tran van dung'."""
+    return fold_text((text or "").strip())
+
 
 @dataclass(slots=True)
 class Person:

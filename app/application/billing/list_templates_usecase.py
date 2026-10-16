@@ -31,12 +31,27 @@ class ListTemplatesUseCase:
         user_id: UUID,
         kind: Optional[BillingDocumentKind] = None,
         company_id: Optional[UUID] = None,
+        company_ids: Optional[list[UUID]] = None,
     ) -> list[BillingTemplateResponse]:
+        """`company_ids` (used when `company_id` is None): also list every template of those
+        companies, after the caller's own — the companies the caller administers, for a
+        client that names no company."""
         if company_id is not None:
             templates = self._template_repo.list_for_company(company_id=company_id, kind=kind)
         else:
-            templates = self._template_repo.list_for_user(user_id=user_id, kind=kind)
-            attached = attached_company_ids(self._access_repo, user_id)
-            if attached is not None:
-                templates = [t for t in templates if t.company_id is None or t.company_id in attached]
+            templates = self._own_templates(user_id, kind)
+            seen = {t.id for t in templates}
+            for cid in company_ids or []:
+                for t in self._template_repo.list_for_company(company_id=cid, kind=kind):
+                    if t.id not in seen:
+                        seen.add(t.id)
+                        templates.append(t)
         return [BillingTemplateResponse.from_entity(t) for t in templates]
+
+    def _own_templates(self, user_id: UUID, kind: Optional[BillingDocumentKind]) -> list:
+        """The caller's own templates, minus those of companies they have left."""
+        templates = self._template_repo.list_for_user(user_id=user_id, kind=kind)
+        attached = attached_company_ids(self._access_repo, user_id)
+        if attached is not None:
+            templates = [t for t in templates if t.company_id is None or t.company_id in attached]
+        return list(templates)

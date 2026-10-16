@@ -32,6 +32,7 @@ from app.application.usecases.otp_login import (
     _utcnow,
     claim_placeholder_email,
     is_placeholder_email,
+    localized_message,
 )
 from app.domain.entities.login_otp import OtpPurpose
 from app.domain.entities.user import User
@@ -47,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 # ASCII on purpose, like the sign-in SMS: one GSM-7 segment, no Unicode surcharge.
 PHONE_CHANGE_MESSAGE = "Folio: ma xac nhan so dien thoai moi cua ban la {code}. Ma het han sau {minutes} phut."
+PHONE_CHANGE_MESSAGES = {
+    "vi": PHONE_CHANGE_MESSAGE,
+    "fr": "Folio : votre code de confirmation du nouveau numéro est {code}. Il expire dans {minutes} min.",
+    "en": "Folio: your code to confirm your new number is {code}. It expires in {minutes} min.",
+}
 
 
 def _check_new_phone(users: UserRepositoryPort, user_id: UUID, raw_phone: str) -> tuple[User, str]:
@@ -93,7 +99,7 @@ class RequestPhoneChangeCodeUseCase:
         self._message = message
         self._clock = clock
 
-    def execute(self, user_id: UUID, raw_phone: str) -> RequestOtpResult:
+    def execute(self, user_id: UUID, raw_phone: str, locale: Optional[str] = None) -> RequestOtpResult:
         user, phone = _check_new_phone(self._users, user_id, raw_phone)
         _issue_code(
             self._otps,
@@ -104,7 +110,7 @@ class RequestPhoneChangeCodeUseCase:
             ttl=self._ttl,
             resend_after=self._resend_after,
             hourly_max=self._hourly_max,
-            message=self._message,
+            message=localized_message(self._message, PHONE_CHANGE_MESSAGE, PHONE_CHANGE_MESSAGES, locale),
             purpose=OtpPurpose.PHONE_CHANGE,
         )
         return RequestOtpResult(expires_in=self._ttl)

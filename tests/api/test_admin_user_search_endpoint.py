@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 # All fixtures sourced from conftest.py
 # (invitation_app, inv_client, superadmin_token, member_token, admin_token)
 
@@ -46,6 +45,26 @@ class TestUserSearchResults:
         data = resp.get_json()
         # At least target_user should appear
         assert data["count"] >= 1
+
+    def test_200_search_by_phone_in_any_format(self, inv_client, superadmin_token, invitation_app):
+        """mobile-auth-settings-14: a phone-only account is found by its number, not its synthetic e-mail."""
+        from app import db
+        from app.infrastructure.database.models import UserModel
+
+        with invitation_app.app_context():
+            db.session.add(
+                UserModel(
+                    email="phone-33623109903@no-email.folio.flowitup.com",
+                    phone="+33623109903",
+                    display_name="Phone Only",
+                    is_active=True,
+                )
+            )
+            db.session.commit()
+        for q in ("+33623109903", "0623109903", "06 23 10 99 03"):
+            resp = inv_client.get(_SEARCH_URL, query_string={"search": q}, headers=_auth(superadmin_token))
+            assert resp.status_code == 200
+            assert [i["phone"] for i in resp.get_json()["items"]] == ["+33623109903"], q
 
     def test_200_no_match_returns_empty_items(self, inv_client, superadmin_token):
         """Query that matches nothing returns empty items list with count 0."""

@@ -17,6 +17,11 @@ class CreatePaymentMethodRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     label: str = Field(..., min_length=1, max_length=120)
+    # The purse the method's expenses count in, chosen at creation (both false = no purse).
+    # A method created with a label only always landed in no purse, so its expenses could
+    # never be reimbursed until someone found the flags behind "rename".
+    is_company_payment: bool = False
+    is_personal_payment: bool = False
 
     @field_validator("label", mode="before")
     @classmethod
@@ -24,6 +29,12 @@ class CreatePaymentMethodRequest(BaseModel):
         if isinstance(v, str):
             return v.strip()
         return v  # pragma: no cover — strict=True rejects non-strings before this branch
+
+    @model_validator(mode="after")
+    def one_purse_at_most(self) -> "CreatePaymentMethodRequest":
+        if self.is_company_payment and self.is_personal_payment:
+            raise ValueError("A payment method cannot be both a company and a personal payment")
+        return self
 
 
 class UpdatePaymentMethodRequest(BaseModel):

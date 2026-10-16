@@ -33,7 +33,6 @@ from app.domain.entities.invoice import Invoice, InvoiceType
 from app.domain.exceptions.project_exceptions import ProjectNotFoundError
 from app.domain.value_objects.invoice_item import InvoiceItem
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -202,9 +201,10 @@ def test_cash_advance_exports_under_others_not_released_funds(monkeypatch):
     assert others.grand_total == Decimal("40.00")
 
     everything = _export_bundle(monkeypatch, project, invoices)
+    # The expenses first, then the funding rows left out of their total.
     assert [(s.type, s.is_cash_advance, s.total_amount) for s in everything.subtotals_by_type] == [
-        (InvoiceType.RELEASED_FUNDS, False, Decimal("9000.00")),
         (InvoiceType.OTHERS, False, Decimal("40.00")),
+        (InvoiceType.RELEASED_FUNDS, False, Decimal("9000.00")),
         (InvoiceType.OTHERS, True, Decimal("500.00")),
     ]
 
@@ -411,6 +411,32 @@ def test_filename_with_no_type_filter():
     assert "-client" not in result.filename
     assert "-labor" not in result.filename
     assert "-supplier" not in result.filename
+
+
+def test_filename_is_localised_and_names_the_project_first():
+    """French file name prefix and the project's label (name first, as the apps show it); the heading adds the address."""
+    import dataclasses
+
+    project = dataclasses.replace(_make_project("QA3 Rénovation Lilas"), address="12 rue des Lilas")
+    uc = _build_usecase(project, invoices=[])
+    request = dataclasses.replace(_base_request(project.id, format="xlsx"), locale="fr")
+    result = uc.execute(request)
+    assert result.filename == "depenses-qa3-renovation-lilas-2026-01-to-2026-03.xlsx"
+
+
+def test_heading_shows_the_name_then_the_address():
+    import dataclasses
+
+    from app.domain.entities.project import project_export_heading
+
+    project = _make_project("QA3 Rénovation Lilas")
+    assert project_export_heading(dataclasses.replace(project, address="12 rue des Lilas")) == (
+        "QA3 Rénovation Lilas · 12 rue des Lilas"
+    )
+    assert project_export_heading(dataclasses.replace(project, address="")) == "QA3 Rénovation Lilas"
+    assert project_export_heading(dataclasses.replace(project, name=" ", address="12 rue des Lilas")) == (
+        "12 rue des Lilas"
+    )
 
 
 def test_filename_with_type_filter():

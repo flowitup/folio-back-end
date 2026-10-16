@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.application.labor.attendance_dates import check_manager_attendance_date
+from app.application.labor.bulk_log_attendance import ConflictsNotAcknowledgedError
 from app.application.labor.ports import IWorkerRepository, ILaborEntryRepository
 from app.domain.entities.labor_entry import LaborEntry
 from app.domain.exceptions.labor_exceptions import WorkerInactiveError, WorkerNotFoundError
@@ -21,6 +22,8 @@ class LogAttendanceRequest:
     note: Optional[str] = None
     shift_type: Optional[str] = None  # "full" | "half" | "overtime" | None
     supplement_hours: int = 0
+    # False refuses a day the same person already has on another site of the company that date.
+    acknowledge_conflicts: bool = False
     # Injected clock for tests; any instant, read on the business calendar.
     now: Optional[datetime] = None
 
@@ -57,6 +60,13 @@ class LogAttendanceUseCase:
             raise WorkerNotFoundError(str(request.worker_id))
         if not worker.is_active:
             raise WorkerInactiveError(str(request.worker_id))
+
+        # Same cross-project rule as the bulk endpoint (one person, one site per day).
+        finder = getattr(self._entry_repo, "find_cross_project_conflicts", None)
+        if not request.acknowledge_conflicts and worker.person_id is not None and finder is not None:
+            conflicts = finder(project_id=request.project_id, date=request.date, person_ids=[worker.person_id])
+            if conflicts:
+                raise ConflictsNotAcknowledgedError(conflicts)
 
         entry = LaborEntry(
             id=uuid4(),

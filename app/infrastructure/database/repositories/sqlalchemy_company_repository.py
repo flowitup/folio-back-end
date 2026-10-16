@@ -101,8 +101,19 @@ class SqlAlchemyCompanyRepository:
         return deserialize_company_orm(row)
 
     def delete(self, company_id: UUID) -> None:
-        """Hard-delete a company by UUID. No-op if not found."""
+        """Hard-delete a company by UUID. No-op if not found.
+
+        Its labor roles go with it: `labor_roles.company_id` is ON DELETE SET NULL,
+        which would otherwise turn them into company-less rows (one tenant's role
+        names leaking as "global" roles). Workers and member defaults that pointed
+        at them are cleared by their own ON DELETE SET NULL.
+        """
         row = self._session.get(CompanyModel, company_id)
         if row is not None:
+            from app.infrastructure.database.models.labor_role import LaborRoleModel
+
+            self._session.query(LaborRoleModel).filter(LaborRoleModel.company_id == company_id).delete(
+                synchronize_session=False
+            )
             self._session.delete(row)
             self._session.flush()

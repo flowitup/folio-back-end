@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+from app.application.labor.create_labor_role_usecase import find_default_role_named
 from app.application.labor.labor_role_ports import ILaborRoleRepository
 from app.domain.entities.labor_role import LaborRole
 from app.domain.exceptions.labor_exceptions import (
@@ -49,9 +50,12 @@ class UpdateLaborRoleUseCase:
         new_color = color if color is not None else role.color
 
         if name is not None and name != role.name:
-            conflict = self._repo.find_by_name(name, company_id=role.company_id)
-            if conflict is not None and conflict.id != role.id:
-                raise DuplicateLaborRoleError(name)
+            for conflict in (
+                self._repo.find_by_name(name, company_id=role.company_id),
+                find_default_role_named(self._repo, name, role.company_id),
+            ):
+                if conflict is not None and conflict.id != role.id:
+                    raise DuplicateLaborRoleError(name)
 
         updated = LaborRole(
             id=role.id,

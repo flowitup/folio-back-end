@@ -61,6 +61,10 @@ class IPaymentMethodRepository(Protocol):
         """Return (PaymentMethod, usage_count) pairs for a company in a single query."""
         ...
 
+    def count_refund_tracked_expenses(self, payment_method_id: UUID) -> int:
+        """Number of expenses paid with this method whose refund is tracked (refundable_status set)."""
+        ...
+
 
 class IUserCompanyAccessRepository(Protocol):
     """Minimal port to check whether a user has access to a company.

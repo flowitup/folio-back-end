@@ -24,6 +24,7 @@ from app.application.billing.ports import (
     ProjectReadPort,
     TransactionalSessionPort,
     UserCompanyAccessRepositoryPort,
+    assert_project_in_company,
     assert_project_link_access,
 )
 from app.domain.billing.dates import validate_document_dates, validate_kind_fields
@@ -92,6 +93,7 @@ class UpdateBillingDocumentUseCase:
         # None to unlink, or a UUID to link. Only check access when linking (not None).
         if inp.update_project_id and inp.project_id is not None:
             assert_project_link_access(self._project_repo, inp.project_id, inp.user_id, self._access_repo)
+            assert_project_in_company(self._project_repo, inp.project_id, doc.company_id)
 
         updates: dict = {"updated_at": datetime.now(timezone.utc)}
 

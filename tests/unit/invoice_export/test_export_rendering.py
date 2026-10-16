@@ -64,7 +64,8 @@ def test_pdf_free_text_cells_wrap_inside_their_column():
     )
     styles = _make_styles()
 
-    invoices_table = next(e for e in _render_invoices_table([inv], styles, USABLE_WIDTH, "fr") if isinstance(e, Table))
+    bundle = InvoiceBundle(invoices=[inv], subtotals_by_type=[], grand_total=Decimal("0"), invoice_count=1)
+    invoices_table = next(e for e in _render_invoices_table(bundle, styles, USABLE_WIDTH, "fr") if isinstance(e, Table))
     type_cell, recipient_cell = invoices_table._cellvalues[1][2], invoices_table._cellvalues[1][3]
     assert isinstance(type_cell, Paragraph) and type_cell.getPlainText() == "Autres (avance de trésorerie)"
     assert isinstance(recipient_cell, Paragraph) and recipient_cell.getPlainText() == long_text
@@ -199,7 +200,8 @@ def test_xlsx_cash_advance_has_its_own_subtotal_and_sheet():
 
     rows = list(wb["Summary"].iter_rows(values_only=True))
     assert ("Others", 1, 40) in [r[:3] for r in rows]
-    assert ("Others (cash advance)", 1, 300) in [r[:3] for r in rows]
+    # Left out of the expenses total, and saying so.
+    assert ("Others (cash advance) (not in total)", 1, 300) in [r[:3] for r in rows]
 
     assert wb.sheetnames[1:] == ["Others invoices", "Others (cash advance) invoices"]
     others_rows = list(wb["Others invoices"].iter_rows(values_only=True))
@@ -222,4 +224,64 @@ def test_pdf_cash_advance_subtotal_is_labelled():
     text = _text(
         build_pdf(_ctx("en", range=dataclasses.replace(_make_context().range, to_month=date(2026, 1, 1))), bundle)
     )
-    assert "Others (cash advance) 1 300,00 €" in text
+    assert "Others (cash advance) (not in total) 1 300,00 €" in text
+
+
+# ---------------------------------------------------------------------------
+# Funding apart from the expenses total; glossary; localized file name
+# ---------------------------------------------------------------------------
+
+
+def test_xlsx_expense_rows_add_up_to_their_total_and_funding_is_listed_apart():
+    labor = _make_invoice(invoice_type=InvoiceType.LABOR, amount=Decimal("746.91"), recipient="Equipe")
+    release = _make_invoice(invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("42804.55"), recipient="Banque")
+    bundle = InvoiceBundle(
+        invoices=[labor, release],
+        subtotals_by_type=[
+            TypeSubtotal(type=InvoiceType.LABOR, invoice_count=1, total_amount=Decimal("746.91")),
+            TypeSubtotal(type=InvoiceType.RELEASED_FUNDS, invoice_count=1, total_amount=Decimal("42804.55")),
+        ],
+        grand_total=Decimal("746.91"),
+        invoice_count=2,
+        released_total=Decimal("42804.55"),
+    )
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(_ctx("fr"), bundle)))
+    rows = list(wb["Synthèse"].iter_rows(values_only=True))
+    labels = [r[0] for r in rows]
+    assert "Fonds débloqués (hors total)" in labels
+    expenses_total = labels.index("TOTAL DES DÉPENSES")
+    funding = labels.index("Financement (hors total des dépenses)")
+    assert expenses_total < funding
+    assert rows[expenses_total][-1] == 746.91
+    released_total = labels.index("TOTAL FONDS DÉBLOQUÉS")
+    assert released_total > funding and rows[released_total][-1] == 42804.55
+
+
+def test_xlsx_released_funds_only_export_has_no_zero_expenses_total():
+    release = _make_invoice(invoice_type=InvoiceType.RELEASED_FUNDS, amount=Decimal("179.99"))
+    bundle = InvoiceBundle(
+        invoices=[release],
+        subtotals_by_type=[
+            TypeSubtotal(type=InvoiceType.RELEASED_FUNDS, invoice_count=1, total_amount=Decimal("179.99"))
+        ],
+        grand_total=Decimal("0"),
+        invoice_count=1,
+        released_total=Decimal("179.99"),
+    )
+    wb = openpyxl.load_workbook(BytesIO(build_xlsx(_ctx("fr"), bundle)))
+    labels = [r[0] for r in wb["Synthèse"].iter_rows(values_only=True)]
+    assert "TOTAL DES DÉPENSES" not in labels
+    assert "TOTAL FONDS DÉBLOQUÉS" in labels
+
+
+def test_french_type_names_match_the_app_glossary():
+    from app.domain.invoice.export.labels import type_labels
+
+    # Same words as the web (src/messages/fr.json invoices.types) and the mobile app.
+    assert type_labels("fr") == {
+        "released_funds": "Fonds débloqués",
+        "labor": "Main-d'œuvre",
+        "materials_services": "Achats & prestations",
+        "others": "Autres",
+        "return": "Avoir",
+    }
