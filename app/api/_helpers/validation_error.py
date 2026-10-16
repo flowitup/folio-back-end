@@ -32,6 +32,42 @@ def safe_validation_fields(exc: ValidationError) -> list[str]:
     return fields
 
 
+def _rule_text(err: dict) -> str:
+    """The rule a value broke, in words a client can show ("80 characters max"), never the input."""
+    kind = err.get("type", "")
+    ctx = err.get("ctx") or {}
+    if kind == "missing":
+        return "required"
+    if kind == "string_too_long":
+        return f"{ctx.get('max_length')} characters max"
+    if kind == "string_too_short":
+        return "required" if ctx.get("min_length") == 1 else f"at least {ctx.get('min_length')} characters"
+    if kind == "string_pattern_mismatch":
+        return "invalid format"
+    if kind in ("string_type", "str_type"):
+        return "must be text"
+    if kind == "model_type" or kind == "dict_type":
+        return "the body must be a JSON object"
+    return str(err.get("msg", "invalid")).removeprefix("Value error, ")
+
+
+def field_rule_message(exc: ValidationError, rules: "dict[str, str] | None" = None) -> str:
+    """'Invalid input: <field>: <rule>; ...' naming only the fields that failed.
+
+    ``rules`` overrides the text for a field (e.g. ``{"code": "6 digits"}``) where the generic
+    rule would be cryptic (a regex). Body-level errors (empty ``loc``) give their rule alone.
+    """
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = err.get("loc") or ()
+        field = ".".join(str(p) for p in loc)
+        rule = (rules or {}).get(field) or _rule_text(err)
+        text = f"{field}: {rule}" if field else rule
+        if text not in parts:
+            parts.append(text)
+    return "Invalid input: " + "; ".join(parts)
+
+
 def validation_error_response(
     exc: ValidationError,
     *,

@@ -115,6 +115,16 @@ class AddMemberByPhoneUseCase:
                 raise MemberAlreadyAttachedError("This person is already a member of the company")
 
             person = self._persons.find_by_user_id(user.id)
+            # A profile of this company still holding the number without an account (an expired
+            # or cancelled invitation, or a member who deleted their account and came back)
+            # used to answer 409 "already in your company" while nobody was listed.
+            stale_person = self._stale_unlinked_person(inp.company_id, phone)
+            if person is None and stale_person is not None:
+                # The account takes that profile over: same person, now with an account.
+                person = stale_person
+                self._persons.set_user_id(person.id, user.id, commit=False)
+            elif stale_person is not None:
+                self._release_stale_phone(inp.company_id, stale_person.id)
             if person is None:
                 person = self._persons.create(
                     Person(
@@ -206,6 +216,35 @@ class AddMemberByPhoneUseCase:
 
     # ----------------------------------------------------------------------
 
+    def _stale_unlinked_person(self, company_id: UUID, phone: str) -> Optional[Person]:
+        """The account-less person whose profile in ``company_id`` holds ``phone``, if any."""
+        profile = self._company_persons.find_by_phone(company_id, phone)
+        if profile is None:
+            return None
+        person = self._persons.find_by_id(profile.person_id)
+        return person if person is not None and person.user_id is None else None
+
+    def _release_stale_phone(self, company_id: UUID, person_id: UUID) -> None:
+        """Free the number from an account-less profile the attached account cannot take over.
+
+        The account already has its own person, so the two stay separate identities (to merge from
+        the directory). A never-used invitation (pending or cancelled) is retired; a profile with a
+        history (a former member's) stays listed, only without the number.
+        """
+        stale = self._company_persons.find(company_id, person_id)
+        if stale is None:
+            return
+        retire = (not stale.is_active) or stale.pending_expires_at is not None
+        self._company_persons.save(
+            dataclasses.replace(
+                stale,
+                phone_normalized=None,
+                is_active=False if retire else stale.is_active,
+                pending_expires_at=None,
+                pending_company_role=None,
+            )
+        )
+
     def _create_pending(self, inp, person: Person, phone: str, now: datetime, db_session) -> AddMemberByPhoneResult:
         self._upsert_company_person(
             inp.company_id, person.id, inp.caller_id, phone, now, pending=True, pending_role=inp.role
@@ -244,8 +283,22 @@ class AddMemberByPhoneUseCase:
                         pending_company_role=role_to_keep,
                     )
                 )
-            if pending and existing.pending_expires_at is not None and existing.pending_company_role != role_to_keep:
-                return self._company_persons.save(dataclasses.replace(existing, pending_company_role=role_to_keep))
+            if pending:
+                # Re-adding someone who still has no account renews the invitation: a fresh
+                # 30-day window (an expired one was hidden and never linked at sign-up) and the
+                # role chosen now.
+                return self._company_persons.save(
+                    dataclasses.replace(
+                        existing,
+                        pending_expires_at=now + timedelta(days=_PENDING_WINDOW_DAYS),
+                        pending_company_role=role_to_keep,
+                    )
+                )
+            if existing.pending_expires_at is not None or existing.pending_company_role is not None:
+                # The account is attached now: the profile is no longer waiting for a sign-up.
+                return self._company_persons.save(
+                    dataclasses.replace(existing, pending_expires_at=None, pending_company_role=None)
+                )
             return existing
 
         # H2: at most one ACTIVE company_persons row per (company_id,

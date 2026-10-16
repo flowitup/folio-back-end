@@ -7,7 +7,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.application.persons.ports import IPersonRepository
-from app.domain.entities.person import Person
+from app.domain.entities.person import ACCENTED_LETTERS, PLAIN_LETTERS, Person, fold_accents
 from app.domain.value_objects.phone_number import InvalidPhoneNumberError, is_phone_number, normalize_phone
 from app.infrastructure.database.models import PersonModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
@@ -168,18 +168,33 @@ class SqlAlchemyPersonRepository(IPersonRepository):
     ) -> List[Person]:
         q = self._session.query(PersonModel)
         normalized = Person.normalize(query)
+        # Duplicates usually differ only by accents ('Tran' / 'Trần') or by how the number was
+        # typed ('06 20 80 00 52' / '+33620800052'), which is what this search is for.
+        folded = fold_accents(query)
+        phones = {query.strip()}
+        try:
+            phones.add(normalize_phone(query))
+        except ValueError:
+            pass
+        fold_in_python = False
+        phone_ids: set = set()
 
         if normalized:
-            # Match either substring on normalized_name or exact phone (when
-            # the query happens to be a phone number — cheap union, no
-            # ambiguity since phone formats rarely collide with name fragments).
-            conditions = [
+            # A number typed in any format ("06 20 30 00 04" / "+33620300004") also matches the
+            # stored E.164 form or a free-text number with the same last nine digits.
+            phone_conditions = _phone_conditions(query)
+            phone_match = or_(
+                PersonModel.phone.in_(phones), PersonModel.phone_normalized.in_(phones), *phone_conditions
+            )
+            if self._session.get_bind().dialect.name == "postgresql":
+                folded_name = func.translate(PersonModel.normalized_name, ACCENTED_LETTERS, PLAIN_LETTERS)
                 # autoescape: "%" and "_" in the search text match only themselves.
-                PersonModel.normalized_name.contains(normalized, autoescape=True),
-                PersonModel.phone == query.strip(),
-            ]
-            conditions.extend(_phone_conditions(query))
-            q = q.filter(or_(*conditions))
+                q = q.filter(or_(folded_name.contains(folded, autoescape=True), phone_match))
+            else:
+                # No translate() (SQLite, the test database): fold the scoped rows here.
+                fold_in_python = True
+                if phone_conditions:
+                    phone_ids = {row.id for row in self._session.query(PersonModel.id).filter(or_(*phone_conditions))}
 
         if company_ids is not None:
             # Tenancy scope (Phase 2): only persons with an active
@@ -195,7 +210,18 @@ class SqlAlchemyPersonRepository(IPersonRepository):
             )
             q = q.distinct()
 
-        models = q.order_by(PersonModel.normalized_name).limit(limit).all()
+        q = q.order_by(PersonModel.normalized_name)
+        if fold_in_python:
+            models = [
+                m
+                for m in q.all()
+                if folded in fold_accents(m.normalized_name)
+                or m.phone in phones
+                or m.phone_normalized in phones
+                or m.id in phone_ids
+            ][:limit]
+        else:
+            models = q.limit(limit).all()
         return [self._to_entity(m) for m in models]
 
     def has_references(self, person_id: UUID) -> bool:

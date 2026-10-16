@@ -344,7 +344,12 @@ def _configure_di_container() -> None:
         attachment_storage=storage,
         invoice_attachment_repository=SQLAlchemyInvoiceAttachmentRepository(db.session),
         task_repository=SQLAlchemyTaskRepository(db.session),
-        token_issuer=JWTTokenIssuer(redis_url=Config.REDIS_URL),
+        # One source for the lifetimes: the issuer, the cookies and `expires_in` all follow the config.
+        token_issuer=JWTTokenIssuer(
+            access_expires_minutes=int(Config.JWT_ACCESS_TOKEN_EXPIRES.total_seconds() // 60),
+            refresh_expires_days=Config.JWT_REFRESH_TOKEN_EXPIRES.days,
+            redis_url=Config.REDIS_URL,
+        ),
         session_manager=FlaskSessionManager(),
         invitation_repo=invitation_repo,
         project_membership_repo=membership_repo,
@@ -786,6 +791,9 @@ def _configure_di_container() -> None:
         from app.infrastructure.adapters.sqlalchemy_personal_data_eraser import (
             SQLAlchemyPersonalDataEraser,
         )
+        from app.infrastructure.database.repositories.sqlalchemy_company_person_repository import (
+            SqlAlchemyCompanyPersonRepository as _DeletionCompanyPersonRepository,
+        )
 
         _c.delete_account_usecase = DeleteAccountUseCase(
             user_repo=_c.user_repository,
@@ -794,6 +802,7 @@ def _configure_di_container() -> None:
             eraser=SQLAlchemyPersonalDataEraser(db.session),
             db_session=db.session,
             clock=_clock,
+            company_person_repo=_DeletionCompanyPersonRepository(db.session),
         )
 
     # Membership pushes need both name sources, so they are wired here rather than in the

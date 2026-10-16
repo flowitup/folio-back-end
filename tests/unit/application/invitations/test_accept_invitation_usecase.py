@@ -362,11 +362,51 @@ class TestExistingUserRace:
         inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_email.return_value = None
+        user_repo.find_by_id.return_value = None  # the account the code was issued to is gone
 
         uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, otp_repo=_make_otp_repo(user_id=uuid4()))
         with pytest.raises(OtpInvalidError):
             uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
         user_repo.save.assert_not_called()
+
+    def test_a_phone_only_account_accepts_with_its_sign_in_code(self):
+        """auth-onboarding-01: nobody holds the invited address; the phone signs an account in."""
+        inv, raw = _make_pending_inv()
+        phone_only = _make_user("phone-33611223344@no-email.folio.flowitup.com")
+        phone_only.phone = PHONE
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = None
+        user_repo.find_by_id.return_value = phone_only
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+
+        uc = _make_uc(
+            inv_repo=inv_repo,
+            user_repo=user_repo,
+            membership_repo=membership_repo,
+            otp_repo=_make_otp_repo(user_id=phone_only.id),
+        )
+        result = uc.execute(raw_token=raw, name="Ignored", phone=PHONE, code=CODE)
+
+        assert result.user is phone_only
+        user_repo.save.assert_not_called()  # no second account
+        assert membership_repo.add.call_args[0][0].user_id == phone_only.id
+
+    def test_a_sign_in_code_for_another_phone_is_refused(self):
+        inv, raw = _make_pending_inv()
+        other = _make_user("other@example.com")
+        other.phone = "+33699887766"
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_email.return_value = None
+        user_repo.find_by_id.return_value = other
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, otp_repo=_make_otp_repo(user_id=other.id))
+        with pytest.raises(OtpInvalidError):
+            uc.execute(raw_token=raw, name="Alice", phone=PHONE, code=CODE)
 
 
 class TestAcceptAsSignedInUser:
@@ -394,6 +434,24 @@ class TestAcceptAsSignedInUser:
         # The session already proves the account: no new tokens.
         issuer.create_access_token.assert_not_called()
 
+    def test_any_account_joins_when_nobody_holds_the_invited_address(self):
+        """auth-onboarding-01: a phone-only account (synthetic address) accepts from its session."""
+        inv, raw = _make_pending_inv()
+        me = _make_user("phone-33611223344@no-email.folio.flowitup.com")
+        inv_repo = MagicMock()
+        inv_repo.find_by_token_hash_for_update.return_value = inv
+        user_repo = MagicMock()
+        user_repo.find_by_id.return_value = me
+        user_repo.find_by_email.return_value = None
+        membership_repo = MagicMock()
+        membership_repo.exists.return_value = False
+
+        uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)
+        accepted = uc.accept_as(raw_token=raw, user_id=me.id)
+
+        assert accepted.status == InvitationStatus.ACCEPTED
+        assert membership_repo.add.call_args[0][0].user_id == me.id
+
     def test_another_account_is_refused(self):
         inv, raw = _make_pending_inv()
         someone = _make_user("someone.else@example.com")
@@ -401,6 +459,8 @@ class TestAcceptAsSignedInUser:
         inv_repo.find_by_token_hash_for_update.return_value = inv
         user_repo = MagicMock()
         user_repo.find_by_id.return_value = someone
+        # The invited address is another account's: the invitation is theirs.
+        user_repo.find_by_email.return_value = _make_user(inv.email)
         membership_repo = MagicMock()
 
         uc = _make_uc(inv_repo=inv_repo, user_repo=user_repo, membership_repo=membership_repo)

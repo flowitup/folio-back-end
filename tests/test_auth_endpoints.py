@@ -161,6 +161,29 @@ class TestRefreshEndpoint:
         assert "access_token" in data
         assert data["access_token"] != ""
 
+    def test_expires_in_reports_the_real_access_token_lifetime(self, client):
+        """auth-onboarding-08: expires_in said 1800 while the access token lives 7 days."""
+        import jwt
+
+        tokens = mint_tokens(client, "active@example.com")
+        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {tokens['refresh_token']}"})
+        data = response.get_json()
+        claims = jwt.decode(data["access_token"], options={"verify_signature": False})
+        assert data["expires_in"] == claims["exp"] - claims["iat"]
+
+    def test_refresh_rotates_an_expiring_refresh_token(self, client):
+        """auth-onboarding-08: a refresh hands out a fresh refresh token so an active session slides."""
+        tokens = mint_tokens(client, "active@example.com")
+        response = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {tokens['refresh_token']}"})
+        data = response.get_json()
+        assert data["refresh_token"] and data["refresh_token"] != tokens["refresh_token"]
+        cookies = " ".join(response.headers.getlist("Set-Cookie"))
+        assert "refresh_token_cookie=" in cookies
+        # Both the rotated and the presented token work: older clients ignore the new field.
+        for token in (data["refresh_token"], tokens["refresh_token"]):
+            again = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {token}"})
+            assert again.status_code == 200
+
     def test_refresh_without_token(self, client):
         """Test refresh without token."""
         response = client.post("/api/v1/auth/refresh")
@@ -354,6 +377,7 @@ class TestSessionPolicy:
         assert "exp" not in claims and claims["persistent"] is True
         refreshed = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {login['refresh_token']}"})
         assert refreshed.status_code == 200
+        assert "refresh_token" not in refreshed.get_json()  # never expires, nothing to rotate
 
     def test_logout_accepts_refresh_token_in_body(self, client):
         login = self._login(client).get_json()

@@ -443,7 +443,7 @@ class TestBillingDocumentDates:
         assert inv_client.put(url, json={"issue_date": "2025-12-31"}, headers=_auth(billing_token)).status_code == 400
         moved = inv_client.put(url, json={"issue_date": "2026-03-02"}, headers=_auth(billing_token))
         assert moved.status_code == 200
-        assert "02 Mar 2026" in moved.get_json()["issue_date"]
+        assert moved.get_json()["issue_date"] == "2026-03-02"
 
     @pytest.mark.parametrize("kind", ["devis", "facture"])
     @pytest.mark.parametrize("issue_date", ["9999-12-31", "0001-01-15"])

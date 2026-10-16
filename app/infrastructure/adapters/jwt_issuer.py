@@ -47,6 +47,11 @@ class JWTTokenIssuer:
                 )
                 self._redis = None
 
+    @property
+    def access_expires_seconds(self) -> int:
+        """Lifetime of the access tokens this issuer signs (what login answers report as expires_in)."""
+        return self._access_expires_seconds
+
     def create_access_token(self, user_id: UUID, additional_claims: Optional[Dict[str, Any]] = None) -> str:
         """Create short-lived access token with user ID and optional claims."""
         claims = additional_claims or {}

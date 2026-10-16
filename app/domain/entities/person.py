@@ -1,9 +1,37 @@
 """Person domain entity."""
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
+
+
+def _accent_table() -> tuple[str, str]:
+    """(accented, plain) lowercase letters of the Latin blocks French and Vietnamese use.
+
+    Each accented letter maps to ONE plain letter, so the same pair works in Python
+    (``str.translate``) and in SQL (``translate(col, from, to)``) with identical results.
+    """
+    accented, plain = ["đ"], ["d"]
+    for code in list(range(0x00C0, 0x0250)) + list(range(0x1E00, 0x1F00)):
+        ch = chr(code)
+        if ch != ch.lower():
+            continue
+        base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+        if len(base) == 1 and base.isascii() and base.isalpha() and base != ch:
+            accented.append(ch)
+            plain.append(base)
+    return "".join(accented), "".join(plain)
+
+
+ACCENTED_LETTERS, PLAIN_LETTERS = _accent_table()
+_FOLD = str.maketrans(ACCENTED_LETTERS, PLAIN_LETTERS)
+
+
+def fold_accents(text: str) -> str:
+    """Lowercase ``text`` without its accents: 'Trần Văn Dũng' -> 'tran van dung'."""
+    return (text or "").strip().lower().translate(_FOLD)
 
 
 @dataclass(slots=True)

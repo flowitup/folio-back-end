@@ -336,6 +336,34 @@ class TestVerifyInvitation:
         assert resp.status_code == 410
         assert resp.get_json().get("reason") == "revoked"
 
+    def test_a_resent_invitations_first_link_says_superseded(self, inv_client, admin_token, invitation_app):
+        """auth-onboarding-14: re-sending revokes the first link; it says a newer one was sent."""
+        import re
+        import uuid
+
+        import wiring
+
+        email_addr = f"resent-{uuid.uuid4().hex[:8]}@example.com"
+        tokens = []
+        for _ in range(2):
+            if wiring._inmemory_email_adapter:
+                wiring._inmemory_email_adapter.clear()
+            resp = inv_client.post(
+                "/api/v1/invitations",
+                json={"project_id": invitation_app._test_project_id, "email": email_addr},
+                headers=_auth(admin_token),
+            )
+            assert resp.status_code == 201
+            body_text = inv_client.get("/api/v1/__test__/last-email").get_json().get("body", "")
+            tokens.append(re.search(r"/accept-invite/([A-Za-z0-9_\-]+)", body_text).group(1))
+
+        first = inv_client.get(f"/api/v1/invitations/verify/{tokens[0]}")
+        assert first.status_code == 410
+        body = first.get_json()
+        assert body["reason"] == "superseded"
+        assert "Invitation " not in body["message"]  # no internal id on a public answer
+        assert inv_client.get(f"/api/v1/invitations/verify/{tokens[1]}").status_code == 200
+
     def test_expired_token_returns_410(self, inv_client, admin_token, invitation_app):
         """Simulate expired invitation by directly manipulating the DB."""
         from datetime import datetime, timedelta, timezone
@@ -476,6 +504,8 @@ class TestAcceptInvitation:
         assert body["access_token"], "acceptance must return an access token in the body"
         assert body["refresh_token"], "acceptance must return a refresh token in the body"
         assert body["user"]["id"]
+        # Clients open the project just joined, not the last one they viewed.
+        assert body["project_id"]
 
     def test_expired_returns_410(self, inv_client, admin_token, invitation_app):
         """Test that an expired invitation returns 410."""
@@ -740,7 +770,8 @@ class TestInvitationForAnExistingAccount:
         assert again.get_json()["reason"] == "accepted"
 
     def test_another_signed_in_account_is_refused(self, inv_client, admin_token, outsider_token, invitation_app):
-        _email, token = self._invite(inv_client, admin_token, invitation_app)
+        email, token = self._invite(inv_client, admin_token, invitation_app)
+        self._give_account(invitation_app, email, "+33611229007")
 
         resp = inv_client.post("/api/v1/invitations/accept-as-me", json={"token": token}, headers=_auth(outsider_token))
         assert resp.status_code == 403
@@ -751,3 +782,55 @@ class TestInvitationForAnExistingAccount:
         _email, token = self._invite(inv_client, admin_token, invitation_app)
         resp = inv_client.post("/api/v1/invitations/accept-as-me", json={"token": token})
         assert resp.status_code == 401
+
+
+class TestInvitationForAPhoneOnlyAccount:
+    """auth-onboarding-01: someone who signed up on mobile (synthetic address) accepts an e-mail invitation."""
+
+    PHONE = "+33611229101"
+
+    _invite = TestInvitationForAnExistingAccount._invite
+    _code = TestInvitationForAnExistingAccount._code
+    _is_member = TestInvitationForAnExistingAccount._is_member
+
+    def _phone_account(self, app, phone: str):
+        from app import db
+        from app.infrastructure.database.models import UserModel
+
+        with app.app_context():
+            user = UserModel(
+                email=f"phone-{phone.lstrip('+')}@no-email.folio.flowitup.com",
+                phone=phone,
+                display_name="Mobile Signup",
+                is_active=True,
+            )
+            db.session.add(user)
+            db.session.commit()
+            return user.id, user.email
+
+    def test_its_own_phone_gets_a_sign_in_code_and_accepts(self, inv_client, admin_token, invitation_app):
+        _email, token = self._invite(inv_client, admin_token, invitation_app)
+        user_id, _ = self._phone_account(invitation_app, self.PHONE)
+
+        resp = inv_client.post("/api/v1/invitations/accept/request-code", json={"token": token, "phone": self.PHONE})
+        assert resp.status_code == 202, resp.get_json()
+        code = self._code(invitation_app, self.PHONE)
+
+        resp = inv_client.post(
+            "/api/v1/invitations/accept",
+            json={"token": token, "name": "Mobile Signup", "phone": self.PHONE, "code": code},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()["user"]["id"] == str(user_id)
+        assert self._is_member(invitation_app, user_id)
+
+    def test_its_session_accepts_without_a_code(self, inv_client, admin_token, invitation_app):
+        from tests.auth_login_helper import mint_access_token
+
+        _email, token = self._invite(inv_client, admin_token, invitation_app)
+        user_id, synthetic = self._phone_account(invitation_app, "+33611229102")
+        my_token = mint_access_token(inv_client, synthetic)
+
+        resp = inv_client.post("/api/v1/invitations/accept-as-me", json={"token": token}, headers=_auth(my_token))
+        assert resp.status_code == 200, resp.get_json()
+        assert self._is_member(invitation_app, user_id)

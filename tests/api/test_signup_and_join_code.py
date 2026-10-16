@@ -95,6 +95,19 @@ class TestPhoneSignup:
         _signup(inv_client, invitation_app, "0600003344", "Someone")
         resp = inv_client.post("/api/v1/auth/signup/request", json={"phone": "0600003344"})
         assert resp.status_code == 409
+        assert resp.get_json()["reason"] == "phone_registered"
+
+    def test_signup_tells_a_deactivated_account_why(self, inv_client, invitation_app):
+        """auth-onboarding-16: sign-up said 'sign in instead', and sign-in never sends a code."""
+        from app import db
+        from app.infrastructure.database.models import UserModel
+
+        with invitation_app.app_context():
+            db.session.add(UserModel(email="deactivated-0600003355@example.com", phone="+33600003355", is_active=False))
+            db.session.commit()
+        resp = inv_client.post("/api/v1/auth/signup/request", json={"phone": "0600003355"})
+        assert resp.status_code == 409
+        assert resp.get_json()["reason"] == "account_deactivated"
 
     def test_signup_wrong_code_and_missing_name(self, inv_client, invitation_app):
         assert inv_client.post("/api/v1/auth/signup/request", json={"phone": "0600005566"}).status_code == 202
