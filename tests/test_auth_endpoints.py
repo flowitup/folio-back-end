@@ -146,6 +146,18 @@ class TestLogoutEndpoint:
         assert len(cookies) > 0
 
 
+def _refresh_with_cookie(client, refresh_token: str):
+    """POST /auth/refresh the way a browser does: the refresh cookie plus its CSRF header."""
+    import jwt as pyjwt
+
+    csrf = pyjwt.decode(refresh_token, options={"verify_signature": False}).get("csrf")
+    client.set_cookie("refresh_token_cookie", refresh_token)
+    try:
+        return client.post("/api/v1/auth/refresh", headers={"X-CSRF-TOKEN": csrf} if csrf else {})
+    finally:
+        client.delete_cookie("refresh_token_cookie")
+
+
 class TestRefreshEndpoint:
     """Test POST /api/v1/auth/refresh endpoint."""
 
@@ -196,6 +208,42 @@ class TestRefreshEndpoint:
             access = response.get_json()["access_token"]
             me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access}"})
             assert me.status_code == 200
+
+    def test_a_browser_refresh_revokes_the_old_refresh_cookie(self, client):
+        """The web always stores the rotated cookie: the presented one must die with the rotation,
+        or a copy of it would outlive the user's logout (regression review #2)."""
+        old_cookie = mint_tokens(client, "active@example.com")["refresh_token"]
+        rotated = _refresh_with_cookie(client, old_cookie)
+        assert rotated.status_code == 200, rotated.get_json()
+        new_token = rotated.get_json()["refresh_token"]
+        assert new_token != old_cookie
+        assert "refresh_token_cookie=" in " ".join(rotated.headers.getlist("Set-Cookie"))
+
+        assert _refresh_with_cookie(client, old_cookie).status_code == 401
+        assert _refresh_with_cookie(client, new_token).status_code == 200
+
+    def test_a_header_refresh_keeps_the_presented_token_working(self, client):
+        """Mobile presents its refresh token in the Authorization header; 0.5.27 ignores the
+        rotated one, so the presented token must keep working after a refresh."""
+        tokens = mint_tokens(client, "active@example.com")
+        header = {"Authorization": f"Bearer {tokens['refresh_token']}"}
+        assert client.post("/api/v1/auth/refresh", headers=header).status_code == 200
+        assert client.post("/api/v1/auth/refresh", headers=header).status_code == 200
+
+    def test_logout_after_a_browser_rotation_ends_the_session(self, client):
+        original = mint_tokens(client, "active@example.com")["refresh_token"]
+        rotated = _refresh_with_cookie(client, original)
+        assert rotated.status_code == 200
+        body = rotated.get_json()
+        # The browser now holds the rotated cookie and signs out with it.
+        client.set_cookie("refresh_token_cookie", body["refresh_token"])
+        out = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {body['access_token']}"})
+        client.delete_cookie("refresh_token_cookie")
+        assert out.status_code == 200
+        for token in (original, body["refresh_token"]):
+            assert _refresh_with_cookie(client, token).status_code == 401
+            again = client.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {token}"})
+            assert again.status_code == 401
 
     def test_refresh_without_token(self, client):
         """Test refresh without token."""

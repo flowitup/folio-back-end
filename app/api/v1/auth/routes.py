@@ -11,6 +11,7 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity,
     get_jwt,
+    get_jwt_request_location,
     unset_jwt_cookies,
 )
 from pydantic import ValidationError
@@ -333,9 +334,14 @@ def refresh():
 
     An expiring refresh token is rotated: a fresh one comes back in the body and in the refresh
     cookie, so a session that keeps refreshing slides instead of ending when the refresh token
-    issued at sign-in expires. The presented one is NOT revoked: an older mobile build that
-    ignores the new field keeps using it until it expires, exactly as before. A persistent
-    refresh token never expires and is not rotated.
+    issued at sign-in expires. A persistent refresh token never expires and is not rotated.
+
+    What happens to the presented token depends on where it came from:
+    - the refresh COOKIE (a browser): it is revoked once the new one is issued. The browser
+      always stores the new cookie, and leaving the old one alive would let a copy of it outlive
+      a logout (logout only revokes the token it is shown).
+    - the Authorization header (mobile): it stays valid until it expires, as before rotation
+      existed: mobile 0.5.27 ignores the new field and keeps presenting the token it has.
     """
     user_id = get_jwt_identity()
     container = get_container()
@@ -346,6 +352,11 @@ def refresh():
     new_refresh_token = None
     if not get_jwt().get("persistent"):
         new_refresh_token = container.token_issuer.create_refresh_token(UUID(user_id))
+
+    if new_refresh_token and get_jwt_request_location() == "cookies":
+        presented_jti = get_jwt().get("jti")
+        if presented_jti:
+            container.token_issuer.revoke_token(presented_jti, token_type="refresh")
 
     response_data = RefreshResponse(
         access_token=new_access_token, expires_in=access_token_expires_in(), refresh_token=new_refresh_token
