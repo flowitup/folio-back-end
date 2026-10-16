@@ -1534,6 +1534,7 @@ def _configure_di_container() -> None:
     from app.infrastructure.adapters.pillow_image_thumbnailer import PillowImageThumbnailer
     from app.infrastructure.adapters.ffmpeg_video_thumbnailer import FfmpegVideoThumbnailer
     from app.infrastructure.adapters.media_thumbnailer import MediaThumbnailer
+    from app.infrastructure.adapters.media_capture_date_reader import MediaCaptureDateReader
     from app.application.project_photos import (
         UploadProjectPhotoUseCase,
         ListProjectPhotosUseCase,
@@ -1558,6 +1559,7 @@ def _configure_di_container() -> None:
         thumbnailer=_photo_thumbnailer,
         db_session=db.session,
         filename_sanitizer=_filename_sanitizer,
+        capture_date_reader=MediaCaptureDateReader(),
     )
     _c.list_project_photos_usecase = ListProjectPhotosUseCase(repo=_photo_repo)
     _c.get_project_photo_usecase = GetProjectPhotoUseCase(repo=_photo_repo, storage=storage)

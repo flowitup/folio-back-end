@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import BinaryIO, Optional
+from datetime import datetime
+from typing import BinaryIO, Iterator, Optional
 
 import boto3
 from botocore.client import Config as BotoConfig
@@ -51,6 +52,14 @@ class S3AttachmentStorage(IAttachmentStorage):
                 region_name=region,
                 config=self._boto_cfg,
             )
+
+    def list_keys_older_than(self, prefix: str, cutoff: datetime) -> Iterator[str]:
+        """Keys under ``prefix`` last modified before ``cutoff`` (used by the storage janitor)."""
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                if obj["LastModified"] < cutoff:
+                    yield obj["Key"]
 
     def ensure_bucket(self) -> None:
         """Create the bucket if it does not already exist. Safe to call repeatedly."""

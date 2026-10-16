@@ -66,3 +66,12 @@ class IImageThumbnailer(Protocol):
             ThumbnailGenerationError: If the image cannot be decoded or processed.
         """
         ...
+
+
+@runtime_checkable
+class ICaptureDateReader(Protocol):
+    """Port reading when a photo or video was taken from its own metadata."""
+
+    def read(self, data: bytes, content_type: str) -> Optional[datetime]:
+        """Return the aware capture datetime, or None when the file does not say."""
+        ...

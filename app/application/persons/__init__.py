@@ -23,6 +23,7 @@ from app.application.persons.merge_persons import (
     MergePersonsResponse,
     PersonNotFoundError,
     InvalidMergeError,
+    MergeConflictError,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "MergePersonsResponse",
     "PersonNotFoundError",
     "InvalidMergeError",
+    "MergeConflictError",
 ]

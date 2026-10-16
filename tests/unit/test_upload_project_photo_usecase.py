@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -557,3 +558,57 @@ class TestVideoWithOversizedFrame:
             )
         storage.put.assert_not_called()
         repo.save.assert_not_called()
+
+
+class TestCaptureDateFromFile:
+    """QA3 documents-photos-analyses-01 / -02 / sweep-cannot-open-16."""
+
+    def _uc(self, reader):
+        thumbnailer = MagicMock()
+        thumbnailer.generate.return_value = b"thumb"
+        uc, repo, storage, session = _make_use_case(thumbnailer=thumbnailer)
+        uc._capture_date_reader = reader
+        return uc
+
+    def _run(self, uc, captured_at=None, filename="site.jpg"):
+        return uc.execute(
+            project_id=uuid4(),
+            filename=filename,
+            content_type="image/jpeg",
+            size_bytes=10,
+            data=b"x" * 10,
+            uploader_user_id=uuid4(),
+            caption=None,
+            captured_at=captured_at,
+        )
+
+    def test_file_date_used_when_none_given(self):
+        taken = datetime(2026, 9, 1, 8, 30, tzinfo=timezone.utc)
+        reader = MagicMock()
+        reader.read.return_value = taken
+        assert self._run(self._uc(reader)).captured_at == taken
+
+    def test_user_date_wins_over_file_date(self):
+        chosen = datetime(2026, 9, 5, tzinfo=timezone.utc)
+        reader = MagicMock()
+        reader.read.return_value = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        assert self._run(self._uc(reader), captured_at=chosen).captured_at == chosen
+        reader.read.assert_not_called()
+
+    def test_reader_failure_falls_back_to_now(self):
+        reader = MagicMock()
+        reader.read.side_effect = RuntimeError("boom")
+        before = datetime.now(timezone.utc)
+        assert self._run(self._uc(reader)).captured_at >= before
+
+    @pytest.mark.parametrize("name", ["现场照片.jpg", "Фото стройки.jpg", "đđ.jpg"])
+    def test_non_latin_names_are_accepted(self, name):
+        photo = self._run(self._uc(None), filename=name)
+        assert photo.filename == name
+        assert photo.storage_key.endswith("/original/file.jpg")
+
+    def test_extension_error_is_readable(self):
+        with pytest.raises(UnsupportedImageTypeError) as exc:
+            validate_media_type("IMG_0001.heic", "image/heic")
+        assert "frozenset" not in str(exc.value)
+        assert ".jpg, .jpeg, .png, .webp, .mp4, .mov, .webm" in str(exc.value)

@@ -365,11 +365,15 @@ def update_current_user():
     if not user:
         return _error(404, "NotFound", "User not found")
 
-    profile_error = apply_profile_fields(user, provided, container.user_repository, allow_phone_change=False)
+    previous_name = user.display_name
+    profile_error = apply_profile_fields(
+        user, provided, container.user_repository, allow_phone_change=False, allow_clear_name=False
+    )
     if profile_error is not None:
         return _error(*profile_error)
 
     container.user_repository.save(user)
+    _sync_person_name(container, user, previous_name)
     from app import db
 
     # The person linked to this account (shared by every company they work for) follows the
@@ -383,6 +387,24 @@ def update_current_user():
 
     db.session.commit()
     return jsonify(_me_payload(container, user).model_dump())
+
+
+def _sync_person_name(container: Any, user: Any, previous_name: "str | None") -> None:
+    """Carry a self-service rename to the user's directory entry (persons.name, workers.name).
+
+    Only when that entry still shows the account's previous name: a different name there was
+    chosen by an admin (e.g. when adding the person by phone) and is kept.
+    """
+    person_repo = getattr(container, "person_repo", None)
+    new_name = user.display_name
+    if person_repo is None or not new_name or new_name == previous_name:
+        return
+    person = person_repo.find_by_user_id(user.id)
+    if person is None:
+        return
+    if (person.name or "").strip().lower() != (previous_name or "").strip().lower():
+        return
+    person_repo.rename(person.id, new_name, commit=False)
 
 
 _PHONE_TAKEN = "This phone number is already used by another account."

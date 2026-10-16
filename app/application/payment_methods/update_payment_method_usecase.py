@@ -11,10 +11,12 @@ from app.application.payment_methods.ports import (
     TransactionalSessionPort,
 )
 from app.domain.payment_methods.exceptions import (
+    BuiltinCompanyPaymentFlagError,
     BuiltinPaymentMethodDeletionError,
     PaymentMethodAlreadyExistsError,
     PaymentMethodConflictingFlagsError,
     PaymentMethodNotFoundError,
+    PaymentMethodRefundTrackedExpensesError,
 )
 
 
@@ -103,6 +105,19 @@ class UpdatePaymentMethodUseCase:
         )
         if effective_company_payment and effective_personal_payment:
             raise PaymentMethodConflictingFlagsError(method.id)
+
+        # 3d. The built-in company method stays company-paid: every company
+        # expense defaults to it, so un-flagging it re-files all of them.
+        if method.is_builtin and method.is_company_payment and not effective_company_payment:
+            raise BuiltinCompanyPaymentFlagError(method.id)
+
+        # 3e. Becoming company-paid re-files every past expense paid with it into the
+        # company purse; one with a tracked refund would end up company-paid AND
+        # refundable (the state update_invoice already refuses per expense).
+        if effective_company_payment and not method.is_company_payment:
+            tracked = self._repo.count_refund_tracked_expenses(method.id)
+            if tracked:
+                raise PaymentMethodRefundTrackedExpensesError(method.id, tracked)
 
         # 4. Apply updates
         updated = method.with_updates(

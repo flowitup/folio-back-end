@@ -516,3 +516,63 @@ class TestValidateFileType:
 
         kind = validate_file_type("report.pdf", "application/pdf")
         assert kind == "pdf"
+
+
+class TestNonLatinNamesAndCanonicalType:
+    """QA3 documents-photos-analyses-02 / -25."""
+
+    @pytest.mark.parametrize("name", ["Смета работ.pdf", "图纸.pdf", "Đđ.pdf"])
+    def test_non_latin_name_is_accepted_and_kept_for_display(self, name):
+        uc, repo, storage, session = _make_use_case()
+
+        result = uc.execute(
+            project_id=uuid4(),
+            filename=name,
+            content_type="application/pdf",
+            size_bytes=10,
+            fileobj=_fileobj(b"%PDF-1.4 x"),
+            uploader_user_id=uuid4(),
+        )
+
+        assert result.filename == name
+        assert result.storage_key.endswith("/file.pdf")
+        assert result.compute_kind() == "pdf"
+
+    @pytest.mark.parametrize(
+        ("name", "declared", "stored"),
+        [
+            ("notes.txt", "application/pdf", "text/plain"),
+            ("mismatch.pdf", "image/png", "application/pdf"),
+            ("photo.webp", "application/octet-stream", "image/webp"),
+            ("plan.dwg", "application/acad", "application/acad"),
+            ("plan.dwg", "application/x-whatever", "application/octet-stream"),
+        ],
+    )
+    def test_stored_type_follows_the_extension(self, name, declared, stored):
+        uc, repo, storage, session = _make_use_case()
+
+        result = uc.execute(
+            project_id=uuid4(),
+            filename=name,
+            content_type=declared,
+            size_bytes=10,
+            fileobj=_fileobj(b"0123456789"),
+            uploader_user_id=uuid4(),
+        )
+
+        assert result.content_type == stored
+        assert storage.put.call_args.args[2] == stored
+
+    def test_refusal_lists_allowed_extensions_readably(self):
+        uc, *_ = _make_use_case()
+        with pytest.raises(UnsupportedDocumentTypeError) as exc:
+            uc.execute(
+                project_id=uuid4(),
+                filename="archive.zip",
+                content_type="application/zip",
+                size_bytes=10,
+                fileobj=_fileobj(b"0123456789"),
+                uploader_user_id=uuid4(),
+            )
+        assert "frozenset" not in str(exc.value)
+        assert ".pdf, .jpg" in str(exc.value)

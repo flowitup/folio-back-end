@@ -14,6 +14,7 @@ from app.domain.entities.project_analysis import ProjectAnalysis
 from app.infrastructure.database.like_pattern import LIKE_ESCAPE, contains_pattern
 from app.infrastructure.database.models.project_analysis import ProjectAnalysisModel, ProjectAnalysisTagRow
 from app.infrastructure.database.models.user import UserModel
+from app.infrastructure.database.text_collation import fold_text, folded, sortable
 
 
 class SqlAlchemyProjectAnalysisRepository:
@@ -70,15 +71,16 @@ class SqlAlchemyProjectAnalysisRepository:
         ]
 
         # ------------------------------------------------------------------
-        # Free-text filter — case-insensitive substring match on title + summary
+        # Free-text filter — case- and accent-insensitive substring match on
+        # title + summary ('beton' finds 'Béton').
         # ------------------------------------------------------------------
         if q:
             # Literal substring: "%" and "_" in the search text match only themselves.
-            pattern = contains_pattern(q.lower())
+            pattern = contains_pattern(fold_text(q))
             base_where.append(
                 or_(
-                    func.lower(ProjectAnalysisModel.title).like(pattern, escape=LIKE_ESCAPE),
-                    func.lower(ProjectAnalysisModel.summary).like(pattern, escape=LIKE_ESCAPE),
+                    folded(ProjectAnalysisModel.title, self._session).like(pattern, escape=LIKE_ESCAPE),
+                    folded(ProjectAnalysisModel.summary, self._session).like(pattern, escape=LIKE_ESCAPE),
                 )
             )
 
@@ -106,7 +108,10 @@ class SqlAlchemyProjectAnalysisRepository:
             return col.asc() if asc_order else col.desc()
 
         if sort == "title":
-            order_by = [order_fn(func.lower(ProjectAnalysisModel.title)), order_fn(ProjectAnalysisModel.id)]
+            order_by = [
+                order_fn(sortable(ProjectAnalysisModel.title, self._session)),
+                order_fn(ProjectAnalysisModel.id),
+            ]
         else:
             # "created_at" (default) and any unknown value fall back to created_at
             order_by = [order_fn(ProjectAnalysisModel.created_at), order_fn(ProjectAnalysisModel.id)]
@@ -136,9 +141,9 @@ class SqlAlchemyProjectAnalysisRepository:
                 ProjectAnalysisModel.deleted_at.is_(None),
             )
             .distinct()
-            .order_by(ProjectAnalysisTagRow.tag)
         )
-        return list(self._session.execute(stmt).scalars().all())
+        # Sorted here, accent-aware: byte order put 'électricité' after 'plans'.
+        return sorted(self._session.execute(stmt).scalars().all(), key=lambda tag: (fold_text(tag), tag))
 
     def find_uploaders(
         self, user_ids: Iterable[UUID]

@@ -11,7 +11,6 @@ import pytest
 
 from app.domain.payment_methods.payment_method import PaymentMethod
 
-
 # ---------------------------------------------------------------------------
 # In-memory repository
 # ---------------------------------------------------------------------------
@@ -21,6 +20,7 @@ class InMemoryPaymentMethodRepository:
     """Dict-backed payment method store for unit tests."""
 
     def __init__(self):
+        self._refund_tracked: dict[UUID, int] = {}
         self._store: dict[UUID, PaymentMethod] = {}
         # invoice reference counts, keyed by payment_method_id (used by find_all_by_company_with_usage_count)
         self._invoice_counts: dict[UUID, int] = {}
@@ -61,9 +61,16 @@ class InMemoryPaymentMethodRepository:
         methods = self.find_all_by_company(company_id, include_inactive=include_inactive)
         return [(m, self._invoice_counts.get(m.id, 0)) for m in methods]
 
+    def count_refund_tracked_expenses(self, payment_method_id: UUID) -> int:
+        return self._refund_tracked.get(payment_method_id, 0)
+
     # test helper
     def set_invoice_count(self, payment_method_id: UUID, count: int) -> None:
         self._invoice_counts[payment_method_id] = count
+
+    # test helper
+    def set_refund_tracked_count(self, payment_method_id: UUID, count: int) -> None:
+        self._refund_tracked[payment_method_id] = count
 
 
 class FakeRoleService:

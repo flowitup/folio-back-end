@@ -22,6 +22,12 @@ from app.domain.value_objects.phone_number import InvalidPhoneNumberError, norma
 
 ProfileError = Tuple[int, str, str]
 
+# One limit for a person's name everywhere it is typed: sign-up, invitation accept,
+# Settings › Profile and the platform-ops edit.
+DISPLAY_NAME_MAX_LENGTH = 80
+
+NAME_REQUIRED: ProfileError = (400, "DisplayNameRequired", "Your name cannot be empty.")
+
 PHONE_CHANGE_REFUSED: ProfileError = (
     400,
     "PhoneChangeNotAllowed",
@@ -36,10 +42,18 @@ def apply_profile_fields(
     users: UserRepositoryPort,
     *,
     allow_phone_change: bool = True,
+    allow_clear_name: bool = True,
 ) -> Optional[ProfileError]:
+    """Apply the edits; self-service callers also pass ``allow_clear_name=False``.
+
+    The name is required at sign-up, so the user may not empty it from the profile.
+    """
     if "display_name" in provided:
         dn = provided["display_name"]
-        user.display_name = dn.strip() if isinstance(dn, str) and dn.strip() else None
+        cleaned = dn.strip() if isinstance(dn, str) and dn.strip() else None
+        if cleaned is None and not allow_clear_name:
+            return NAME_REQUIRED
+        user.display_name = cleaned
 
     if "phone" in provided:
         raw_phone = provided["phone"]
