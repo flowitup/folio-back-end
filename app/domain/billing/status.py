@@ -23,6 +23,14 @@ from app.domain.billing.enums import BillingDocumentKind, BillingDocumentStatus
 from app.domain.billing.exceptions import InvalidStatusTransitionError
 
 # Each entry maps from_status → frozenset of allowed to_status values.
+_DEVIS_REPAIR: frozenset[BillingDocumentStatus] = frozenset(
+    {
+        BillingDocumentStatus.DRAFT,
+        BillingDocumentStatus.SENT,
+        BillingDocumentStatus.ACCEPTED,
+        BillingDocumentStatus.REJECTED,
+    }
+)
 _DEVIS_TRANSITIONS: dict[BillingDocumentStatus, frozenset[BillingDocumentStatus]] = {
     BillingDocumentStatus.DRAFT: frozenset({BillingDocumentStatus.SENT}),
     BillingDocumentStatus.SENT: frozenset(
@@ -35,9 +43,12 @@ _DEVIS_TRANSITIONS: dict[BillingDocumentStatus, frozenset[BillingDocumentStatus]
     BillingDocumentStatus.ACCEPTED: frozenset({BillingDocumentStatus.SENT}),
     BillingDocumentStatus.REJECTED: frozenset({BillingDocumentStatus.DRAFT}),
     BillingDocumentStatus.EXPIRED: frozenset(),
-    BillingDocumentStatus.PAID: frozenset(),
-    BillingDocumentStatus.OVERDUE: frozenset(),
-    BillingDocumentStatus.CANCELLED: frozenset(),
+    # A devis can never be paid, overdue or cancelled, but older imports stored
+    # such statuses. Let those documents be put back on the devis track instead
+    # of being stuck for good.
+    BillingDocumentStatus.PAID: _DEVIS_REPAIR,
+    BillingDocumentStatus.OVERDUE: _DEVIS_REPAIR,
+    BillingDocumentStatus.CANCELLED: _DEVIS_REPAIR,
 }
 
 _FACTURE_TRANSITIONS: dict[BillingDocumentStatus, frozenset[BillingDocumentStatus]] = {
