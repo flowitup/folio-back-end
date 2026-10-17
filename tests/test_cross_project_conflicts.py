@@ -215,3 +215,48 @@ class TestCrossProjectConflicts:
         result = entry_repo.find_cross_project_conflicts(project_id=project_a.id, date=date(2026, 5, 13))
         assert len(result) == 1
         assert [(e.project_name, e.shift_type) for e in result[0].entries] == [("B", "half")]
+
+    def test_order_by_is_valid_for_postgres_select_distinct(self, session, owner, company, monkeypatch):
+        """PostgreSQL refuses a SELECT DISTINCT whose ORDER BY term is not selected.
+
+        The test database is SQLite, which accepts it, so a sort on projects.name next to the
+        selected project label passed CI and failed every attendance save in production.
+        """
+        import re
+
+        from sqlalchemy.dialects import postgresql
+        from sqlalchemy.orm import Query
+
+        captured = []
+        real_all = Query.all
+
+        def capture(query):
+            captured.append(query)
+            return real_all(query)
+
+        monkeypatch.setattr(Query, "all", capture)
+        project_a = _make_project(session, owner, company, "A")
+        SQLAlchemyLaborEntryRepository(session).find_cross_project_conflicts(
+            project_id=project_a.id, date=date(2026, 5, 13), person_ids=[uuid4()]
+        )
+
+        sql = str(captured[0].statement.compile(dialect=postgresql.dialect()))
+        select_list, order_by = re.match(r"SELECT DISTINCT (.*?)\s+FROM .* ORDER BY (.*)$", sql, re.S).groups()
+
+        def top_level_items(text):
+            items, depth, start = [], 0, 0
+            for i, ch in enumerate(text):
+                depth += ch == "("
+                depth -= ch == ")"
+                if ch == "," and depth == 0:
+                    items.append(text[start:i].strip())
+                    start = i + 1
+            return items + [text[start:].strip()]
+
+        selected = set()
+        for item in top_level_items(select_list.replace("\n", " ")):
+            expr, _, alias = item.rpartition(" AS ")
+            selected.update({expr, alias} if expr else {item})
+        for term in top_level_items(order_by):
+            expr = re.sub(r"\s+(ASC|DESC)$", "", term)
+            assert expr in selected, f"ORDER BY {expr!r} is not in the select list"
