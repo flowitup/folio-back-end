@@ -492,13 +492,14 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
         TargetProject = aliased(ProjectModel)
         OtherProject = aliased(ProjectModel)
 
+        # Name first, site address second, as the apps show projects (project_label).
+        other_project_name = project_label_expr(OtherProject).label("other_project_name")
         query = (
             self._session.query(
                 PersonModel.id.label("person_id"),
                 PersonModel.name.label("person_name"),
                 OtherProject.id.label("other_project_id"),
-                # Name first, site address second, as the apps show projects (project_label).
-                project_label_expr(OtherProject).label("other_project_name"),
+                other_project_name,
                 LaborEntryModel.id.label("entry_id"),
                 LaborEntryModel.shift_type.label("shift_type"),
                 LaborEntryModel.supplement_hours.label("supplement_hours"),
@@ -521,7 +522,9 @@ class SQLAlchemyLaborEntryRepository(ILaborEntryRepository):
             )
             # A person with two worker rows here would otherwise list each entry twice.
             .distinct()
-            .order_by(PersonModel.name.asc(), OtherProject.name.asc())
+            # PostgreSQL wants every ORDER BY term of a SELECT DISTINCT in the select list, so sort
+            # by the selected label, not by projects.name.
+            .order_by(PersonModel.name.asc(), other_project_name.asc())
         )
         if person_ids:
             query = query.filter(PersonModel.id.in_(person_ids))
