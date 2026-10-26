@@ -1943,29 +1943,45 @@ class TestStoredUrlsAreHttpOnly:
 
 
 class TestPurchaseTracking:
-    def test_tick_records_actual_spend_and_untick_clears_it(
+    def test_tick_starts_at_planned_quantity_and_spend_follows_net_quantity(
         self, inv_client, writer_token, reader_token, project_id, poste, article
     ):
+        # 12 spots planned; the cheapest price is 10.75 HT (20 % VAT) → 12.90 TTC each.
+        _add_quote(inv_client, writer_token, project_id, article["id"], "Leroy Merlin", "10.75")
         url = f"{_base(project_id)}/articles/{article['id']}"
-        resp = inv_client.patch(url, json={"purchased": True, "actual_ttc": "140.50"}, headers=_auth(writer_token))
+
+        resp = inv_client.patch(url, json={"purchased": True}, headers=_auth(writer_token))
         assert resp.status_code == 200, resp.get_data(as_text=True)
         assert resp.get_json()["purchased"] is True
-        assert resp.get_json()["actual_ttc"] == 140.5
+        assert resp.get_json()["purchased_quantity"] == 12.0
+
+        # 3 more had to be bought, 2 unused went back: net 13 x 12.90 = 167.70 TTC.
+        resp = inv_client.patch(
+            url, json={"purchased_quantity": "15", "returned_quantity": "2"}, headers=_auth(writer_token)
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
 
         tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
         found = _article_in_tree(tree, article["id"])
-        assert found["purchased"] is True
-        assert found["actual_ttc"] == 140.5
+        assert found["purchased_quantity"] == 15.0
+        assert found["returned_quantity"] == 2.0
+        assert found["actual_ttc"] == 167.7
         the_poste = next(p for p in tree["postes"] if p["id"] == poste["id"])
-        assert the_poste["actual_ttc"] == 140.5
+        assert the_poste["actual_ttc"] == 167.7
         assert the_poste["purchased_count"] == 1
-        assert tree["actual_ttc"] >= 140.5
 
         resp = inv_client.patch(url, json={"purchased": False}, headers=_auth(writer_token))
-        assert resp.get_json()["purchased"] is False
-        assert resp.get_json()["actual_ttc"] is None
+        body = resp.get_json()
+        assert body["purchased"] is False
+        assert body["purchased_quantity"] is None and body["returned_quantity"] is None
         tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
         assert next(p for p in tree["postes"] if p["id"] == poste["id"])["actual_ttc"] == 0.0
+
+    def test_cannot_return_more_than_was_bought(self, inv_client, writer_token, project_id, article):
+        url = f"{_base(project_id)}/articles/{article['id']}"
+        inv_client.patch(url, json={"purchased": True}, headers=_auth(writer_token))
+        resp = inv_client.patch(url, json={"returned_quantity": "99"}, headers=_auth(writer_token))
+        assert resp.status_code == 400
 
     def test_reader_cannot_tick(self, inv_client, reader_token, project_id, article):
         resp = inv_client.patch(
@@ -1973,8 +1989,10 @@ class TestPurchaseTracking:
         )
         assert resp.status_code == 403
 
-    def test_negative_actual_is_rejected(self, inv_client, writer_token, project_id, article):
+    def test_negative_quantity_is_rejected(self, inv_client, writer_token, project_id, article):
         resp = inv_client.patch(
-            f"{_base(project_id)}/articles/{article['id']}", json={"actual_ttc": "-1"}, headers=_auth(writer_token)
+            f"{_base(project_id)}/articles/{article['id']}",
+            json={"purchased_quantity": "-1"},
+            headers=_auth(writer_token),
         )
         assert resp.status_code == 422

@@ -36,8 +36,11 @@ class ChiffrageArticle:
     updated_at: datetime
     # When the item was ticked as bought; None while it is still to buy.
     purchased_at: Optional[datetime] = None
-    # What was really paid (TTC, whole line). Only meaningful once purchased.
-    actual_ttc: Optional[Decimal] = None
+    # What was really bought, which can differ from ``quantity``: more had to
+    # be bought, or less. Only meaningful once purchased.
+    purchased_quantity: Optional[Decimal] = None
+    # Unused goods taken back to the shop; the spend is the net quantity.
+    returned_quantity: Optional[Decimal] = None
 
     # Sentinel distinguishing "leave unchanged" (omitted) from an explicit clear.
     _UNSET = object()
@@ -80,7 +83,8 @@ class ChiffrageArticle:
         note: object = _UNSET,
         room_id: object = _UNSET,
         purchased: object = _UNSET,
-        actual_ttc: object = _UNSET,
+        purchased_quantity: object = _UNSET,
+        returned_quantity: object = _UNSET,
     ) -> "ChiffrageArticle":
         """Return a copy with the given editable fields overwritten.
 
@@ -90,14 +94,19 @@ class ChiffrageArticle:
         U = ChiffrageArticle._UNSET
         now = datetime.now(timezone.utc)
         purchased_at = self.purchased_at
-        new_actual = self.actual_ttc if actual_ttc is U else actual_ttc
+        bought = self.purchased_quantity if purchased_quantity is U else purchased_quantity
+        returned = self.returned_quantity if returned_quantity is U else returned_quantity
         if purchased is not U:
             if purchased:
                 purchased_at = purchased_at or now
+                # Ticking starts from the planned quantity; the buyer corrects it.
+                if bought is None:
+                    bought = self.quantity if quantity is U else quantity
             else:
-                # Back to "to buy": the amount paid no longer applies.
+                # Back to "to buy": the quantities bought and returned no longer apply.
                 purchased_at = None
-                new_actual = None
+                bought = None
+                returned = None
         return replace(
             self,
             name=self.name if name is U else name,
@@ -106,7 +115,8 @@ class ChiffrageArticle:
             note=self.note if note is U else note,
             room_id=self.room_id if room_id is U else room_id,
             purchased_at=purchased_at,
-            actual_ttc=new_actual,
+            purchased_quantity=bought,
+            returned_quantity=returned,
             updated_at=now,
         )
 

@@ -112,6 +112,9 @@ class ArticleResponse:
     total_ttc: float = 0.0
     # Shopping-list state: ticked as bought, and the amount really paid (TTC).
     purchased: bool = False
+    purchased_quantity: Optional[float] = None
+    returned_quantity: Optional[float] = None
+    # What the bought-and-kept quantity cost (TTC), at the article's effective price.
     actual_ttc: Optional[float] = None
 
 
@@ -280,6 +283,11 @@ def _build_article(
         line_ht = _quantize(article.quantity * effective.unit_price_ht)
         line_ttc = _line_ttc(article.quantity, effective)
 
+    actual: Optional[Decimal] = None
+    if article.purchased_at is not None:
+        kept = (article.purchased_quantity or Decimal("0")) - (article.returned_quantity or Decimal("0"))
+        actual = _line_ttc(kept, effective) if effective is not None else Decimal("0")
+
     response = ArticleResponse(
         id=str(article.id),
         poste_id=str(article.poste_id),
@@ -296,7 +304,9 @@ def _build_article(
         total_ht=float(line_ht),
         total_ttc=float(line_ttc),
         purchased=article.purchased_at is not None,
-        actual_ttc=float(article.actual_ttc) if article.actual_ttc is not None else None,
+        purchased_quantity=float(article.purchased_quantity) if article.purchased_quantity is not None else None,
+        returned_quantity=float(article.returned_quantity) if article.returned_quantity is not None else None,
+        actual_ttc=float(actual) if actual is not None else None,
     )
     return response, line_ht, line_ttc
 
@@ -423,9 +433,9 @@ def build_tree_response(
             article_responses.append(article_response)
             subtotal_ht += line_ht
             subtotal_ttc += line_ttc
-            if article.purchased_at is not None:
+            if article_response.purchased:
                 purchased_count += 1
-                actual += article.actual_ttc or Decimal("0")
+                actual += Decimal(str(article_response.actual_ttc or 0))
 
             key = str(article.room_id) if article.room_id else None
             bucket = per_room.setdefault(key, [Decimal("0"), Decimal("0"), 0])

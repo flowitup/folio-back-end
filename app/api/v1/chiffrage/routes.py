@@ -176,7 +176,8 @@ def _article_json(a: Any) -> dict[str, Any]:
         "room_id": str(a.room_id) if a.room_id else None,
         "position": a.position,
         "purchased": a.purchased_at is not None,
-        "actual_ttc": float(a.actual_ttc) if a.actual_ttc is not None else None,
+        "purchased_quantity": float(a.purchased_quantity) if a.purchased_quantity is not None else None,
+        "returned_quantity": float(a.returned_quantity) if a.returned_quantity is not None else None,
     }
 
 
@@ -489,7 +490,8 @@ def update_article(project_id: str, article_id: UUID) -> Any:
             note=_sentinel(body, "note", unset),
             room_id=_sentinel(body, "room_id", unset),
             purchased=_sentinel(body, "purchased", unset),
-            actual_ttc=_sentinel(body, "actual_ttc", unset),
+            purchased_quantity=_sentinel(body, "purchased_quantity", unset),
+            returned_quantity=_sentinel(body, "returned_quantity", unset),
         )
         return jsonify(_article_json(article)), 200
 

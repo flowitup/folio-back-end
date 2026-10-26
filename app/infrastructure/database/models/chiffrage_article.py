@@ -46,7 +46,8 @@ class ChiffrageArticleModel(Base):
     )
     image_storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, unique=True)
     purchased_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    actual_ttc: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    purchased_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
+    returned_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
@@ -69,7 +70,8 @@ class ChiffrageArticleModel(Base):
             created_at=self.created_at,
             updated_at=self.updated_at,
             purchased_at=self.purchased_at,
-            actual_ttc=Decimal(str(self.actual_ttc)) if self.actual_ttc is not None else None,
+            purchased_quantity=(Decimal(str(self.purchased_quantity)) if self.purchased_quantity is not None else None),
+            returned_quantity=(Decimal(str(self.returned_quantity)) if self.returned_quantity is not None else None),
         )
 
     @classmethod
@@ -87,7 +89,8 @@ class ChiffrageArticleModel(Base):
             created_at=a.created_at,
             updated_at=a.updated_at,
             purchased_at=a.purchased_at,
-            actual_ttc=a.actual_ttc,
+            purchased_quantity=a.purchased_quantity,
+            returned_quantity=a.returned_quantity,
         )
 
     def __repr__(self) -> str:

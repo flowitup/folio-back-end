@@ -81,7 +81,8 @@ class UpdateArticleUseCase:
         note: object,
         room_id: object,
         purchased: object = ChiffrageArticle._UNSET,
-        actual_ttc: object = ChiffrageArticle._UNSET,
+        purchased_quantity: object = ChiffrageArticle._UNSET,
+        returned_quantity: object = ChiffrageArticle._UNSET,
     ) -> ChiffrageArticle:
         article = owned_article(self._repo, article_id, project_id)
         U = ChiffrageArticle._UNSET
@@ -104,8 +105,19 @@ class UpdateArticleUseCase:
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
             room_id=(U if room_id is U else (None if room_id is None else UUID(str(room_id)))),
             purchased=U if purchased is U else bool(purchased),
-            actual_ttc=(U if actual_ttc is U else (None if actual_ttc is None else Decimal(str(actual_ttc)))),
+            purchased_quantity=(
+                U
+                if purchased_quantity is U
+                else (None if purchased_quantity is None else Decimal(str(purchased_quantity)))
+            ),
+            returned_quantity=(
+                U
+                if returned_quantity is U
+                else (None if returned_quantity is None else Decimal(str(returned_quantity)))
+            ),
         )
+        if (updated.returned_quantity or Decimal("0")) > (updated.purchased_quantity or Decimal("0")):
+            raise InvalidChiffrageInputError("Cannot return more than was bought.")
         self._repo.save_article(updated)
         self._db.commit()
         return updated
