@@ -103,8 +103,12 @@ class ArticleUpdateBody(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
+    purchased: Optional[bool] = None
+    # What was really bought (may differ from the planned quantity) and what was taken back.
+    purchased_quantity: Optional[Decimal] = Field(default=None, ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
+    returned_quantity: Optional[Decimal] = Field(default=None, ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
 
-    _no_null = field_validator("name", "quantity", mode="before")(_reject_null)
+    _no_null = field_validator("name", "quantity", "purchased", mode="before")(_reject_null)
 
 
 class QuoteCreateBody(BaseModel):
