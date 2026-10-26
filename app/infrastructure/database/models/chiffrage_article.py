@@ -45,6 +45,8 @@ class ChiffrageArticleModel(Base):
         nullable=True,
     )
     image_storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, unique=True)
+    purchased_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_ttc: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
@@ -66,6 +68,8 @@ class ChiffrageArticleModel(Base):
             position=self.position,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            purchased_at=self.purchased_at,
+            actual_ttc=Decimal(str(self.actual_ttc)) if self.actual_ttc is not None else None,
         )
 
     @classmethod
@@ -82,6 +86,8 @@ class ChiffrageArticleModel(Base):
             position=a.position,
             created_at=a.created_at,
             updated_at=a.updated_at,
+            purchased_at=a.purchased_at,
+            actual_ttc=a.actual_ttc,
         )
 
     def __repr__(self) -> str:

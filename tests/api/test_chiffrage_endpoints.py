@@ -1940,3 +1940,41 @@ class TestStoredUrlsAreHttpOnly:
         assert ok.status_code == 200
         cleared = inv_client.patch(url, json={"website_url": None}, headers=_auth(writer_token))
         assert cleared.status_code == 200
+
+
+class TestPurchaseTracking:
+    def test_tick_records_actual_spend_and_untick_clears_it(
+        self, inv_client, writer_token, reader_token, project_id, poste, article
+    ):
+        url = f"{_base(project_id)}/articles/{article['id']}"
+        resp = inv_client.patch(url, json={"purchased": True, "actual_ttc": "140.50"}, headers=_auth(writer_token))
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["purchased"] is True
+        assert resp.get_json()["actual_ttc"] == 140.5
+
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        found = _article_in_tree(tree, article["id"])
+        assert found["purchased"] is True
+        assert found["actual_ttc"] == 140.5
+        the_poste = next(p for p in tree["postes"] if p["id"] == poste["id"])
+        assert the_poste["actual_ttc"] == 140.5
+        assert the_poste["purchased_count"] == 1
+        assert tree["actual_ttc"] >= 140.5
+
+        resp = inv_client.patch(url, json={"purchased": False}, headers=_auth(writer_token))
+        assert resp.get_json()["purchased"] is False
+        assert resp.get_json()["actual_ttc"] is None
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert next(p for p in tree["postes"] if p["id"] == poste["id"])["actual_ttc"] == 0.0
+
+    def test_reader_cannot_tick(self, inv_client, reader_token, project_id, article):
+        resp = inv_client.patch(
+            f"{_base(project_id)}/articles/{article['id']}", json={"purchased": True}, headers=_auth(reader_token)
+        )
+        assert resp.status_code == 403
+
+    def test_negative_actual_is_rejected(self, inv_client, writer_token, project_id, article):
+        resp = inv_client.patch(
+            f"{_base(project_id)}/articles/{article['id']}", json={"actual_ttc": "-1"}, headers=_auth(writer_token)
+        )
+        assert resp.status_code == 422

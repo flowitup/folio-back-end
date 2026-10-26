@@ -193,6 +193,8 @@ class SqlAlchemyChiffrageRepository:
         orm.note = article.note
         orm.room_id = article.room_id
         orm.image_storage_key = article.image_storage_key
+        orm.purchased_at = article.purchased_at
+        orm.actual_ttc = article.actual_ttc
         orm.position = article.position
         orm.updated_at = article.updated_at
         self._session.flush()

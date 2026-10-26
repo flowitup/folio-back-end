@@ -80,6 +80,8 @@ class UpdateArticleUseCase:
         unit: object,
         note: object,
         room_id: object,
+        purchased: object = ChiffrageArticle._UNSET,
+        actual_ttc: object = ChiffrageArticle._UNSET,
     ) -> ChiffrageArticle:
         article = owned_article(self._repo, article_id, project_id)
         U = ChiffrageArticle._UNSET
@@ -101,6 +103,8 @@ class UpdateArticleUseCase:
             ),
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
             room_id=(U if room_id is U else (None if room_id is None else UUID(str(room_id)))),
+            purchased=U if purchased is U else bool(purchased),
+            actual_ttc=(U if actual_ttc is U else (None if actual_ttc is None else Decimal(str(actual_ttc)))),
         )
         self._repo.save_article(updated)
         self._db.commit()

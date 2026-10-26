@@ -103,8 +103,11 @@ class ArticleUpdateBody(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
+    purchased: Optional[bool] = None
+    # Whole-line amount actually paid, TTC; null clears it.
+    actual_ttc: Optional[Decimal] = Field(default=None, ge=0, le=MAX_QUOTE_UNIT_PRICE, decimal_places=2)
 
-    _no_null = field_validator("name", "quantity", mode="before")(_reject_null)
+    _no_null = field_validator("name", "quantity", "purchased", mode="before")(_reject_null)
 
 
 class QuoteCreateBody(BaseModel):

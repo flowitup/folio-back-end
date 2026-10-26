@@ -34,6 +34,10 @@ class ChiffrageArticle:
     position: int
     created_at: datetime
     updated_at: datetime
+    # When the item was ticked as bought; None while it is still to buy.
+    purchased_at: Optional[datetime] = None
+    # What was really paid (TTC, whole line). Only meaningful once purchased.
+    actual_ttc: Optional[Decimal] = None
 
     # Sentinel distinguishing "leave unchanged" (omitted) from an explicit clear.
     _UNSET = object()
@@ -75,6 +79,8 @@ class ChiffrageArticle:
         unit: object = _UNSET,
         note: object = _UNSET,
         room_id: object = _UNSET,
+        purchased: object = _UNSET,
+        actual_ttc: object = _UNSET,
     ) -> "ChiffrageArticle":
         """Return a copy with the given editable fields overwritten.
 
@@ -82,6 +88,16 @@ class ChiffrageArticle:
         from this method silently drops on PATCH.
         """
         U = ChiffrageArticle._UNSET
+        now = datetime.now(timezone.utc)
+        purchased_at = self.purchased_at
+        new_actual = self.actual_ttc if actual_ttc is U else actual_ttc
+        if purchased is not U:
+            if purchased:
+                purchased_at = purchased_at or now
+            else:
+                # Back to "to buy": the amount paid no longer applies.
+                purchased_at = None
+                new_actual = None
         return replace(
             self,
             name=self.name if name is U else name,
@@ -89,7 +105,9 @@ class ChiffrageArticle:
             unit=self.unit if unit is U else unit,
             note=self.note if note is U else note,
             room_id=self.room_id if room_id is U else room_id,
-            updated_at=datetime.now(timezone.utc),
+            purchased_at=purchased_at,
+            actual_ttc=new_actual,
+            updated_at=now,
         )
 
     def with_image_key(self, image_storage_key: Optional[str]) -> "ChiffrageArticle":

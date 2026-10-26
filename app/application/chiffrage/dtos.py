@@ -110,6 +110,9 @@ class ArticleResponse:
     effective_source: str = SOURCE_NONE
     total_ht: float = 0.0
     total_ttc: float = 0.0
+    # Shopping-list state: ticked as bought, and the amount really paid (TTC).
+    purchased: bool = False
+    actual_ttc: Optional[float] = None
 
 
 @dataclass
@@ -192,6 +195,9 @@ class PosteResponse:
     room_subtotals: list[RoomSubtotal] = field(default_factory=list)
     subtotal_ht: float = 0.0
     subtotal_ttc: float = 0.0
+    # Real spend: sum of the amounts paid on purchased articles (TTC).
+    actual_ttc: float = 0.0
+    purchased_count: int = 0
 
 
 @dataclass
@@ -207,6 +213,9 @@ class ChiffrageTreeResponse:
     total_ht: float = 0.0
     total_ttc: float = 0.0
     unpriced_article_count: int = 0
+    actual_ttc: float = 0.0
+    purchased_count: int = 0
+    article_count: int = 0
 
 
 def resolve_effective_quote(quotes: list[ChiffrageQuote]) -> tuple[Optional[ChiffrageQuote], str]:
@@ -286,6 +295,8 @@ def _build_article(
         effective_source=source,
         total_ht=float(line_ht),
         total_ttc=float(line_ttc),
+        purchased=article.purchased_at is not None,
+        actual_ttc=float(article.actual_ttc) if article.actual_ttc is not None else None,
     )
     return response, line_ht, line_ttc
 
@@ -384,6 +395,9 @@ def build_tree_response(
     grand_ht = Decimal("0")
     grand_ttc = Decimal("0")
     unpriced = 0
+    grand_actual = Decimal("0")
+    grand_purchased = 0
+    grand_articles = 0
     project_stores = stores or []
     # (article, quotes) for the whole project, reused for the project-wide baskets.
     project_scope: list[tuple[ChiffrageArticle, list[ChiffrageQuote]]] = []
@@ -391,6 +405,8 @@ def build_tree_response(
     for poste in postes:
         subtotal_ht = Decimal("0")
         subtotal_ttc = Decimal("0")
+        actual = Decimal("0")
+        purchased_count = 0
         article_responses: list[ArticleResponse] = []
         poste_scope: list[tuple[ChiffrageArticle, list[ChiffrageQuote]]] = []
         # Keyed by room id (None = unassigned) so the per-room figures come
@@ -407,6 +423,9 @@ def build_tree_response(
             article_responses.append(article_response)
             subtotal_ht += line_ht
             subtotal_ttc += line_ttc
+            if article.purchased_at is not None:
+                purchased_count += 1
+                actual += article.actual_ttc or Decimal("0")
 
             key = str(article.room_id) if article.room_id else None
             bucket = per_room.setdefault(key, [Decimal("0"), Decimal("0"), 0])
@@ -426,10 +445,15 @@ def build_tree_response(
                 room_subtotals=_room_subtotals(per_room, rooms),
                 subtotal_ht=float(subtotal_ht),
                 subtotal_ttc=float(subtotal_ttc),
+                actual_ttc=float(_quantize(actual)),
+                purchased_count=purchased_count,
             )
         )
         grand_ht += subtotal_ht
         grand_ttc += subtotal_ttc
+        grand_actual += actual
+        grand_purchased += purchased_count
+        grand_articles += len(article_responses)
 
     return ChiffrageTreeResponse(
         project_id=str(project_id),
@@ -440,6 +464,9 @@ def build_tree_response(
         total_ht=float(grand_ht),
         total_ttc=float(grand_ttc),
         unpriced_article_count=unpriced,
+        actual_ttc=float(_quantize(grand_actual)),
+        purchased_count=grand_purchased,
+        article_count=grand_articles,
     )
 
 
