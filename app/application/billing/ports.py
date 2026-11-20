@@ -429,10 +429,17 @@ def assert_user_company_access(
 class BillingDocumentPdfRendererPort(Protocol):
     """PDF rendering contract for billing documents."""
 
-    def render(self, doc: BillingDocument, project: Optional[Project] = None) -> bytes:
+    def render(
+        self,
+        doc: BillingDocument,
+        project: Optional[Project] = None,
+        source_devis: Optional[BillingDocument] = None,
+    ) -> bytes:
         """Render a billing document to a PDF byte string.
 
         *project* is the project the document is linked to, printed as its "Objet".
+        *source_devis* is the devis a facture was converted from, printed as
+        "Suivant devis n° …" (None for a facture made by hand or once the devis is gone).
         """
         ...
 

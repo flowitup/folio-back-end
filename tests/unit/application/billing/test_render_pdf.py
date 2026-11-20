@@ -110,3 +110,34 @@ class TestRenderPdfLinkedProject:
         uc.execute(unlinked.id, user_id)
         uc.execute(gone.id, user_id)
         assert pdf_renderer.projects == [None, None]
+
+
+class TestRenderPdfSourceDevis:
+    """A facture converted from a devis hands that devis to the renderer while it exists."""
+
+    def test_renderer_receives_the_source_devis(self, doc_repo, pdf_renderer, user_id):
+        from app.domain.billing.enums import BillingDocumentKind
+
+        devis = make_doc(user_id=user_id)
+        facture = make_doc(
+            user_id=user_id, kind=BillingDocumentKind.FACTURE, doc_number="FAC-2026-001", source_devis_id=devis.id
+        )
+        doc_repo.save(devis)
+        doc_repo.save(facture)
+        RenderBillingDocumentPdfUseCase(doc_repo=doc_repo, pdf_renderer=pdf_renderer).execute(facture.id, user_id)
+        assert pdf_renderer.source_devis == [devis]
+
+    def test_no_source_devis_by_hand_once_deleted_or_on_a_devis(self, doc_repo, pdf_renderer, user_id):
+        from app.domain.billing.enums import BillingDocumentKind
+
+        by_hand = make_doc(user_id=user_id, kind=BillingDocumentKind.FACTURE, doc_number="FAC-2026-002")
+        orphan = make_doc(
+            user_id=user_id, kind=BillingDocumentKind.FACTURE, doc_number="FAC-2026-003", source_devis_id=uuid4()
+        )
+        devis = make_doc(user_id=user_id, doc_number="DEV-2026-009")
+        for doc in (by_hand, orphan, devis):
+            doc_repo.save(doc)
+        uc = RenderBillingDocumentPdfUseCase(doc_repo=doc_repo, pdf_renderer=pdf_renderer)
+        for doc in (by_hand, orphan, devis):
+            uc.execute(doc.id, user_id)
+        assert pdf_renderer.source_devis == [None, None, None]
