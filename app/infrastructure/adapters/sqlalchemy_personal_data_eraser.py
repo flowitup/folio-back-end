@@ -33,6 +33,7 @@ from app.infrastructure.database.models.company_member_grant import CompanyMembe
 from app.infrastructure.database.models.login_otp import LoginOtpOrm
 from app.infrastructure.database.models.note_orm import NoteDismissalOrm
 from app.infrastructure.database.models.notification_event import NotificationEventModel
+from app.infrastructure.database.models.scheduled_reminder import ScheduledReminderLogModel
 from app.infrastructure.database.models.notification_preference import (
     NotificationPreferenceModel,
 )
@@ -69,6 +70,7 @@ class SQLAlchemyPersonalDataEraser:
             delete(PushDeviceOrm).where(PushDeviceOrm.user_id == user_id),
             delete(NotificationPreferenceModel).where(NotificationPreferenceModel.user_id == user_id),
             delete(ChatPushMarkerModel).where(ChatPushMarkerModel.user_id == user_id),
+            delete(ScheduledReminderLogModel).where(ScheduledReminderLogModel.user_id == user_id),
             delete(ChatChannelReadOrm).where(ChatChannelReadOrm.user_id == user_id),
             # Their bell history (chat previews, names, amounts) and their own chat reactions, reports
             # and block list. The messages themselves stay (see the module docstring); other members'
