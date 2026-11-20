@@ -13,6 +13,8 @@ from app.application.billing.ports import (
     ProjectReadPort,
     UserCompanyAccessRepositoryPort,
 )
+from app.domain.billing.document import BillingDocument
+from app.domain.billing.enums import BillingDocumentKind
 from app.domain.billing.exceptions import BillingDocumentNotFoundError
 from app.domain.value_objects.display_filename import strip_control_chars
 
@@ -50,7 +52,20 @@ class RenderBillingDocumentPdfUseCase:
             raise BillingDocumentNotFoundError(doc_id)
         _assert_billing_doc_access(doc, user_id, self._access_repo)
 
-        pdf_bytes = self._pdf_renderer.render(doc, project=_linked_project(self._project_repo, doc))
+        pdf_bytes = self._pdf_renderer.render(
+            doc,
+            project=_linked_project(self._project_repo, doc),
+            source_devis=self._source_devis(doc),
+        )
         # An imported number may hold a line break, which Content-Disposition refuses.
         filename = f"{strip_control_chars(doc.document_number) or 'document'}.pdf"
         return RenderPdfResult(content=pdf_bytes, filename=filename)
+
+    def _source_devis(self, doc: BillingDocument) -> Optional[BillingDocument]:
+        """The devis a facture was converted from, while it still exists."""
+        if doc.kind != BillingDocumentKind.FACTURE or doc.source_devis_id is None:
+            return None
+        devis = self._doc_repo.find_by_id(doc.source_devis_id)
+        if devis is None or devis.kind != BillingDocumentKind.DEVIS:
+            return None
+        return devis

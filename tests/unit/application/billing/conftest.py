@@ -268,14 +268,17 @@ class InMemoryBillingNumberCounterRepository:
 class FakePdfRenderer:
     """Returns a minimal PDF byte string without calling ReportLab.
 
-    Records the project each render received in ``projects``.
+    Records the project and source devis each render received in ``projects``
+    and ``source_devis``.
     """
 
     def __init__(self) -> None:
         self.projects: list = []
+        self.source_devis: list = []
 
-    def render(self, doc: BillingDocument, project=None) -> bytes:
+    def render(self, doc: BillingDocument, project=None, source_devis=None) -> bytes:
         self.projects.append(project)
+        self.source_devis.append(source_devis)
         return b"%PDF-1.4 fake"
 
 

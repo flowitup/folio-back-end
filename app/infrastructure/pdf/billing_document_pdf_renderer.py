@@ -618,8 +618,25 @@ def _build_title_row(doc: BillingDocument, styles: dict, usable_width: float) ->
     return [t]
 
 
-def _build_recipient_meta(doc: BillingDocument, styles: dict, usable_width: float) -> list:
-    """Two-column block: recipient left, meta (dates/terms) right."""
+def _source_devis_line(doc: BillingDocument, source_devis: Optional[BillingDocument]) -> Optional[str]:
+    """'Suivant devis n° DEV-… du jj/mm/aaaa' on a facture converted from a devis that still exists."""
+    if doc.kind != BillingDocumentKind.FACTURE or source_devis is None:
+        return None
+    if source_devis.kind != BillingDocumentKind.DEVIS or source_devis.id != doc.source_devis_id:
+        return None
+    return (
+        f"Suivant devis n° {_pdf_text(source_devis.document_number)} "
+        f"du {source_devis.issue_date.strftime('%d/%m/%Y')}"
+    )
+
+
+def _build_recipient_meta(
+    doc: BillingDocument,
+    styles: dict,
+    usable_width: float,
+    source_devis: Optional[BillingDocument] = None,
+) -> list:
+    """Two-column block: recipient left, meta (dates/terms, source devis) right."""
     # Recipient column
     recip_lines = [Paragraph(_pdf_text(doc.recipient_name), styles["h3"])]
     if doc.recipient_address:
@@ -654,6 +671,9 @@ def _build_recipient_meta(doc: BillingDocument, styles: dict, usable_width: floa
                     styles["body_small"],
                 )
             )
+        devis_line = _source_devis_line(doc, source_devis)
+        if devis_line:
+            meta_lines.append(Paragraph(devis_line, styles["body_small"]))
 
     col_w = usable_width / 2
     data = [[recip_lines, meta_lines]]
@@ -1046,11 +1066,19 @@ class ReportLabBillingDocumentPdfRenderer:
     Font registration is done at module import time and is idempotent.
     """
 
-    def render(self, doc: BillingDocument, project: Optional[Project] = None) -> bytes:
+    def render(
+        self,
+        doc: BillingDocument,
+        project: Optional[Project] = None,
+        source_devis: Optional[BillingDocument] = None,
+    ) -> bytes:
         """Render *doc* to a valid A4 PDF byte string.
 
         *project* is the project the document is linked to (doc.project_id), printed
         as the document's "Objet"; None when it has none.
+        *source_devis* is the devis a facture was converted from (doc.source_devis_id),
+        printed as "Suivant devis n° … du …" in the meta block; None when there is
+        none or it was deleted.
         Returns raw PDF bytes starting with b"%PDF-".
         Never raises due to logo fetch errors (fail-open).
         Raises BillingDocumentRenderError when the content cannot be laid out on
@@ -1082,7 +1110,7 @@ class ReportLabBillingDocumentPdfRenderer:
         story.append(Spacer(1, 5 * mm))
 
         # 3. Recipient + meta
-        story.extend(_build_recipient_meta(doc, s, usable_width))
+        story.extend(_build_recipient_meta(doc, s, usable_width, source_devis))
         story.append(Spacer(1, 5 * mm))
 
         # 3b. "Objet : <project>" + greeting block — "Madame, Monsieur," + 2 short paragraphs
