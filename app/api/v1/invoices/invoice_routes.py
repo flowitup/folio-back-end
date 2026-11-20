@@ -552,6 +552,29 @@ def get_labor_payments_summary(project_id: str):
     return jsonify(schema.model_dump())
 
 
+def _labor_payment_touches(kind: str, *invoices) -> list:
+    """Closed-month touches for labor payments (one per distinct service month)."""
+    from app.api.v1.labor.month_closure_audit import touch
+
+    out, seen = [], set()
+    for inv in invoices:
+        if inv is None or getattr(inv, "type", None) != InvoiceType.LABOR.value:
+            continue
+        month = getattr(inv, "service_month", None)
+        if not month or str(month)[:7] in seen:
+            continue
+        seen.add(str(month)[:7])
+        out.append(touch(month, kind, inv.id, getattr(inv, "worker_id", None), dated=False))
+    return out
+
+
+def _record_labor_payment(project_id: str, kind: str, *invoices) -> list:
+    """Record a labor payment write into closed months; returns those months."""
+    from app.api.v1.labor.month_closure_audit import record_closed_month_writes
+
+    return record_closed_month_writes(project_id, _labor_payment_touches(kind, *invoices))
+
+
 def _invoice_subject(invoice) -> str:
     """ "Number · recipient" for the admins' bell; the amount is added per reader's locale. Never raises."""
     try:
@@ -670,6 +693,10 @@ def create_invoice(project_id: str):
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
     notify_admins("invoice_created", _invoice_subject(result), project_id=project_id, **_invoice_activity(result))
+    closed = _record_labor_payment(project_id, "payment_created", result)
+    if closed:
+        d["month_closed"] = True
+        d["closed_months"] = closed
     return jsonify(d), 201
 
 
@@ -842,6 +869,11 @@ def update_invoice(project_id: str, invoice_id: str):
     _enrich_paid_with_returns(d, result.id)
     _enrich_has_bank_refund(d, result.id, result.type)
     notify_admins("invoice_updated", _invoice_subject(result), project_id=project_id, **_invoice_activity(result))
+    # Both the month it left and the month it landed in, when a payment moved.
+    closed = _record_labor_payment(project_id, "payment_updated", result, existing)
+    if closed:
+        d["month_closed"] = True
+        d["closed_months"] = closed
     return jsonify(d)
 
 
@@ -875,4 +907,5 @@ def delete_invoice(project_id: str, invoice_id: str):
         return _error_response("ValidationError", str(e), 400)
 
     notify_admins("invoice_deleted", _invoice_subject(existing), project_id=project_id, **_invoice_activity(existing))
+    _record_labor_payment(project_id, "payment_deleted", existing)
     return "", 204

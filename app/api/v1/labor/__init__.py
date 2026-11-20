@@ -14,4 +14,5 @@ from app.api.v1.labor import (  # noqa: E402, F401
     rate_change_routes,
     attendance_validation_routes,
     roster_routes,
+    month_closure_routes,
 )

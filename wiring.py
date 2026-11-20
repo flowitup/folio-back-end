@@ -70,6 +70,12 @@ from app.application.labor.labor_day_description_usecases import (
     SetLaborDayDescriptionUseCase,
     ListLaborDayDescriptionsUseCase,
 )
+from app.application.labor.labor_month_closure_usecases import (
+    CloseLaborMonthUseCase,
+    ListLaborMonthClosuresUseCase,
+    RecordClosedMonthEditsUseCase,
+    ReopenLaborMonthUseCase,
+)
 from app.application.labor.labor_payment_note_usecases import (
     SetLaborPaymentNoteUseCase,
     ListLaborPaymentNotesUseCase,
@@ -625,6 +631,13 @@ class Container:
     # Labor payment note use cases (one note per worker per month, Payments tab)
     set_labor_payment_note_usecase: Optional[SetLaborPaymentNoteUseCase] = None
     list_labor_payment_notes_usecase: Optional[ListLaborPaymentNotesUseCase] = None
+
+    # Closed labor months ("Chốt tháng", QĐ-10): close / reopen / list, and the
+    # recorder every write into a closed month goes through (never blocks).
+    close_labor_month_usecase: Optional[CloseLaborMonthUseCase] = None
+    reopen_labor_month_usecase: Optional[ReopenLaborMonthUseCase] = None
+    list_labor_month_closures_usecase: Optional[ListLaborMonthClosuresUseCase] = None
+    record_closed_month_edits_usecase: Optional[RecordClosedMonthEditsUseCase] = None
 
     # Worker rate-change use cases (effective-dated pay-rate timeline)
     set_worker_rate_change_usecase: Optional[SetWorkerRateChangeUseCase] = None
