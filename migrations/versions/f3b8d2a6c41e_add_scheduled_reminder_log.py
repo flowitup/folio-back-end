@@ -4,7 +4,7 @@ One row per (user, reminder kind, Europe/Paris day): makes every reminder send o
 re-runs and lets the job keep to one reminder push per person per day.
 
 Revision ID: f3b8d2a6c41e
-Revises: a7c3e91d5b24
+Revises: b4d8e2f6a913
 Create Date: 2026-11-20
 """
 
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "f3b8d2a6c41e"
-down_revision = "a7c3e91d5b24"
+down_revision = "b4d8e2f6a913"
 branch_labels = None
 depends_on = None
 
