@@ -30,6 +30,7 @@ from app.infrastructure.database.models.push_device import PushDeviceOrm
 from app.infrastructure.database.models.notification_preference import NotificationPreferenceModel
 from app.infrastructure.database.models.chat_push_marker import ChatPushMarkerModel
 from app.infrastructure.database.models.notification_event import NotificationEventModel
+from app.infrastructure.database.models.scheduled_reminder import ScheduledReminderLogModel
 from app.infrastructure.database.models.billing_document import BillingDocumentModel
 from app.infrastructure.database.models.billing_document_template import BillingDocumentTemplateModel
 
@@ -126,6 +127,7 @@ __all__ = [
     "NotificationPreferenceModel",
     "ChatPushMarkerModel",
     "NotificationEventModel",
+    "ScheduledReminderLogModel",
     "InvoiceAiImportModel",
     "AssistantMaterialImportModel",
     "AssistantJobModel",
