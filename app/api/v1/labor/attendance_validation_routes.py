@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.api.openapi import openapi_doc
 from app.api.v1.labor import labor_bp
+from app.api.v1.labor.month_closure_audit import record_closed_month_writes, touch, with_closed_months
 from app.api._helpers.rate_limit_keys import jwt_user_key
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
@@ -104,7 +105,10 @@ def submit_own_attendance(project_id: str):
         return _error_response("Conflict", str(e), 409)
 
     _notify(lambda n: n.worker_submitted(UUID(result.worker_id), _parse_date(result.date), UUID(result.id)))
-    return jsonify(SelfLoggedEntryResponse(**result.__dict__).model_dump()), 201
+    closed = record_closed_month_writes(
+        project_id, [touch(result.date, "entry_self_logged", result.id, result.worker_id)]
+    )
+    return jsonify(with_closed_months(SelfLoggedEntryResponse(**result.__dict__).model_dump(), closed)), 201
 
 
 def _notify(call) -> None:
@@ -150,7 +154,10 @@ def validate_attendance(project_id: str, entry_id: str):
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
     _notify(lambda n: n.decision(UUID(result.worker_id), _parse_date(result.date), UUID(result.id), "validated"))
-    return jsonify(ValidatedEntryResponse(**result.__dict__).model_dump())
+    closed = record_closed_month_writes(
+        project_id, [touch(result.date, "entry_validated", result.id, result.worker_id)]
+    )
+    return jsonify(with_closed_months(ValidatedEntryResponse(**result.__dict__).model_dump(), closed))
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>/reject", methods=["POST"])
@@ -192,6 +199,7 @@ def reject_attendance(project_id: str, entry_id: str):
 
     if doomed is not None:
         _notify(lambda n: n.decision(doomed.worker_id, doomed.date, doomed.id, "rejected"))
+        record_closed_month_writes(project_id, [touch(doomed.date, "entry_rejected", doomed.id, doomed.worker_id)])
     return "", 204
 
 
@@ -236,7 +244,10 @@ def edit_own_attendance(project_id: str, entry_id: str):
         _notify(
             lambda n: n.worker_submitted(UUID(result.worker_id), _parse_date(result.date), UUID(result.id), change=True)
         )
-    return jsonify(OwnAttendanceEntryResponse(**result.__dict__).model_dump())
+    closed = record_closed_month_writes(
+        project_id, [touch(result.date, "entry_self_edited", result.id, result.worker_id)]
+    )
+    return jsonify(with_closed_months(OwnAttendanceEntryResponse(**result.__dict__).model_dump(), closed))
 
 
 def _decide_change(project_id: str, entry_id: str, approve: bool):
@@ -266,7 +277,13 @@ def _decide_change(project_id: str, entry_id: str, approve: bool):
             "change_applied" if approve else "change_refused",
         )
     )
-    return jsonify(OwnAttendanceEntryResponse(**result.__dict__).model_dump())
+    # A refused change leaves the validated day as it was: nothing to record.
+    closed = (
+        record_closed_month_writes(project_id, [touch(result.date, "change_approved", result.id, result.worker_id)])
+        if approve
+        else []
+    )
+    return jsonify(with_closed_months(OwnAttendanceEntryResponse(**result.__dict__).model_dump(), closed))
 
 
 @labor_bp.route("/projects/<project_id>/labor-entries/<entry_id>/change/validate", methods=["POST"])

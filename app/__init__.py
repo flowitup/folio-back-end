@@ -437,6 +437,23 @@ def _configure_di_container() -> None:
     _c.set_labor_payment_note_usecase = SetLaborPaymentNoteUseCase(_payment_note_repo, _PayNoteWorkerRepo(db.session))
     _c.list_labor_payment_notes_usecase = ListLaborPaymentNotesUseCase(_payment_note_repo)
 
+    # Wire closed labor months ("Chốt tháng", QĐ-10) — same late-injection pattern.
+    from app.infrastructure.adapters.sqlalchemy_labor_month_closure import SQLAlchemyLaborMonthClosureRepository
+    from app.application.labor.labor_month_closure_usecases import (
+        CloseLaborMonthUseCase,
+        ListLaborMonthClosuresUseCase,
+        RecordClosedMonthEditsUseCase,
+        ReopenLaborMonthUseCase,
+    )
+
+    _closure_repo = SQLAlchemyLaborMonthClosureRepository(db.session)
+    _c.close_labor_month_usecase = CloseLaborMonthUseCase(_closure_repo)
+    _c.reopen_labor_month_usecase = ReopenLaborMonthUseCase(_closure_repo)
+    _c.list_labor_month_closures_usecase = ListLaborMonthClosuresUseCase(_closure_repo)
+    _c.record_closed_month_edits_usecase = RecordClosedMonthEditsUseCase(
+        _closure_repo, entry_repo=_c.labor_entry_repository
+    )
+
     # Wire notes use-cases — done post-configure_container so we can pass db.session
     # directly without adding more params to configure_container's signature.
     _note_repo = SqlAlchemyNoteRepository(db.session)

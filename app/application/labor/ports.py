@@ -12,6 +12,7 @@ from app.domain.entities.labor_entry import LaborEntry
 from app.domain.entities.labor_activity import LaborActivity
 from app.domain.entities.labor_day_description import LaborDayDescription
 from app.domain.entities.labor_payment_note import LaborPaymentNote
+from app.domain.entities.labor_month_closure import LaborMonthClosure, LaborMonthClosureEdit
 from app.domain.entities.worker_rate_change import WorkerRateChange
 
 
@@ -367,6 +368,54 @@ class ILaborPaymentNoteRepository(ABC):
     @abstractmethod
     def delete(self, project_id: UUID, worker_id: UUID, month: date) -> bool:
         """Delete the note for (project_id, worker_id, month). Returns True if deleted."""
+        ...
+
+
+class ILaborMonthClosureRepository(ABC):
+    """Port for closed labor months ("Chốt tháng") and the writes recorded after closing.
+
+    One closure per (project_id, month); ``month`` is the first day of the month.
+    Reopening deletes the closure together with its recorded edits.
+    """
+
+    @abstractmethod
+    def find(self, project_id: UUID, month: date) -> Optional[LaborMonthClosure]:
+        """Return the closure of (project_id, month), or None while the month is open."""
+        ...
+
+    @abstractmethod
+    def list_by_project(self, project_id: UUID, months: Optional[List[date]] = None) -> List[LaborMonthClosure]:
+        """Return the project's closures, only those of ``months`` when given."""
+        ...
+
+    @abstractmethod
+    def create(self, closure: LaborMonthClosure) -> LaborMonthClosure:
+        """Insert the closure; when the month is already closed, return the existing row."""
+        ...
+
+    @abstractmethod
+    def delete(self, project_id: UUID, month: date) -> bool:
+        """Delete the closure (and its edits). Returns True if a closure was deleted."""
+        ...
+
+    @abstractmethod
+    def add_edits(self, edits: List[LaborMonthClosureEdit]) -> None:
+        """Persist writes recorded against closed months."""
+        ...
+
+    @abstractmethod
+    def list_edits(self, closure_ids: List[UUID]) -> Dict[UUID, List[LaborMonthClosureEdit]]:
+        """{closure_id: edits, oldest first} for the given closures."""
+        ...
+
+    @abstractmethod
+    def user_names(self, user_ids: List[UUID]) -> Dict[UUID, str]:
+        """Display label (name, else phone, else e-mail) of each account."""
+        ...
+
+    @abstractmethod
+    def worker_names(self, worker_ids: List[UUID]) -> Dict[UUID, str]:
+        """Display name of each worker."""
         ...
 
 

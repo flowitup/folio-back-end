@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.api.openapi import openapi_doc
 from app.api.v1._company_activity import notify_admins
 from app.api.v1.labor import labor_bp
+from app.api.v1.labor.month_closure_audit import record_closed_month_writes, touch, with_closed_months
 from app.api.v1.labor._labor_validation_error_helper import (
     _error_response,
     parse_iso_date as _parse_date,
@@ -79,6 +80,15 @@ def _existing_entry_subject(entry_id: str) -> tuple:
         return _entry_subject(str(entry.worker_id), entry.date.isoformat()), entry.date.isoformat()
     except Exception:
         return "", ""
+
+
+def _existing_entry_worker_id(entry_id: str):
+    """Worker of an entry about to be deleted (for the closed-month record); None if unknown."""
+    try:
+        entry = get_container().labor_entry_repository.find_by_id(UUID(entry_id))
+        return entry.worker_id if entry is not None else None
+    except Exception:
+        return None
 
 
 def _notify_logged(project_id: str, day: str, worker_ids: list) -> None:
@@ -262,18 +272,22 @@ def log_attendance(project_id: str):
         return _conflicts_response(e)
 
     _notify_logged(project_id, result.date, [result.worker_id])
+    closed = record_closed_month_writes(project_id, [touch(result.date, "entry_created", result.id, result.worker_id)])
     return (
         jsonify(
-            {
-                "id": result.id,
-                "worker_id": result.worker_id,
-                "date": result.date,
-                "shift_type": result.shift_type,
-                "supplement_hours": result.supplement_hours,
-                "amount_override": result.amount_override,
-                "note": result.note,
-                "created_at": result.created_at,
-            }
+            with_closed_months(
+                {
+                    "id": result.id,
+                    "worker_id": result.worker_id,
+                    "date": result.date,
+                    "shift_type": result.shift_type,
+                    "supplement_hours": result.supplement_hours,
+                    "amount_override": result.amount_override,
+                    "note": result.note,
+                    "created_at": result.created_at,
+                },
+                closed,
+            )
         ),
         201,
     )
@@ -395,17 +409,22 @@ def bulk_log_attendance(project_id: str):
     except ConflictsNotAcknowledgedError as e:
         return _conflicts_response(e)
 
-    _notify_logged(
-        project_id,
-        data.date,
-        [e.worker_id for e in data.entries if e.worker_id not in set(result.skipped_worker_ids)],
+    logged_worker_ids = [e.worker_id for e in data.entries if e.worker_id not in set(result.skipped_worker_ids)]
+    _notify_logged(project_id, data.date, logged_worker_ids)
+    closed = (
+        record_closed_month_writes(project_id, [touch(data.date, "entry_created", None, w) for w in logged_worker_ids])
+        if result.created
+        else []
     )
     return (
         jsonify(
-            BulkLogAttendanceResponse(
-                created=result.created,
-                skipped_worker_ids=result.skipped_worker_ids,
-            ).model_dump()
+            with_closed_months(
+                BulkLogAttendanceResponse(
+                    created=result.created,
+                    skipped_worker_ids=result.skipped_worker_ids,
+                ).model_dump(),
+                closed,
+            )
         ),
         201,
     )
@@ -465,17 +484,21 @@ def update_attendance(project_id: str, entry_id: str):
         project_id=project_id,
         extra_data={"date": str(result.date)[:10]} if result.date else None,
     )
+    closed = record_closed_month_writes(project_id, [touch(result.date, "entry_updated", result.id, result.worker_id)])
     return jsonify(
-        {
-            "id": result.id,
-            "worker_id": result.worker_id,
-            "date": result.date,
-            "shift_type": result.shift_type,
-            "supplement_hours": result.supplement_hours,
-            "amount_override": result.amount_override,
-            "note": result.note,
-            "created_at": result.created_at,
-        }
+        with_closed_months(
+            {
+                "id": result.id,
+                "worker_id": result.worker_id,
+                "date": result.date,
+                "shift_type": result.shift_type,
+                "supplement_hours": result.supplement_hours,
+                "amount_override": result.amount_override,
+                "note": result.note,
+                "created_at": result.created_at,
+            },
+            closed,
+        )
     )
 
 
@@ -488,6 +511,7 @@ def update_attendance(project_id: str, entry_id: str):
 def delete_attendance(project_id: str, entry_id: str):
     """Delete a labor entry."""
     subject, day = _existing_entry_subject(entry_id)
+    doomed_worker_id = _existing_entry_worker_id(entry_id)
     try:
         get_container().delete_attendance_usecase.execute(
             DeleteAttendanceRequest(entry_id=UUID(entry_id), project_id=UUID(project_id))
@@ -498,6 +522,7 @@ def delete_attendance(project_id: str, entry_id: str):
         return _error_response("NotFound", f"Labor entry {entry_id} not found", 404)
 
     notify_admins("attendance_deleted", subject, project_id=project_id, extra_data={"date": day} if day else None)
+    record_closed_month_writes(project_id, [touch(day, "entry_deleted", entry_id, doomed_worker_id)])
     return "", 204
 
 

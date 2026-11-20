@@ -44,6 +44,10 @@ from app.infrastructure.database.models.project_photo import ProjectPhotoRow
 from app.infrastructure.database.models.labor_activity import LaborActivityModel
 from app.infrastructure.database.models.labor_day_description import LaborDayDescriptionModel
 from app.infrastructure.database.models.labor_payment_note import LaborPaymentNoteModel
+from app.infrastructure.database.models.labor_month_closure import (
+    LaborMonthClosureEditModel,
+    LaborMonthClosureModel,
+)
 from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_purchase import BibliothequePurchaseModel
@@ -102,6 +106,8 @@ __all__ = [
     "LaborActivityModel",
     "LaborDayDescriptionModel",
     "LaborPaymentNoteModel",
+    "LaborMonthClosureModel",
+    "LaborMonthClosureEditModel",
     "BibliothequeSupplierModel",
     "BibliothequeProductModel",
     "BibliothequePurchaseModel",
