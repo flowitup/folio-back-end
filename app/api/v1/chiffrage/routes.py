@@ -41,6 +41,8 @@ from app.api.v1.chiffrage.schemas import (
     PosteCreateBody,
     PosteUpdateBody,
     ImageFromUrlBody,
+    PhaseCreateBody,
+    PhaseUpdateBody,
     RoomCreateBody,
     RoomUpdateBody,
     StoreCreateBody,
@@ -61,6 +63,8 @@ from app.application.chiffrage.exceptions import (
     NotProjectMemberError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    PhaseAlreadyExistsError,
+    PhaseNotFoundError,
     RoomAlreadyExistsError,
     StoreAlreadyExistsError,
     RoomNotFoundError,
@@ -120,12 +124,19 @@ def _handle(fn: Callable[[], Any]) -> Any:
         LibraryProductNotFoundError,
         LibrarySupplierNotFoundError,
         QuoteNotFoundError,
+        PhaseNotFoundError,
         RoomNotFoundError,
         StoreNotFoundError,
         UnitNotFoundError,
     ) as e:
         return _err(404, "NotFound", str(e))
-    except (UnitAlreadyExistsError, UnitInUseError, RoomAlreadyExistsError, StoreAlreadyExistsError) as e:
+    except (
+        UnitAlreadyExistsError,
+        UnitInUseError,
+        RoomAlreadyExistsError,
+        PhaseAlreadyExistsError,
+        StoreAlreadyExistsError,
+    ) as e:
         return _err(409, "Conflict", str(e))
     except InvalidChiffrageInputError as e:
         return _err(400, "InvalidInput", str(e))
@@ -154,6 +165,10 @@ def _room_json(r: Any) -> dict[str, Any]:
     return {"id": str(r.id), "name": r.name, "position": r.position}
 
 
+def _phase_json(p: Any) -> dict[str, Any]:
+    return {"id": str(p.id), "name": p.name, "position": p.position}
+
+
 def _store_json(s: Any) -> dict[str, Any]:
     return {
         "id": str(s.id),
@@ -174,6 +189,7 @@ def _article_json(a: Any) -> dict[str, Any]:
         "unit": a.unit,
         "note": a.note,
         "room_id": str(a.room_id) if a.room_id else None,
+        "phase_id": str(a.phase_id) if a.phase_id else None,
         "position": a.position,
         "purchased": a.purchased_at is not None,
         "purchased_quantity": float(a.purchased_quantity) if a.purchased_quantity is not None else None,
@@ -462,6 +478,7 @@ def create_article(project_id: str, poste_id: UUID) -> Any:
             unit=body.unit,
             note=body.note,
             room_id=body.room_id,
+            phase_id=body.phase_id,
         )
         return jsonify(_article_json(article)), 201
 
@@ -492,6 +509,7 @@ def update_article(project_id: str, article_id: UUID) -> Any:
             purchased=_sentinel(body, "purchased", unset),
             purchased_quantity=_sentinel(body, "purchased_quantity", unset),
             returned_quantity=_sentinel(body, "returned_quantity", unset),
+            phase_id=_sentinel(body, "phase_id", unset),
         )
         return jsonify(_article_json(article)), 200
 
@@ -824,5 +842,97 @@ def reorder_room(project_id: str, room_id: UUID) -> Any:
             after_id=body.after_id,
         )
         return jsonify(_room_json(room)), 200
+
+    return _handle(run)
+
+
+# ---------------------------------------------------------------------------
+# Phases — each poste's stages of works (giai đoạn)
+# ---------------------------------------------------------------------------
+
+
+@chiffrage_bp.get("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>/phases")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:read")
+@require_project_access()
+@limiter.limit(READ_LIMIT, key_func=jwt_user_key)
+def list_phases(project_id: str, poste_id: UUID) -> Any:
+    """List a poste's stages in display order."""
+
+    def run() -> Any:
+        phases = get_container().list_chiffrage_phases_usecase.execute(project_id=UUID(project_id), poste_id=poste_id)
+        return jsonify([_phase_json(p) for p in phases]), 200
+
+    return _handle(run)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/postes/<uuid:poste_id>/phases")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True, permission="project:manage_invoices")
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def create_phase(project_id: str, poste_id: UUID) -> Any:
+    """Append a stage of works to a poste."""
+
+    def run() -> Any:
+        body = _parse(PhaseCreateBody)
+        phase = get_container().create_chiffrage_phase_usecase.execute(
+            project_id=UUID(project_id), poste_id=poste_id, name=body.name
+        )
+        return jsonify(_phase_json(phase)), 201
+
+    return _handle(run)
+
+
+@chiffrage_bp.patch("/projects/<project_id>/chiffrage/phases/<uuid:phase_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True, permission="project:manage_invoices")
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def update_phase(project_id: str, phase_id: UUID) -> Any:
+    """Rename a stage. Articles hold its id, so they follow the rename."""
+
+    def run() -> Any:
+        body = _parse(PhaseUpdateBody)
+        phase = get_container().update_chiffrage_phase_usecase.execute(
+            project_id=UUID(project_id), phase_id=phase_id, name=body.name
+        )
+        return jsonify(_phase_json(phase)), 200
+
+    return _handle(run)
+
+
+@chiffrage_bp.delete("/projects/<project_id>/chiffrage/phases/<uuid:phase_id>")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True, permission="project:manage_invoices")
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def delete_phase(project_id: str, phase_id: UUID) -> Any:
+    """Delete a stage; its articles stay, without a stage."""
+
+    def run() -> Any:
+        get_container().delete_chiffrage_phase_usecase.execute(project_id=UUID(project_id), phase_id=phase_id)
+        return "", 204
+
+    return _handle(run)
+
+
+@chiffrage_bp.post("/projects/<project_id>/chiffrage/phases/<uuid:phase_id>/reorder")
+@jwt_required()  # type: ignore[untyped-decorator]
+@require_permission("project:manage_invoices")
+@require_project_access(write=True, permission="project:manage_invoices")
+@limiter.limit(WRITE_LIMIT, key_func=jwt_user_key)
+def reorder_phase(project_id: str, phase_id: UUID) -> Any:
+    """Move a stage between two neighbours of the same poste."""
+
+    def run() -> Any:
+        body = _parse(ReorderBody)
+        phase = get_container().reorder_chiffrage_phase_usecase.execute(
+            project_id=UUID(project_id),
+            phase_id=phase_id,
+            before_id=body.before_id,
+            after_id=body.after_id,
+        )
+        return jsonify(_phase_json(phase)), 200
 
     return _handle(run)

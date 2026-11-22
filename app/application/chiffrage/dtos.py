@@ -24,6 +24,7 @@ from uuid import UUID
 from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
+from app.domain.entities.chiffrage_phase import ChiffragePhase
 from app.domain.entities.chiffrage_room import ChiffrageRoom
 from app.domain.entities.chiffrage_store import ChiffrageStore
 
@@ -116,6 +117,8 @@ class ArticleResponse:
     returned_quantity: Optional[float] = None
     # What the bought-and-kept quantity cost (TTC), at the article's effective price.
     actual_ttc: Optional[float] = None
+    # The stage of works this line belongs to; None = no stage yet.
+    phase_id: Optional[str] = None
 
 
 @dataclass
@@ -139,6 +142,31 @@ class RoomSubtotal:
     subtotal_ht: float
     subtotal_ttc: float
     article_count: int
+
+
+@dataclass
+class PhaseResponse:
+    """A stage of works (giai đoạn) of one poste."""
+
+    id: str
+    name: str
+    position: int
+
+    @classmethod
+    def from_entity(cls, p: ChiffragePhase) -> "PhaseResponse":
+        return cls(id=str(p.id), name=p.name, position=p.position)
+
+
+@dataclass
+class PhaseSubtotal:
+    """What one stage costs inside its poste. None id = articles with no stage."""
+
+    phase_id: Optional[str]
+    subtotal_ht: float
+    subtotal_ttc: float
+    actual_ttc: float
+    article_count: int
+    purchased_count: int
 
 
 @dataclass
@@ -196,6 +224,10 @@ class PosteResponse:
     store_baskets: list[StoreBasket] = field(default_factory=list)
     # Per-room breakdown inside this poste, so the UI never re-adds money.
     room_subtotals: list[RoomSubtotal] = field(default_factory=list)
+    # This poste's stages of works, in display order.
+    phases: list[PhaseResponse] = field(default_factory=list)
+    # Per-stage breakdown inside this poste; empty while the poste has no stages.
+    phase_subtotals: list[PhaseSubtotal] = field(default_factory=list)
     subtotal_ht: float = 0.0
     subtotal_ttc: float = 0.0
     # Real spend: sum of the amounts paid on purchased articles (TTC).
@@ -307,6 +339,7 @@ def _build_article(
         purchased_quantity=float(article.purchased_quantity) if article.purchased_quantity is not None else None,
         returned_quantity=float(article.returned_quantity) if article.returned_quantity is not None else None,
         actual_ttc=float(actual) if actual is not None else None,
+        phase_id=str(article.phase_id) if article.phase_id else None,
     )
     return response, line_ht, line_ttc
 
@@ -386,6 +419,25 @@ def _build_store_baskets(
     return baskets
 
 
+def _phase_subtotals(per_phase: dict, phases: list[ChiffragePhase]) -> list[PhaseSubtotal]:
+    """One entry per stage in display order, empty stages included; lines with no stage come last."""
+    zero = [Decimal("0"), Decimal("0"), Decimal("0"), 0, 0]
+    keys: list = [str(p.id) for p in phases]
+    if None in per_phase:
+        keys.append(None)
+    return [
+        PhaseSubtotal(
+            phase_id=k,
+            subtotal_ht=float(per_phase.get(k, zero)[0]),
+            subtotal_ttc=float(per_phase.get(k, zero)[1]),
+            actual_ttc=float(_quantize(per_phase.get(k, zero)[2])),
+            article_count=per_phase.get(k, zero)[3],
+            purchased_count=per_phase.get(k, zero)[4],
+        )
+        for k in keys
+    ]
+
+
 def build_tree_response(
     project_id: UUID,
     postes: list[ChiffragePoste],
@@ -394,6 +446,7 @@ def build_tree_response(
     stores: Optional[list[ChiffrageStore]] = None,
     library_with_image: Optional[set] = None,
     rooms: Optional[list[ChiffrageRoom]] = None,
+    phases: Optional[list[ChiffragePhase]] = None,
 ) -> ChiffrageTreeResponse:
     """Assemble the full chiffrage tree with per-level totals.
 
@@ -411,6 +464,9 @@ def build_tree_response(
     project_stores = stores or []
     # (article, quotes) for the whole project, reused for the project-wide baskets.
     project_scope: list[tuple[ChiffrageArticle, list[ChiffrageQuote]]] = []
+    phases_by_poste: dict = {}
+    for phase in phases or []:
+        phases_by_poste.setdefault(phase.poste_id, []).append(phase)
 
     for poste in postes:
         subtotal_ht = Decimal("0")
@@ -422,6 +478,9 @@ def build_tree_response(
         # Keyed by room id (None = unassigned) so the per-room figures come
         # from the same quantized line totals as the poste subtotal.
         per_room: dict = {}
+        # Keyed by phase id (None = no stage): [ht, ttc, actual, count, purchased].
+        per_phase: dict = {}
+        poste_phases = phases_by_poste.get(poste.id, [])
 
         for article in articles_by_poste.get(poste.id, []):
             quotes = quotes_by_article.get(article.id, [])
@@ -443,6 +502,15 @@ def build_tree_response(
             bucket[1] += line_ttc
             bucket[2] += 1
 
+            phase_key = str(article.phase_id) if article.phase_id else None
+            stage = per_phase.setdefault(phase_key, [Decimal("0"), Decimal("0"), Decimal("0"), 0, 0])
+            stage[0] += line_ht
+            stage[1] += line_ttc
+            stage[3] += 1
+            if article_response.purchased:
+                stage[2] += Decimal(str(article_response.actual_ttc or 0))
+                stage[4] += 1
+
         poste_responses.append(
             PosteResponse(
                 id=str(poste.id),
@@ -453,6 +521,10 @@ def build_tree_response(
                 articles=article_responses,
                 store_baskets=_build_store_baskets(poste_scope, project_stores),
                 room_subtotals=_room_subtotals(per_room, rooms),
+                phases=[PhaseResponse.from_entity(p) for p in poste_phases],
+                # Only once the poste has stages: one without keeps the shape it
+                # had, with no lone "no stage" bucket to render.
+                phase_subtotals=_phase_subtotals(per_phase, poste_phases) if poste_phases else [],
                 subtotal_ht=float(subtotal_ht),
                 subtotal_ttc=float(subtotal_ttc),
                 actual_ttc=float(_quantize(actual)),

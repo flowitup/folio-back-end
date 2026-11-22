@@ -81,3 +81,11 @@ class ChiffragePermissionDeniedError(Exception):
 
 class NotProjectMemberError(Exception):
     """Raised when the acting user is not a member of the project."""
+
+
+class PhaseNotFoundError(Exception):
+    """Raised when a requested phase (stage of works) does not exist in the project."""
+
+
+class PhaseAlreadyExistsError(Exception):
+    """Raised when adding a phase name the project already has."""

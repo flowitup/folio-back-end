@@ -15,12 +15,20 @@ from app.application.chiffrage.validation import (
     clean_name,
     clean_optional_text,
     owned_article,
+    owned_phase,
     owned_poste,
     owned_room,
     validate_quantity,
     validate_unit,
 )
 from app.domain.entities.chiffrage_article import ChiffrageArticle
+
+
+def _phase_of_poste(repo: ChiffrageRepositoryPort, phase_id: UUID, project_id: UUID, poste_id: UUID) -> None:
+    """A line can only take a stage of its own poste: the stages differ by trade."""
+    phase = owned_phase(repo, phase_id, project_id)
+    if phase.poste_id != poste_id:
+        raise InvalidChiffrageInputError("The phase belongs to another poste.")
 
 
 class CreateArticleUseCase:
@@ -40,11 +48,14 @@ class CreateArticleUseCase:
         unit: Optional[str] = None,
         note: Optional[str] = None,
         room_id: Optional[UUID] = None,
+        phase_id: Optional[UUID] = None,
     ) -> ChiffrageArticle:
         owned_poste(self._repo, poste_id, project_id)
-        # A room id from another project must not be attachable here.
+        # A room or phase id from another project must not be attachable here.
         if room_id is not None:
             owned_room(self._repo, room_id, project_id)
+        if phase_id is not None:
+            _phase_of_poste(self._repo, phase_id, project_id, poste_id)
         article = ChiffrageArticle.create(
             poste_id=poste_id,
             name=clean_name(name, field="Article name", max_length=MAX_ARTICLE_NAME),
@@ -52,6 +63,7 @@ class CreateArticleUseCase:
             unit=validate_unit(self._repo, project_id, unit),
             note=clean_optional_text(note),
             room_id=room_id,
+            phase_id=phase_id,
             position=self._repo.max_article_position(poste_id) + POSITION_STEP,
         )
         self._repo.add_article(article)
@@ -83,11 +95,14 @@ class UpdateArticleUseCase:
         purchased: object = ChiffrageArticle._UNSET,
         purchased_quantity: object = ChiffrageArticle._UNSET,
         returned_quantity: object = ChiffrageArticle._UNSET,
+        phase_id: object = ChiffrageArticle._UNSET,
     ) -> ChiffrageArticle:
         article = owned_article(self._repo, article_id, project_id)
         U = ChiffrageArticle._UNSET
         if room_id is not U and room_id is not None:
             owned_room(self._repo, UUID(str(room_id)), project_id)
+        if phase_id is not U and phase_id is not None:
+            _phase_of_poste(self._repo, UUID(str(phase_id)), project_id, article.poste_id)
         updated = article.with_updates(
             name=(
                 U
@@ -104,6 +119,7 @@ class UpdateArticleUseCase:
             ),
             note=(U if note is U else clean_optional_text(note if note is None else str(note))),
             room_id=(U if room_id is U else (None if room_id is None else UUID(str(room_id)))),
+            phase_id=(U if phase_id is U else (None if phase_id is None else UUID(str(phase_id)))),
             purchased=U if purchased is U else bool(purchased),
             purchased_quantity=(
                 U

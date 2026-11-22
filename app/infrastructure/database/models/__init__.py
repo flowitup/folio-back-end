@@ -55,6 +55,7 @@ from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteMod
 from app.infrastructure.database.models.chiffrage_unit import ChiffrageUnitModel
 from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
 from app.infrastructure.database.models.chiffrage_room import ChiffrageRoomModel
+from app.infrastructure.database.models.chiffrage_phase import ChiffragePhaseModel
 from app.infrastructure.database.models.worker_rate_change import WorkerRateChangeModel
 from app.infrastructure.database.models.company_person import CompanyPersonModel
 from app.infrastructure.database.models.company_member_grant import CompanyMemberGrantModel
@@ -114,6 +115,7 @@ __all__ = [
     "ChiffrageUnitModel",
     "ChiffrageStoreModel",
     "ChiffrageRoomModel",
+    "ChiffragePhaseModel",
     "CompanyPersonModel",
     "CompanyMemberGrantModel",
     "ApiKeyOrm",

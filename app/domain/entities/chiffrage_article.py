@@ -41,6 +41,8 @@ class ChiffrageArticle:
     purchased_quantity: Optional[Decimal] = None
     # Unused goods taken back to the shop; the spend is the net quantity.
     returned_quantity: Optional[Decimal] = None
+    # The stage of works (giai đoạn) this item is bought for; None = no stage yet.
+    phase_id: Optional[UUID] = None
 
     # Sentinel distinguishing "leave unchanged" (omitted) from an explicit clear.
     _UNSET = object()
@@ -57,6 +59,7 @@ class ChiffrageArticle:
         note: Optional[str] = None,
         room_id: Optional[UUID] = None,
         image_storage_key: Optional[str] = None,
+        phase_id: Optional[UUID] = None,
     ) -> "ChiffrageArticle":
         """Create a new article at the given position within its poste."""
         now = datetime.now(timezone.utc)
@@ -72,6 +75,7 @@ class ChiffrageArticle:
             position=position,
             created_at=now,
             updated_at=now,
+            phase_id=phase_id,
         )
 
     def with_updates(
@@ -82,6 +86,7 @@ class ChiffrageArticle:
         unit: object = _UNSET,
         note: object = _UNSET,
         room_id: object = _UNSET,
+        phase_id: object = _UNSET,
         purchased: object = _UNSET,
         purchased_quantity: object = _UNSET,
         returned_quantity: object = _UNSET,
@@ -114,6 +119,7 @@ class ChiffrageArticle:
             unit=self.unit if unit is U else unit,
             note=self.note if note is U else note,
             room_id=self.room_id if room_id is U else room_id,
+            phase_id=self.phase_id if phase_id is U else phase_id,
             purchased_at=purchased_at,
             purchased_quantity=bought,
             returned_quantity=returned,

@@ -175,6 +175,13 @@ from app.application.chiffrage.room_usecases import (
     ReorderRoomUseCase,
     UpdateRoomUseCase,
 )
+from app.application.chiffrage.phase_usecases import (
+    ListPostePhasesUseCase,
+    CreatePhaseUseCase,
+    DeletePhaseUseCase,
+    ReorderPhaseUseCase,
+    UpdatePhaseUseCase,
+)
 from app.application.chiffrage.store_usecases import (
     CreateStoreUseCase,
     DeleteStoreUseCase,
@@ -408,6 +415,11 @@ class Container:
     update_chiffrage_room_usecase: Optional[UpdateRoomUseCase] = None
     delete_chiffrage_room_usecase: Optional[DeleteRoomUseCase] = None
     reorder_chiffrage_room_usecase: Optional[ReorderRoomUseCase] = None
+    list_chiffrage_phases_usecase: Optional[ListPostePhasesUseCase] = None
+    create_chiffrage_phase_usecase: Optional[CreatePhaseUseCase] = None
+    update_chiffrage_phase_usecase: Optional[UpdatePhaseUseCase] = None
+    delete_chiffrage_phase_usecase: Optional[DeletePhaseUseCase] = None
+    reorder_chiffrage_phase_usecase: Optional[ReorderPhaseUseCase] = None
     chiffrage_image_storage: Optional[Any] = None  # ChiffrageImageStorage
     upload_chiffrage_article_image_usecase: Optional[UploadArticleImageUseCase] = None
     set_chiffrage_article_image_from_url_usecase: Optional[SetArticleImageFromUrlUseCase] = None
@@ -1121,6 +1133,12 @@ def configure_container(
     container.update_chiffrage_room_usecase = UpdateRoomUseCase(_chiffrage_repo, _chiffrage_session)
     container.delete_chiffrage_room_usecase = DeleteRoomUseCase(_chiffrage_repo, _chiffrage_session)
     container.reorder_chiffrage_room_usecase = ReorderRoomUseCase(_chiffrage_repo, _chiffrage_session)
+
+    container.list_chiffrage_phases_usecase = ListPostePhasesUseCase(_chiffrage_repo)
+    container.create_chiffrage_phase_usecase = CreatePhaseUseCase(_chiffrage_repo, _chiffrage_session)
+    container.update_chiffrage_phase_usecase = UpdatePhaseUseCase(_chiffrage_repo, _chiffrage_session)
+    container.delete_chiffrage_phase_usecase = DeletePhaseUseCase(_chiffrage_repo, _chiffrage_session)
+    container.reorder_chiffrage_phase_usecase = ReorderPhaseUseCase(_chiffrage_repo, _chiffrage_session)
 
     from app.infrastructure.adapters.chiffrage_image_storage import ChiffrageImageStorage
     from config import Config as _ChiffrageConfig

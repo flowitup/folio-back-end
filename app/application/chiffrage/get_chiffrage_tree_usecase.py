@@ -49,4 +49,5 @@ class GetChiffrageTreeUseCase:
             stores,
             library_with_image,
             self._repo.list_rooms(project_id),
+            self._repo.list_phases(project_id),
         )

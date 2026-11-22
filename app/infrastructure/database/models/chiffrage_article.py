@@ -27,6 +27,7 @@ class ChiffrageArticleModel(Base):
     __table_args__ = (
         Index("ix_chiffrage_articles_poste_position", "poste_id", "position"),
         Index("ix_chiffrage_articles_room_id", "room_id"),
+        Index("ix_chiffrage_articles_phase_id", "phase_id"),
     )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -42,6 +43,11 @@ class ChiffrageArticleModel(Base):
     room_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("chiffrage_rooms.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    phase_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("chiffrage_phases.id", ondelete="SET NULL"),
         nullable=True,
     )
     image_storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, unique=True)
@@ -72,6 +78,7 @@ class ChiffrageArticleModel(Base):
             purchased_at=self.purchased_at,
             purchased_quantity=(Decimal(str(self.purchased_quantity)) if self.purchased_quantity is not None else None),
             returned_quantity=(Decimal(str(self.returned_quantity)) if self.returned_quantity is not None else None),
+            phase_id=self.phase_id,
         )
 
     @classmethod
@@ -91,6 +98,7 @@ class ChiffrageArticleModel(Base):
             purchased_at=a.purchased_at,
             purchased_quantity=a.purchased_quantity,
             returned_quantity=a.returned_quantity,
+            phase_id=a.phase_id,
         )
 
     def __repr__(self) -> str:
