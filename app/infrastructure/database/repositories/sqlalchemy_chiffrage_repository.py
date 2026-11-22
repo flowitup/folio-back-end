@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.chiffrage.exceptions import (
     RoomAlreadyExistsError,
+    PhaseAlreadyExistsError,
     StoreAlreadyExistsError,
     UnitAlreadyExistsError,
 )
@@ -18,6 +19,7 @@ from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
 from app.domain.entities.chiffrage_room import ChiffrageRoom
+from app.domain.entities.chiffrage_phase import ChiffragePhase
 from app.domain.entities.chiffrage_store import ChiffrageStore
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 from app.infrastructure.database.models.chiffrage_article import ChiffrageArticleModel
@@ -25,6 +27,7 @@ from app.infrastructure.database.models.chiffrage_poste import ChiffragePosteMod
 from app.infrastructure.database.models.chiffrage_quote import ChiffrageQuoteModel
 from app.infrastructure.database.models.chiffrage_store import ChiffrageStoreModel
 from app.infrastructure.database.models.chiffrage_room import ChiffrageRoomModel
+from app.infrastructure.database.models.chiffrage_phase import ChiffragePhaseModel
 from app.infrastructure.database.models.bibliotheque_product import BibliothequeProductModel
 from app.infrastructure.database.models.bibliotheque_supplier import BibliothequeSupplierModel
 from app.infrastructure.database.models.project import ProjectModel
@@ -144,6 +147,12 @@ class SqlAlchemyChiffrageRepository:
     def delete_poste(self, poste_id: UUID) -> None:
         orm = self._session.get(ChiffragePosteModel, poste_id)
         if orm is not None:
+            # The poste's stages go with it. Explicit for the same reason as
+            # delete_room: SQLite in the test suite does not enforce the FK cascade.
+            self._session.execute(
+                delete(ChiffragePhaseModel).where(ChiffragePhaseModel.poste_id == poste_id),
+                execution_options={"synchronize_session": False},
+            )
             self._session.delete(orm)
             self._session.flush()
 
@@ -192,6 +201,7 @@ class SqlAlchemyChiffrageRepository:
         orm.unit = article.unit
         orm.note = article.note
         orm.room_id = article.room_id
+        orm.phase_id = article.phase_id
         orm.image_storage_key = article.image_storage_key
         orm.purchased_at = article.purchased_at
         orm.purchased_quantity = article.purchased_quantity
@@ -336,6 +346,85 @@ class SqlAlchemyChiffrageRepository:
     def max_room_position(self, project_id: UUID) -> int:
         value = self._session.execute(
             select(func.max(ChiffrageRoomModel.position)).where(ChiffrageRoomModel.project_id == project_id)
+        ).scalar()
+        return int(value) if value is not None else 0
+
+    # ------------------------------------------------------------------
+    # Phases
+    # ------------------------------------------------------------------
+
+    def list_phases(self, project_id: UUID) -> list[ChiffragePhase]:
+        rows = (
+            self._session.execute(
+                select(ChiffragePhaseModel)
+                .where(ChiffragePhaseModel.project_id == project_id)
+                .order_by(ChiffragePhaseModel.position, ChiffragePhaseModel.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        return [r.to_entity() for r in rows]
+
+    def phases_in_poste(self, poste_id: UUID) -> list[ChiffragePhase]:
+        rows = (
+            self._session.execute(
+                select(ChiffragePhaseModel)
+                .where(ChiffragePhaseModel.poste_id == poste_id)
+                .order_by(ChiffragePhaseModel.position, ChiffragePhaseModel.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        return [r.to_entity() for r in rows]
+
+    def find_phase(self, phase_id: UUID) -> Optional[ChiffragePhase]:
+        orm = self._session.get(ChiffragePhaseModel, phase_id)
+        return orm.to_entity() if orm is not None else None
+
+    def phase_name_exists(self, poste_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        """Whether the poste already has a phase under this name, case-insensitively (same rule as shops)."""
+        stmt = select(ChiffragePhaseModel.id).where(
+            ChiffragePhaseModel.poste_id == poste_id,
+            func.lower(ChiffragePhaseModel.name) == name.strip().lower(),
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(ChiffragePhaseModel.id != exclude_id)
+        return self._session.execute(stmt).first() is not None
+
+    def add_phase(self, phase: ChiffragePhase) -> None:
+        self._flush_unique(
+            ChiffragePhaseModel.from_entity(phase),
+            ("uq_chiffrage_phases_poste_name", "chiffrage_phases.poste_id, chiffrage_phases.name"),
+            PhaseAlreadyExistsError(f"Phase '{phase.name}' already exists in this poste."),
+        )
+
+    def save_phase(self, phase: ChiffragePhase) -> None:
+        orm = self._session.get(ChiffragePhaseModel, phase.id)
+        if orm is None:
+            return
+        orm.name = phase.name
+        orm.position = phase.position
+        orm.updated_at = phase.updated_at
+        self._session.flush()
+
+    def delete_phase(self, phase_id: UUID) -> None:
+        orm = self._session.get(ChiffragePhaseModel, phase_id)
+        if orm is None:
+            return
+        # Detach the articles here rather than leaning on ON DELETE SET NULL:
+        # SQLite does not enforce foreign keys by default, so the cascade would
+        # fire on Postgres and silently not in the test suite. The FK stays as a
+        # backstop for rows written outside this path.
+        self._session.execute(
+            update(ChiffrageArticleModel).where(ChiffrageArticleModel.phase_id == phase_id).values(phase_id=None),
+            execution_options={"synchronize_session": False},
+        )
+        self._session.delete(orm)
+        self._session.flush()
+
+    def max_phase_position(self, poste_id: UUID) -> int:
+        value = self._session.execute(
+            select(func.max(ChiffragePhaseModel.position)).where(ChiffragePhaseModel.poste_id == poste_id)
         ).scalar()
         return int(value) if value is not None else 0
 

@@ -9,6 +9,7 @@ from app.domain.entities.chiffrage_article import ChiffrageArticle
 from app.domain.entities.chiffrage_poste import ChiffragePoste
 from app.domain.entities.chiffrage_quote import ChiffrageQuote
 from app.domain.entities.chiffrage_room import ChiffrageRoom
+from app.domain.entities.chiffrage_phase import ChiffragePhase
 from app.domain.entities.chiffrage_store import ChiffrageStore
 from app.domain.entities.chiffrage_unit import ChiffrageUnit
 
@@ -139,6 +140,40 @@ class ChiffrageRepositoryPort(Protocol):
 
     def max_room_position(self, project_id: UUID) -> int:
         """Return the highest room position, or 0 when the project has none."""
+        ...
+
+    # -- phases -------------------------------------------------------------
+
+    def list_phases(self, project_id: UUID) -> list[ChiffragePhase]:
+        """Return every phase of the project ordered by position (all postes)."""
+        ...
+
+    def find_phase(self, phase_id: UUID) -> Optional[ChiffragePhase]:
+        """Return a phase by id, or None."""
+        ...
+
+    def phases_in_poste(self, poste_id: UUID) -> list[ChiffragePhase]:
+        """Return one poste's phases ordered by position."""
+        ...
+
+    def phase_name_exists(self, poste_id: UUID, name: str, exclude_id: Optional[UUID] = None) -> bool:
+        """Return True if the poste already has a phase with that name."""
+        ...
+
+    def add_phase(self, phase: ChiffragePhase) -> None:
+        """Insert a new phase."""
+        ...
+
+    def save_phase(self, phase: ChiffragePhase) -> None:
+        """Update an existing phase."""
+        ...
+
+    def delete_phase(self, phase_id: UUID) -> None:
+        """Delete a phase; articles pointing at it fall back to unassigned."""
+        ...
+
+    def max_phase_position(self, poste_id: UUID) -> int:
+        """Return the highest phase position in the poste, or 0 when it has none."""
         ...
 
     # -- stores ------------------------------------------------------------

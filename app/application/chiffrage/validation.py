@@ -19,6 +19,7 @@ from app.application.chiffrage.exceptions import (
     LibrarySupplierNotFoundError,
     PosteNotFoundError,
     QuoteNotFoundError,
+    PhaseNotFoundError,
     RoomNotFoundError,
     StoreNotFoundError,
 )
@@ -30,6 +31,7 @@ MAX_POSTE_NAME = 120
 MAX_ARTICLE_NAME = 200
 MAX_UNIT_SYMBOL = 16
 MAX_ROOM_NAME = 120
+MAX_PHASE_NAME = 120
 MAX_STORE_NAME = 160
 MAX_STORE_ADDRESS = 500
 MAX_STORE_WEBSITE = 500
@@ -158,6 +160,14 @@ def owned_room(repo: ChiffrageRepositoryPort, room_id: UUID, project_id: UUID):
     if room is None or room.project_id != project_id:
         raise RoomNotFoundError(f"Room {room_id} not found in project {project_id}.")
     return room
+
+
+def owned_phase(repo: ChiffrageRepositoryPort, phase_id: UUID, project_id: UUID):
+    """Load a phase, refusing ids that belong to another project."""
+    phase = repo.find_phase(phase_id)
+    if phase is None or phase.project_id != project_id:
+        raise PhaseNotFoundError(f"Phase {phase_id} not found in project {project_id}.")
+    return phase
 
 
 def owned_store(repo: ChiffrageRepositoryPort, store_id: UUID, project_id: UUID):

@@ -1996,3 +1996,201 @@ class TestPurchaseTracking:
             headers=_auth(writer_token),
         )
         assert resp.status_code == 422
+
+
+class TestPhases:
+    """Stages of works (giai đoạn): each poste orders its own."""
+
+    def _phase(self, inv_client, token, project_id, poste_id, name):
+        return inv_client.post(
+            f"{_base(project_id)}/postes/{poste_id}/phases", json={"name": name}, headers=_auth(token)
+        )
+
+    def _poste(self, inv_client, token, project_id, name):
+        resp = inv_client.post(f"{_base(project_id)}/postes", json={"name": name}, headers=_auth(token))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def _article(self, inv_client, token, project_id, poste_id, name, **extra):
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste_id}/articles",
+            json={"name": name, "quantity": "2", "unit": "u", **extra},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        return resp.get_json()
+
+    def test_phases_are_listed_in_declared_order(self, inv_client, writer_token, reader_token, project_id, poste):
+        for n in ("Gaines et boîtes", "Tableau", "Appareillage"):
+            assert self._phase(inv_client, writer_token, project_id, poste["id"], n).status_code == 201
+        phases = inv_client.get(
+            f"{_base(project_id)}/postes/{poste['id']}/phases", headers=_auth(reader_token)
+        ).get_json()
+        assert [p["name"] for p in phases] == ["Gaines et boîtes", "Tableau", "Appareillage"]
+
+    def test_each_poste_has_its_own_phases(self, inv_client, writer_token, reader_token, project_id, poste):
+        other = self._poste(inv_client, writer_token, project_id, "Toiture")
+        # The same name is fine in two postes, a duplicate inside one poste is not.
+        assert self._phase(inv_client, writer_token, project_id, poste["id"], "Giai đoạn 1").status_code == 201
+        assert self._phase(inv_client, writer_token, project_id, other["id"], "Giai đoạn 1").status_code == 201
+        assert self._phase(inv_client, writer_token, project_id, other["id"], "giai đoạn 1").status_code == 409
+
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        by_id = {p["id"]: p for p in tree["postes"]}
+        assert [p["name"] for p in by_id[poste["id"]]["phases"]] == ["Giai đoạn 1"]
+        assert [p["name"] for p in by_id[other["id"]]["phases"]] == ["Giai đoạn 1"]
+
+    def test_blank_phase_name_is_rejected(self, inv_client, writer_token, project_id, poste):
+        assert self._phase(inv_client, writer_token, project_id, poste["id"], "   ").status_code == 422
+
+    def test_read_only_member_cannot_declare_a_phase(self, inv_client, reader_token, project_id, poste):
+        assert self._phase(inv_client, reader_token, project_id, poste["id"], "Lecture").status_code == 403
+
+    def test_article_takes_a_phase_and_moves_between_phases(self, inv_client, writer_token, project_id, poste):
+        a = self._phase(inv_client, writer_token, project_id, poste["id"], "Premier passage").get_json()
+        b = self._phase(inv_client, writer_token, project_id, poste["id"], "Second passage").get_json()
+        art = self._article(inv_client, writer_token, project_id, poste["id"], "Boîte", phase_id=a["id"])
+        assert art["phase_id"] == a["id"]
+
+        url = f"{_base(project_id)}/articles/{art['id']}"
+        resp = inv_client.patch(url, json={"phase_id": b["id"]}, headers=_auth(writer_token))
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["phase_id"] == b["id"]
+        # The field-drop landmine: the rest of the line survives the move.
+        assert body["name"] == "Boîte" and body["quantity"] == 2.0
+        # An unrelated edit leaves the phase alone; an explicit null clears it.
+        assert inv_client.patch(url, json={"note": "x"}, headers=_auth(writer_token)).get_json()["phase_id"] == b["id"]
+        assert (
+            inv_client.patch(url, json={"phase_id": None}, headers=_auth(writer_token)).get_json()["phase_id"] is None
+        )
+
+    def test_article_cannot_take_a_phase_of_another_poste(self, inv_client, writer_token, project_id, poste):
+        other = self._poste(inv_client, writer_token, project_id, "Plomberie")
+        foreign = self._phase(inv_client, writer_token, project_id, other["id"], "Réseau").get_json()
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "X", "quantity": "1", "unit": "u", "phase_id": foreign["id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 400
+        art = self._article(inv_client, writer_token, project_id, poste["id"], "Y")
+        resp = inv_client.patch(
+            f"{_base(project_id)}/articles/{art['id']}", json={"phase_id": foreign["id"]}, headers=_auth(writer_token)
+        )
+        assert resp.status_code == 400
+
+    def test_article_is_created_without_a_phase_by_default(self, inv_client, writer_token, project_id, poste):
+        assert self._article(inv_client, writer_token, project_id, poste["id"], "Divers")["phase_id"] is None
+
+    def test_deleting_a_phase_keeps_its_articles(self, inv_client, writer_token, reader_token, project_id, poste):
+        phase = self._phase(inv_client, writer_token, project_id, poste["id"], "Provisoire").get_json()
+        art = self._article(inv_client, writer_token, project_id, poste["id"], "Gaine", phase_id=phase["id"])
+        assert (
+            inv_client.delete(f"{_base(project_id)}/phases/{phase['id']}", headers=_auth(writer_token)).status_code
+            == 204
+        )
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, art["id"])["phase_id"] is None
+
+    def test_renaming_a_phase_keeps_its_articles(self, inv_client, writer_token, reader_token, project_id, poste):
+        phase = self._phase(inv_client, writer_token, project_id, poste["id"], "GD1").get_json()
+        art = self._article(inv_client, writer_token, project_id, poste["id"], "Câble", phase_id=phase["id"])
+        resp = inv_client.patch(
+            f"{_base(project_id)}/phases/{phase['id']}", json={"name": "Ống và cáp"}, headers=_auth(writer_token)
+        )
+        assert resp.status_code == 200 and resp.get_json()["name"] == "Ống và cáp"
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        assert _article_in_tree(tree, art["id"])["phase_id"] == phase["id"]
+
+    def test_phase_of_another_project_cannot_be_attached(
+        self, inv_client, writer_token, chiffrage_world, project_id, poste
+    ):
+        other = chiffrage_world["other_project_id"]
+        foreign_poste = inv_client.post(
+            f"/api/v1/projects/{other}/chiffrage/postes", json={"name": "Ailleurs"}, headers=_auth(writer_token)
+        )
+        if foreign_poste.status_code != 201:
+            pytest.skip("writer has no access to the sibling project")
+        foreign = self._phase(inv_client, writer_token, other, foreign_poste.get_json()["id"], "Ailleurs").get_json()
+        resp = inv_client.post(
+            f"{_base(project_id)}/postes/{poste['id']}/articles",
+            json={"name": "X", "quantity": "1", "unit": "u", "phase_id": foreign["id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 404
+
+    def test_reorder_moves_a_phase_within_its_poste(self, inv_client, writer_token, reader_token, project_id, poste):
+        first = self._phase(inv_client, writer_token, project_id, poste["id"], "Ordre 1").get_json()
+        second = self._phase(inv_client, writer_token, project_id, poste["id"], "Ordre 2").get_json()
+        resp = inv_client.post(
+            f"{_base(project_id)}/phases/{second['id']}/reorder",
+            json={"before_id": None, "after_id": first["id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        names = [
+            p["name"]
+            for p in inv_client.get(
+                f"{_base(project_id)}/postes/{poste['id']}/phases", headers=_auth(reader_token)
+            ).get_json()
+        ]
+        assert names == ["Ordre 2", "Ordre 1"]
+
+        other = self._poste(inv_client, writer_token, project_id, "Chauffage")
+        stranger = self._phase(inv_client, writer_token, project_id, other["id"], "Ordre X").get_json()
+        resp = inv_client.post(
+            f"{_base(project_id)}/phases/{second['id']}/reorder",
+            json={"before_id": stranger["id"]},
+            headers=_auth(writer_token),
+        )
+        assert resp.status_code == 400
+
+    def test_phase_subtotals_split_the_poste(self, inv_client, writer_token, reader_token, project_id, poste):
+        gd1 = self._phase(inv_client, writer_token, project_id, poste["id"], "GĐ1").get_json()
+        gd2 = self._phase(inv_client, writer_token, project_id, poste["id"], "GĐ2").get_json()
+        gd3 = self._phase(inv_client, writer_token, project_id, poste["id"], "GĐ3").get_json()
+        a = self._article(inv_client, writer_token, project_id, poste["id"], "Câble", phase_id=gd1["id"])
+        b = self._article(inv_client, writer_token, project_id, poste["id"], "Gaine", phase_id=gd1["id"])
+        c = self._article(inv_client, writer_token, project_id, poste["id"], "Disjoncteur", phase_id=gd2["id"])
+        d = self._article(inv_client, writer_token, project_id, poste["id"], "Sans étape")
+        for art, price in ((a, "10"), (b, "5"), (c, "40"), (d, "1")):
+            _add_quote(inv_client, writer_token, project_id, art["id"], "LM", price)
+        inv_client.patch(
+            f"{_base(project_id)}/articles/{a['id']}", json={"purchased": True}, headers=_auth(writer_token)
+        )
+
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        p = next(x for x in tree["postes"] if x["id"] == poste["id"])
+        subs = {s["phase_id"]: s for s in p["phase_subtotals"]}
+        # Display order: the stages as declared (empty ones included), then no stage.
+        assert [s["phase_id"] for s in p["phase_subtotals"]] == [gd1["id"], gd2["id"], gd3["id"], None]
+        # 2 × 10 HT + 2 × 5 HT at 20 % VAT; only the cable is bought.
+        assert subs[gd1["id"]]["subtotal_ht"] == 30.0
+        assert subs[gd1["id"]]["subtotal_ttc"] == 36.0
+        assert subs[gd1["id"]]["article_count"] == 2
+        assert subs[gd1["id"]]["purchased_count"] == 1
+        assert subs[gd1["id"]]["actual_ttc"] == 24.0
+        assert subs[gd2["id"]]["subtotal_ttc"] == 96.0
+        assert subs[gd3["id"]]["article_count"] == 0 and subs[gd3["id"]]["subtotal_ttc"] == 0.0
+        assert subs[None]["article_count"] == 1
+        assert sum(s["subtotal_ttc"] for s in p["phase_subtotals"]) == pytest.approx(p["subtotal_ttc"])
+
+    def test_poste_without_phases_has_no_phase_subtotals(self, inv_client, writer_token, reader_token, project_id):
+        bare = self._poste(inv_client, writer_token, project_id, "Sans étapes")
+        self._article(inv_client, writer_token, project_id, bare["id"], "Item")
+        tree = inv_client.get(_base(project_id), headers=_auth(reader_token)).get_json()
+        p = next(x for x in tree["postes"] if x["id"] == bare["id"])
+        assert p["phases"] == [] and p["phase_subtotals"] == []
+
+    def test_deleting_a_poste_removes_its_phases(self, inv_client, writer_token, reader_token, project_id):
+        gone = self._poste(inv_client, writer_token, project_id, "Éphémère")
+        phase = self._phase(inv_client, writer_token, project_id, gone["id"], "Unique").get_json()
+        assert (
+            inv_client.delete(f"{_base(project_id)}/postes/{gone['id']}", headers=_auth(writer_token)).status_code
+            == 204
+        )
+        resp = inv_client.patch(
+            f"{_base(project_id)}/phases/{phase['id']}", json={"name": "Encore"}, headers=_auth(writer_token)
+        )
+        assert resp.status_code == 404

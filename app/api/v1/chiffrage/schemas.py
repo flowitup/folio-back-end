@@ -63,6 +63,18 @@ class RoomUpdateBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class PhaseCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+
+
+class PhaseUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+
+
 class StoreCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -92,6 +104,7 @@ class ArticleCreateBody(BaseModel):
     quantity: Decimal = Field(ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
+    phase_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
@@ -102,6 +115,7 @@ class ArticleUpdateBody(BaseModel):
     quantity: Optional[Decimal] = Field(default=None, ge=0, le=MAX_ARTICLE_QUANTITY, decimal_places=3)
     unit: Optional[str] = Field(default=None, max_length=16)
     room_id: Optional[UUID] = None
+    phase_id: Optional[UUID] = None
     note: Optional[str] = Field(default=None, max_length=2000)
     purchased: Optional[bool] = None
     # What was really bought (may differ from the planned quantity) and what was taken back.
